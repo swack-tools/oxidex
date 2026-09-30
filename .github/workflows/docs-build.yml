@@ -32,7 +32,7 @@ jobs:
     name: Build docs from a clean checkout (${{ matrix.channel }})
     # 2x: npm ci plus a VitePress build, ~1 minute end to end and mostly I/O
     # and single-threaded bundling. No Rust is compiled here.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 20
     # The same sources build two sites (see DOCS_CHANNEL in
     # docs/.vitepress/config.mts): stable at '/', the live oxidex.net, and the

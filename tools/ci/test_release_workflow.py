@@ -641,6 +641,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('rustup target list --installed --toolchain 1.97.1', block)
         self.assertIn('test -d "$SYSROOT/lib/rustlib/$target/lib"', block)
 
+    def test_release_platform_specific_jobs_keep_native_runners(self):
+        for job in ("build-macos", "verify-release-assets"):
+            with self.subTest(job=job):
+                self.assertRegex(
+                    job_block(self.text, job), r"(?m)^    runs-on: macos-15$"
+                )
+        linux = job_block(self.text, "build-linux")
+        self.assertRegex(linux, r"(?m)^    runs-on: \$\{\{ matrix\.os \}\}$")
+        self.assertIn("target: aarch64-unknown-linux-musl", linux)
+        self.assertRegex(linux, r"target: aarch64-unknown-linux-musl\n\s+os: \[self-hosted, Linux, ARM64\]")
+        self.assertRegex(linux, r"target: x86_64-unknown-linux-musl\n\s+os: \[self-hosted, Linux, X64, spot\]")
+
     def test_universal_macos_asset_name_is_shared_by_release_contract_surfaces(self):
         expected = "oxidex-universal-apple-darwin"
         legacy = "oxidex-aarch64-apple-darwin"
@@ -961,6 +973,11 @@ class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
     GATE = "enable=${{ !contains(github.ref_name, '-') }}"
 
+    def test_docker_build_runs_native_image_smoke_test(self):
+        build = job_block(self.text, "build")
+        self.assertIn("docker run --rm", build)
+        self.assertNotIn("setup-qemu-action@", build)
+
     def test_publishing_requires_matching_package_and_image_versions(self):
         verify = job_block(self.text, "verify-tag-on-main")
         build = job_block(self.text, "build")
@@ -995,6 +1012,12 @@ class DockerWorkflowTests(unittest.TestCase):
         step = self.meta_step()
         self.assertIn("type=ref,event=tag", step)
         self.assertIn("type=semver,pattern={{version}}", step)
+
+    def test_docker_builds_use_native_architecture_runners(self):
+        build = job_block(self.text, "build")
+        self.assertIn('runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}", docker]', build)
+        self.assertIn('"runner_arch":"X64"', build)
+        self.assertIn('"runner_arch":"ARM64"', build)
 
 
 class TagRecipeTests(unittest.TestCase):

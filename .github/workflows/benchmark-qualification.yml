@@ -26,7 +26,7 @@ concurrency:
 jobs:
   preflight:
     name: Candidate-bound qualification preflight (no timings)
-    runs-on: ubuntu-24.04
+    runs-on: spot
     timeout-minutes: 30
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}

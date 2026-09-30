@@ -9,7 +9,7 @@ name: Benchmarks (indicative)
 # ExifTool. This workflow measures the merge result on every landing on
 # `refactor/tag-machinery`, with the binary users get.
 #
-# NON-BLOCKING by construction. A shared GitHub-hosted runner is noisy, so:
+# NON-BLOCKING by construction. A self-hosted spot runner can vary or be noisy, so:
 #   * it is a separate workflow, not a required status check, and nothing
 #     `needs:` it -- it can never hold up a merge;
 #   * it never compares against a threshold or a previous run, so a slow
@@ -55,13 +55,12 @@ env:
 jobs:
   exiftool-comparison:
     name: ExifTool comparison (indicative)
-    # Pinned image rather than ubuntu-latest: numbers are only comparable run
-    # to run on the same runner class, and ubuntu-24.04's system perl is the
-    # canonical 5.38.2 the other oracle jobs use.
-    runs-on: ubuntu-24.04
+    # `spot` selects the self-hosted x64 spot pool, not a fixed host or image.
+    # Stamp the actual runner on each result; the label alone proves no
+    # cross-run comparability.
+    runs-on: spot
     timeout-minutes: 30
     env:
-      RUNNER_LABEL: ubuntu-24.04
       HYPERFINE_WARMUP: 3
       HYPERFINE_RUNS: 20
     steps:
@@ -97,7 +96,7 @@ jobs:
           unset PERL5LIB PERLLIB PERL5OPT
           export OXIDEX_BENCHMARK_CI=1
           CPU=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
-          BENCH_ENVIRONMENT="CI, INDICATIVE ONLY: GitHub Actions, GitHub-hosted shared runner $RUNNER_LABEL (image ${ImageVersion:-unknown}), $(nproc) vCPU, $CPU; run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          BENCH_ENVIRONMENT="CI, INDICATIVE ONLY: GitHub Actions self-hosted spot pool; actual runner ${RUNNER_NAME:-unknown}, ${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown}, $(nproc) vCPU, $CPU; run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID attempt ${GITHUB_RUN_ATTEMPT:-unknown}"
           export BENCH_ENVIRONMENT
           ./benches/exiftool_comparison.sh target/release/oxidex
       - name: Write step summary
@@ -112,9 +111,9 @@ jobs:
           p = pathlib.Path("benches/benchmark_results.json")
           sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
           print("## Benchmarks: oxidex vs pinned ExifTool (INDICATIVE)\n", file=out)
-          print("> Shared GitHub-hosted runner: numbers are noisy, indicative only, and never gate a merge. "
-                "Compare only with other runs of this workflow on the same runner class; never with "
-                "`benches/benchmark_results.md` (a local workstation run).\n", file=out)
+          print("> Self-hosted spot runner: numbers are indicative only and never gate a merge. "
+                "Runner identity and background load can vary; this run establishes no cross-run "
+                "or local-workstation comparability.\n", file=out)
           # benches/benchmark_results.json is COMMITTED (the local run), so its
           # mere presence proves nothing: only a successful step that stamped
           # this very checkout counts as this run's result.
@@ -126,12 +125,15 @@ jobs:
               raise SystemExit(0)
           ins = r["instrument"]
           cpu = subprocess.run(["sh", "-c", "lscpu | sed -n 's/^Model name: *//p' | head -1"], capture_output=True, text=True).stdout.strip()
+          vcpus = subprocess.run(["nproc"], capture_output=True, text=True, check=True).stdout.strip()
           print(f"- **Commit**: `{ins['commit']}` (checked out `{sha}`, event `{os.environ['EVENT']}`)", file=out)
           print(f"- **ExifTool**: {ins['exiftool']}", file=out)
           print(f"- **oxidex**: {ins['oxidex_version']}, sha256 `{ins['oxidex_sha256'][:16]}...`, `[profile.release]`"
                 + (f" -- staleness: {ins['staleness_note']}" if ins['staleness_note'] else ""), file=out)
-          print(f"- **Runner**: {os.environ['RUNNER_LABEL']} (image {os.environ.get('ImageVersion', 'unknown')}), "
-                f"{os.cpu_count()} vCPU, {cpu}; {ins['machine']}", file=out)
+          print(f"- **Runner**: self-hosted spot pool; actual runner "
+                f"{os.environ.get('RUNNER_NAME', 'unknown')}, "
+                f"{os.environ.get('RUNNER_OS', 'unknown')}/{os.environ.get('RUNNER_ARCH', 'unknown')}, "
+                f"{vcpus} vCPU, {cpu}; {ins['machine']}", file=out)
           print(f"- **Load (1/5/15) at preflight**: {ins['loadavg_at_preflight']}", file=out)
           print(f"- **hyperfine**: `--warmup {os.environ['HYPERFINE_WARMUP']} --runs "
                 f"{os.environ['HYPERFINE_RUNS']} -N`, both commands per invocation\n", file=out)
@@ -150,7 +152,7 @@ jobs:
               et, ox = r[key]["results"][0], r[key]["results"][1]
               print(f"| {label} | {et['median']*1000:.1f} ms | {ox['median']*1000:.1f} ms | "
                     f"**{et['median']/ox['median']:.2f}x** | {et['min']/ox['min']:.2f}x |", file=out)
-          print(f"\nRunner vCPU count: {os.cpu_count()} (rayon scenarios 2 and 5 scale with it). "
+          print(f"\nRunner vCPU count: {vcpus} (rayon scenarios 2 and 5 scale with it). "
                 "Full tables, per-scenario load and the top-CPU log are in the `benchmark-comparison` artifact.", file=out)
           PY
           cat "$GITHUB_STEP_SUMMARY"

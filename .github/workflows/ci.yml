@@ -39,10 +39,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Runners: most jobs use standard GitHub-hosted runners, which are free for
-# this public repository (ubuntu-latest = 4 vCPU / 16 GB). The corpus read
-# gate and table capture prefer the M4 Air only when its runner is idle; they
-# fall back to ubuntu-latest otherwise. The per-job
+# Runners: ordinary x64 CI jobs use the spot pool. The corpus read gate
+# and table capture use the Linux ARM64 M4 runners directly. GitHub queues
+# jobs when those runners are busy; no runner-status credential is needed.
+# The per-job
 # "2x/4x/8x" notes and the table below are the historical WarpBuild sizing
 # measurements (2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64), kept as evidence
 # of what more cores buy each job. Larger GitHub runners are billed even for
@@ -89,13 +89,11 @@ env:
 # safe precisely because it was never a required check; the reverse move, and
 # the reason the doc tests now block merges again, is the point of the change.
 #
-# RUNNERS (measured 2026-09-26, workflow_dispatch on identical commits):
-# CPU-bound jobs run on Ubicloud; the rest stay on GitHub-hosted runners.
-# Build & Test 10.7-13.3m -> 4.7-5.0m, capture ~12m -> 3.9m (also sharded,
-# see that step), source 5.3 -> 3.1m, whole run ~22m -> ~10.5m. Lint & Audit
-# (network-bound cargo audit), staleness/drift and the aggregator showed no
-# useful gain, so they stay on ubuntu-latest. Tools shards use standard-4:
-# they gained only ~1.2x on standard-8 and are an 8-job matrix.
+# RUNNER HISTORY (measured 2026-09-26, workflow_dispatch on identical commits):
+# Ubicloud improved Build & Test from 10.7-13.3m to 4.7-5.0m, capture from
+# ~12m to 3.9m (also sharded), source from 5.3m to 3.1m, and whole-run time
+# from ~22m to ~10.5m. CI now uses the repository's x64 spot pool for ordinary
+# jobs; retain these numbers as the prior baseline, not as a spot benchmark.
 jobs:
   lint:
     name: Lint & Audit
@@ -103,7 +101,7 @@ jobs:
     # (clippy --all-features). The dominant step is rustsec/audit-check at
     # ~2m55s, which is network I/O against the advisory database and does not
     # get faster with more cores.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,7 +193,7 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    runs-on: ubicloud-standard-8
+    runs-on: spot
     timeout-minutes: 25
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
     # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
@@ -468,7 +466,7 @@ jobs:
     # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
     # it is not the long pole -- Build & Test is. Sizing it to finish just
     # inside that job is what this is worth paying for, not raw speed.
-    runs-on: ubicloud-standard-8
+    runs-on: spot
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -510,29 +508,9 @@ jobs:
   # or the oracle/corpus is not the snapshot's). Re-run on 2; read the LOST
   # lines on 1.
   #
-  # Select immediately before dispatch. The M4 Air is used only when its
-  # registered runners are online and idle; otherwise the job uses GitHub's
-  # ubuntu-latest runner. The runner API requires a repository Administration
-  # read token, supplied as RUNNER_STATUS_TOKEN. The API check is advisory, so
-  # concurrent workflow starts can race between selection and assignment.
-  select_read_gate_runner:
-    name: Select runner / read gate
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      runs_on: ${{ steps.select.outputs.runs_on }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: select
-        uses: ./.github/actions/select-m4air-runner
-        with:
-          runner-status-token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
   read-regression-gate:
     name: Corpus Read Regression Gate
-    needs: [select_read_gate_runner]
-    runs-on: ${{ fromJSON(needs.select_read_gate_runner.outputs.runs_on) }}
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 30
     env:
       # The receipt's build command is fixed (`cargo build --release --bin
@@ -629,31 +607,16 @@ jobs:
   #
   # The full dump is 1.25 GB of JSON (16 MB zstd); it is captured once and
   # passed as an artifact so every dependent job checks the same bytes.
-  select_capture_runner:
-    name: Select runner / tables capture
-    needs: [read-regression-gate]
-    if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      runs_on: ${{ steps.select.outputs.runs_on }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: select
-        uses: ./.github/actions/select-m4air-runner
-        with:
-          runner-status-token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
   verify-tables-capture:
     name: Verify Generated Tables / capture
-    # Run after the gate so this job's availability check sees whether another
-    # workflow has occupied the M4 Air in the meantime.
-    needs: [select_capture_runner]
-    runs-on: ${{ fromJSON(needs.select_capture_runner.outputs.runs_on) }}
+    # Avoid competing with the read measurement on the same M4 host.
+    needs: [read-regression-gate]
+    if: ${{ always() && !cancelled() }}
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/ensure-zstd
       - id: exiftool
         uses: ./.github/actions/pinned-exiftool
       # This keeps a module-complete native writer capture: CheckExif's
@@ -699,7 +662,7 @@ jobs:
   # Checks that need only the fetched ExifTool tree, not the capture.
   verify-tables-source:
     name: Verify Generated Tables / source and tier 2
-    runs-on: ubicloud-standard-8
+    runs-on: spot
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -774,7 +737,7 @@ jobs:
   verify-tables-catalog:
     name: Verify Generated Tables / catalog join
     needs: [verify-tables-capture]
-    runs-on: ubicloud-standard-8
+    runs-on: spot
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -892,7 +855,7 @@ jobs:
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -947,7 +910,7 @@ jobs:
   verify-tables-drift:
     name: Verify Generated Tables / staleness and drift
     needs: [verify-tables-capture]
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1004,7 +967,7 @@ jobs:
     name: Verify Generated Tables
     needs: [verify-tables-capture, verify-tables-source, verify-tables-catalog, verify-tables-tools, verify-tables-drift]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 5
     steps:
       - name: Require every Verify Generated Tables job
@@ -1017,10 +980,9 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # 8x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
-    # These two publish into the same story -- this one as a 90-day artifact,
-    # the other to the docs performance page -- so they must always match on
-    # runner AND on how they measure. They move together or not at all.
+    # This is the sole producer of the Criterion benchmark artifact.
+    # deploy-docs.yml consumes that artifact and stamps the measured commit;
+    # it no longer runs a second benchmark job. `spot` does not pin a host.
     #
     # This job is tuned for THROUGHPUT, not for measurement fidelity. That is
     # a deliberate, explicit trade (2026-08-08, see CHANGELOG):
@@ -1040,7 +1002,7 @@ jobs:
     # numbers after it, on hardware or methodology. If any of this changes
     # again, both jobs move together, in one commit, and the discontinuity is
     # recorded in CHANGELOG.md again.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # No `needs:` on purpose. This used to wait for Build & Test, which put

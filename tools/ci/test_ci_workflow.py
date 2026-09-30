@@ -1,7 +1,7 @@
 """Fail-closed contract tests for the main CI workflow entry points.
 
 The main ruleset must require these CI contexts for both pull requests and
-merge-queue candidates.  A post-merge push still supplies separate evidence
+merge-queue candidates. A post-merge push still supplies separate evidence
 for the exact resulting main SHA; neither a PR check nor a merge-group check
 is evidence that the post-merge run completed successfully.
 
@@ -42,6 +42,20 @@ class MainCiWorkflowTests(unittest.TestCase):
 
     def test_manual_route_is_preserved(self):
         self.assertRegex(self.triggers, r"(?m)^  workflow_dispatch:$")
+
+    def test_direct_architecture_routing_needs_no_runner_credential(self):
+        def block(job):
+            return re.search(r"(?ms)^  " + re.escape(job) + r":\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)", self.text).group(1)
+        for job in ("read-regression-gate", "verify-tables-capture"):
+            with self.subTest(job=job):
+                self.assertIn("runs-on: [self-hosted, Linux, ARM64]", block(job))
+        self.assertIn("needs: [read-regression-gate]", block("verify-tables-capture"))
+        self.assertIn("if: ${{ always() && !cancelled() }}", block("verify-tables-capture"))
+        for obsolete in ("RUNNER_STATUS_TOKEN", "select_read_gate_runner", "select_capture_runner", "select-m4air-runner"):
+            self.assertNotIn(obsolete, self.text)
+        for job in ("lint", "test", "release-build"):
+            with self.subTest(job=job):
+                self.assertIn("runs-on: spot", block(job))
 
     def test_workflow_uses_least_privilege_read_only_token(self):
         self.assertRegex(self.text, r"(?m)^permissions:\n  contents: read$")

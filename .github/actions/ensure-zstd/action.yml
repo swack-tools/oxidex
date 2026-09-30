@@ -1,0 +1,14 @@
+name: Ensure Zstandard is available
+description: Install the capture compression dependency when the runner lacks it.
+runs:
+  using: composite
+  steps:
+    - name: Ensure zstd
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v zstd >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends zstd
+        fi
+        zstd --version

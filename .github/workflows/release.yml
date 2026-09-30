@@ -25,7 +25,7 @@ jobs:
   # holds the logic; tools/ci/test_release_workflow.py pins the wiring below.
   verify-version:
     name: Verify tag matches Cargo.toml
-    runs-on: ubuntu-latest
+    runs-on: spot
     outputs:
       version: ${{ steps.classify.outputs.version }}
       prerelease: ${{ steps.classify.outputs.prerelease }}
@@ -57,12 +57,10 @@ jobs:
           # `cargo build --release` with no warm cache, which parallelises
           # across codegen units.
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          # Linux ARM64 - native build on arm64. Left at 2x: unchanged by this
-          # migration, and now the long pole of the release. Worth revisiting
-          # separately against measured arm64 build times.
+            os: [self-hosted, Linux, X64, spot]
+          # Linux ARM64 builds run natively on the M4 runner pool.
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04-arm
+            os: [self-hosted, Linux, ARM64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,7 +108,7 @@ jobs:
     needs: verify-version
     # 8x: same profile as the Linux x64 build -- a cold cross-compile of the
     # whole workspace via mingw.
-    runs-on: ubuntu-latest
+    runs-on: spot
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -337,7 +335,7 @@ jobs:
     needs: [verify-version, build-linux, build-windows, build-macos]
     # 2x: downloads artifacts, copies files and calls the releases API.
     # Nothing is compiled here.
-    runs-on: ubuntu-latest
+    runs-on: spot
     permissions:
       contents: write
       actions: read
@@ -544,7 +542,7 @@ jobs:
   publish-release:
     name: Publish verified GitHub Release
     needs: [verify-version, create-release, verify-release-assets]
-    runs-on: ubuntu-latest
+    runs-on: spot
     permissions:
       contents: write
       actions: read
@@ -746,7 +744,7 @@ jobs:
     # label would silently survive every later stable release.
     if: needs.verify-version.outputs.prerelease != 'true'
     # 2x: git operations, awk and sed against the gh-pages branch.
-    runs-on: ubuntu-latest
+    runs-on: spot
     permissions:
       contents: write
     steps:

@@ -8,8 +8,9 @@ instrument, or the measurement is not evidence").
 **Which environment these numbers come from.** The table below was produced on
 a developer workstation (see **Environment** and **Machine**), not in CI.
 `.github/workflows/benchmarks.yml` runs the same script on every landing on
-`refactor/tag-machinery`, on a shared GitHub-hosted runner; those results are
-published as a workflow artifact and in the run's step summary, are labelled
+`refactor/tag-machinery`, on a self-hosted spot runner. Each CI artifact stamps
+its actual runner, and those results are published as a workflow artifact and
+in the run's step summary, are labelled
 *indicative*, and are never committed here. Do not compare a CI number with
 this file's numbers -- different hardware, core count and background load.
 
@@ -123,7 +124,7 @@ Library-level criterion benchmarks: `cargo bench` (results under `target/criteri
 - **Architecture**: arm64
 - **CPU**: Apple M4
 - **Cores**: 10
-- **Memory**: 32GB
+- **Memory**: 32 GB
 - **Perl ExifTool**: 13.36
 - **ExifTool-RS**: 0.1.0
 
