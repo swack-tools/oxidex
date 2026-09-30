@@ -28,7 +28,7 @@ jobs:
     name: Verify tag is reachable from main
     # A full-depth clone and one `git merge-base` call; this job gates the
     # whole workflow.
-    runs-on: spot
+    runs-on: docker
     outputs:
       allowed: ${{ steps.ancestry.outputs.allowed }}
     steps:
