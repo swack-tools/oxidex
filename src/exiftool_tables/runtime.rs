@@ -1349,7 +1349,7 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
                     .binary_search_by_key(&value, |(key, _)| *key)
                     .ok()
                     .map(|index| exact[index].1.to_string())
-                    .or_else(|| other.and_then(|id| id.apply(value)))
+                    .or_else(|| other.and_then(|id| id.apply(value, exact)))
                     .unwrap_or_else(|| unknown_fallback(value, print_hex)),
             )
         }
@@ -2800,6 +2800,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exe_macho_cpu_other_uses_exact_map_after_direct_match() {
+        // EXE.pm's OTHER receives the same conversion hash that supplied
+        // these direct entries; it must not invent a name for an unknown key.
+        let conv = PrintConv::PartialEnumInt {
+            exact: &[(-1, "Any"), (7, "x86"), (12, "ARM"), (18, "PowerPC")],
+            other: Some(OtherId::ExeMachoCpuAbi64),
+            print_hex: false,
+        };
+        for (raw, expected) in [
+            (-1, "Any"),
+            (7, "x86"),
+            (0x0100_0007, "x86 64-bit"),
+            (0x0100_000c, "ARM 64-bit"),
+            (0x0100_0012, "PowerPC 64-bit"),
+            (0x0200_000c, "Unknown (33554444)"),
+            (-2, "Unknown (-2)"),
+        ] {
+            assert_eq!(
+                render(conv, &DecodedValue::Integer(raw)),
+                Some(expected.to_string()),
+                "CPUType {raw}"
+            );
+        }
+    }
+
     // --- Step 25: Bitmask ----------------------------------------------------
 
     #[test]
@@ -2836,8 +2862,8 @@ mod tests {
 
     #[test]
     fn other_id_identity_passes_the_value_through() {
-        assert_eq!(OtherId::Identity.apply(127), Some("127".to_string()));
-        assert_eq!(OtherId::Identity.apply(-3), Some("-3".to_string()));
+        assert_eq!(OtherId::Identity.apply(127, &[]), Some("127".to_string()));
+        assert_eq!(OtherId::Identity.apply(-3, &[]), Some("-3".to_string()));
     }
 
     #[test]
@@ -2845,21 +2871,27 @@ mod tests {
         // Exif.pm:5628-5639's `PrintParameter`: `return $val if $inv` is the
         // PrintConvInv path, not reachable from here.
         // `$val <= 0` passes through unchanged.
-        assert_eq!(OtherId::ExifPrintParameter.apply(0), Some("0".to_string()));
         assert_eq!(
-            OtherId::ExifPrintParameter.apply(-4),
+            OtherId::ExifPrintParameter.apply(0, &[]),
+            Some("0".to_string())
+        );
+        assert_eq!(
+            OtherId::ExifPrintParameter.apply(-4, &[]),
             Some("-4".to_string())
         );
         // `0 < $val <= 0xfff0` gets a leading `+`.
-        assert_eq!(OtherId::ExifPrintParameter.apply(7), Some("+7".to_string()));
         assert_eq!(
-            OtherId::ExifPrintParameter.apply(0xfff0),
+            OtherId::ExifPrintParameter.apply(7, &[]),
+            Some("+7".to_string())
+        );
+        assert_eq!(
+            OtherId::ExifPrintParameter.apply(0xfff0, &[]),
             Some("+65520".to_string())
         );
         // `$val > 0xfff0` is really a negative value in disguise:
         // `$val - 0x10000`.
         assert_eq!(
-            OtherId::ExifPrintParameter.apply(0xfff1),
+            OtherId::ExifPrintParameter.apply(0xfff1, &[]),
             Some("-15".to_string())
         );
     }
@@ -2868,15 +2900,15 @@ mod tests {
     fn other_id_minolta_af_status_focus_matches_minolta_pm_648() {
         // Minolta.pm:648-658's `%afStatusInfo` OTHER sub, forward path only.
         assert_eq!(
-            OtherId::MinoltaAfStatusFocus.apply(-5),
+            OtherId::MinoltaAfStatusFocus.apply(-5, &[]),
             Some("Front Focus (-5)".to_string())
         );
         assert_eq!(
-            OtherId::MinoltaAfStatusFocus.apply(5),
+            OtherId::MinoltaAfStatusFocus.apply(5, &[]),
             Some("Back Focus (+5)".to_string())
         );
         assert_eq!(
-            OtherId::MinoltaAfStatusFocus.apply(0),
+            OtherId::MinoltaAfStatusFocus.apply(0, &[]),
             Some("Back Focus (+0)".to_string())
         );
     }
