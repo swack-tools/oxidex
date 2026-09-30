@@ -388,16 +388,84 @@ class CleanSnapshotTests(unittest.TestCase):
                                   snapshot.source_tree_sha256(self.owned),
                                   {"generated.txt", ".exiftool-version"})
 
+    def test_git_executable_is_bound_before_replay(self) -> None:
+        proof = self.create()
+        git_path = Path(shutil.which("git")).resolve()
+        self.assertEqual(proof["git_path"], str(git_path))
+        self.assertEqual(proof["git_sha256"], hashlib.sha256(git_path.read_bytes()).hexdigest())
+        alternate = self.root / "alternate-git-bin"
+        alternate.mkdir()
+        marker = self.root / "replacement-git-invoked"
+        wrapper = alternate / "git"
+        wrapper.write_text("#!/bin/sh\nprintf invoked > '" + str(marker) + "'\nexec '" +
+                           str(git_path) + "' \"$@\"\n")
+        wrapper.chmod(0o700)
+        with patch.dict(os.environ, {"PATH": str(alternate) + os.pathsep + os.environ["PATH"]}):
+            with self.assertRaisesRegex(snapshot.Refused, "Git executable differs"):
+                snapshot.validate(proof, self.owned, self.target, self.parent,
+                                  snapshot.source_tree_sha256(self.owned),
+                                  {"generated.txt", ".exiftool-version"})
+        self.assertFalse(marker.exists())
+
     def test_owned_worktree_preflight_refuses_relative_signing_path(self) -> None:
         git(self.owned, "config", "--local", "user.signingkey", "../signing-key.pub")
         with self.assertRaisesRegex(qualification.Refused, "absolute user.signingkey"):
-            qualification._preflight_owned_signing(self.owned)
+            qualification._preflight_owned_signing(self.owned, self.root)
         git(self.owned, "config", "--local", "user.signingkey", str(self.key.with_suffix(".pub")))
         git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", "../allowed-signers")
         with self.assertRaisesRegex(qualification.Refused, "absolute gpg.ssh.allowedSignersFile"):
-            qualification._preflight_owned_signing(self.owned)
+            qualification._preflight_owned_signing(self.owned, self.root)
         git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
-        qualification._preflight_owned_signing(self.owned)
+        git(self.owned, "config", "--local", "user.signingkey", str(self.key))
+        qualification._preflight_owned_signing(self.owned, self.root)
+
+    def test_owned_preflight_refuses_public_key_without_agent_before_stages(self) -> None:
+        orphan = self.root / "public-only.pub"
+        orphan.write_bytes(self.key.with_suffix(".pub").read_bytes())
+        git(self.owned, "config", "--local", "user.signingkey", str(orphan))
+        with patch.dict(os.environ, {"SSH_AUTH_SOCK": ""}):
+            with self.assertRaisesRegex(qualification.Refused, "signing probe failed"):
+                qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
+
+    def test_owned_preflight_refuses_includeif_config_lost_in_worktree(self) -> None:
+        included = self.root / "caller-only-config"
+        included.write_text(f"[user]\n\tsigningkey = {self.key}\n")
+        source_gitdir = Path(git(self.owned, "rev-parse", "--absolute-git-dir")).resolve()
+        self.git_config.write_text(
+            "[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
+            "[gpg]\n\tformat = ssh\n"
+            f"[gpg \"ssh\"]\n\tallowedSignersFile = {self.allowed_signers}\n"
+            f"[includeIf \"gitdir:{source_gitdir}\"]\n\tpath = {included}\n"
+        )
+        self.assertEqual(snapshot._signature_trust(self.owned).effective_key, str(self.key.resolve()))
+        with self.assertRaisesRegex(qualification.Refused, "trust changes in the owned checkout"):
+            qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
+
+    def test_actual_owned_checkout_refuses_includeif_signer_swap(self) -> None:
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        self.allowed_signers.write_text(
+            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
+            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n")
+        source_gitdir = Path(git(self.owned, "rev-parse", "--absolute-git-dir")).resolve()
+        included = self.root / "owned-only-config"
+        included.write_text(f"[user]\n\tsigningkey = {other}\n")
+        with self.git_config.open("a") as config:
+            config.write(f"[includeIf \"gitdir:{source_gitdir / 'worktrees' / 'owned-checkout'}\"]\n"
+                         f"\tpath = {included}\n")
+        preflight = qualification._preflight_owned_signing(self.owned, self.root)
+        checkout = self.root / "checkouts" / "owned-checkout"
+        checkout.parent.mkdir()
+        git(self.owned, "worktree", "add", "--detach", "--no-checkout", str(checkout), "HEAD")
+        try:
+            self.assertEqual(snapshot._signature_trust(checkout).effective_key, str(other.resolve()))
+            with self.assertRaisesRegex(qualification.Refused, "actual owned checkout"):
+                qualification._confirm_owned_signing(checkout, preflight)
+        finally:
+            git(self.owned, "worktree", "remove", "--force", str(checkout))
 
     def test_repo_local_ssh_program_is_used_by_snapshot(self) -> None:
         marker = self.root / "program-invoked"
@@ -459,6 +527,13 @@ class CleanSnapshotTests(unittest.TestCase):
         wrong = dict(proof, parent_commit="f" * 40)
         with self.assertRaises(snapshot.Refused):
             snapshot.validate(wrong, self.owned, self.target, self.parent,
+                              proof["source_tree_sha256"], {"generated.txt", ".exiftool-version"})
+
+    def test_malformed_signer_mode_refuses_without_type_error(self) -> None:
+        proof = self.create()
+        malformed = dict(proof, signing_key_mode=[])
+        with self.assertRaisesRegex(snapshot.Refused, "proof identity is malformed"):
+            snapshot.validate(malformed, self.owned, self.target, self.parent,
                               proof["source_tree_sha256"], {"generated.txt", ".exiftool-version"})
 
     def test_signed_merge_with_identical_bytes_is_not_a_child_snapshot(self) -> None:
