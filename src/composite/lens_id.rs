@@ -25,6 +25,7 @@
 use super::lens_alternatives::{
     CANON_LENS_ALTERNATIVES, CANON_RF_LENS_ALTERNATIVES, PENTAX_LENS_ALTERNATIVES,
 };
+use super::xmp_lens_maps::{self, XmpLensMaker};
 
 /// The `PrintLensID` branches this port does not implement, each returning
 /// `None` rather than a guess. Kept as data so a test can assert the list is
@@ -101,6 +102,28 @@ pub const OMITTED: &[(&str, &str)] = &[
          userLens`, populated from a user's .ExifTool_config. oxidex has no \
          such configuration file, so the list is empty by construction and \
          both blocks are unreachable rather than unimplemented.",
+    ),
+];
+
+/// XMP.pm:3300-3370 cases intentionally refused until their source inputs
+/// and ordering can be reproduced. The exporter records every literal row;
+/// these are conversion limits, not missing lookup data.
+pub const XMP_OMITTED: &[(&str, &str)] = &[
+    (
+        "Nikon multi-name prefix",
+        "XMP.pm:3354-3365 iterates Perl hash keys without an order; ambiguous prefix output needs separately authenticated ordering",
+    ),
+    (
+        "Sony E-mount and adapters",
+        "Exif.pm:5915-5952 needs Model, sonyLensTypes2, and metabonesID; simple Sony IDs still use the generated sonyLensTypes map",
+    ),
+    (
+        "nondecimal Nikon/Pentax input",
+        "XMP.pm:3348-3365 applies Perl numeric conversion; unsupported scalar forms are refused",
+    ),
+    (
+        "unknown mapped ID with model or focal hints",
+        "Exif.pm:5954-5966 may prefer LensModel or synthesize a focal suffix; unsupported combination is refused",
     ),
 ];
 
@@ -467,8 +490,25 @@ fn lens_with_tc(lens: &str, short_focal: f64) -> String {
 fn candidates(
     table: LensTable,
     raw_id: Option<i64>,
+    xmp_key: Option<&str>,
     lens: &str,
 ) -> Result<Option<Vec<String>>, ()> {
+    if let LensTable::Xmp(maker) = table {
+        let key = xmp_key.ok_or(())?;
+        let rows = xmp_lens_maps::rows(maker);
+        if rows.iter().find(|(id, _)| *id == key).map(|(_, v)| *v) != Some(lens) {
+            return Err(());
+        }
+        let mut result = vec![strip_or(lens).to_string()];
+        for i in 1.. {
+            let suffix = format!("{key}.{i}");
+            let Some((_, value)) = rows.iter().find(|(id, _)| *id == suffix.as_str()) else {
+                break;
+            };
+            result.push((*value).to_string());
+        }
+        return Ok((result.len() > 1).then_some(result));
+    }
     let alts = match table {
         LensTable::Canon | LensTable::CanonRf => {
             let rows = if table == LensTable::Canon {
@@ -503,6 +543,7 @@ fn candidates(
             .map_or(&[][..], |(_, alts)| *alts),
         LensTable::Olympus => &[],
         LensTable::None_ => return Err(()),
+        LensTable::Xmp(_) => unreachable!(),
     };
     if alts.is_empty() {
         return Ok(None);
@@ -541,6 +582,8 @@ enum LensTable {
     /// trailing spaces and nothing else). This is `PrintLensID`'s
     /// `unless (ref $printConv eq 'HASH')` fall-through.
     None_,
+    /// A selected XMP.pm maker hash with literal source keys.
+    Xmp(XmpLensMaker),
 }
 
 impl LensTable {
@@ -574,6 +617,8 @@ impl LensTable {
 struct Args<'a> {
     lens_type: &'a str,
     raw_lens_type: Option<i64>,
+    xmp_key: Option<&'a str>,
+    sony_body: bool,
     focal_length: Option<f64>,
     max_aperture: Option<f64>,
     max_aperture_value: Option<f64>,
@@ -583,6 +628,170 @@ struct Args<'a> {
     lens_focal_range: Option<&'a str>,
     lens_focal_length: Option<f64>,
     rf_lens_type: Option<&'a str>,
+}
+
+/// XMP.pm:3300-3370. The generated composite supplies these six inputs in
+/// source order; its seventh slot is the `Composite:LensID` inhibit edge.
+pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
+    let get = |i: usize| inputs.get(i).copied().flatten();
+    let id = get(0)?;
+    let make = get(1)?;
+    if inputs.iter().flatten().any(|s| s.contains('\0')) {
+        return None;
+    }
+    let lower = make.to_ascii_lowercase();
+    let maker = [
+        XmpLensMaker::Canon,
+        XmpLensMaker::Nikon,
+        XmpLensMaker::Pentax,
+        XmpLensMaker::Sony,
+        XmpLensMaker::Sigma,
+        XmpLensMaker::Samsung,
+        XmpLensMaker::Leica,
+    ]
+    .into_iter()
+    .find(|maker| {
+        let token = match maker {
+            XmpLensMaker::Canon => "canon",
+            XmpLensMaker::Nikon => "nikon",
+            XmpLensMaker::Pentax => "pentax",
+            XmpLensMaker::Sony => "sony",
+            XmpLensMaker::Sigma => "sigma",
+            XmpLensMaker::Samsung => "samsung",
+            XmpLensMaker::Leica => "leica",
+        };
+        lower.contains(token) || (*maker == XmpLensMaker::Pentax && lower.contains("ricoh"))
+    });
+    let Some(maker) = maker else {
+        return Some(format!("Unknown ({id})"));
+    };
+    let rows = xmp_lens_maps::rows(maker);
+    // `%$convName or last` occurs before the optional-input processing.
+    // SigmaRaw::sigmaLensTypes is empty in the selected 13.59 source.
+    if rows.is_empty() {
+        return Some(format!("Unknown ({id})"));
+    }
+
+    let mut key = id.to_string();
+    let mut raw_id = None;
+    match maker {
+        XmpLensMaker::Canon => raw_id = id.parse::<i64>().ok(),
+        XmpLensMaker::Pentax => {
+            if id.bytes().all(|b| b.is_ascii_digit()) {
+                let value = id.parse::<u16>().ok()?;
+                key = format!("{} {}", value >> 8, value & 255);
+            } else if !id.bytes().all(|b| b.is_ascii_digit() || b == b' ') {
+                return None;
+            }
+        }
+        XmpLensMaker::Nikon => {
+            let value = id.parse::<u64>().ok()?;
+            // Above 2^53 Perl's numeric `sprintf('%X', $id)` may round its
+            // scalar. Do not manufacture an exact prefix from an inexact one.
+            if value > (1u64 << 53) {
+                return None;
+            }
+            let hex = format!("{value:X}");
+            let padded = if hex.len() % 2 == 1 {
+                format!("0{hex}")
+            } else {
+                hex
+            };
+            key = padded
+                .as_bytes()
+                .chunks(2)
+                .map(|b| std::str::from_utf8(b).unwrap())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut names: Vec<&str> = rows
+                .iter()
+                .filter(|(k, _)| k.starts_with(key.as_str()))
+                .map(|(_, name)| *name)
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            // Perl's `keys %hash` has no stable order. A single distinct name
+            // is exact; a multi-name prefix has no reproducible output order.
+            if names.len() > 1 {
+                return None;
+            }
+            if let Some(name) = names.first() {
+                return (get(2).is_none()
+                    && get(3).is_none()
+                    && get(4).is_none()
+                    && get(5).is_none())
+                .then(|| (*name).to_string());
+            }
+        }
+        XmpLensMaker::Sony if make == "SONY" => {
+            let value = id.parse::<u32>().ok()?;
+            let high = value & 0xff00;
+            if value == 65535
+                || matches!(high, 0xef00 | 0xbc00 | 0x7700)
+                || (0x4900..=0x590a).contains(&value)
+            {
+                return None;
+            }
+        }
+        _ => {}
+    }
+
+    let info = get(2).filter(|s| !s.is_empty());
+    let mut parts = [None; 4];
+    if let Some(info) = info {
+        for (i, value) in info.split_whitespace().take(4).enumerate() {
+            if value != "undef" {
+                parts[i] = Some(super::compute::f(Some(value))?);
+            }
+        }
+    }
+    let focal_length = super::compute::f(get(3));
+    let max_av = super::compute::f(get(5));
+    let truthy = |v: Option<f64>| v.filter(|n| *n != 0.0);
+    if maker == XmpLensMaker::Sony {
+        let bad_focal = truthy(focal_length).is_some_and(|fl| {
+            truthy(parts[0]).is_some_and(|sf| fl < sf - 0.5)
+                || truthy(parts[1]).is_some_and(|lf| fl > lf + 0.5)
+        });
+        let bad_aperture = truthy(max_av).is_some_and(|ma| {
+            truthy(parts[2]).is_some_and(|sa| ma < sa - 0.15)
+                || truthy(parts[3]).is_some_and(|la| ma > la + 0.15)
+        });
+        if bad_focal || bad_aperture {
+            parts = [None; 4];
+        }
+    }
+    if truthy(max_av).is_some() && maker != XmpLensMaker::Sony {
+        parts[2] = None;
+    }
+    let lens_model = get(4).filter(|s| !s.is_empty());
+    let Some((_, label)) = rows.iter().find(|(k, _)| *k == key.as_str()) else {
+        if info.is_some() || focal_length.is_some() || lens_model.is_some() || max_av.is_some() {
+            return None;
+        }
+        return Some(format!("Unknown ({key})"));
+    };
+    let table = match maker {
+        XmpLensMaker::Canon => LensTable::Canon,
+        XmpLensMaker::Pentax => LensTable::Pentax,
+        other => LensTable::Xmp(other),
+    };
+    let args = Args {
+        lens_type: label,
+        raw_lens_type: raw_id,
+        xmp_key: Some(&key),
+        sony_body: make == "SONY",
+        focal_length,
+        max_aperture: parts[2],
+        max_aperture_value: max_av,
+        short_focal: parts[0],
+        long_focal: parts[1],
+        lens_model,
+        lens_focal_range: None,
+        lens_focal_length: None,
+        rf_lens_type: None,
+    };
+    print_lens_id(label, table, &args)
 }
 
 /// Compute `Composite:LensID` from the primary (`Require => 'LensType'`)
@@ -664,6 +873,8 @@ pub(super) fn compute_primary(
     let mut args = Args {
         lens_type,
         raw_lens_type,
+        xmp_key: None,
+        sony_body: false,
         focal_length: f(get(1)),
         max_aperture: f(get(2)),
         max_aperture_value: f(get(3)),
@@ -760,7 +971,7 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
         let tamron = args
             .lens_model
             .is_some_and(|m| m.starts_with("TAMRON") && tamron_dash_mm(m));
-        if !tamron {
+        if !tamron && !args.sony_body {
             return canon_print_lens_id(
                 table,
                 lens_type_prt,
@@ -769,6 +980,7 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
                 max_aperture,
                 args.lens_model,
                 args.raw_lens_type,
+                args.xmp_key,
             );
         }
     }
@@ -791,7 +1003,8 @@ fn print_lens_id(lens_type_prt: &str, table: LensTable, args: &Args) -> Option<S
                 .to_string(),
         );
     }
-    let Some(lenses) = candidates(table, args.raw_lens_type, lens_type_prt).ok()? else {
+    let Some(lenses) = candidates(table, args.raw_lens_type, args.xmp_key, lens_type_prt).ok()?
+    else {
         return Some(lens_type_prt.to_string());
     };
 
@@ -885,6 +1098,7 @@ fn canon_print_lens_id(
     max_aperture: Option<f64>,
     lens_model: Option<&str>,
     raw_lens_type: Option<i64>,
+    xmp_key: Option<&str>,
 ) -> Option<String> {
     // Canon.pm:10186-10187:
     //     $lens = $$printConv{$lensType} unless $lensType eq '-1' or eq '65535';
@@ -896,7 +1110,7 @@ fn canon_print_lens_id(
     if !is_na && unknown_id.is_none() {
         // Canon.pm:10190 -- `return LensWithTC($lens, $shortFocal) unless
         // $$printConv{"$lensType.1"};`
-        let Some(lenses) = candidates(table, raw_lens_type, lens_type_prt).ok()? else {
+        let Some(lenses) = candidates(table, raw_lens_type, xmp_key, lens_type_prt).ok()? else {
             return Some(lens_with_tc(lens_type_prt, short_focal));
         };
 
