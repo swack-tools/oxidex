@@ -1017,10 +1017,9 @@ jobs:
 
   metrics:
     name: Benchmarks
-    # 8x, and DELIBERATELY the same label as deploy-docs.yml's benchmark job.
-    # These two publish into the same story -- this one as a 90-day artifact,
-    # the other to the docs performance page -- so they must always match on
-    # runner AND on how they measure. They move together or not at all.
+    # This is the sole producer of the Criterion benchmark artifact.
+    # deploy-docs.yml consumes that artifact and stamps the measured commit;
+    # it no longer runs a second benchmark job. `spot` does not pin a host.
     #
     # This job is tuned for THROUGHPUT, not for measurement fidelity. That is
     # a deliberate, explicit trade (2026-08-08, see CHANGELOG):
