@@ -516,6 +516,15 @@ impl TTFParser {
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
+            // The language lookup names more Macintosh records than the
+            // current charset reader can reproduce. Keep those values out of
+            // the Font group until their source charset is supported.
+            if record.platform_id == PLATFORM_MACINTOSH
+                && !matches!(record.encoding_id, MAC_ENCODING_ROMAN | MAC_ENCODING_HEBREW)
+                && mac_charset::for_mac_encoding(record.encoding_id).is_none()
+            {
+                continue;
+            }
             let key = match Self::name_record_lang_with_fallback(
                 record,
                 format_one_tags.get(&record.language_id).map(String::as_str),
@@ -1344,6 +1353,28 @@ mod tests {
 
         assert_eq!(metadata.get("Copyright"), Some(&expected));
         assert_eq!(metadata.get("Font:Copyright"), Some(&expected));
+    }
+
+    #[test]
+    fn unsupported_macintosh_charset_does_not_publish_wrong_font_value() {
+        // Pinned Font.pm decodes c2 a0 with MacArabic as "آ "; interpreting
+        // it as UTF-8 would publish a non-breaking space under the new ar tag.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one record
+        data.extend_from_slice(&18u16.to_be_bytes()); // string storage
+        for field in [PLATFORM_MACINTOSH, 4, 12, NAME_FONT_FAMILY, 2, 0] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&[0xc2, 0xa0]);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let reader = TestReader::new(data);
+        let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+        assert!(!tags.contains_key("Font:FontFamily-ar"));
     }
 
     /// End-to-end check that a Macintosh CJK record reaches the right tag
