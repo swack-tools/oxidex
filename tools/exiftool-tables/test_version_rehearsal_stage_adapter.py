@@ -432,6 +432,14 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(read["denominator"], 3)
         self.assertTrue(Path(read["raw_maps"]["path"]).is_file())
 
+    def test_read_refuses_missing_prior_raw_command_receipts(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        shutil.rmtree(self.reports / "raw")
+        with self.assertRaisesRegex(adapter.Refused, "raw command report"):
+            adapter.read(self.args("read"), run=self.fake_run)
+        self.assertFalse((self.reports / "raw").exists())
+
     def test_read_refuses_unauthenticated_raw_map_capture(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
@@ -1392,6 +1400,27 @@ class CurrentGeneratedMatrixContractTests(unittest.TestCase):
         self.assertEqual(sum(coverage.values()), len(expected))
         self.assertEqual(sum(qualifiers.values()), len(expected))
         self.assertGreater(baseline, 0)
+
+
+class StageCliExitTests(unittest.TestCase):
+    def test_measured_read_exits_success_without_claiming_pair_acceptance(self) -> None:
+        for stage, state, expected_exit in (("read", "measured", 0),
+                                             ("read", "refused", 2),
+                                             ("write", "measured", 2),
+                                             ("write", "passed", 0)):
+            with self.subTest(stage=stage, state=state):
+                source = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+                          "import version_rehearsal_stage_adapter as adapter; "
+                          f"adapter.{stage} = lambda args: {{'state': '{state}'}}; "
+                          "raise SystemExit(adapter.main(sys.argv[1:]))")
+                command = [sys.executable, "-c", source, str(HERE), stage]
+                for option in ("checkout", "target", "report", "release", "source-commit",
+                               "native-source", "native-lib", "native-perl"):
+                    command += ["--" + option, "unused"]
+                command += ["--fixture-manifest", "unused", "--native-probe-sha256", "unused"]
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["state"], state)
 
 
 if __name__ == "__main__": unittest.main()

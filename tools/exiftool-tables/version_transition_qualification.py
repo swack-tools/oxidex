@@ -21,6 +21,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -47,6 +48,7 @@ RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 EXPECTED_PERL_VERSION = "v5.38.2"
 EXPECTED_PERL_SHA256 = "e78cfd5a061c7e0f4ee7d0cc40a8878186d9bd321f930609ad5bdaec78410959"
+SIGNING_PROBE_TIMEOUT_SECONDS = 15
 FIXED_SOURCE_COMMITS = {
     "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
     "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
@@ -594,6 +596,11 @@ def _report_for(run_dir: Path, journal: Mapping[str, Any], release: str, stage: 
     value = _read_object(run_dir / relative, f"{release} {stage} report")
     if rehearsal.sha256_json(value) != report["sha256"]:
         raise Refused(f"{release} {stage} report differs from its execution journal digest")
+    if stage in {"generate", "build", "test", "read", "write"}:
+        try:
+            executor._require_raw_report(value)
+        except executor.Refused as error:
+            raise Refused(f"{release} {stage} {error}") from error
     return value
 
 
@@ -1388,6 +1395,10 @@ def _replay_committed_read_snapshot(row: Mapping[str, Any], side: str, root: Pat
     generation = _report_for(run_dir, journal, release, "generate")
     build = _report_for(run_dir, journal, release, "build")
     read = _report_for(run_dir, journal, release, "read")
+    # The final marker must still be backed by the release-test and write
+    # command transcripts, even though read-pair replay uses only read data.
+    _report_for(run_dir, journal, release, "test")
+    _report_for(run_dir, journal, release, "write")
     read_report_path = run_dir / journal["releases"][release]["reports"]["read"]["path"]
     if (read.get("state") != "measured"
             or release_state.get("reports", {}).get("read", {}).get("acceptance") != "pending_pair_policy"):
@@ -1564,6 +1575,90 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
     return final
 
 
+def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapter.clean_snapshot.SigningTrust:
+    """Prove the effective signer in a linked checkout before costly stages."""
+    snapshot = stage_adapter.clean_snapshot
+    trust = snapshot._signature_trust(repository)
+    options = ("user.signingkey", "gpg.ssh.allowedSignersFile",
+               "gpg.ssh.revocationFile", "gpg.ssh.program")
+    for option in options:
+        raw = snapshot._git(
+            repository, "config", "--get", "--default=", option)
+        assert isinstance(raw, str)
+        if not raw or (option == "user.signingkey" and
+                       (raw.startswith("key::") or raw.startswith(("ssh-", "ecdsa-", "sk-")))):
+            continue
+        if option == "gpg.ssh.program" and "/" not in raw:
+            continue  # Resolved to a bound absolute executable by _signature_trust.
+        if not Path(raw).expanduser().is_absolute():
+            raise Refused(f"Task19 owned checkout requires an absolute {option} path")
+    if trust.program_path is None:
+        raise Refused("Task19 owned checkout has no bound SSH signing program")
+    if not output_root.is_dir() or output_root.is_symlink():
+        raise Refused("Task19 signing preflight output root is absent or symlinked")
+
+    git_path, _git_sha = snapshot._git_executable()
+    scratch_parent = Path(tempfile.mkdtemp(prefix=".task19-signing-probe-", dir=output_root))
+    owned = scratch_parent / "owned"
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false",
+                       SSH_ASKPASS="/bin/false", DISPLAY="")
+    created = False
+
+    def run(*args: str, cwd: Path) -> str:
+        try:
+            result = executor._tracked_run(
+                [git_path, *args], cwd=str(cwd), env=environment,
+                stdin=subprocess.DEVNULL, capture_output=True,
+                start_new_session=True, close_fds=False, text=True,
+                timeout=SIGNING_PROBE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            raise Refused("Task19 owned checkout signing probe timed out") from error
+        except OSError as error:
+            raise Refused("Task19 owned checkout signing probe could not prove process cleanup") from error
+        if result.returncode != 0:
+            raise Refused(f"Task19 owned checkout signing probe failed: {result.stderr.strip()[:300]}")
+        return result.stdout.strip()
+
+    try:
+        run("-C", str(repository), "worktree", "add", "--detach", "--no-checkout",
+            str(owned), "HEAD", cwd=repository)
+        created = True
+        try:
+            owned_trust = snapshot._signature_trust(owned)
+        except snapshot.Refused as error:
+            raise Refused("Task19 signing trust changes in the owned checkout") from error
+        if owned_trust != trust:
+            raise Refused("Task19 signing trust changes in the owned checkout")
+        run("-C", str(owned), "-c", "core.hooksPath=/dev/null", *snapshot._signing_options(trust),
+            "commit", "--quiet", "--allow-empty", "-S", "-m", "Task19 signing preflight",
+            cwd=owned)
+        run("-C", str(owned), *snapshot._verification_options(trust),
+            "verify-commit", "HEAD", cwd=owned)
+        if run("-C", str(owned), *snapshot._verification_options(trust),
+               "show", "-s", "--format=%GF", "HEAD", cwd=owned) != trust.fingerprint:
+            raise Refused("Task19 owned checkout signed with an unexpected SSH key")
+    finally:
+        survivors = executor.unproven_children()
+        if survivors:
+            raise LeaseRetained("Task19 signing probe retains an unproven owned process", survivors)
+        if created:
+            run("-C", str(repository), "worktree", "remove", "--force", str(owned), cwd=repository)
+        scratch_parent.rmdir()
+    return trust
+
+
+def _confirm_owned_signing(checkout: Path,
+                           preflight: stage_adapter.clean_snapshot.SigningTrust) -> None:
+    """The actual checkout can match a different includeIf gitdir rule."""
+    try:
+        observed = stage_adapter.clean_snapshot._signature_trust(checkout)
+    except stage_adapter.clean_snapshot.Refused as error:
+        raise Refused("Task19 signing trust changes in the actual owned checkout") from error
+    if observed != preflight:
+        raise Refused("Task19 signing trust changes in the actual owned checkout")
+
+
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                       target_root: Path, lease_path: Path, run_id: str,
                       owner_receipt: Path, heartbeat_receipt: Path,
@@ -1616,6 +1711,13 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     with TransitionLease(lease=lease_path, run_id=run_id, owner_receipt=owner_receipt,
                          heartbeat_receipt=heartbeat_receipt, expiry_receipt=expiry_receipt,
                          release_receipt=release_receipt) as host_lease:
+        # The signed measurement clone does not inherit repository-local SSH
+        # verification configuration. Probe before costly stages, but under the
+        # lease so an unproven signing child retains the host boundary.
+        try:
+            preflight_signing = _preflight_owned_signing(repository, output_root)
+        except stage_adapter.clean_snapshot.Refused as error:
+            raise Refused(str(error)) from error
         _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                         "state": "preflight", "rows": [row["id"] for row in rows],
                                         "lease": str(lease_path),
@@ -1661,6 +1763,10 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         try:
                             host_lease.guard()
                             cadence.check()
+                            if _stage == "checkout" and _boundary == "after":
+                                _confirm_owned_signing(
+                                    side_run / "checkouts" / executor._safe_name(_release),
+                                    preflight_signing)
                             _verify_read_policy_input(
                                 policy_binding, {item["id"] for item in matrix["rows"]})
                             _verify_frozen_side(selected)
