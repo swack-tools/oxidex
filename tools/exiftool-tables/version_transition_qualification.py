@@ -18,9 +18,11 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -1573,13 +1575,14 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
     return final
 
 
-def _preflight_owned_signing(repository: Path) -> None:
-    """Refuse Git signing paths whose meaning changes in an owned worktree."""
-    trust = stage_adapter.clean_snapshot._signature_trust(repository)
+def _preflight_owned_signing(repository: Path, output_root: Path) -> None:
+    """Prove the effective signer in a linked checkout before costly stages."""
+    snapshot = stage_adapter.clean_snapshot
+    trust = snapshot._signature_trust(repository)
     options = ("user.signingkey", "gpg.ssh.allowedSignersFile",
                "gpg.ssh.revocationFile", "gpg.ssh.program")
     for option in options:
-        raw = stage_adapter.clean_snapshot._git(
+        raw = snapshot._git(
             repository, "config", "--get", "--default=", option)
         assert isinstance(raw, str)
         if not raw or (option == "user.signingkey" and
@@ -1591,6 +1594,53 @@ def _preflight_owned_signing(repository: Path) -> None:
             raise Refused(f"Task19 owned checkout requires an absolute {option} path")
     if trust.program_path is None:
         raise Refused("Task19 owned checkout has no bound SSH signing program")
+    if not output_root.is_dir() or output_root.is_symlink():
+        raise Refused("Task19 signing preflight output root is absent or symlinked")
+
+    git_path, _git_sha = snapshot._git_executable()
+    scratch_parent = Path(tempfile.mkdtemp(prefix=".task19-signing-probe-", dir=output_root))
+    owned = scratch_parent / "owned"
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false",
+                       SSH_ASKPASS="/bin/false", DISPLAY="")
+    created = False
+
+    def run(*args: str, cwd: Path) -> str:
+        process = subprocess.Popen([git_path, *args], cwd=cwd, env=environment,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True, text=True)
+        try:
+            stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired as error:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise Refused("Task19 owned checkout signing probe timed out") from error
+        if process.returncode != 0:
+            raise Refused(f"Task19 owned checkout signing probe failed: {stderr.strip()[:300]}")
+        return stdout.strip()
+
+    try:
+        run("-C", str(repository), "worktree", "add", "--detach", "--no-checkout",
+            str(owned), "HEAD", cwd=repository)
+        created = True
+        try:
+            owned_trust = snapshot._signature_trust(owned)
+        except snapshot.Refused as error:
+            raise Refused("Task19 signing trust changes in the owned checkout") from error
+        if owned_trust != trust:
+            raise Refused("Task19 signing trust changes in the owned checkout")
+        run("-C", str(owned), *snapshot._signing_options(trust),
+            "commit", "--quiet", "--allow-empty", "-S", "-m", "Task19 signing preflight",
+            cwd=owned)
+        run("-C", str(owned), *snapshot._verification_options(trust),
+            "verify-commit", "HEAD", cwd=owned)
+        if run("-C", str(owned), *snapshot._verification_options(trust),
+               "show", "-s", "--format=%GF", "HEAD", cwd=owned) != trust.fingerprint:
+            raise Refused("Task19 owned checkout signed with an unexpected SSH key")
+    finally:
+        if created:
+            run("-C", str(repository), "worktree", "remove", "--force", str(owned), cwd=repository)
+        scratch_parent.rmdir()
 
 
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
@@ -1620,7 +1670,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     # does not inherit repository-local SSH verification configuration. Refuse
     # missing trust before the costly generation/build stages begin.
     try:
-        _preflight_owned_signing(repository)
+        _preflight_owned_signing(repository, output_root)
     except stage_adapter.clean_snapshot.Refused as error:
         raise Refused(str(error)) from error
     pinned = caller["pin_version"]

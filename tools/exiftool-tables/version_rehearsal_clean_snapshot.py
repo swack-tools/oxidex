@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 import re
 import shutil
@@ -26,10 +28,44 @@ SNAPSHOT_DIR = "measurement-source"
 OID = re.compile(r"[0-9a-f]{40}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 EXCLUDED_DIRS = {".git", "target", "__pycache__"}
+_BOUND_GIT: ContextVar[tuple[str, str] | None] = ContextVar("snapshot_git", default=None)
 
 
 class Refused(ValueError):
     pass
+
+
+def _git_executable() -> tuple[str, str]:
+    executable = shutil.which("git")
+    if not executable:
+        raise Refused("clean measurement snapshot Git executable is absent")
+    path = Path(executable).resolve()
+    if not path.is_file():
+        raise Refused("clean measurement snapshot Git executable is absent")
+    return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _bind_git(*, proof_arg: bool = False):
+    """Use one immutable executable identity for every Git call in a proof."""
+    def decorate(function):
+        @wraps(function)
+        def bound(*args, **kwargs):
+            identity = _git_executable()
+            if proof_arg:
+                proof = args[0] if args else kwargs.get("proof")
+                if (not isinstance(proof, dict) or proof.get("git_path") != identity[0]
+                        or proof.get("git_sha256") != identity[1]):
+                    raise Refused("clean measurement snapshot Git executable differs from signed proof")
+            token = _BOUND_GIT.set(identity)
+            try:
+                result = function(*args, **kwargs)
+                if _git_executable() != identity:
+                    raise Refused("clean measurement snapshot Git executable changed during verification")
+                return result
+            finally:
+                _BOUND_GIT.reset(token)
+        return bound
+    return decorate
 
 
 class SigningTrust(NamedTuple):
@@ -55,7 +91,8 @@ class SigningTrust(NamedTuple):
 
 def _git(repo: Path, *args: str, binary: bool = False) -> str | bytes:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    result = subprocess.run(["git", "-C", str(repo), *args], cwd=repo, env=env,
+    executable = (_BOUND_GIT.get() or _git_executable())[0]
+    result = subprocess.run([executable, "-C", str(repo), *args], cwd=repo, env=env,
                             capture_output=True, text=not binary, check=False)
     if result.returncode != 0:
         raise Refused(f"clean measurement snapshot Git command failed: {' '.join(args)}: "
@@ -292,6 +329,7 @@ def _source_identity(source: Path, parent: str, expected_digest: str,
     return rows
 
 
+@_bind_git()
 def create(source: Path, target: Path, parent: str, expected_digest: str,
            sanctioned_paths: set[str]) -> dict[str, Any]:
     """Make one signed child from precisely the generated source bytes."""
@@ -304,7 +342,7 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     rows = _source_identity(source, parent, expected_digest, sanctioned_paths)
     trust = _signature_trust(source)
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    cloned = subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
+    cloned = subprocess.run([_BOUND_GIT.get()[0], "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
                              "--", str(source), str(measured)], cwd=target, env=env,
                             capture_output=True, text=True, check=False)
     if cloned.returncode != 0:
@@ -344,6 +382,7 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
         "default_key_command_sha256": trust.default_command_sha,
         "ssh_program_path": trust.program_path, "ssh_program_sha256": trust.program_sha,
         "ssh_keygen_path": trust.keygen_path, "ssh_keygen_sha256": trust.keygen_sha,
+        "git_path": _BOUND_GIT.get()[0], "git_sha256": _BOUND_GIT.get()[1],
         "author_identity_sha256": hashlib.sha256(
             json.dumps([trust.author_name, trust.author_email]).encode()).hexdigest(),
         "minimum_trust_level": trust.minimum_trust,
@@ -352,6 +391,7 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     return proof
 
 
+@_bind_git(proof_arg=True)
 def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
              expected_digest: str, sanctioned_paths: set[str]) -> Path:
     """Replay the signed-parent, clean-tree, byte-equality and path checks."""
@@ -365,6 +405,7 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
                        "revocation_path", "revocation_sha256", "default_key_command_sha256",
                        "ssh_program_path", "ssh_program_sha256",
                        "ssh_keygen_path", "ssh_keygen_sha256", "author_identity_sha256",
+                       "git_path", "git_sha256",
                        "minimum_trust_level"}
             or proof["schema"] != 3 or proof["path"] != str(measured)
             or proof["parent_commit"] != parent or proof["source_tree_sha256"] != expected_digest
@@ -406,6 +447,9 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
             or not isinstance(proof["ssh_keygen_path"], str)
             or not isinstance(proof["ssh_keygen_sha256"], str)
             or not SHA.fullmatch(proof["ssh_keygen_sha256"])
+            or not isinstance(proof["git_path"], str)
+            or not isinstance(proof["git_sha256"], str)
+            or not SHA.fullmatch(proof["git_sha256"])
             or (proof["default_key_command_sha256"] is not None and
                 (not isinstance(proof["default_key_command_sha256"], str) or
                  not SHA.fullmatch(proof["default_key_command_sha256"])))
