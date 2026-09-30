@@ -35,7 +35,7 @@
 #   BENCH_ENVIRONMENT="..."                       -- which environment produced the numbers,
 #                                                   stamped into the report (default: a local,
 #                                                   non-CI run; .github/workflows/benchmarks.yml
-#                                                   sets it to the GitHub-hosted runner class)
+#                                                   stamps the actual self-hosted spot runner)
 #   HYPERFINE_WARMUP=5 HYPERFINE_RUNS=30          -- hyperfine sampling (defaults shown; both
 #                                                   commands in one invocation, exactly N runs each)
 #
@@ -244,7 +244,7 @@ instrument, or the measurement is not evidence").
 
 **Which environment these numbers come from**: see **Environment** and
 **Machine** below. \`.github/workflows/benchmarks.yml\` runs this script on a
-shared GitHub-hosted runner on every landing on \`refactor/tag-machinery\`;
+self-hosted spot runner on every landing on \`refactor/tag-machinery\`;
 those numbers are indicative only, are published as a workflow artifact and
 step summary, and are not committed here. Numbers from different environments
 are not comparable.

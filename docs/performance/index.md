@@ -16,7 +16,9 @@ beta.1 speed claim.
   shared GitHub-hosted runner. They are *indicative* and were never committed.
 
 Different hardware, core count and background load separate the two kinds.
-Compare a CI number only with other runs of the same workflow.
+The cited #825 CI run used a GitHub-hosted runner; the current workflow routes
+through a self-hosted spot pool. The workflow name alone does not make runs
+comparable across that change or across spot hosts.
 :::
 
 ## Historical committed measurement (#821, not beta.1 evidence)
