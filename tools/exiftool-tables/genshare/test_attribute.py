@@ -897,6 +897,10 @@ class EmptyDiagnosticReceiptTests(unittest.TestCase):
             receipt["artifact_index"] = attribute._artifact_index(root)
             with mock.patch.object(attribute, "_validate_pre_seam_proof"):
                 attribute.validate_v3_receipt(receipt, root, replay=True)
+                serialized_path = base / "serialized-receipt.json"
+                attribute.write_json(serialized_path, receipt)
+                serialized_receipt = json.loads(serialized_path.read_text())
+                attribute.validate_v3_receipt(serialized_receipt, root, replay=True)
                 for label, change in (
                     ("selected count", lambda r: r["selection"].update(selected_files=4)),
                     ("scored count", lambda r: r["selection"].update(scored_files=5)),
@@ -908,7 +912,15 @@ class EmptyDiagnosticReceiptTests(unittest.TestCase):
                     ("wrong run hash", lambda r: r["runs"]["engine"].update(scored_path_set_sha256="0" * 64)),
                     ("loss corpus", lambda r: r["fixture_contract"]["observed_loss_payload"].update(corpus=paths)),
                     ("floor", lambda r: r["floors"].update(min_tags=400000)),
+                    ("missing tag floor", lambda r: r["floors"].pop("min_tags")),
+                    ("zero tag floor", lambda r: r["floors"].update(min_tags=0)),
+                    ("boolean tag floor", lambda r: r["floors"].update(min_tags=True)),
+                    ("negative tag floor", lambda r: r["floors"].update(min_tags=-1)),
+                    ("string tag floor", lambda r: r["floors"].update(min_tags="4")),
                     ("file floor", lambda r: r["floors"].update(min_files=4)),
+                    ("missing oracle ledger path", lambda r: r["runs"]["union"]["oracle_parsed_sha256"].pop(paths[3])),
+                    ("extra oracle ledger path", lambda r: r["runs"]["union"]["oracle_stable_sha256"].update({"other": "0" * 64})),
+                    ("forged oracle ledger hash", lambda r: r["runs"]["union"]["oracle_parsed_sha256"].update({paths[3]: "0" * 64})),
                 ):
                     forged = copy.deepcopy(receipt)
                     change(forged)

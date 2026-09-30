@@ -789,6 +789,10 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     floors = receipt.get("floors")
     if has_diagnostic and not isinstance(floors, dict):
         raise ReceiptError("diagnostic receipt lacks exact floors")
+    if has_diagnostic and (not isinstance(floors.get("min_tags"), int)
+                           or isinstance(floors["min_tags"], bool)
+                           or floors["min_tags"] <= 0):
+        raise ReceiptError("diagnostic receipt lacks a positive oracle occurrence floor")
     if isinstance(floors, dict) and floors.get("min_files") != len(expected_paths):
         raise ReceiptError("selected file floor does not replay")
     for mode, run in runs.items():
@@ -901,8 +905,12 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     if has_diagnostic:
         baseline_oracles = runs["control-empty"].get("oracle_stable_sha256")
         for mode, run in runs.items():
-            if list(run.get("oracle_parsed_sha256", {})) != expected_paths \
-                    or list(run.get("oracle_stable_sha256", {})) != expected_paths \
+            if not isinstance(run.get("oracle_parsed_sha256"), dict) \
+                    or not isinstance(run.get("oracle_stable_sha256"), dict) \
+                    or set(run["oracle_parsed_sha256"]) != set(expected_paths) \
+                    or set(run["oracle_stable_sha256"]) != set(expected_paths) \
+                    or len(run["oracle_parsed_sha256"]) != len(expected_paths) \
+                    or len(run["oracle_stable_sha256"]) != len(expected_paths) \
                     or run.get("oracle_stable_sha256") != baseline_oracles:
                 raise ReceiptError(f"oracle diagnostic ledger differs in {mode}")
             for child in run["children"]:
