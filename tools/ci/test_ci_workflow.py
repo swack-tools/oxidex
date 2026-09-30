@@ -52,6 +52,18 @@ class MainCiWorkflowTests(unittest.TestCase):
     def test_manual_route_is_preserved(self):
         self.assertRegex(self.triggers, r"(?m)^  workflow_dispatch:$")
 
+    def test_runner_selection_controls_both_consumers(self):
+        for selector, consumer in (
+            ("select_read_gate_runner", "read-regression-gate"),
+            ("select_capture_runner", "verify-tables-capture"),
+        ):
+            with self.subTest(consumer=consumer):
+                def block(job):
+                    return re.search(r"(?ms)^  " + re.escape(job) + r":\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)", self.text).group(1)
+                self.assertIn("    runs-on: ubuntu-latest", block(selector))
+                self.assertIn("needs: [" + selector + "]", block(consumer))
+                self.assertIn("runs-on: ${{ fromJSON(needs." + selector + ".outputs.runs_on) }}", block(consumer))
+
     def test_workflow_uses_least_privilege_read_only_token(self):
         self.assertRegex(self.text, r"(?m)^permissions:\n  contents: read$")
 
