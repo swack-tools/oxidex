@@ -119,6 +119,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     LOOP_SECONDS,
     PUSH_BACKOFF_S,
     PUSH_RETRIES,
+    ProcessListingUnavailable,
     RECONCILE_HUB_FAILURE_LIMIT,
     RUNNER_MARKER,
     TOOLCHAIN_MISMATCH_RC,
@@ -796,9 +797,18 @@ def reconcile_once(
     # A worker whose process group is gone releases its claim here; a
     # crashed fleetd's claims expire on their own (LEASE_TTL) and are
     # reaped by any host via claim.reap_expired.
-    pgids = pgid_probe()
+    try:
+        pgids = pgid_probe()
+    except ProcessListingUnavailable as exc:
+        pgids = None
+        res.refused.append(("process-listing-unavailable", str(exc)))
+        print(f"fleetd[{host}] PROCESS LISTING UNAVAILABLE: {exc}; "
+              "retaining adopted workers and starting no new work this pass",
+              file=sys.stderr, flush=True)
     for w in list(workers):
-        if not w.alive(pgids):
+        # A direct child's poll is still decisive when ps is unavailable.
+        # An adopted worker has no such proof, so keep its claim and slot.
+        if (pgids is not None or w.popen is not None) and not w.alive(pgids):
             # Best-effort: an undeleted claim expires on its TTL, but a
             # worker left in `workers` because the release raised would
             # hold a slot until restart -- and would take the rest of this
@@ -966,7 +976,7 @@ def reconcile_once(
         res.refused.append(("disabled", my_desired.get("reason") or ""))
     else:
         deficit = want_gates - running
-        if deficit > 0:
+        if deficit > 0 and pgids is not None:
             reason = _limits_ok(limits, disk_probe(), mem_probe())
             if reason is not None:
                 res.refused.append(("limits", reason))
@@ -1072,7 +1082,7 @@ def reconcile_once(
         # host that is idle entirely by desired-state design. `target-zero`
         # names that design choice so it reads as intentional, not broken.
         res.refused.append(("target-zero", f"gates {want_gates} / agents {want_agents}"))
-    if enabled and slots > 0:
+    if enabled and slots > 0 and pgids is not None:
         try:
             import agentworker as _aw
             has_cli = bool(_aw.available_clis())
