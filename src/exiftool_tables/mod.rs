@@ -350,8 +350,10 @@ pub(crate) fn selected_binary_source_census() -> BinarySourceCensus {
         "13.59" => BinarySourceCensus {
             hook_fields: 35,
             subdir_primary: 63,
-            subdir_all: 68,
-            subdir_modeled: 64,
+            // Nikon::MenuInfoZ8 and MenuInfoZ9 contribute five accepted
+            // firmware-gated SubDirectory alternatives (Nikon.pm:9180-9243).
+            subdir_all: 73,
+            subdir_modeled: 69,
             subdir_processproc_refused: 4,
             print_conv_refused: 28,
             print_conv_tables: 12,
@@ -918,7 +920,7 @@ mod tests {
     /// `PANA`'s further ProcessProc-routed `JPEG-likeData` never reaches this
     /// check: its `Format => 'undef[$size-0x10]'` is a data-dependent width
     /// this generator already refuses on unrelated grounds
-    /// (`tag_fmt_unsupported`), so it is not among the 68 flagged fields to
+    /// (`tag_fmt_unsupported`), so it is not among the 73 flagged fields to
     /// begin with. `subdir.rs`'s module doc has the full citation). A future
     /// regen that starts silently dropping edges it used to model, or
     /// silently modeling one it should refuse (e.g. a table that starts

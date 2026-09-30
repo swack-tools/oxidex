@@ -3308,7 +3308,7 @@ pub const IFD_EXIFTOOL_VERSION: &str = "__VERSION__";
 // given run constructs depends on the pinned tree, not on this file's logic,
 // so a conditional `use` would be generator-output nondeterminism.
 #[allow(unused_imports)]
-use super::cond::{CmpOp, Cond, EffectSource};
+use super::cond::{CmpOp, Cond, EffectSource, StrCmpOp};
 #[allow(unused_imports)]
 use super::ifd_schema::{
     IfdByteOrder, IfdFlags, IfdStart, IfdSubdirEdge, IfdTable, IfdTag, IfdVariantGroup,
@@ -3597,7 +3597,7 @@ __VERSION_BLOCK__
 // to carry this release, which is exactly the kind of generator-output
 // nondeterminism `codegen.py`'s own module doc warns against elsewhere.
 #[allow(unused_imports)]
-use super::cond::{CmpOp, Cond, EffectSource, VariantGroup};
+use super::cond::{CmpOp, Cond, EffectSource, StrCmpOp, VariantGroup};
 #[allow(unused_imports)]
 use super::ifd_schema::RawConvEffect;
 // Step 27: same "imported unconditionally" reasoning as EffectSource above --

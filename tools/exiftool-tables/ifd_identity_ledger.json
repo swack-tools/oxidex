@@ -369234,7 +369234,7 @@
   "source": {
     "expr_ledger_sha256": "29ee6493209dde9a11fbfbe20fc9c729e471c4193e1093e865fa02e00e1339c1",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
-    "ifd_rust_sha256": "5290d862b26a4a41d072a03c9875a01dcf06f0113a54757c095283fd9d304c16",
+    "ifd_rust_sha256": "236097977cf606e2bddc6a49b3bfa240a1f1cec35f714903d84f2672a39ff8b0",
     "tables_json_sha256": "3f03a1669fe1dccf3aad64c99b8934858a537dba4c013599c4e931e23a3c9f3d"
   }
 }
