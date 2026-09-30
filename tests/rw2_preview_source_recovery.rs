@@ -86,17 +86,34 @@ fn preview_ifd0_print_im_and_thumbnail_survive_missing_or_invalid_exif_pointer()
             "invalid={invalid}"
         );
         assert_eq!(metadata.get_string("PrintIM:PrintIMVersion"), Some("0250"));
-        // ExifTool -G1 reports these as IFD1; this parser's existing map
-        // stores their family-0 EXIF names.
-        assert_eq!(metadata.get_integer("EXIF:ThumbnailOffset"), Some(11976));
-        assert_eq!(metadata.get_integer("EXIF:ThumbnailLength"), Some(28));
+        assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
+        assert_eq!(metadata.get_integer("IFD1:ThumbnailLength"), Some(28));
         assert_eq!(
-            metadata.get("EXIF:ThumbnailImage"),
+            metadata.get("IFD1:ThumbnailImage"),
             Some(&TagValue::new_binary(
                 b"<Dummy thumbnail image data>".to_vec()
             ))
         );
     }
+}
+
+#[test]
+fn thumbnail_pointer_uses_declared_ifd0_count_when_an_entry_is_unreadable() {
+    let mut data = source();
+    let (_, ifd0) = preview_ifd0(&data);
+    let pointer = entry(&data, ifd0, 0x8769);
+    let print_im = entry(&data, ifd0, 0xC4A5);
+    assert_eq!(read_u16(&data, print_im + 2), 7);
+    data[pointer..pointer + 2].copy_from_slice(&0xC7FFu16.to_le_bytes());
+    data[print_im + 2..print_im + 4].copy_from_slice(&0u16.to_le_bytes());
+
+    let metadata = parse(&data);
+    assert_eq!(
+        metadata.get_string("IFD0:ModifyDate"),
+        Some("2008:08:06 15:21:56")
+    );
+    assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
+    assert_eq!(metadata.get_integer("IFD1:ThumbnailLength"), Some(28));
 }
 
 #[test]
@@ -108,7 +125,7 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     let slot = entry(&original, exif_ifd, 0xA405);
     assert_eq!(read_u16(&original, slot + 2), 3);
     assert_eq!(read_u32(&original, slot + 4), 1);
-    assert_eq!(read_u16(&original, slot + 8), 1);
+    assert_eq!(read_u16(&original, slot + 8), 24);
 
     for (id, name) in [(0xA411u16, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
         for (raw, expected) in [(0u16, "No"), (1, "Yes"), (2, "Unknown (2)")] {

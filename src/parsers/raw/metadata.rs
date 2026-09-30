@@ -1770,7 +1770,14 @@ fn extract_rw2_embedded_exif_tags(
     // header; ExifTool reports ThumbnailOffset as a position in the physical
     // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
     // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
-    let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
+    // `parse_ifd` omits malformed entries, so its result length is not the
+    // directory's on-disk entry count. The next pointer follows every slot,
+    // including entries we could not decode.
+    let ifd0_entry_count = reader
+        .read(first_ifd_offset, 2)
+        .ok()
+        .and_then(|bytes| read_tiff_u16(bytes, byte_order))
+        .map(u64::from);
     let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
         first_ifd_offset
             .checked_add(2)?
@@ -1807,13 +1814,13 @@ fn extract_rw2_embedded_exif_tags(
             && let Some(absolute) = i64::from(offset).checked_add(tiff_base_in_file)
         {
             metadata.insert(
-                "EXIF:ThumbnailOffset".to_string(),
+                "IFD1:ThumbnailOffset".to_string(),
                 TagValue::new_integer(absolute),
             );
         }
         if let Some(length) = thumbnail_length {
             metadata.insert(
-                "EXIF:ThumbnailLength".to_string(),
+                "IFD1:ThumbnailLength".to_string(),
                 TagValue::new_integer(i64::from(length)),
             );
         }
@@ -1823,7 +1830,7 @@ fn extract_rw2_embedded_exif_tags(
             && let Some(image) = tiff_data.get(offset..end)
         {
             metadata.insert(
-                "EXIF:ThumbnailImage".to_string(),
+                "IFD1:ThumbnailImage".to_string(),
                 TagValue::Binary(image.to_vec()),
             );
         }
@@ -5304,15 +5311,15 @@ mod panasonic_rw2_tests {
             Some(&TagValue::new_string("Normal".to_string()))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailOffset"),
+            metadata.get("IFD1:ThumbnailOffset"),
             Some(&TagValue::new_integer(1150))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailLength"),
+            metadata.get("IFD1:ThumbnailLength"),
             Some(&TagValue::new_integer(4))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailImage"),
+            metadata.get("IFD1:ThumbnailImage"),
             Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
         );
         assert!(!metadata.contains_key("EXIF:0x0201"));
@@ -11290,12 +11297,12 @@ mod rw2_embedded_exif_printconv_tests {
                 );
                 assert_eq!(metadata.get_string(PRINT_IM_VERSION_TAG), Some("0250"));
                 assert_eq!(
-                    metadata.get("EXIF:ThumbnailOffset"),
+                    metadata.get("IFD1:ThumbnailOffset"),
                     Some(&TagValue::new_integer(1012 + i64::from(thumbnail)))
                 );
-                assert_eq!(metadata.get_integer("EXIF:ThumbnailLength"), Some(4));
+                assert_eq!(metadata.get_integer("IFD1:ThumbnailLength"), Some(4));
                 assert_eq!(
-                    metadata.get("EXIF:ThumbnailImage"),
+                    metadata.get("IFD1:ThumbnailImage"),
                     Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
                 );
             }
