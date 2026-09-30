@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -186,6 +185,70 @@ class CleanSnapshotTests(unittest.TestCase):
             subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
                            check=True, capture_output=True)
 
+    def test_public_key_file_with_comments_and_blank_lines_signs(self) -> None:
+        public = self.root / "commented-public-key"
+        public.write_text("# selected signing key\n\n" + self.key.with_suffix(".pub").read_text())
+        git(self.owned, "config", "--local", "user.signingkey", str(public))
+        agent = subprocess.check_output(["ssh-agent", "-s"], text=True)
+        socket = re.search(r"SSH_AUTH_SOCK=([^;]+);", agent)
+        pid = re.search(r"SSH_AGENT_PID=([0-9]+);", agent)
+        self.assertIsNotNone(socket)
+        self.assertIsNotNone(pid)
+        agent_env = {"SSH_AUTH_SOCK": socket.group(1), "SSH_AGENT_PID": pid.group(1)}
+        try:
+            with patch.dict(os.environ, agent_env):
+                subprocess.run(["ssh-add", str(self.key)], check=True, capture_output=True)
+                proof = self.create()
+                self.assertEqual(proof["signing_key_public_path"], str(public.resolve()))
+        finally:
+            subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
+                           check=True, capture_output=True)
+
+    def test_ssh_certificate_fingerprint_matches_openssh(self) -> None:
+        ca = self.root / "signing-ca"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(ca)],
+                       check=True, capture_output=True)
+        subprocess.run(["ssh-keygen", "-q", "-s", str(ca), "-I", "snapshot-test",
+                        "-n", "test@example.invalid", "-V", "+1d",
+                        str(self.key.with_suffix(".pub"))], check=True, capture_output=True)
+        certificate = Path(str(self.key) + "-cert.pub")
+        output = subprocess.check_output(["ssh-keygen", "-lf", str(certificate)], text=True)
+        expected = re.search(r"SHA256:[A-Za-z0-9+/]+", output)
+        self.assertIsNotNone(expected)
+        self.assertEqual(snapshot._ssh_fingerprint(certificate.read_bytes()), expected.group())
+        self.allowed_signers.write_text(
+            f"test@example.invalid cert-authority {ca.with_suffix('.pub').read_text().strip()}\n"
+        )
+        git(self.owned, "config", "--local", "user.signingkey", str(certificate))
+        agent = subprocess.check_output(["ssh-agent", "-s"], text=True)
+        socket = re.search(r"SSH_AUTH_SOCK=([^;]+);", agent)
+        pid = re.search(r"SSH_AGENT_PID=([0-9]+);", agent)
+        self.assertIsNotNone(socket)
+        self.assertIsNotNone(pid)
+        agent_env = {"SSH_AUTH_SOCK": socket.group(1), "SSH_AGENT_PID": pid.group(1)}
+        try:
+            with patch.dict(os.environ, agent_env):
+                subprocess.run(["ssh-add", str(self.key)], check=True, capture_output=True)
+                proof = self.create()
+                self.assertEqual(proof["signing_key_fingerprint"], expected.group())
+        finally:
+            subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
+                           check=True, capture_output=True)
+
+    def test_implicit_email_is_refused_before_clone(self) -> None:
+        self.git_config.write_text(self.git_config.read_text().replace("\temail = test@example.invalid\n", ""))
+        with patch.dict(os.environ, {"EMAIL": "other@example.invalid"}):
+            with self.assertRaisesRegex(snapshot.Refused, "explicit.*user.email"):
+                self.create()
+        self.assertFalse((self.target / snapshot.SNAPSHOT_DIR).exists())
+
+    def test_non_ssh_signing_configuration_is_refused_before_clone(self) -> None:
+        git(self.owned, "config", "--local", "gpg.format", "openpgp")
+        git(self.owned, "config", "--local", "gpg.program", str(self.root / "custom-gpg"))
+        with self.assertRaisesRegex(snapshot.Refused, "SSH signing"):
+            self.create()
+        self.assertFalse((self.target / snapshot.SNAPSHOT_DIR).exists())
+
     def test_swapped_private_key_with_stale_public_sidecar_refuses(self) -> None:
         other = self.root / "other-key"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
@@ -247,59 +310,31 @@ class CleanSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(snapshot.Refused, "verify-commit"):
             self.create()
 
-    def test_default_key_command_can_sign_a_clean_snapshot(self) -> None:
+    def test_default_key_command_is_refused_without_running_it(self) -> None:
         self.git_config.write_text("[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
                                    "[gpg]\n\tformat = ssh\n")
-        other = self.root / "other-key"
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
-                       check=True, capture_output=True)
-        self.allowed_signers.write_text(
-            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
-            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n"
-        )
+        marker = self.root / "default-key-ran"
         command = self.root / "default-key-command"
-        literal = self.key.with_suffix(".pub").read_text().strip()
-        command.write_text("#!/bin/sh\nprintf '%s\\n' 'key::" + literal + "'\n")
+        command.write_text("#!/bin/sh\nprintf ran > '" + str(marker) + "'\n")
         command.chmod(0o700)
         git(self.owned, "config", "--local", "gpg.ssh.defaultKeyCommand", str(command))
-        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
-        agent = subprocess.check_output(["ssh-agent", "-s"], text=True)
-        socket = re.search(r"SSH_AUTH_SOCK=([^;]+);", agent)
-        pid = re.search(r"SSH_AGENT_PID=([0-9]+);", agent)
-        self.assertIsNotNone(socket)
-        self.assertIsNotNone(pid)
-        agent_env = {"SSH_AUTH_SOCK": socket.group(1), "SSH_AGENT_PID": pid.group(1)}
-        try:
-            with patch.dict(os.environ, agent_env):
-                subprocess.run(["ssh-add", str(self.key)], check=True, capture_output=True)
-                git(self.owned, "commit-tree", "-S", "HEAD^{tree}")
-                proof = self.create()
-                digest = snapshot.source_tree_sha256(self.owned)
-                command.write_text("#!/bin/sh\nprintf '%s\\n' 'key::" +
-                                   other.with_suffix(".pub").read_text().strip() + "'\n")
-                with self.assertRaisesRegex(snapshot.Refused, "trust differs"):
-                    snapshot.validate(proof, self.owned, self.target, self.parent, digest,
-                                      {"generated.txt", ".exiftool-version"})
-        finally:
-            subprocess.run(["ssh-agent", "-k"], env={**os.environ, **agent_env},
-                           check=True, capture_output=True)
+        with self.assertRaisesRegex(snapshot.Refused, "explicit.*user.signingkey"):
+            self.create()
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.target / snapshot.SNAPSHOT_DIR).exists())
 
-    def test_default_key_command_timeout_kills_pipe_holding_child(self) -> None:
+    def test_escaped_default_key_descendant_is_never_started(self) -> None:
         self.git_config.write_text("[user]\n\tname = Test Signer\n\temail = test@example.invalid\n"
                                    "[gpg]\n\tformat = ssh\n")
-        marker = self.root / "late-child-marker"
-        command = self.root / "hanging-default-key-command"
-        command.write_text("#!/bin/sh\n(sleep 1; printf child > '" + str(marker) + "') &\nexit 0\n")
+        marker = self.root / "escaped-child-marker"
+        command = self.root / "detaching-default-key-command"
+        command.write_text("#!/bin/sh\nsetsid sh -c 'sleep 1; printf child > "
+                           + str(marker) + "' &\nwait\n")
         command.chmod(0o700)
         git(self.owned, "config", "--local", "gpg.ssh.defaultKeyCommand", str(command))
-        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
-        started = time.monotonic()
-        with patch.object(snapshot, "DEFAULT_KEY_TIMEOUT_SECONDS", 0.1):
-            with self.assertRaisesRegex(snapshot.Refused, "timed out"):
-                snapshot._signature_trust(self.owned)
-        self.assertLess(time.monotonic() - started, 0.8)
-        time.sleep(1.1)
-        self.assertFalse(marker.exists(), "timed-out descendant continued after group kill")
+        with self.assertRaisesRegex(snapshot.Refused, "explicit.*user.signingkey"):
+            snapshot._signature_trust(self.owned)
+        self.assertFalse(marker.exists())
 
     def test_private_signing_key_without_public_sidecar_can_sign(self) -> None:
         git(self.owned, "config", "--local", "user.signingkey", str(self.key))

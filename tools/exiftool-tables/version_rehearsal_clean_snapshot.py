@@ -5,17 +5,19 @@ generated files are therefore legitimately dirty, while conformance receipts
 require a clean Git identity. This module copies *those exact bytes* to a
 separate signed child commit for read measurement; it never edits the owned
 execution checkout or relaxes conformance's clean-source rule.
+
+The snapshot accepts only an explicitly configured SSH signing key and
+user.name/user.email. OpenPGP selectors and defaultKeyCommand are refused
+because their effective signer cannot be rebound from a stable local file.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-import signal
 import subprocess
 from typing import Any, NamedTuple
 
@@ -24,7 +26,6 @@ SNAPSHOT_DIR = "measurement-source"
 OID = re.compile(r"[0-9a-f]{40}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 EXCLUDED_DIRS = {".git", "target", "__pycache__"}
-DEFAULT_KEY_TIMEOUT_SECONDS = 5
 
 
 class Refused(ValueError):
@@ -101,14 +102,31 @@ def _diff(root: Path, parent: str, child: str) -> tuple[list[str], str]:
 
 
 def _ssh_fingerprint(public_key: bytes) -> str:
-    fields = public_key.decode("utf-8").strip().split()
-    if (len(fields) < 2 or not fields[0].startswith(("ssh-", "ecdsa-", "sk-"))):
-        raise Refused("clean measurement snapshot SSH public key is malformed")
+    """Use OpenSSH's certificate-aware identity, as Git's %GF does."""
     try:
-        blob = base64.b64decode(fields[1], validate=True)
-    except ValueError as error:
-        raise Refused("clean measurement snapshot SSH public key is malformed") from error
-    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+        result = subprocess.run(["ssh-keygen", "-E", "sha256", "-lf", "/dev/stdin"],
+                                input=public_key, capture_output=True, timeout=5, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise Refused("clean measurement snapshot SSH public-key fingerprint timed out") from error
+    lines = result.stdout.decode("utf-8", errors="replace").splitlines()
+    if result.returncode != 0 or len(lines) != 1:
+        raise Refused("clean measurement snapshot SSH public key is malformed")
+    match = re.search(r"(?:^|\s)(SHA256:[A-Za-z0-9+/]+)(?:\s|$)", lines[0])
+    if match is None:
+        raise Refused("clean measurement snapshot SSH public key has no SHA256 fingerprint")
+    return match.group(1)
+
+
+def _public_key_line(contents: bytes) -> bytes | None:
+    """Recognize one public key despite leading comments or blank lines."""
+    try:
+        lines = [line.strip() for line in contents.decode("utf-8").splitlines()
+                 if line.strip() and not line.lstrip().startswith("#")]
+    except UnicodeError:
+        return None
+    if len(lines) != 1 or not lines[0].startswith(("ssh-", "ecdsa-", "sk-")):
+        return None
+    return lines[0].encode("utf-8") + b"\n"
 
 
 def _configured_file(source: Path, option: str, label: str) -> tuple[str | None, str | None]:
@@ -123,37 +141,6 @@ def _configured_file(source: Path, option: str, label: str) -> tuple[str | None,
         raise Refused(f"clean measurement snapshot {label} is absent or not regular")
     path = path.resolve()
     return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _default_ssh_key(source: Path, command: str) -> str:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    process = subprocess.Popen(command, shell=True, executable="/bin/sh", cwd=source,
-                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, start_new_session=True)
-    try:
-        stdout, _ = process.communicate(timeout=DEFAULT_KEY_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        # A shell may have exited while a child still holds stdout open. Kill
-        # the whole isolated group before reaping instead of waiting on that
-        # inherited pipe indefinitely.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            process.communicate(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-        raise Refused("clean measurement snapshot default SSH key command timed out") from error
-    if process.returncode != 0 or not stdout:
-        raise Refused("clean measurement snapshot default SSH key command failed")
-    try:
-        first = stdout.splitlines()[0].decode("utf-8", errors="strict").strip()
-    except UnicodeError as error:
-        raise Refused("clean measurement snapshot default SSH key command returned invalid text") from error
-    if not first.startswith("key::"):
-        raise Refused("clean measurement snapshot default SSH key command returned no key:: public key")
-    return first
 
 
 def _ssh_program(source: Path) -> tuple[str | None, str | None]:
@@ -181,17 +168,15 @@ def _signature_trust(source: Path) -> SigningTrust:
     minimum_trust = _git(source, "config", "--get", "--default=", "gpg.minTrustLevel")
     assert isinstance(author_name, str) and isinstance(author_email, str) and isinstance(minimum_trust, str)
     if signing_format != "ssh":
-        return SigningTrust(signing_format, signing_key, None, None,
-                            hashlib.sha256(signing_key.encode()).hexdigest(), None, None, None,
-                            None, None, None, None, None, author_name, author_email, minimum_trust)
-    default_command = _git(source, "config", "--get", "--default=", "gpg.ssh.defaultKeyCommand")
-    assert isinstance(default_command, str)
-    default_command_sha = (hashlib.sha256(default_command.encode()).hexdigest()
-                           if not signing_key and default_command else None)
+        raise Refused("clean measurement snapshot requires SSH signing; non-SSH signing is unsupported")
+    if not author_name:
+        raise Refused("clean measurement snapshot requires explicit user.name")
+    if not author_email:
+        raise Refused("clean measurement snapshot requires explicit user.email")
     if not signing_key:
-        if not default_command:
-            raise Refused("clean measurement snapshot SSH signing key is absent")
-        signing_key = _default_ssh_key(source, default_command)
+        # Git's defaultKeyCommand can launch arbitrary descendants and select
+        # a different key on replay. Qualification requires a fixed key.
+        raise Refused("clean measurement snapshot requires explicit user.signingkey")
     if signing_key.startswith("key::") or signing_key.startswith(("ssh-", "ecdsa-", "sk-")):
         literal = signing_key.removeprefix("key::").strip()
         if not literal:
@@ -210,7 +195,7 @@ def _signature_trust(source: Path) -> SigningTrust:
         # A public key may have any filename; inspect its contents rather than
         # treating the .pub suffix as its identity.
         key_bytes = key_path.read_bytes()
-        public_key = (key_path if key_bytes.startswith((b"ssh-", b"ecdsa-", b"sk-"))
+        public_key = (key_path if _public_key_line(key_bytes) is not None
                       else Path(str(key_path) + ".pub"))
         if public_key.is_file():
             public_bytes = public_key.read_bytes()
@@ -229,7 +214,10 @@ def _signature_trust(source: Path) -> SigningTrust:
             public_bytes, public_path = derived.stdout, None
         key_mode = "file" if public_path is not None else "derived"
         public_sha = hashlib.sha256(public_bytes).hexdigest()
-        fingerprint = _ssh_fingerprint(public_bytes)
+        public_line = _public_key_line(public_bytes)
+        if public_line is None:
+            raise Refused("clean measurement snapshot SSH public key is malformed")
+        fingerprint = _ssh_fingerprint(public_line)
         effective_key = str(key_path)
     allowed_path, allowed_sha = _configured_file(source, "gpg.ssh.allowedSignersFile", "allowed signers file")
     if allowed_path is None:
@@ -238,7 +226,7 @@ def _signature_trust(source: Path) -> SigningTrust:
     program_path, program_sha = _ssh_program(source)
     return SigningTrust(signing_format, effective_key, key_mode, public_path, public_sha,
                         allowed_path, allowed_sha, fingerprint, revocation_path, revocation_sha,
-                        default_command_sha, program_path, program_sha, author_name, author_email,
+                        None, program_path, program_sha, author_name, author_email,
                         minimum_trust)
 
 
@@ -292,6 +280,7 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     if measured.exists() or measured.is_symlink():
         raise Refused("clean measurement snapshot target already exists")
     rows = _source_identity(source, parent, expected_digest, sanctioned_paths)
+    trust = _signature_trust(source)
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     cloned = subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
                              "--", str(source), str(measured)], cwd=target, env=env,
@@ -315,7 +304,6 @@ def create(source: Path, target: Path, parent: str, expected_digest: str,
     newly_generated = sorted(set(rows) - _tracked(source))
     if newly_generated:
         _git(measured, "add", "-f", "--", *newly_generated)
-    trust = _signature_trust(source)
     _git(measured, *_signing_options(trust), "commit", "--quiet", "--allow-empty", "-S", "-m",
          "test: snapshot generated source for native read measurement")
     commit = _git(measured, "rev-parse", "HEAD")
