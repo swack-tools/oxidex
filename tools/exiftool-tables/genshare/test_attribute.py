@@ -188,6 +188,24 @@ class ParsingAndProjectionTests(unittest.TestCase):
 
 
 class ArtifactValidationTests(unittest.TestCase):
+    def test_reviewed_fixture_hashes_allow_an_additional_selected_crw(self):
+        document_path = MODULE.parent / "testdata/bounded-corpus-expectations.json"
+        document = json.loads(document_path.read_text())
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            root = pathlib.Path(td)
+            manifest = root / "selected.txt"
+            manifest.write_text("ICC_Profile.icc\nAAC.aac\nOOXML.docx\nCanonRaw.crw\n")
+            (root / "bounded-corpus-expectations.json").write_bytes(document_path.read_bytes())
+            selection = {"ordered_manifest": [
+                {"relative_path": row["relative_path"], "sha256": row["sha256"]}
+                for row in document["fixtures"]
+            ] + [{"relative_path": "CanonRaw.crw", "sha256": "a" * 64}]}
+            loaded = attribute._load_expectations(manifest, selection, root)
+            self.assertEqual(loaded["document"], document)
+            selection["ordered_manifest"][1]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(attribute.ReceiptError, "fixture paths or content hashes"):
+                attribute._load_expectations(manifest, selection, root)
+
     def test_validator_recomputes_artifact_hashes_and_token_set(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             run_root = pathlib.Path(td)
@@ -235,10 +253,107 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertEqual(attribute.path_set_sha256(rows), canonical_sha(rows))
         self.assertNotEqual(attribute.path_set_sha256(rows), attribute.path_set_sha256(list(reversed(rows))))
 
-    def test_validator_replays_raw_children_and_rejects_mutated_counter(self):
+    def test_combined_corpus_keeps_fixture_controls_and_records_crw_keyed_loss(self):
+        fixtures = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+        paths = [*fixtures, "CanonRaw.crw"]
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             root = pathlib.Path(td)
-            relative_paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+            runs = {}
+            projections = {}
+            for mode in ("control-empty", *attribute.TOKENS, "union"):
+                children = []
+                per_file = {}
+                for relative in paths:
+                    oracle = {
+                        "File:FileType": "CRW" if relative == "CanonRaw.crw" else "TEST",
+                        "File:FileTypeExtension": "crw",
+                        "File:MIMEType": "image/x-canon-crw",
+                        "Test:Payload": relative,
+                    }
+                    candidate = dict(oracle)
+                    if relative == "ICC_Profile.icc" and mode in ("engine", "union"):
+                        candidate.pop("Test:Payload")
+                    if mode in ("producers", "union"):
+                        for key in ("File:FileType", "File:FileTypeExtension", "File:MIMEType"):
+                            candidate.pop(key)
+                    if relative == "CanonRaw.crw" and mode in ("keyed", "union"):
+                        candidate.pop("Test:Payload")
+                    child = root / mode / relative
+                    child.parent.mkdir(parents=True, exist_ok=True)
+                    child.write_text(json.dumps({"candidate_occurrences": attribute.occurrence_sequence(candidate, normalize_access_date=True)}))
+                    children.append({"relative_path": relative, "process": {"path": str(child)}})
+                    per_file[relative] = attribute.project_file(oracle, candidate)
+                runs[mode] = {"children": children}
+                projections[mode] = {"per_file": per_file, "aggregate": attribute._sum_projection(per_file)}
+            reconciliations = {
+                mode: attribute.reconcile(projections["control-empty"]["aggregate"], projections[mode]["aggregate"])
+                for mode in (*attribute.TOKENS, "union")
+            }
+            observed = attribute._fixture_observations(
+                runs, projections, reconciliations, {"sha256": "f" * 64}
+            )
+            payload = observed["observed_loss_payload"]
+            self.assertEqual(payload["corpus"], paths)
+            self.assertEqual(payload["modes"]["keyed"]["matched_lost"], 1)
+            self.assertEqual(payload["modes"]["keyed"]["missing_by_file"]["CanonRaw.crw"], 1)
+            for mode, reconciliation in reconciliations.items():
+                self.assertEqual(payload["modes"][mode]["matched_lost"], reconciliation["matched_lost"])
+            self.assertEqual(observed["keyed_sequence_deltas"]["OOXML.docx"]["removed"], [])
+            fixture_projections = {
+                mode: {
+                    "per_file": {relative: projection["per_file"][relative] for relative in fixtures},
+                    "aggregate": attribute._sum_projection({
+                        relative: projection["per_file"][relative] for relative in fixtures
+                    }),
+                }
+                for mode, projection in projections.items()
+            }
+            fixture_reconciliations = {
+                mode: attribute.reconcile(fixture_projections["control-empty"]["aggregate"], fixture_projections[mode]["aggregate"])
+                for mode in (*attribute.TOKENS, "union")
+            }
+            reviewed_payload = attribute._fixture_observations(
+                runs, fixture_projections, fixture_reconciliations, {"sha256": "f" * 64}
+            )["observed_loss_payload"]
+            unchanged_three = attribute._fixture_observations(
+                runs, fixture_projections, fixture_reconciliations,
+                {"sha256": "f" * 64, "document": {
+                    "review_status": "reviewed_exact", "exact_loss_expectations": reviewed_payload,
+                }},
+            )
+            self.assertEqual(unchanged_three["reviewed_scope"], "selected_corpus")
+            reviewed = attribute._fixture_observations(
+                runs, projections, reconciliations,
+                {"sha256": "f" * 64, "document": {
+                    "review_status": "reviewed_exact", "exact_loss_expectations": reviewed_payload,
+                }},
+            )
+            self.assertEqual(reviewed["reviewed_scope"], "bounded_controls")
+            self.assertNotEqual(reviewed["observed_loss_payload"], reviewed["exact_loss_expectations"])
+            wrong_review = copy.deepcopy(reviewed_payload)
+            wrong_review["modes"]["keyed"]["matched_lost"] = 1
+            with self.assertRaisesRegex(attribute.ReceiptError, "reviewed exact"):
+                attribute._fixture_observations(
+                    runs, projections, reconciliations,
+                    {"sha256": "f" * 64, "document": {
+                        "review_status": "reviewed_exact", "exact_loss_expectations": wrong_review,
+                    }},
+                )
+            baseline = list(runs["keyed"]["children"])
+            for relative in fixtures:
+                changed = root / "keyed" / relative
+                original = changed.read_text()
+                rows = json.loads(original)["candidate_occurrences"]
+                changed.write_text(json.dumps({"candidate_occurrences": rows[:-1]}))
+                with self.subTest(relative=relative), self.assertRaisesRegex(attribute.ReceiptError, "keyed changed|AAC hand-only"):
+                    attribute._fixture_observations(runs, projections, reconciliations, {"sha256": "f" * 64})
+                changed.write_text(original)
+            self.assertEqual(runs["keyed"]["children"], baseline)
+
+    def test_validator_replays_four_file_reviewed_exact_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            root = pathlib.Path(td)
+            relative_paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx", "CanonRaw.crw"]
             selection_root = root / "selection"
             selection_root.mkdir()
             manifest_rows = []
@@ -285,6 +400,8 @@ class ArtifactValidationTests(unittest.TestCase):
                         {},
                     )
                     candidate_document = dict(full_document)
+                    if mode == "pre-seam-control" and relative == "CanonRaw.crw":
+                        candidate_document["Test:HistoricalParserValue"] = "before improvement"
                     if mode in ("producers", "union"):
                         for key in (
                             "File:FileType", "File:FileTypeExtension", "File:MIMEType"
@@ -354,7 +471,7 @@ class ArtifactValidationTests(unittest.TestCase):
                         for row in manifest_rows
                     ]),
                     "path_set_sha256": attribute.path_set_sha256(relative_paths),
-                    "selected_files": 3,
+                    "selected_files": len(relative_paths),
                 },
                 "runs": runs,
                 "projections": projections,
@@ -371,6 +488,14 @@ class ArtifactValidationTests(unittest.TestCase):
             receipt["fixture_contract"] = attribute._fixture_observations(
                 runs, projections, reconciliations, {"sha256": "f" * 64}
             )
+            expectations_path = root / "contracts" / "bounded-corpus-expectations.json"
+            expectations_path.parent.mkdir()
+            expectations_document = {
+                "review_status": "roles_only",
+                "fixtures": [{"relative_path": row["relative_path"], "sha256": row["sha256"]} for row in manifest_rows],
+            }
+            attribute.write_json(expectations_path, expectations_document)
+            receipt["fixture_contract"]["expectations_sha256"] = attribute.sha256_file(expectations_path)
             observed_payload = receipt["fixture_contract"]["observed_loss_payload"]
             reviewed = attribute._fixture_observations(
                 runs,
@@ -385,10 +510,46 @@ class ArtifactValidationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(reviewed["review_status"], "reviewed_exact")
+            self.assertEqual(reviewed["reviewed_scope"], "selected_corpus")
             self.assertEqual(reviewed["exact_loss_expectations"], observed_payload)
+            self.assertEqual(observed_payload["corpus"], relative_paths)
+            self.assertEqual(
+                list(observed_payload["modes"]["engine"]["missing_by_file"]),
+                relative_paths,
+            )
+            complete_document = {
+                "review_status": "reviewed_exact",
+                "fixtures": [
+                    {"relative_path": row["relative_path"], "sha256": row["sha256"]}
+                    for row in manifest_rows
+                ],
+                "exact_loss_expectations": observed_payload,
+            }
+            attribute._validate_expectations_document(complete_document, receipt["selection"])
+            bounded_document = copy.deepcopy(complete_document)
+            bounded_document["fixtures"] = bounded_document["fixtures"][:3]
+            bounded_document["exact_loss_expectations"] = copy.deepcopy(observed_payload)
+            bounded_document["exact_loss_expectations"]["corpus"] = relative_paths[:3]
+            attribute._validate_fixture_selection(bounded_document, receipt["selection"])
+            for label, change in (
+                ("missing", lambda rows: rows.pop()),
+                ("reordered", lambda rows: rows.reverse()),
+                ("hash mismatch", lambda rows: rows[-1].update(sha256="0" * 64)),
+                ("duplicate", lambda rows: rows.__setitem__(-1, copy.deepcopy(rows[0]))),
+            ):
+                malformed = copy.deepcopy(complete_document)
+                change(malformed["fixtures"])
+                with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                    attribute._validate_expectations_document(malformed, receipt["selection"])
             wrong_payloads = []
             wrong = copy.deepcopy(observed_payload)
             wrong["modes"]["engine"]["matched_lost"] += 1
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            wrong["modes"]["engine"]["missing_by_file"]["CanonRaw.crw"] += 1
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            del wrong["modes"]["engine"]["missing_by_file"]["CanonRaw.crw"]
             wrong_payloads.append(wrong)
             wrong = copy.deepcopy(observed_payload)
             wrong["corpus"] = list(reversed(wrong["corpus"]))
@@ -475,6 +636,87 @@ class ArtifactValidationTests(unittest.TestCase):
                 attribute, "project_file", side_effect=record_project_order
             ):
                 attribute.validate_v3_receipt(receipt, root, replay=True)
+            forged_success = copy.deepcopy(receipt)
+            forged_success["status"] = "success"
+            with self.assertRaisesRegex(attribute.ReceiptError, "reviewed corpus scope"):
+                attribute.validate_v3_receipt(forged_success, root, replay=True)
+            attribute.write_json(expectations_path, complete_document)
+            receipt["fixture_contract"] = attribute._fixture_observations(
+                runs, projections, reconciliations,
+                {"sha256": attribute.sha256_file(expectations_path), "document": complete_document},
+            )
+            receipt["status"] = "success"
+            receipt["artifact_index"] = attribute._artifact_index(root)
+            attribute.validate_v3_receipt(receipt, root, replay=True)
+            self.assertEqual(receipt["fixture_contract"]["reviewed_scope"], "selected_corpus")
+            self.assertEqual(
+                receipt["pre_seam_control"]["historical_full_selection"]["differences"],
+                ["CanonRaw.crw"],
+            )
+            self.assertFalse(receipt["pre_seam_control"]["historical_full_selection"]["equal"])
+            old = copy.deepcopy(receipt)
+            old_paths = relative_paths[:3]
+            old["selection"]["ordered_paths"] = old_paths
+            old["selection"]["ordered_manifest"] = manifest_rows[:3]
+            old["selection"]["selected_files"] = 3
+            old["selection"]["path_set_sha256"] = attribute.path_set_sha256(old_paths)
+            old["selection"]["manifest_sha256"] = attribute.canonical_sha256([
+                {key: row[key] for key in ("relative_path", "size", "mode", "sha256")}
+                for row in manifest_rows[:3]
+            ])
+            for mode in old["runs"]:
+                old["runs"][mode]["children"] = old["runs"][mode]["children"][:3]
+                old["runs"][mode]["path_set_sha256"] = attribute.path_set_sha256(old_paths)
+                old["projections"][mode]["per_file"].pop("CanonRaw.crw")
+                old["projections"][mode]["aggregate"] = attribute._sum_projection(
+                    old["projections"][mode]["per_file"]
+                )
+            old["reconciliations"] = {
+                mode: attribute.reconcile(
+                    old["projections"]["control-empty"]["aggregate"],
+                    old["projections"][mode]["aggregate"],
+                ) for mode in (*attribute.TOKENS, "union")
+            }
+            old_document = copy.deepcopy(complete_document)
+            old_document["fixtures"] = old_document["fixtures"][:3]
+            old_document["exact_loss_expectations"] = attribute._fixture_observations(
+                old["runs"], old["projections"], old["reconciliations"],
+                {"sha256": "f" * 64},
+            )["observed_loss_payload"]
+            attribute.write_json(expectations_path, old_document)
+            old["inertness"] = attribute._validate_inertness(old["runs"], old["selection"])
+            old["pre_seam_control"] = attribute._validate_pre_seam_control(
+                old["runs"], old["selection"]
+            )
+            old["pre_seam_control"].pop("historical_full_selection")
+            old["pre_seam_control"].pop("compared_paths")
+            old["fixture_contract"] = attribute._fixture_observations(
+                old["runs"], old["projections"], old["reconciliations"],
+                {"sha256": attribute.sha256_file(expectations_path), "document": old_document},
+            )
+            old["fixture_contract"].pop("reviewed_scope")
+            old["artifact_index"] = attribute._artifact_index(root)
+            attribute.validate_v3_receipt(old, root, replay=True)
+            expanded_without_scope = copy.deepcopy(receipt)
+            expanded_without_scope["fixture_contract"].pop("reviewed_scope")
+            attribute.write_json(expectations_path, complete_document)
+            expanded_without_scope["artifact_index"] = attribute._artifact_index(root)
+            with self.assertRaisesRegex(attribute.ReceiptError, "fixture observations"):
+                attribute.validate_v3_receipt(expanded_without_scope, root, replay=True)
+            receipt["artifact_index"] = attribute._artifact_index(root)
+            for label, change in (
+                ("missing selected", lambda rows: rows.pop()),
+                ("reordered selected", lambda rows: rows.reverse()),
+                ("hash-mismatched selected", lambda rows: rows[-1].update(sha256="0" * 64)),
+            ):
+                forged = copy.deepcopy(receipt)
+                change(forged["selection"]["ordered_manifest"])
+                with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                    attribute.validate_v3_receipt(forged, root, replay=True)
+            forged = copy.deepcopy(receipt)
+            forged["fixture_contract"]["observed_loss_payload"]["modes"]["engine"]["matched_lost"] += 1
+            with self.assertRaisesRegex(attribute.ReceiptError, "fixture observations do not replay"):
+                attribute.validate_v3_receipt(forged, root, replay=True)
             self.assertTrue(observed_key_orders)
             self.assertTrue(
                 all(
@@ -726,6 +968,53 @@ class PreSeamControlTests(unittest.TestCase):
                 attribute._validate_pre_seam_control(
                     runs, {"ordered_paths": ["ICC_Profile.icc"]}
                 )
+
+    def test_historical_control_scope_and_full_current_inertness(self):
+        paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx", "CanonRaw.crw"]
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            root = pathlib.Path(td)
+            runs = {}
+            records = {}
+            for mode in ("pre-seam-control", "control-unset", "control-empty"):
+                children = []
+                for path in paths:
+                    process_path = root / mode / f"{path}.json"
+                    process_path.parent.mkdir(parents=True, exist_ok=True)
+                    value = "old parser" if mode == "pre-seam-control" and path == "CanonRaw.crw" else "current"
+                    process_path.write_text(json.dumps({
+                        "candidate_occurrences": [{"raw_key": "X:Y", "value": value}],
+                        "candidate": {"stderr": {"sha256": "0" * 64}},
+                    }))
+                    records[(mode, path)] = process_path
+                    children.append({"relative_path": path, "process": {"path": str(process_path)}})
+                runs[mode] = {"children": children}
+            selection = {"ordered_paths": paths}
+            historical = attribute._validate_pre_seam_control(runs, selection)
+            self.assertEqual(historical["compared_paths"], paths[:3])
+            self.assertEqual(historical["historical_full_selection"]["compared_paths"], paths)
+            self.assertEqual(
+                historical["historical_full_selection"]["path_set_sha256"],
+                attribute.path_set_sha256(paths),
+            )
+            self.assertEqual(historical["historical_full_selection"]["differences"], ["CanonRaw.crw"])
+            self.assertTrue(attribute._validate_inertness(runs, selection)["equal"])
+            for path in paths[:3]:
+                record = records[("pre-seam-control", path)]
+                original = record.read_text()
+                changed = json.loads(original)
+                changed["candidate_occurrences"][0]["value"] = "different"
+                record.write_text(json.dumps(changed))
+                with self.subTest(control=path), self.assertRaisesRegex(
+                    attribute.ReceiptError, "historical controls"
+                ):
+                    attribute._validate_pre_seam_control(runs, selection)
+                record.write_text(original)
+            current = records[("control-empty", "CanonRaw.crw")]
+            changed = json.loads(current.read_text())
+            changed["candidate_occurrences"][0]["value"] = "current drift"
+            current.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(attribute.ReceiptError, "unset and empty controls differ"):
+                attribute._validate_inertness(runs, selection)
 
 
 if __name__ == "__main__":

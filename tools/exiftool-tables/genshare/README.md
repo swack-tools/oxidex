@@ -36,6 +36,16 @@ ICC fixture deltas. Those expectations were frozen only after the first valid
 matches them byte-for-byte before it may emit `status=success` or satisfy
 `--require-success`; any drift fails closed.
 
+A larger selected manifest may include these three reviewed fixtures and other
+files, including CRW. Their hashes and per-fixture controls still apply. The
+observed loss payload covers every selected file in manifest order. A document
+listing only the three controls has `reviewed_scope=bounded_controls`, so the
+expanded run remains `observed_unreviewed`. After independent review, an
+expectations document may instead list every selected file in manifest order
+with its content hash and exact full-corpus losses. It then has
+`reviewed_scope=selected_corpus` and can produce `status=success` when the
+observed population and loss payload match exactly.
+
 Run only through the exclusive measurement lock and use a new durable output
 directory every time:
 
@@ -89,8 +99,13 @@ preserves order, typed values, duplicate identity, raw keys, and stderr. The
 only normalization replaces the value of the exact key
 `System:FileAccessDate`; no other key or value is dropped or rewritten.
 The pre-seam control uses the identical staged selection with the environment
-absent and must match the maintained unset control in normalized ordered output
-and raw stderr. Its introducing commit, one-parent relationship, parent tree,
+absent. Historical equality is required for the original ICC, AAC, and OOXML
+hook controls in normalized ordered output and raw stderr. The receipt also
+records every selected path, the full path-set hash, and every difference
+between the historical binary and the current unset control; differences on
+additional files are retained and do not claim historical equality. The
+current maintained-binary unset and empty controls must match across every
+selected file. Its introducing commit, one-parent relationship, parent tree,
 run-owned detached checkout, isolated target, build logs, and binary are
 retained as distinct proof; it is not a maintained-binary self-comparison.
 
@@ -112,7 +127,10 @@ python3 tools/exiftool-tables/genshare/attribute.py validate \
 The validator recomputes the exact artifact set, hashes, parsed outputs,
 projections, path sets, token/mode set, and reconciliation counters. It also
 authenticates every PID/start binding and replays the pre-seam build proof and
-ordinary-binary equality claim. Use
+bounded ordinary-binary equality claim. Older exact three-control v3 receipts
+without `reviewed_scope` replay only when their retained fixture hashes,
+population, and exact losses validate. A larger receipt missing that field is
+rejected. Use
 `--require-success` only for a later controller-reviewed receipt; it correctly
 rejects `observed_unreviewed`.
 
