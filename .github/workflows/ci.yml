@@ -612,6 +612,8 @@ jobs:
   # passed as an artifact so every dependent job checks the same bytes.
   verify-tables-capture:
     name: Verify Generated Tables / capture
+    # Benchmark-only: serialize capture after the read gate on the M4 runner.
+    needs: [read-regression-gate]
     runs-on: oxidex-m4air
     timeout-minutes: 30
     steps:
