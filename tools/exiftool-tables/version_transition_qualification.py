@@ -18,7 +18,6 @@ import math
 import os
 from pathlib import Path
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -49,6 +48,7 @@ RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 EXPECTED_PERL_VERSION = "v5.38.2"
 EXPECTED_PERL_SHA256 = "e78cfd5a061c7e0f4ee7d0cc40a8878186d9bd321f930609ad5bdaec78410959"
+SIGNING_PROBE_TIMEOUT_SECONDS = 15
 FIXED_SOURCE_COMMITS = {
     "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
     "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
@@ -1606,18 +1606,19 @@ def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapt
     created = False
 
     def run(*args: str, cwd: Path) -> str:
-        process = subprocess.Popen([git_path, *args], cwd=cwd, env=environment,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, start_new_session=True, text=True)
         try:
-            stdout, stderr = process.communicate(timeout=15)
+            result = executor._tracked_run(
+                [git_path, *args], cwd=str(cwd), env=environment,
+                stdin=subprocess.DEVNULL, capture_output=True,
+                start_new_session=True, close_fds=False, text=True,
+                timeout=SIGNING_PROBE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as error:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
             raise Refused("Task19 owned checkout signing probe timed out") from error
-        if process.returncode != 0:
-            raise Refused(f"Task19 owned checkout signing probe failed: {stderr.strip()[:300]}")
-        return stdout.strip()
+        except OSError as error:
+            raise Refused("Task19 owned checkout signing probe could not prove process cleanup") from error
+        if result.returncode != 0:
+            raise Refused(f"Task19 owned checkout signing probe failed: {result.stderr.strip()[:300]}")
+        return result.stdout.strip()
 
     try:
         run("-C", str(repository), "worktree", "add", "--detach", "--no-checkout",
@@ -1629,7 +1630,7 @@ def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapt
             raise Refused("Task19 signing trust changes in the owned checkout") from error
         if owned_trust != trust:
             raise Refused("Task19 signing trust changes in the owned checkout")
-        run("-C", str(owned), *snapshot._signing_options(trust),
+        run("-C", str(owned), "-c", "core.hooksPath=/dev/null", *snapshot._signing_options(trust),
             "commit", "--quiet", "--allow-empty", "-S", "-m", "Task19 signing preflight",
             cwd=owned)
         run("-C", str(owned), *snapshot._verification_options(trust),
@@ -1638,6 +1639,9 @@ def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapt
                "show", "-s", "--format=%GF", "HEAD", cwd=owned) != trust.fingerprint:
             raise Refused("Task19 owned checkout signed with an unexpected SSH key")
     finally:
+        survivors = executor.unproven_children()
+        if survivors:
+            raise LeaseRetained("Task19 signing probe retains an unproven owned process", survivors)
         if created:
             run("-C", str(repository), "worktree", "remove", "--force", str(owned), cwd=repository)
         scratch_parent.rmdir()
