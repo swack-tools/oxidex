@@ -20,8 +20,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 81)
-        self.assertEqual(len(all_items), 82 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 83)
+        self.assertEqual(len(all_items), 84 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="png_shift_contract")},
                          {"png-shift-contract"})
         self.assertEqual({item.key for item in artifacts.select(producer="scene_type_inverse_codegen")},
@@ -38,7 +38,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual({item.key for item in artifacts.select(producer="gen_xmp_lens_maps")},
                          {"xmp-lens-maps"})
         self.assertEqual(len(artifacts.select(1)), 55 + members)
-        self.assertEqual(len(artifacts.select(2)), 27)
+        self.assertEqual(len(artifacts.select(2)), 29)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
         self.assertTrue(all(a.path.endswith('.rs') for a in artifacts.select(kind='rust')))

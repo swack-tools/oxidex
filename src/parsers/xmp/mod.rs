@@ -32,11 +32,13 @@
 //! ```
 
 pub mod generated_namespaces;
+pub mod generated_priorities;
 pub mod generic_xml;
 pub mod google_hdrp;
 pub mod history_parser;
 pub mod namespace_resolver;
 pub mod plus_vocab;
+pub mod priority;
 pub mod rdf_parser;
 pub mod struct_flatten;
 

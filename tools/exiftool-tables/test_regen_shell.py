@@ -58,6 +58,9 @@ elif mode=='chosen-perl':
         if reader_only: captured['reader_only']=True
         if hydrated: captured['hydrated_layouts']={'selection':'full_hydrated_catalog'}
         print(json.dumps(captured))
+    elif name=='capture_xmp_priorities.pl':
+        assert pathlib.Path(args[0]).resolve()==lib
+        print(json.dumps({'marker':'explicit-A'}))
     elif name=='dump_af_points.pl':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Nikon.pm'
         pathlib.Path(args[1]).write_text(json.dumps({'marker':'explicit-A'}))
@@ -229,6 +232,12 @@ else:
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
         assert flag('--out')==artifact(name[:-3])
         output(flag('--out'),name)
+    elif name=='xmp_priority_specs.py':
+        dump(flag('--capture'))
+        assert flag('--fixture-out')==artifact_path('xmp-priority-capture')
+        assert flag('--rust-out')==artifact_path('xmp-priority-rust')
+        output(flag('--fixture-out'),name)
+        output(flag('--rust-out'),name)
     elif name=='gen_xmp_lens_maps.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -379,7 +388,8 @@ class RegenerationShellTests(unittest.TestCase):
     def extra_leaves(self):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
-                'dump_lens_alternatives.pl', 'gen_xmp_lens_maps.py',
+                'dump_lens_alternatives.pl', 'capture_xmp_priorities.pl',
+                'xmp_priority_specs.py', 'gen_xmp_lens_maps.py',
                 'gen_xmp_lens_maps.py:check', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',

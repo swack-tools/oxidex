@@ -521,7 +521,7 @@ impl MakerNoteParser for FlirParser {
                         value: Some(tag.value_conv.unwrap_or_else(|| tag.value.clone())),
                         print: Some(printed),
                         stored: Some(tag.stored),
-                        priority: u8::from(!(tag.low_priority || tag.avoid)),
+                        priority: i16::from(!(tag.low_priority || tag.avoid)),
                         is_list: tag.is_list,
                         order: 0,
                         origin: Provenance {

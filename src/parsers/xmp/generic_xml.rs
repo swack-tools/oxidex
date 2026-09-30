@@ -175,6 +175,8 @@ pub(crate) struct XmlProperty {
     pub group1: String,
     /// The reported tag name, `ucfirst` of the concatenated path.
     pub name: String,
+    /// Case-sensitive GetXMPTagID key before the displayed-name ucfirst.
+    pub raw_id: String,
     /// The value after `XMPAutoConv` (XMP.pm:3677-3688), which is what a tag
     /// `FoundXMP` just minted gets.
     pub value: String,
@@ -184,13 +186,27 @@ pub(crate) struct XmlProperty {
     pub raw: String,
 }
 
+/// XMP::XML is selected by ZIP, CZI and JPEG 2000 XML carriers. It only
+/// dispatches the dc namespace and defines a direct `lastUpdate` entry;
+/// everything else is a FoundXMP default at priority zero. The raw ID keeps
+/// case-sensitive table lookup independent of the displayed path name.
+pub(crate) fn xml_table_priority(property: &XmlProperty) -> i16 {
+    if property.group1 == "XML" {
+        super::priority::special_property_priority("XML", &property.raw_id).into()
+    } else if property.group1 == "XML-dc" {
+        super::priority::table_entry_priority("dc", &property.raw_id).into()
+    } else {
+        0
+    }
+}
+
 /// `GetXMPTagID` (XMP.pm:3018-3070) plus `FoundXMP`'s closing
 /// `ucfirst` (XMP.pm:3519) and `%stdXlatNS` group translation (XMP.pm:3444).
 ///
 /// Returns `(name, group1-namespace)`, or `None` when no property contributed
 /// -- `FoundXMP`'s own `return 0 unless $tag` (XMP.pm:3441), "ignore things
 /// that aren't valid tags".
-fn xmp_tag_id(props: &[Prop], ignore_prop: &[&str]) -> Option<(String, String)> {
+fn xmp_tag_id(props: &[Prop], ignore_prop: &[&str]) -> Option<(String, String, String)> {
     let mut tag: Option<String> = None;
     let mut namespace = String::new();
 
@@ -237,7 +253,7 @@ fn xmp_tag_id(props: &[Prop], ignore_prop: &[&str]) -> Option<(String, String)> 
         .iter()
         .find(|(from, _)| *from == namespace)
         .map_or(namespace, |(_, to)| (*to).to_string());
-    Some((ucfirst(&tag), namespace))
+    Some((ucfirst(&tag), namespace, tag))
 }
 
 /// XMP.pm:3039-3048: "all uppercase is ugly, so convert it". A local name with
@@ -648,7 +664,7 @@ fn close_element(
 }
 
 fn record(props: &[Prop], value: &str, found: &mut Vec<XmlProperty>, options: &XmlWalkOptions) {
-    let Some((name, namespace)) = xmp_tag_id(props, options.ignore_prop) else {
+    let Some((name, namespace, raw_id)) = xmp_tag_id(props, options.ignore_prop) else {
         return;
     };
     let group0 = options.group0;
@@ -665,6 +681,7 @@ fn record(props: &[Prop], value: &str, found: &mut Vec<XmlProperty>, options: &X
             format!("{group0}-{namespace}")
         },
         name,
+        raw_id,
         value: auto_convert(value),
         raw: value.to_string(),
     });

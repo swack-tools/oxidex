@@ -2247,7 +2247,7 @@ impl PentaxParser {
                                             value: Some(packed.clone()),
                                             print: Some(display),
                                             stored: Some(packed),
-                                            priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                                            priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                                             is_list: false,
                                             order: 0,
                                             origin: crate::core::Provenance {
@@ -3192,7 +3192,7 @@ fn decode_pentax_external_flash_guide_number(
                 value: Some(converted),
                 print: Some(display),
                 stored: Some(stored),
-                priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                 is_list: false,
                 order: 0,
                 origin: crate::core::Provenance {
@@ -3408,7 +3408,7 @@ fn decode_pentax_digital_filters(
                             .map(crate::core::TagValue::new_string)
                             .collect(),
                     )),
-                    priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                    priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                     is_list: true,
                     order: 0,
                     origin: crate::core::Provenance {

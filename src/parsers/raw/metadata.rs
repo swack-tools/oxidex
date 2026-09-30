@@ -2549,7 +2549,7 @@ fn record_dng_ifd_tag(
         0,
     );
     occurrence.group1 = crate::core::tag_occurrence::intern(directory);
-    occurrence.priority = priority;
+    occurrence.priority = priority.into();
     // These Exif::Main enum tags have PrintConv only (Compression's RawConv
     // returns its numeric value). Preserve that exact pre-PrintConv scalar;
     // do not infer value forms for the DNG conversions handled elsewhere.
@@ -9026,7 +9026,7 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
                             value: Some(value),
                             print: Some(row.value),
                             stored: Some(row.stored),
-                            priority: u8::from(!(row.low_priority || row.avoid)),
+                            priority: i16::from(!(row.low_priority || row.avoid)),
                             is_list: row.is_list,
                             order: 0,
                             origin: Provenance {

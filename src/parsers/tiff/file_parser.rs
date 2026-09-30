@@ -336,6 +336,16 @@ fn extract_make_from_tags(tags: &IfdEntries) -> Option<String> {
 /// # }
 /// ```
 pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
+    Ok(parse_tiff_file_with_xmp(reader)?.0)
+}
+
+/// The public TIFF record scan plus the XMP tag 700 entries in physical
+/// order. `IfdEntries` has no field for group, list status or signed priority;
+/// callers that arbitrate XMP should consume the companion entries. The
+/// synthetic tag 700 records retain their established `"key: value"` bytes.
+pub fn parse_tiff_file_with_xmp(
+    reader: &dyn FileReader,
+) -> Result<(IfdEntries, Vec<crate::parsers::xmp::rdf_parser::XmpEntry>)> {
     // Parse header
     let header = parse_tiff_header(reader)?;
     let byte_order = header.byte_order;
@@ -346,6 +356,7 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
 
     // Collect all tags from all IFDs
     let mut all_tags = Vec::new();
+    let mut xmp_entries = Vec::new();
 
     // Walk the IFD chain
     loop {
@@ -478,15 +489,16 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
                         Ok(xmp_tags) => {
                             // Convert XMP tags to IfdEntries format
                             // Store as synthetic entries with XMP_TAG ID
-                            for entry in xmp_tags.into_iter().filter(|entry| !entry.shadowed) {
+                            for entry in xmp_tags {
                                 let synthetic_value =
-                                    format!("{}: {}", entry.key, entry.value.into_joined());
+                                    format!("{}: {}", entry.key, entry.value.clone().into_joined());
                                 all_tags.push((
                                     XMP_TAG,
                                     7, // Type UNDEFINED
                                     synthetic_value.len() as u32,
                                     std::borrow::Cow::Owned(synthetic_value.into_bytes()),
                                 ));
+                                xmp_entries.push(entry);
                             }
                         }
                         Err(e) => {
@@ -587,13 +599,41 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
         current_offset = next_offset as u64;
     }
 
-    Ok(all_tags)
+    Ok((all_tags, xmp_entries))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn public_tiff_scan_retains_xmp_copies_and_signed_priorities() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let reader = TestReader::new(
+            include_bytes!("../../../tests/fixtures/xmp_priority/tiff-public.tif").to_vec(),
+        );
+        let (records, xmp) = parse_tiff_file_with_xmp(&reader).unwrap();
+        let titles: Vec<_> = xmp
+            .iter()
+            .filter(|entry| entry.tag == "XMP-dc:Title")
+            .collect();
+        assert_eq!(titles.len(), 2);
+        assert_eq!(
+            titles
+                .iter()
+                .map(|entry| entry.priority)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        let synthetic: Vec<_> = records
+            .iter()
+            .filter(|(id, _, _, value)| *id == XMP_TAG && value.starts_with(b"XMP:Title: "))
+            .collect();
+        assert_eq!(synthetic.len(), 2);
+    }
 
     /// Simple in-memory FileReader for testing
     struct TestReader {
