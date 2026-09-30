@@ -903,7 +903,13 @@ def adopt_from_journal(
         if identity_probe is None:
             identity_probe = fleetd._scoped_worker_in_group
 
-    live = pgid_probe()
+    from keel.runner import ProcessListingUnavailable  # local process evidence
+    try:
+        live = pgid_probe()
+    except ProcessListingUnavailable as exc:
+        res.refused_wholesale = (
+            f"process listing unavailable ({exc}); adopting nothing and releasing nothing")
+        return res
     try:
         own_pgid = os.getpgrp()
     except (AttributeError, OSError):
@@ -955,7 +961,15 @@ def adopt_from_journal(
         # strength of provenance recorded by a differently-configured
         # runner is how a fixture daemon comes to supervise the real
         # fleet (`fleet_scope_token`'s incident note).
-        member = identity_probe(pgid, markers, scope_token)
+        try:
+            member = identity_probe(pgid, markers, scope_token)
+        except ProcessListingUnavailable as exc:
+            # Earlier entries may have been proved absent, but a partial
+            # startup pass must never queue a release on a failed scan.
+            res.to_release.clear()
+            res.refused_wholesale = (
+                f"process identity listing unavailable ({exc}); releasing nothing")
+            return res
         if member is None:
             res.to_release.append(
                 OwedRelease(job.job_key, job.claim_ref, job.started_at,
