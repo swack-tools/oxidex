@@ -416,6 +416,8 @@ def validate(proof: dict[str, Any], source: Path, target: Path, parent: str,
             or not proof["signing_format"]
             or not isinstance(proof["signing_key_sha256"], str)
             or not SHA.fullmatch(proof["signing_key_sha256"])
+            or (proof["signing_key_mode"] is not None
+                and not isinstance(proof["signing_key_mode"], str))
             or (proof["signing_format"] == "ssh" and
                 (proof["signing_key_mode"] not in {"file", "derived", "literal"}
                  or (proof["signing_key_mode"] == "file" and

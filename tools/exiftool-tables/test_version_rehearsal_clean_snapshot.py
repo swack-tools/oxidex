@@ -529,6 +529,13 @@ class CleanSnapshotTests(unittest.TestCase):
             snapshot.validate(wrong, self.owned, self.target, self.parent,
                               proof["source_tree_sha256"], {"generated.txt", ".exiftool-version"})
 
+    def test_malformed_signer_mode_refuses_without_type_error(self) -> None:
+        proof = self.create()
+        malformed = dict(proof, signing_key_mode=[])
+        with self.assertRaisesRegex(snapshot.Refused, "proof identity is malformed"):
+            snapshot.validate(malformed, self.owned, self.target, self.parent,
+                              proof["source_tree_sha256"], {"generated.txt", ".exiftool-version"})
+
     def test_signed_merge_with_identical_bytes_is_not_a_child_snapshot(self) -> None:
         proof = self.create()
         measured = Path(proof["path"])
