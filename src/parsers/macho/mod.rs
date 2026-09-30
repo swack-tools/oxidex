@@ -74,10 +74,10 @@ use structures::{MachOInfo, cpu_type};
 ///     let metadata = parser.parse(reader)?;
 ///
 ///     if let Some(cpu_type) = metadata.get_string("EXE:CPUType") {
-///         println!("CPU Type: {}", cpu_type);
+///         println!("CPU Type: {cpu_type}");
 ///     }
 ///     if let Some(uuid) = metadata.get_string("EXE:UUID") {
-///         println!("UUID: {}", uuid);
+///         println!("UUID: {uuid}");
 ///     }
 ///     Ok(())
 /// }
@@ -364,7 +364,7 @@ mod tests {
         let metadata = result.unwrap();
 
         // Check basic fields
-        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(
             metadata.get_string("EXE:CPUArchitecture").unwrap(),

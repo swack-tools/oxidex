@@ -20,8 +20,8 @@ This report records exact source and generated-declaration identities. Generated
 | `blocked_generated_reader_refusal` | 156 |
 | `generated_reader_declaration_option_gated` | 1123 |
 | `generated_reader_declaration_unobserved` | 778 |
-| `ifd_schema_declaration_eligible_unobserved` | 2889 |
-| `ifd_schema_declaration_omitted_unobserved` | 417 |
+| `ifd_schema_declaration_eligible_unobserved` | 2890 |
+| `ifd_schema_declaration_omitted_unobserved` | 416 |
 | `ifd_schema_declaration_refused_unobserved` | 9562 |
 | `source_row_not_yet_consumed` | 18562 |
 
@@ -283,7 +283,7 @@ Declarations below are authenticated schema facts, not runtime reachability or o
 | Image::ExifTool::EXE::DebugNB10 | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::EXE::DebugRSDS | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::EXE::ELF | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::EXE::MachO | 7 | 7 | 5 | 0 | 0 | 0 | 0 | print_conv: 2 |
+| Image::ExifTool::EXE::MachO | 7 | 7 | 6 | 0 | 0 | 0 | 0 | print_conv: 1 |
 | Image::ExifTool::EXE::Main | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::EXE::Misc | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::EXE::PEF | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |

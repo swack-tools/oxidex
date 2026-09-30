@@ -221,7 +221,7 @@ fn test_macho32_executable_x86() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "i386");
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "x86");
     assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 0);
 }
@@ -243,7 +243,7 @@ fn test_macho64_arm64_executable() {
     let parser = MachOParser;
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
-    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
     assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
     assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
 }
@@ -377,7 +377,7 @@ fn test_macho64_with_code_signature() {
     let metadata = parser.parse(&reader).expect("Failed to parse Mach-O");
 
     assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
-    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+    assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
 }
 
 #[test]
