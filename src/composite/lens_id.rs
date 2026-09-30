@@ -497,6 +497,18 @@ fn candidates(
         let key = xmp_key.ok_or(())?;
         let rows = xmp_lens_maps::rows(maker);
         if rows.iter().find(|(id, _)| *id == key).map(|(_, v)| *v) != Some(lens) {
+            // XMP::PrintLensID builds a temporary Nikon hash from every full
+            // key with this Adobe prefix. A sole distinct label becomes its
+            // synthetic base entry, with no fractional alternatives.
+            if maker == XmpLensMaker::Nikon {
+                let mut names = rows
+                    .iter()
+                    .filter(|(id, _)| id.starts_with(key))
+                    .map(|(_, name)| *name);
+                if names.next() == Some(lens) && names.all(|name| name == lens) {
+                    return Ok(None);
+                }
+            }
             return Err(());
         }
         let mut result = vec![strip_or(lens).to_string()];
@@ -674,11 +686,14 @@ pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
 
     let mut key = id.to_string();
     let mut raw_id = None;
+    let mut unique_nikon_label = None;
     match maker {
         XmpLensMaker::Canon => raw_id = id.parse::<i64>().ok(),
         XmpLensMaker::Pentax => {
             if id.bytes().all(|b| b.is_ascii_digit()) {
-                let value = id.parse::<u16>().ok()?;
+                // Perl's pack('n', $id) keeps the low 16 bits of a decimal
+                // integer before unpacking its two bytes.
+                let value = id.parse::<u64>().ok()? as u16;
                 key = format!("{} {}", value >> 8, value & 255);
             } else if !id.bytes().all(|b| b.is_ascii_digit() || b == b' ') {
                 return None;
@@ -716,11 +731,10 @@ pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
                 return None;
             }
             if let Some(name) = names.first() {
-                return (get(2).is_none()
-                    && get(3).is_none()
-                    && get(4).is_none()
-                    && get(5).is_none())
-                .then(|| (*name).to_string());
+                if get(2).is_none() && get(3).is_none() && get(4).is_none() && get(5).is_none() {
+                    return Some((*name).to_string());
+                }
+                unique_nikon_label = Some(*name);
             }
         }
         XmpLensMaker::Sony if make == "SONY" => {
@@ -765,7 +779,12 @@ pub(super) fn compute_xmp(inputs: &[Option<&str>]) -> Option<String> {
         parts[2] = None;
     }
     let lens_model = get(4).filter(|s| !s.is_empty());
-    let Some((_, label)) = rows.iter().find(|(k, _)| *k == key.as_str()) else {
+    let label = unique_nikon_label.or_else(|| {
+        rows.iter()
+            .find(|(k, _)| *k == key.as_str())
+            .map(|(_, label)| *label)
+    });
+    let Some(label) = label else {
         if info.is_some() || focal_length.is_some() || lens_model.is_some() || max_av.is_some() {
             return None;
         }

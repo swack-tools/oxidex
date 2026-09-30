@@ -83,3 +83,22 @@ fn ambiguous_nikon_prefix_is_explicitly_refused() {
     // source-stable without an additional ordering contract.
     assert_eq!(converted("Nikon", "1", None, None), None);
 }
+
+#[test]
+fn nikon_unique_prefix_keeps_its_label_with_focal_hint() {
+    // Pinned XMP::PrintLensID expands 4 to the sole 04* label, then passes
+    // the optional focal length through Exif::PrintLensID.
+    assert_eq!(
+        converted("Nikon", "4", None, Some("28")).as_deref(),
+        Some("AF Nikkor 28mm f/2.8"),
+    );
+}
+
+#[test]
+fn pentax_decimal_id_wraps_to_the_source_int16u() {
+    // Pinned XMP::PrintLensID uses pack('n', $id): 66323 wraps to 787.
+    assert_eq!(
+        converted("Pentax", "66323", None, None).as_deref(),
+        Some("smc PENTAX-F 24-50mm F4"),
+    );
+}
