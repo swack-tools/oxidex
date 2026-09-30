@@ -1575,7 +1575,7 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
     return final
 
 
-def _preflight_owned_signing(repository: Path, output_root: Path) -> None:
+def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapter.clean_snapshot.SigningTrust:
     """Prove the effective signer in a linked checkout before costly stages."""
     snapshot = stage_adapter.clean_snapshot
     trust = snapshot._signature_trust(repository)
@@ -1641,6 +1641,18 @@ def _preflight_owned_signing(repository: Path, output_root: Path) -> None:
         if created:
             run("-C", str(repository), "worktree", "remove", "--force", str(owned), cwd=repository)
         scratch_parent.rmdir()
+    return trust
+
+
+def _confirm_owned_signing(checkout: Path,
+                           preflight: stage_adapter.clean_snapshot.SigningTrust) -> None:
+    """The actual checkout can match a different includeIf gitdir rule."""
+    try:
+        observed = stage_adapter.clean_snapshot._signature_trust(checkout)
+    except stage_adapter.clean_snapshot.Refused as error:
+        raise Refused("Task19 signing trust changes in the actual owned checkout") from error
+    if observed != preflight:
+        raise Refused("Task19 signing trust changes in the actual owned checkout")
 
 
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
@@ -1670,7 +1682,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     # does not inherit repository-local SSH verification configuration. Refuse
     # missing trust before the costly generation/build stages begin.
     try:
-        _preflight_owned_signing(repository, output_root)
+        preflight_signing = _preflight_owned_signing(repository, output_root)
     except stage_adapter.clean_snapshot.Refused as error:
         raise Refused(str(error)) from error
     pinned = caller["pin_version"]
@@ -1747,6 +1759,10 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         try:
                             host_lease.guard()
                             cadence.check()
+                            if _stage == "checkout" and _boundary == "after":
+                                _confirm_owned_signing(
+                                    side_run / "checkouts" / executor._safe_name(_release),
+                                    preflight_signing)
                             _verify_read_policy_input(
                                 policy_binding, {item["id"] for item in matrix["rows"]})
                             _verify_frozen_side(selected)

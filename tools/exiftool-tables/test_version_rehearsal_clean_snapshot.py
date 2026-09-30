@@ -443,6 +443,30 @@ class CleanSnapshotTests(unittest.TestCase):
             qualification._preflight_owned_signing(self.owned, self.root)
         self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
 
+    def test_actual_owned_checkout_refuses_includeif_signer_swap(self) -> None:
+        other = self.root / "other-key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                       check=True, capture_output=True)
+        self.allowed_signers.write_text(
+            f"test@example.invalid {self.key.with_suffix('.pub').read_text().strip()}\n"
+            f"test@example.invalid {other.with_suffix('.pub').read_text().strip()}\n")
+        source_gitdir = Path(git(self.owned, "rev-parse", "--absolute-git-dir")).resolve()
+        included = self.root / "owned-only-config"
+        included.write_text(f"[user]\n\tsigningkey = {other}\n")
+        with self.git_config.open("a") as config:
+            config.write(f"[includeIf \"gitdir:{source_gitdir / 'worktrees' / 'owned-checkout'}\"]\n"
+                         f"\tpath = {included}\n")
+        preflight = qualification._preflight_owned_signing(self.owned, self.root)
+        checkout = self.root / "checkouts" / "owned-checkout"
+        checkout.parent.mkdir()
+        git(self.owned, "worktree", "add", "--detach", "--no-checkout", str(checkout), "HEAD")
+        try:
+            self.assertEqual(snapshot._signature_trust(checkout).effective_key, str(other.resolve()))
+            with self.assertRaisesRegex(qualification.Refused, "actual owned checkout"):
+                qualification._confirm_owned_signing(checkout, preflight)
+        finally:
+            git(self.owned, "worktree", "remove", "--force", str(checkout))
+
     def test_repo_local_ssh_program_is_used_by_snapshot(self) -> None:
         marker = self.root / "program-invoked"
         wrapper = self.root / "ssh-keygen-wrapper"
