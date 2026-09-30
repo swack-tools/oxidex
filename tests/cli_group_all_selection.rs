@@ -299,6 +299,83 @@ fn rename_exclusion_fails_closed_before_moving_a_file() {
 #[path = "common/fixtures.rs"]
 mod fixtures;
 
+// Selector forms whose public CLI rows are fully covered by the pinned
+// ExifTool t/images samples. This exercises group membership, exclusions,
+// duplicate selection, wildcard names and the -s2 spelling together.
+const GRADED_SELECTOR_CASES: &[(&[&str], &[&str])] = &[
+    (
+        &["-a", "-G1", "-s", "-ExifIFD:all"],
+        &[
+            "Canon.jpg",
+            "Nikon.jpg",
+            "ExifTool.jpg",
+            "GPS.jpg",
+            "Pentax.jpg",
+            "Sony.jpg",
+        ],
+    ),
+    (
+        &["-G1", "-s", "-EXIF:all"],
+        &["ExifTool.jpg", "GPS.jpg", "Apple.jpg", "XMP.jpg"],
+    ),
+    (
+        &["-G1", "-s", "-EXIF:all", "--ISO"],
+        &["Sigma.jpg", "ExifTool.jpg", "GPS.jpg"],
+    ),
+    (&["-s", "-EXIF:all"], &["GPS.jpg"]),
+    (&["-G1", "-s", "-XMP-dc:all"], &["XMP.jpg"]),
+    (
+        &["-G1", "-s", "-all:ISO", "-ExifIFD:*"],
+        &["Olympus.jpg", "Sony.jpg", "Panasonic.jpg"],
+    ),
+    (
+        &["-a", "-G1", "-s", "-GPS:all", "-IFD0:all"],
+        &["GPS.jpg", "Nikon.jpg"],
+    ),
+    (&["-G1", "-s2", "-GPS:GPS*", "--GPSVersionID"], &["GPS.jpg"]),
+    (&["-s", "-*:Comment"], &["ExifTool.jpg"]),
+];
+
+#[test]
+fn group_all_selection_matches_pinned_oracle_row_for_row() {
+    let Some(oracle) = oxidex::exiftool_oracle::graded() else {
+        eprintln!("skipping: pinned ExifTool 13.59 oracle unavailable");
+        return;
+    };
+    let mut calls = 0;
+    for &(flags, samples) in GRADED_SELECTOR_CASES {
+        for &sample in samples {
+            let file = fixtures::required_t_images_fixture_path(sample);
+            let expected = oracle
+                .command()
+                .args(["-config", ""])
+                .args(flags)
+                .arg(&file)
+                .output()
+                .unwrap_or_else(|error| panic!("pinned oracle {flags:?} {sample}: {error}"));
+            assert!(
+                expected.status.success(),
+                "pinned oracle {flags:?} {sample}: {}",
+                String::from_utf8_lossy(&expected.stderr)
+            );
+            assert!(
+                !expected.stdout.is_empty(),
+                "pinned oracle printed no rows for {flags:?} {sample}"
+            );
+            let actual = oxidex(flags, &file);
+            assert!(
+                actual.status.success(),
+                "oxidex {flags:?} {sample}: {}",
+                String::from_utf8_lossy(&actual.stderr)
+            );
+            assert_eq!(actual.stdout, expected.stdout, "{flags:?} {sample}");
+            calls += 1;
+        }
+    }
+    assert_eq!(GRADED_SELECTOR_CASES.len(), 9);
+    assert_eq!(calls, 22);
+}
+
 #[test]
 #[ignore = "explicit CI replay against pinned ExifTool 13.59 t/images RAW fixtures"]
 fn canon_and_kyocera_raw_rows_keep_makernotes_family_selection() {
