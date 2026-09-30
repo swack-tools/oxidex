@@ -31,6 +31,8 @@ import unittest
 from unittest import mock
 
 from tools.ci import validate_release_receipt as validator
+from tools.ci import release_pr_gate
+from tools.ci.test_release_pr_gate import ReleasePrGateTests
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -163,6 +165,65 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         bad = fixture("parity")
         bad["oxidex_sha"] = "f" * 40
         self.assert_invalid("parity", bad, "oxidex_sha")
+
+    def test_finalization_replays_local_review_fallback_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            helper = ReleasePrGateTests()
+            state, threads, required = helper.fixtures(root)
+            pr_state = json.loads(state.read_text())
+            pr_state.update(baseRefOid="e" * 40, reviewDecision="")
+            state.write_text(json.dumps(pr_state), encoding="utf-8")
+            local = helper.local_review(root, base="e" * 40, tree="b" * 40)
+            gate = release_pr_gate.validate(state, threads, required, SHA, local, "e" * 40, "b" * 40)
+            gate_path = root / "reviewed-promotion.json"
+            gate_path.write_text(json.dumps(gate), encoding="utf-8")
+            payload = fixture("finalization")
+            promotion = payload["promotion"]
+            promotion.update(
+                review_basis="local_review_fallback",
+                review_decision="",
+                gate_evidence=str(gate_path),
+                gate_sha256=hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+                review_threads_evidence=gate["review_threads_path"],
+                review_threads_sha256=gate["review_threads_sha256"],
+                pr_state_evidence=gate["pr_state_path"],
+                pr_state_sha256=gate["pr_state_sha256"],
+                required_checks_evidence=gate["required_checks_path"],
+                required_checks_sha256=gate["required_checks_sha256"],
+            )
+            self.assertEqual(validator.validate_schema("finalization", payload), [])
+            self.assertEqual(
+                validator.validate_receipt(
+                    "finalization", payload, expected_version=VERSION, expected_sha=SHA
+                ),
+                [],
+            )
+
+            bad = copy.deepcopy(payload)
+            bad["promotion"]["review_decision"] = "APPROVED"
+            self.assert_invalid("finalization", bad, "promotion.review_decision")
+            bad = copy.deepcopy(payload)
+            bad["promotion"]["gate_sha256"] = "0" * 64
+            self.assert_invalid("finalization", bad, "promotion.gate_sha256")
+            bad = copy.deepcopy(payload)
+            bad["promotion"]["pr_state_sha256"] = "0" * 64
+            self.assert_invalid("finalization", bad, "promotion.pr_state_sha256")
+            stale = copy.deepcopy(payload)
+            stale["candidate_tree"] = "f" * 40
+            self.assert_invalid("finalization", stale, "promotion.gate_evidence")
+            altered_gate = dict(gate)
+            altered_gate["review_decision"] = "APPROVED"
+            gate_path.write_text(json.dumps(altered_gate), encoding="utf-8")
+            bad = copy.deepcopy(payload)
+            bad["promotion"]["gate_sha256"] = hashlib.sha256(gate_path.read_bytes()).hexdigest()
+            self.assert_invalid("finalization", bad, "promotion.gate_evidence")
+            gate_path.write_text(json.dumps(gate), encoding="utf-8")
+            required.write_text(
+                json.dumps([{"name": "Build", "state": "FAILURE", "link": "x"}]),
+                encoding="utf-8",
+            )
+            self.assert_invalid("finalization", payload, "promotion.gate_evidence")
 
     def test_parity_requires_capable_oracle_all_families_and_satisfied_floor(self):
         cases = (
