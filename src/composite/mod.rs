@@ -19,6 +19,7 @@ mod generated_compute;
 mod lens_alternatives;
 mod lens_id;
 pub mod tables;
+mod xmp_lens_maps;
 
 pub use tables::{COMPOSITES, Composite};
 
@@ -542,6 +543,9 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                         }
                     })
                 }
+            } else if comp.module == "XMP" && comp.name == "LensID" {
+                lens_id::compute_xmp(&inputs)
+                    .and_then(|print| compute::Computed::new(inputs[0].unwrap_or_default(), print))
             } else {
                 compute::compute(comp.module, comp.name, &inputs, make.as_deref())
             };
@@ -1214,7 +1218,56 @@ mod tests {
             .iter()
             .find(|c| c.module == "XMP" && c.name == "LensID")
             .expect("generated XMP LensID composite");
+        assert_eq!(xmp_lens_id.require, &[(0, "XMP-aux:LensID"), (1, "Make")]);
+        assert_eq!(
+            xmp_lens_id.desire,
+            &[
+                (2, "LensInfo"),
+                (3, "FocalLength"),
+                (4, "LensModel"),
+                (5, "MaxApertureValue"),
+            ]
+        );
         assert_eq!(xmp_lens_id.inhibit, &[(6, "Composite:LensID")]);
+    }
+
+    #[test]
+    fn xmp_selected_source_map_shapes_are_pinned() {
+        use super::xmp_lens_maps::{XmpLensMaker as Maker, rows};
+        for (maker, count) in [
+            (Maker::Canon, 535),
+            (Maker::Nikon, 618),
+            (Maker::Pentax, 310),
+            (Maker::Sony, 431),
+            (Maker::Sigma, 0),
+            (Maker::Samsung, 18),
+            (Maker::Leica, 58),
+        ] {
+            assert_eq!(rows(maker).len(), count, "{maker:?}");
+            assert!(rows(maker).windows(2).all(|p| p[0].0 < p[1].0));
+        }
+        assert_eq!(
+            rows(Maker::Canon)
+                .iter()
+                .find(|(id, _)| *id == "1")
+                .unwrap()
+                .1,
+            "Canon EF 50mm f/1.8"
+        );
+    }
+
+    #[test]
+    fn existing_composite_lens_id_inhibits_xmp_alternate() {
+        let mut m = map_of(&[
+            ("Canon:LensType", "Canon EF 50mm f/1.8"),
+            ("IFD0:Make", "Canon"),
+            ("XMP-aux:LensID", "2"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensID"),
+            Some("Canon EF 50mm f/1.8")
+        );
     }
 
     #[test]

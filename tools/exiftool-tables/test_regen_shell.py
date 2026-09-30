@@ -235,6 +235,15 @@ else:
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
         assert flag('--out')==artifact(name[:-3])
         output(flag('--out'),name)
+    elif name=='gen_xmp_lens_maps.py':
+        assert flag('--exiftool-dir')==lib.parent
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        path=artifact('gen_xmp_lens_maps')
+        if '--check' in args:
+            assert path.read_text()=='generated explicit-A '+name+'\n'
+        else:
+            assert flag('--out')==path
+            output(path,name)
     elif name=='tag_exists_codegen.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -376,7 +385,8 @@ class RegenerationShellTests(unittest.TestCase):
     def extra_leaves(self):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
-                'dump_lens_alternatives.pl', 'verify_geotiff.py',
+                'dump_lens_alternatives.pl', 'gen_xmp_lens_maps.py',
+                'gen_xmp_lens_maps.py:check', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
                 'gen_nikon_encrypted_tables.py',
@@ -470,6 +480,8 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
+                self.assertLess(names.index('gen_xmp_lens_maps.py'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
+                self.assertGreater(names.index('gen_xmp_lens_maps.py:check'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 dump_cache = self.cache / f'tables-reader-{self.pin}.json'
                 self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
                 self.assertIs(json.loads(dump_cache.read_text())['reader_only'], True)
