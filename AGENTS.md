@@ -410,9 +410,26 @@ removing targets, worktrees, scratch clones, bundles or branches. Keep targets
 while a live agent, open PR or recheckable measurement uses them. Only remove
 exact paths you own after all tracked, untracked and ignored evidence is
 preserved and local commits and annotated tags are proven remote or archived.
-Use Codex's managed worktree archive tool when available. The stash is shared:
-never apply, pop or drop an unnamed or position-only stash. Prefer a WIP commit
-or evidence patch, and record an exact stash object ID if one is necessary.
+Before retiring a worktree, run
+`git status --porcelain --ignored --untracked-files=all`; ordinary status hides
+ignored `HANDOFF.md` and evidence.
+Copy any needed ignored files below `${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/evidence/`.
+Codex's managed worktree archive tool preserves non-ignored files, so preserve
+ignored evidence separately and use that tool for managed checkouts. For other
+worktrees, follow the runbook's reachability checks before removal.
+
+A worktree's `CARGO_TARGET_DIR` is regenerable build output, but retain it while
+a live worker, open PR, or recheckable measurement needs its binary. Before
+removing an owned target directory by exact path, record the measurement and
+binary fingerprint and SHA-256. A scratch clone or bundle may contain the only
+copy of commits or annotated tags; apply the runbook's remote-reachability
+checks rather than treating it as build output.
+
+The stash is shared by every worktree. Prefer a WIP commit on your branch or
+an evidence patch. If a stash is necessary, record its exact object ID when
+creating it, inspect that object's contents, and apply by ID. A `stash@{N}`
+position can change when another worker stashes; never apply, pop, or drop an
+unnamed or position-only stash. The runbook gives the capture command.
 
 ## How work lands
 
@@ -483,9 +500,16 @@ checking PR state. Do not use it to bypass the landing requirements.
 
 Read [the review contract](docs/AGENT_WORKFLOWS.md#review-guidelines). Review the
 current candidate and its interactions; validate findings with concrete inputs
-and pinned-oracle evidence. Wrong values, partial writes, lost data, unsafe
-resource use, and fail-open safety checks take priority over style. Local review
-helps anticipate GitHub findings; it cannot establish that no bugs remain.
+and pinned-oracle evidence. Prioritize wrong values under real ExifTool tag
+names (including wrong units, conversions, groups, or copies), silent partial
+writes or no-ops, data loss, crashes, unbounded resource use, security defects,
+and fail-open safety checks. Report demonstrated divergence on requests both
+tools accept, missing or unnamed refusals, tests that cannot fail, and stale or
+mislabeled measurements. An explicit, named refusal can be intentional when
+the unsupported operation is documented; do not turn it into silent partial
+success. Formatting preferences are not correctness findings. Validate each
+review finding before repair, and preserve its evidence or disproof. Local
+review helps anticipate GitHub findings; it cannot establish that no bugs remain.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
