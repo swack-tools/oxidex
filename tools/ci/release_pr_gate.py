@@ -14,6 +14,7 @@ from typing import Any
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+FINDING_SIGNAL_RE = re.compile(r"\[P[0-3]\]|\bP[0-3]\b")
 
 
 class PrGateError(RuntimeError):
@@ -102,6 +103,8 @@ def _local_review(
     output_index = command.index("--output-last-message") + 1
     if output_index >= len(command) or command[output_index] != str(result_path):
         raise PrGateError("local-review.review_receipt.command: result path mismatch")
+    if len(command) < 3 or command[-3:] != ["review", "--base", expected_base]:
+        raise PrGateError("local-review.review_receipt.command: expected review of exact base")
     if not isinstance(result, str) or not result.strip():
         raise PrGateError("local-review.review_result: empty result")
     _, findings = _bound_file(record, "findings")
@@ -109,25 +112,43 @@ def _local_review(
         raise PrGateError("local-review.findings: expected an object")
     for field, expected in (("status", "reviewed"), ("head", expected_head),
                             ("base", expected_base), ("tree", expected_tree),
-                            ("unresolved_actionable_findings", 0)):
+                            ("unresolved_actionable_findings", 0),
+                            ("review_result_sha256", record["review_result_sha256"])):
         if findings.get(field) != expected:
             raise PrGateError(f"local-review.findings.{field}: expected {expected!r}")
     items = findings.get("findings")
     if not isinstance(items, list) or any(
         not isinstance(item, dict)
         or item.get("disposition") not in {"resolved", "not_actionable"}
+        or not isinstance(item.get("review_line"), str)
         or not isinstance(item.get("reason"), str)
         or not item["reason"].strip()
         for item in items
     ):
         raise PrGateError("local-review.findings.findings: unresolved or malformed finding")
+    raw_lines = sorted(line for line in result.splitlines() if FINDING_SIGNAL_RE.search(line))
+    disposed_lines = sorted(item["review_line"] for item in items)
+    if raw_lines != disposed_lines:
+        raise PrGateError("local-review.findings.findings: raw review findings are not all accounted for")
     _, authorization = _bound_file(record, "authorization")
     if (
         not isinstance(authorization, dict)
-        or not isinstance(authorization.get("authorization"), str)
-        or not authorization["authorization"].startswith("User:")
+        or authorization.get("schema_version") != 1
+        or authorization.get("decision") != "approved"
+        or authorization.get("scope") != "local_review_fallback"
+        or not isinstance(authorization.get("authorized_by"), str)
+        or not authorization["authorized_by"].strip()
+        or not isinstance(authorization.get("authorized_at"), str)
+        or not authorization["authorized_at"].strip()
     ):
-        raise PrGateError("local-review.authorization: missing user authorization")
+        raise PrGateError("local-review.authorization: missing affirmative scoped grant")
+    _, source = _bound_file(authorization, "source")
+    if (
+        not isinstance(source, dict)
+        or not isinstance(source.get("authorization"), str)
+        or not source["authorization"].strip()
+    ):
+        raise PrGateError("local-review.authorization.source: missing original user instruction")
     return {
         "local_review_path": str(path.resolve()),
         "local_review_sha256": _sha256(path),

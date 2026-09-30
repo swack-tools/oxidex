@@ -233,9 +233,14 @@ The local acceptance JSON must contain `schema_version: 1`, `status: accepted`,
 `--output-last-message` path matching the result. The findings JSON must bind
 the same identity, have `status: reviewed`, an array of individually disposed
 findings (`resolved` or `not_actionable` with reasons), and zero unresolved
-actionable findings. The authorization JSON retains the user's explicit
-fallback instruction. This acceptance is a human disposition of the review;
-`completed` and process exit zero alone are not approval.
+actionable findings. The authorization JSON is a structured grant with `schema_version: 1`,
+`decision: approved`, `scope: local_review_fallback`, `authorized_by`,
+`authorized_at`, and absolute `source_path`/`source_sha256` binding the retained
+original user instruction. Every severity-bearing line in the raw review
+result must appear verbatim as a `review_line` in the findings ledger; the
+ledger also binds `review_result_sha256`. This acceptance is an independent
+assessment of the review; `completed` and process exit zero alone are not
+approval.
 
 Require successful current required checks, a complete review-thread page,
 and zero unresolved non-outdated review threads under either route. The gate
