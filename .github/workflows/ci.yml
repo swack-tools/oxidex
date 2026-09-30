@@ -854,7 +854,7 @@ jobs:
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
