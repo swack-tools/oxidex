@@ -3238,6 +3238,27 @@ fn next_ifd_offset(
     }
 }
 
+/// Decode only pointer shapes that ExifTool processes as subdirectories.
+/// Pinned ExifTool 13.59 differs by tag for a SHORT pair: ExifOffset refuses
+/// it, while GPSInfo and InteropOffset use the first SHORT.
+fn followed_subifd_offset(
+    tag_id: u16,
+    field_type: u16,
+    count: u32,
+    raw_bytes: &[u8],
+    byte_order: ByteOrder,
+) -> Option<u64> {
+    // ExifTool follows a scalar SHORT/LONG ExifOffset. GPSInfo and
+    // InteropOffset also accept a pair of SHORTs and use the first. Other
+    // count/type combinations are data, not an already-processed directory.
+    match (field_type, count) {
+        (3, 1) => Some(u64::from(read_u16(raw_bytes.get(..2)?, byte_order))),
+        (3, 2) if tag_id != 0x8769 => Some(u64::from(read_u16(raw_bytes.get(..2)?, byte_order))),
+        (4, 1) => Some(u64::from(read_u32(raw_bytes.get(..4)?, byte_order))),
+        _ => None,
+    }
+}
+
 /// Collects the offsets of the EXIF directories that have already been walked
 /// before IFD1 is reached: IFD0 itself, its EXIF and GPS sub-IFDs, and the
 /// Interoperability IFD that hangs off the EXIF sub-IFD.
@@ -3249,7 +3270,8 @@ fn next_ifd_offset(
 /// corpus are built that way - SamsungSPH-A800.jpg, SamsungSPH-A940.jpg and
 /// CanonXL_H1.jpg aim IFD1 at the InteropIFD, SamsungGT-S5620.jpg aims it at
 /// the GPS IFD - and following the pointer anyway turns an unrelated
-/// directory's entries into invented thumbnail tags.
+/// directory's entries into invented thumbnail tags. Only parseable targets
+/// enter this set: an invalid declared pointer was never walked.
 fn visited_directory_offsets(
     reader: &dyn FileReader,
     ifd0_offset: u64,
@@ -3263,22 +3285,34 @@ fn visited_directory_offsets(
         return visited;
     };
 
-    for (tag_id, _, _, raw_bytes) in &ifd0 {
-        if !matches!(*tag_id, EXIF_IFD_POINTER | GPS_IFD_POINTER) || raw_bytes.len() < 4 {
+    for (tag_id, field_type, count, raw_bytes) in &ifd0 {
+        if !matches!(*tag_id, EXIF_IFD_POINTER | GPS_IFD_POINTER) {
             continue;
         }
-        let sub_offset = read_u32(raw_bytes, byte_order) as u64;
+        let Some(sub_offset) =
+            followed_subifd_offset(*tag_id, *field_type, *count, raw_bytes, byte_order)
+        else {
+            continue;
+        };
+        let Ok(sub_ifd) = parse_ifd(reader, sub_offset, byte_order) else {
+            continue;
+        };
         visited.push(sub_offset);
 
         if *tag_id != EXIF_IFD_POINTER {
             continue;
         }
-        let Ok(exif_ifd) = parse_ifd(reader, sub_offset, byte_order) else {
-            continue;
-        };
-        for (sub_tag, _, _, sub_bytes) in &exif_ifd {
-            if *sub_tag == INTEROPERABILITY_IFD_POINTER && sub_bytes.len() >= 4 {
-                visited.push(read_u32(sub_bytes, byte_order) as u64);
+        for (sub_tag, sub_type, sub_count, sub_bytes) in &sub_ifd {
+            if *sub_tag != INTEROPERABILITY_IFD_POINTER {
+                continue;
+            }
+            let Some(interop_offset) =
+                followed_subifd_offset(*sub_tag, *sub_type, *sub_count, sub_bytes, byte_order)
+            else {
+                continue;
+            };
+            if parse_ifd(reader, interop_offset, byte_order).is_ok() {
+                visited.push(interop_offset);
             }
         }
     }

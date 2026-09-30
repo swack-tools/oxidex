@@ -152,6 +152,72 @@ fn looping_preview_ifd1_pointer_does_not_relabel_ifd0_tags() {
 }
 
 #[test]
+fn thumbnail_guard_follows_only_exif_pointer_shapes_processed_by_exiftool() {
+    let original = source();
+    let (_, ifd0) = preview_ifd0(&original);
+    let pointer = entry(&original, ifd0, 0x8769);
+    let count = usize::from(read_u16(&original, ifd0));
+    let ifd1 = read_u32(&original, ifd0 + 2 + count * 12);
+
+    // Each entry's bytes name the real IFD1. Only scalar pointers are
+    // processed as ExifIFD by pinned ExifTool 13.59.
+    for (field_type, value_count, thumbnail_expected) in [
+        (3u16, 1u32, false),
+        (3, 2, true),
+        (4, 0, true),
+        (4, 1, false),
+        (4, 2, true),
+    ] {
+        let mut data = original.clone();
+        data[pointer + 2..pointer + 4].copy_from_slice(&field_type.to_le_bytes());
+        data[pointer + 4..pointer + 8].copy_from_slice(&value_count.to_le_bytes());
+        data[pointer + 8..pointer + 12].copy_from_slice(&ifd1.to_le_bytes());
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_integer("IFD1:ThumbnailOffset"),
+            thumbnail_expected.then_some(11976),
+            "Exif pointer type={field_type} count={value_count}"
+        );
+    }
+}
+
+#[test]
+fn thumbnail_guard_accounts_for_gps_and_interop_pointer_shapes() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let exif_pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, exif_pointer + 8) as usize;
+    let interop_pointer = entry(&original, exif_ifd, 0xA005);
+    let count = usize::from(read_u16(&original, ifd0));
+    let ifd1 = read_u32(&original, ifd0 + 2 + count * 12);
+
+    for (is_gps, pointer) in [(true, exif_pointer), (false, interop_pointer)] {
+        for (field_type, value_count, thumbnail_expected) in [
+            (3u16, 1u32, false),
+            (3, 2, false),
+            (4, 0, true),
+            (4, 1, false),
+            (4, 2, true),
+        ] {
+            let mut data = original.clone();
+            if is_gps {
+                data[pointer..pointer + 2].copy_from_slice(&0x8825u16.to_le_bytes());
+            }
+            data[pointer + 2..pointer + 4].copy_from_slice(&field_type.to_le_bytes());
+            data[pointer + 4..pointer + 8].copy_from_slice(&value_count.to_le_bytes());
+            data[pointer + 8..pointer + 12].copy_from_slice(&ifd1.to_le_bytes());
+            let metadata = parse(&data);
+            assert_eq!(
+                metadata.get_integer("IFD1:ThumbnailOffset"),
+                thumbnail_expected.then_some(11976),
+                "{} pointer type={field_type} count={value_count}",
+                if is_gps { "GPS" } else { "Interop" }
+            );
+        }
+    }
+}
+
+#[test]
 fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
