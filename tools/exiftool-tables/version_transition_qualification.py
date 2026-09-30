@@ -594,6 +594,11 @@ def _report_for(run_dir: Path, journal: Mapping[str, Any], release: str, stage: 
     value = _read_object(run_dir / relative, f"{release} {stage} report")
     if rehearsal.sha256_json(value) != report["sha256"]:
         raise Refused(f"{release} {stage} report differs from its execution journal digest")
+    if stage in {"generate", "build", "test", "read", "write"}:
+        try:
+            executor._require_raw_report(value)
+        except executor.Refused as error:
+            raise Refused(f"{release} {stage} {error}") from error
     return value
 
 
@@ -1388,6 +1393,10 @@ def _replay_committed_read_snapshot(row: Mapping[str, Any], side: str, root: Pat
     generation = _report_for(run_dir, journal, release, "generate")
     build = _report_for(run_dir, journal, release, "build")
     read = _report_for(run_dir, journal, release, "read")
+    # The final marker must still be backed by the release-test and write
+    # command transcripts, even though read-pair replay uses only read data.
+    _report_for(run_dir, journal, release, "test")
+    _report_for(run_dir, journal, release, "write")
     read_report_path = run_dir / journal["releases"][release]["reports"]["read"]["path"]
     if (read.get("state") != "measured"
             or release_state.get("reports", {}).get("read", {}).get("acceptance") != "pending_pair_policy"):
@@ -1564,6 +1573,26 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
     return final
 
 
+def _preflight_owned_signing(repository: Path) -> None:
+    """Refuse Git signing paths whose meaning changes in an owned worktree."""
+    trust = stage_adapter.clean_snapshot._signature_trust(repository)
+    options = ("user.signingkey", "gpg.ssh.allowedSignersFile",
+               "gpg.ssh.revocationFile", "gpg.ssh.program")
+    for option in options:
+        raw = stage_adapter.clean_snapshot._git(
+            repository, "config", "--get", "--default=", option)
+        assert isinstance(raw, str)
+        if not raw or (option == "user.signingkey" and
+                       (raw.startswith("key::") or raw.startswith(("ssh-", "ecdsa-", "sk-")))):
+            continue
+        if option == "gpg.ssh.program" and "/" not in raw:
+            continue  # Resolved to a bound absolute executable by _signature_trust.
+        if not Path(raw).expanduser().is_absolute():
+            raise Refused(f"Task19 owned checkout requires an absolute {option} path")
+    if trust.program_path is None:
+        raise Refused("Task19 owned checkout has no bound SSH signing program")
+
+
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                       target_root: Path, lease_path: Path, run_id: str,
                       owner_receipt: Path, heartbeat_receipt: Path,
@@ -1591,7 +1620,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     # does not inherit repository-local SSH verification configuration. Refuse
     # missing trust before the costly generation/build stages begin.
     try:
-        stage_adapter.clean_snapshot._signature_trust(repository)
+        _preflight_owned_signing(repository)
     except stage_adapter.clean_snapshot.Refused as error:
         raise Refused(str(error)) from error
     pinned = caller["pin_version"]

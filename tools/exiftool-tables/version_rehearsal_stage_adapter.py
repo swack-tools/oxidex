@@ -412,6 +412,10 @@ def _prior(report: Path, stage: str, args: argparse.Namespace, identity: dict[st
             or value.get("source_commit") != args.source_commit or value.get("native_identity") != identity
             or value.get("source_tree_sha256") != _source_tree(checkout)):
         raise Refused("prior stage is not bound to this release, source, and native identity")
+    try:
+        executor._require_raw_report(value)
+    except executor.Refused as error:
+        raise Refused(str(error)) from error
     return value
 
 
