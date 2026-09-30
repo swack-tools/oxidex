@@ -860,13 +860,20 @@ fn oracle_counts_every_header_variant() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
+        let pin = exiftool_oracle::repo_pin();
+        let multiple_records = variant != "Exif\\0\\x01" || pin != "11.78";
+        assert_eq!(
             stderr.contains("Warning: Multiple APP1 EXIF records"),
+            multiple_records,
             "{label}: {stderr}"
         );
-        if variant.starts_with("exif") {
+        if variant.starts_with("exif") || (variant == "identifier only" && pin != "13.59") {
             assert!(
-                stderr.contains("Incorrect EXIF segment identifier"),
+                stderr.contains(if variant.starts_with("exif") {
+                    "Incorrect EXIF segment identifier"
+                } else {
+                    "Format error in file"
+                }),
                 "{label}: {stderr}"
             );
             assert!(stdout.contains("0 image files updated"), "{label}");
@@ -884,7 +891,12 @@ fn oracle_counts_every_header_variant() {
             .lines()
             .map(str::to_string)
             .collect();
-        assert_eq!(rows, ["Manual", "Manual"], "{label}");
+        let expected: &[&str] = if variant == "Exif\\0\\x01" && pin == "11.78" {
+            &["Manual"]
+        } else {
+            &["Manual", "Manual"]
+        };
+        assert_eq!(rows, expected, "{label}");
     }
 }
 

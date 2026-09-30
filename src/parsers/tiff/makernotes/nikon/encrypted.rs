@@ -504,6 +504,19 @@ mod dispatch_tests {
             count: 485,
         });
         let rows = generated_lens_rows(&data, keys);
+        if tested_source() == TestedSource::V1178 {
+            // Its generated LensData0204 root explicitly omits the partial
+            // DecryptLen/DecryptMore operation. Refuse every key/version
+            // variant rather than claiming a generated decode.
+            assert!(!rows.owned);
+            assert!(rows.rows.is_empty());
+            assert!(!generated_lens_rows(&data, None).owned);
+            assert!(!generated_lens_rows(&data[..4], keys).owned);
+            let mut unknown = data.clone();
+            unknown[..4].copy_from_slice(b"9999");
+            assert!(!generated_lens_rows(&unknown, keys).owned);
+            return;
+        }
         assert!(rows.owned);
         assert!(rows.rows.iter().any(|row| row.name == "ExitPupilPosition"));
         assert!(!generated_lens_rows(&data, None).owned);

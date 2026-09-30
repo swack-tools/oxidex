@@ -2532,7 +2532,11 @@ mod tests {
         })
     }
 
-    fn host_zone_dependent(helper: &str, case: &Value) -> bool {
+    fn host_zone_dependent_for_source(
+        source: DateHelperSource,
+        helper: &str,
+        case: &Value,
+    ) -> bool {
         if helper != "Image::ExifTool::ConvertUnixTime" {
             return false;
         }
@@ -2543,7 +2547,30 @@ mod tests {
             .and_then(|o| o.get("KeepUTCTime"))
             .map(arg)
             .is_some_and(|v| v.is_truthy());
-        local && !keep_utc
+        // Only the 13.59 implementation checks KeepUTCTime. In 11.78
+        // and 12.64, `$toLocal` always calls localtime even with this
+        // option set, so their UTC-captured cases depend on the host zone.
+        local && !(source == DateHelperSource::V1359 && keep_utc)
+    }
+
+    #[test]
+    fn old_convert_unix_time_capture_with_keep_utc_still_depends_on_host_zone() {
+        let case = serde_json::json!({
+            "args": [{"t":"i","v":"1"}, {"t":"i","v":"1"}],
+            "options": {"KeepUTCTime":{"t":"i","v":"1"}}
+        });
+        for source in [DateHelperSource::V1178, DateHelperSource::V1264] {
+            assert!(host_zone_dependent_for_source(
+                source,
+                "Image::ExifTool::ConvertUnixTime",
+                &case,
+            ));
+        }
+        assert!(!host_zone_dependent_for_source(
+            DateHelperSource::V1359,
+            "Image::ExifTool::ConvertUnixTime",
+            &case,
+        ));
     }
 
     /// The differential test: every captured probe of every admitted port
@@ -2554,6 +2581,8 @@ mod tests {
         let cap = capture();
         let helpers = cap["helpers"].as_object().expect("helpers");
         let utc = host_zone_is_utc();
+        let unix_source = date_helper_source("Image::ExifTool::ConvertUnixTime")
+            .expect("captured ConvertUnixTime source");
         let mut failures: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         let mut refused: BTreeMap<&str, (usize, BTreeSet<&str>)> = BTreeMap::new();
         let (mut checked, mut matched, mut zone_skipped) = (0usize, 0usize, 0usize);
@@ -2561,7 +2590,7 @@ mod tests {
             let h = &helpers[port.perl];
             for case in h["cases"].as_array().expect("cases") {
                 checked += 1;
-                if !utc && host_zone_dependent(port.perl, case) {
+                if !utc && host_zone_dependent_for_source(unix_source, port.perl, case) {
                     zone_skipped += 1;
                     continue;
                 }

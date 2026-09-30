@@ -19,16 +19,15 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Renders an mvhd/tkhd/mdhd Mac timestamp the way QuickTime.pm's shared
-/// `%timeInfo` PrintConv does (QuickTime.pm:242-291): local time with a UTC
-/// offset suffix when `is_cr3` (i.e. `$$self{FileType} eq "CR3"`,
-/// QuickTime.pm:271,280), otherwise the zone-less UTC rendering every other
-/// QuickTime-family container gets. See
+/// `%timeInfo` PrintConv does: QuickTime.pm 12.64 and 13.59 apply the CR3
+/// local-time conversion, while 11.78 applies it only when QuickTimeUTC is
+/// requested. The default 11.78 CR3 rendering is zone-less UTC. See
 /// [`mac_time_to_local_exif_datetime`] for the CR3 citation in full.
 ///
 /// The raw `mac_time` instant is never altered -- only which string it is
 /// rendered to changes.
 fn render_quicktime_datetime(mac_time: u64, is_cr3: bool) -> String {
-    if is_cr3 {
+    if is_cr3 && crate::exiftool_oracle::repo_pin() != "11.78" {
         mac_time_to_local_exif_datetime(mac_time)
             .unwrap_or_else(|| format_mac_time_legacy(mac_time))
     } else {

@@ -790,6 +790,25 @@ fn leica_wb_string_and_undefined_fields_keep_perl_composite_input() {
         let file = tempfile::Builder::new().suffix(".dng").tempfile().unwrap();
         fs::write(file.path(), bytes).unwrap();
         let metadata = read_metadata(file.path()).unwrap();
+        if field_type == 129 && oxidex::exiftool_oracle::repo_pin() == "11.78" {
+            assert!(!metadata.contains_key("Leica:WB_RGBLevels"));
+            assert!(!metadata.contains_key("Composite:RedBalance"));
+            assert!(!metadata.contains_key("Composite:BlueBalance"));
+            for numeric in [false, true] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+                command.arg("-j");
+                if numeric {
+                    command.arg("--no-print-conv");
+                }
+                let output = command.arg(file.path()).output().unwrap();
+                assert!(output.status.success());
+                let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert!(json[0].get("Leica:WB_RGBLevels").is_none());
+                assert!(json[0].get("Composite:RedBalance").is_none());
+                assert!(json[0].get("Composite:BlueBalance").is_none());
+            }
+            continue;
+        }
         assert_eq!(metadata.get_string("Leica:WB_RGBLevels"), Some(printed));
         assert_eq!(
             metadata
@@ -812,7 +831,7 @@ fn leica_wb_string_and_undefined_fields_keep_perl_composite_input() {
             let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
             command.arg("-j");
             if numeric {
-                command.arg("-n");
+                command.arg("--no-print-conv");
             }
             let output = command.arg(file.path()).output().unwrap();
             assert!(
@@ -837,7 +856,7 @@ fn leica_wb_inline_nul_keeps_public_json_string_type() {
             let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
             command.arg("-j");
             if numeric {
-                command.arg("-n");
+                command.arg("--no-print-conv");
             }
             let output = command.arg(file.path()).output().unwrap();
             assert!(
@@ -846,7 +865,16 @@ fn leica_wb_inline_nul_keeps_public_json_string_type() {
                 String::from_utf8_lossy(&output.stderr)
             );
             let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(json[0]["Leica:WB_RGBLevels"].as_str(), Some("1"));
+            if field_type == 129 && oxidex::exiftool_oracle::repo_pin() == "11.78" {
+                assert!(
+                    !json[0]
+                        .as_object()
+                        .unwrap()
+                        .contains_key("Leica:WB_RGBLevels")
+                );
+            } else {
+                assert_eq!(json[0]["Leica:WB_RGBLevels"].as_str(), Some("1"));
+            }
         }
     }
 }

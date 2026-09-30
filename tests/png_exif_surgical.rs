@@ -1590,7 +1590,15 @@ fn raw_profile_makernote_keeps_bare_conversion_atomic() {
         .output()
         .unwrap();
     let native_rows = String::from_utf8_lossy(&native_rows.stdout);
-    assert!(native_rows.contains("[Nikon]") && native_rows.contains("BT.2100"));
+    let expected_color = match exiftool_oracle::repo_pin() {
+        "11.78" | "12.64" => "sRGB",
+        "13.59" => "BT.2100",
+        pin => panic!("unprobed Nikon ColorSpace for ExifTool {pin}"),
+    };
+    assert!(
+        native_rows.contains("[Nikon]") && native_rows.contains(expected_color),
+        "{native_rows}"
+    );
     assert!(native_rows.contains("[PNG]") && native_rows.contains("sibling"));
 
     let ours_write = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))

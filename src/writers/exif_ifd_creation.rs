@@ -154,15 +154,21 @@ mod tests {
     /// ComponentsConfiguration undef[4] 01 02 03 00, ColorSpace int16u 0xffff).
     #[test]
     fn a_created_exif_ifd_gets_writeexifs_mandatory_entries() {
+        let flashpix = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            // Both historical WriteExif.pl sources make FlashpixVersion
+            // mandatory; 13.59 marks it optional under EXIF 3.0.
+            "11.78" | "12.64" => vec![(0xa000, 7, 4, b"0100".to_vec())],
+            "13.59" => vec![],
+            other => panic!("unreviewed ExifTool release {other}"),
+        };
         for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
-            assert_eq!(
-                fields(order, &[]),
-                vec![
-                    (0x9000, 7, 4, b"0232".to_vec()),
-                    (0x9101, 7, 4, vec![1, 2, 3, 0]),
-                    (0xa001, 3, 1, vec![0xff, 0xff]),
-                ]
-            );
+            let mut expected = vec![
+                (0x9000, 7, 4, b"0232".to_vec()),
+                (0x9101, 7, 4, vec![1, 2, 3, 0]),
+            ];
+            expected.extend(flashpix.clone());
+            expected.push((0xa001, 3, 1, vec![0xff, 0xff]));
+            assert_eq!(fields(order, &[]), expected);
         }
         // A value the caller sets itself is not replaced.
         assert_eq!(
@@ -170,7 +176,11 @@ mod tests {
                 .iter()
                 .map(|field| field.0)
                 .collect::<Vec<_>>(),
-            [0x9000, 0x9101]
+            if flashpix.is_empty() {
+                vec![0x9000, 0x9101]
+            } else {
+                vec![0x9000, 0x9101, 0xa000]
+            }
         );
     }
 }

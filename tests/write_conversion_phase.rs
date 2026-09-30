@@ -49,6 +49,11 @@ fn invalid_enum_candidates_follow_pinned_command_and_file_phases() {
     let synthetic = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jpeg/simple/synthetic_001.jpg");
     let canon = fixtures::required_t_images_fixture_path("Canon.jpg");
+    let custom_rendered_exit = if exiftool_oracle::repo_pin() == "11.78" {
+        1
+    } else {
+        0
+    };
     let cases: &[Case<'_>] = &[
         ("canon-only", &canon, &["-ColorSpace=bogus"], 0, true, false),
         (
@@ -191,7 +196,7 @@ fn invalid_enum_candidates_follow_pinned_command_and_file_phases() {
             "custom-rendered",
             &synthetic,
             &["-CustomRendered=bogus"],
-            0,
+            custom_rendered_exit,
             true,
             false,
         ),
