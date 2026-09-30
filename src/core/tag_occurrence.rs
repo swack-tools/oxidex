@@ -180,7 +180,7 @@ pub struct TagOccurrence {
     /// `FoundTag`'s `Priority` (`ExifTool.pm:9539`+): higher wins, ties
     /// broken by file order. See [`SHIM_DEFAULT_PRIORITY`] for what
     /// shim-minted occurrences get and why.
-    pub priority: u8,
+    pub priority: i16,
     /// Whether this occurrence belongs to a `List`-type tag. Always `false`
     /// for shim-minted occurrences -- `insert()` has no such concept.
     pub is_list: bool,
@@ -257,7 +257,7 @@ impl TagOccurrence {
             value: None,
             print: None,
             stored: None,
-            priority,
+            priority: priority.into(),
             is_list: false,
             order,
             origin: Provenance::default(),
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(&*occ.group0, "EXIF");
         assert_eq!(&*occ.name, "Make");
         assert_eq!(occ.order, 3);
-        assert_eq!(occ.priority, SHIM_DEFAULT_PRIORITY);
+        assert_eq!(occ.priority, i16::from(SHIM_DEFAULT_PRIORITY));
         assert_eq!(occ.raw, TagValue::new_string("Canon"));
         assert!(occ.value.is_none());
         assert!(occ.print.is_none());

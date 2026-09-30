@@ -847,8 +847,15 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
     for (key, value) in docx_tags {
         if key.starts_with("XMP:") {
             // dc:title and friends: family-1 group XMP-dc.
+            let raw_id = match key.as_str() {
+                "XMP:Title" => "title",
+                "XMP:Subject" => "subject",
+                "XMP:Creator" => "creator",
+                "XMP:Description" => "description",
+                _ => unreachable!("only the Dublin Core aliases enter this branch"),
+            };
             crate::parsers::xmp::rdf_parser::insert_grouped_xmp_tag(
-                metadata, &key, "XMP-dc", value,
+                metadata, &key, "XMP-dc", raw_id, value,
             );
         } else {
             metadata.insert(key, value);

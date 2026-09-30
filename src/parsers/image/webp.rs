@@ -762,7 +762,7 @@ mod tests {
                 Some(seed_raw)
             );
             assert_eq!(occurrences[0].raw.as_string(), Some(seed_label));
-            assert_eq!(occurrences[0].priority, seed_priority);
+            assert_eq!(occurrences[0].priority, i16::from(seed_priority));
             assert_eq!(occurrences[0].group1.as_ref(), "Canon");
             assert_eq!(occurrences[0].instance, Instance(7));
             assert_eq!(

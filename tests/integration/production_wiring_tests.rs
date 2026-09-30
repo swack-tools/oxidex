@@ -1490,9 +1490,10 @@ fn read_metadata_routes_valid_epub_mimetype_to_epub_parser() {
     let metadata = read_metadata(epub.path()).expect("valid EPUB should route to EPUB parser");
 
     assert_eq!(
-        metadata.get("EPUB:Title"),
+        metadata.get("XML:Title"),
         Some(&TagValue::String("Exact EPUB".to_string()))
     );
+    assert!(!metadata.contains_key("EPUB:Title"));
 }
 
 #[test]
