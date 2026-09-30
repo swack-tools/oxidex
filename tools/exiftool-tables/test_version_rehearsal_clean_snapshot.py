@@ -266,7 +266,7 @@ class CleanSnapshotTests(unittest.TestCase):
         git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
         shutil.copyfile(other, active)
         active.chmod(0o600)
-        with self.assertRaisesRegex(snapshot.Refused, "doesn't match private"):
+        with self.assertRaisesRegex(snapshot.Refused, "private key and public sidecar differ"):
             self.create()
 
     def test_source_local_ssh_revocation_is_not_lost_in_clone(self) -> None:
@@ -360,6 +360,43 @@ class CleanSnapshotTests(unittest.TestCase):
         git(self.owned, "config", "--local", "user.signingkey", str(encrypted))
         with self.assertRaisesRegex(snapshot.Refused, "cannot derive SSH public key noninteractively"):
             snapshot._signature_trust(self.owned)
+
+    def test_encrypted_private_key_with_sidecar_refuses_before_clone(self) -> None:
+        encrypted = self.root / "encrypted-with-sidecar"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "secret", "-f", str(encrypted)],
+                       check=True, capture_output=True)
+        git(self.owned, "config", "--local", "user.signingkey", str(encrypted))
+        with self.assertRaisesRegex(snapshot.Refused, "cannot derive SSH public key noninteractively"):
+            self.create()
+        self.assertFalse((self.target / snapshot.SNAPSHOT_DIR).exists())
+
+    def test_default_ssh_executable_is_bound_and_path_swap_refuses(self) -> None:
+        proof = self.create()
+        original = Path(shutil.which("ssh-keygen")).resolve()
+        self.assertEqual(proof["ssh_program_path"], str(original))
+        self.assertEqual(proof["ssh_keygen_path"], str(original))
+        self.assertEqual(proof["ssh_program_sha256"], hashlib.sha256(original.read_bytes()).hexdigest())
+        replacement = self.root / "alternate-bin"
+        replacement.mkdir()
+        wrapper = replacement / "ssh-keygen"
+        wrapper.write_text("#!/bin/sh\nexec '" + str(original) + "' \"$@\"\n")
+        wrapper.chmod(0o700)
+        with patch.dict(os.environ, {"PATH": str(replacement) + os.pathsep + os.environ["PATH"]}):
+            with self.assertRaisesRegex(snapshot.Refused, "SSH trust differs"):
+                snapshot.validate(proof, self.owned, self.target, self.parent,
+                                  snapshot.source_tree_sha256(self.owned),
+                                  {"generated.txt", ".exiftool-version"})
+
+    def test_owned_worktree_preflight_refuses_relative_signing_path(self) -> None:
+        git(self.owned, "config", "--local", "user.signingkey", "../signing-key.pub")
+        with self.assertRaisesRegex(qualification.Refused, "absolute user.signingkey"):
+            qualification._preflight_owned_signing(self.owned)
+        git(self.owned, "config", "--local", "user.signingkey", str(self.key.with_suffix(".pub")))
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", "../allowed-signers")
+        with self.assertRaisesRegex(qualification.Refused, "absolute gpg.ssh.allowedSignersFile"):
+            qualification._preflight_owned_signing(self.owned)
+        git(self.owned, "config", "--local", "gpg.ssh.allowedSignersFile", str(self.allowed_signers))
+        qualification._preflight_owned_signing(self.owned)
 
     def test_repo_local_ssh_program_is_used_by_snapshot(self) -> None:
         marker = self.root / "program-invoked"

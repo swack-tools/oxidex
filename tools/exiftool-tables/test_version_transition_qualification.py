@@ -1349,6 +1349,7 @@ class WrapperCallTests(unittest.TestCase):
             "generated_refusals": {"total": 0, "counters": []},
         }
         with patch.object(qualification, "snapshot_caller", return_value=self.caller), \
+             patch.object(qualification, "_preflight_owned_signing"), \
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
