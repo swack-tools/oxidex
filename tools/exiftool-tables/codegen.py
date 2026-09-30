@@ -4186,7 +4186,7 @@ impl PrintConv {
                     .binary_search_by_key(&val, |(k, _)| *k)
                     .ok()
                     .map(|i| exact[i].1.to_string())
-                    .or_else(|| other.and_then(|id| id.apply(val)))
+                    .or_else(|| other.and_then(|id| id.apply(val, exact)))
                     .unwrap_or_else(|| super::runtime::unknown_fallback(val, *print_hex)),
             ),
         }
