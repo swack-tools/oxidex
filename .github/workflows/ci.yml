@@ -39,10 +39,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Runners: most jobs use standard GitHub-hosted runners, which are free for
-# this public repository (ubuntu-latest = 4 vCPU / 16 GB). The corpus read
-# gate and table capture prefer the M4 Air only when its runner is idle; they
-# fall back to ubuntu-latest otherwise. The per-job
+# Runners: ordinary CI jobs use the x64 spot pool in the `oxidex-m4air`
+# organization runner group. The corpus read gate and table capture prefer
+# the M4 Air runners when idle, then fall back to ubuntu-latest. The small
+# runner-selector jobs stay on ubuntu-latest so fallback selection can run.
+# The per-job
 # "2x/4x/8x" notes and the table below are the historical WarpBuild sizing
 # measurements (2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64), kept as evidence
 # of what more cores buy each job. Larger GitHub runners are billed even for
@@ -89,13 +90,11 @@ env:
 # safe precisely because it was never a required check; the reverse move, and
 # the reason the doc tests now block merges again, is the point of the change.
 #
-# RUNNERS (measured 2026-09-26, workflow_dispatch on identical commits):
-# CPU-bound jobs run on Ubicloud; the rest stay on GitHub-hosted runners.
-# Build & Test 10.7-13.3m -> 4.7-5.0m, capture ~12m -> 3.9m (also sharded,
-# see that step), source 5.3 -> 3.1m, whole run ~22m -> ~10.5m. Lint & Audit
-# (network-bound cargo audit), staleness/drift and the aggregator showed no
-# useful gain, so they stay on ubuntu-latest. Tools shards use standard-4:
-# they gained only ~1.2x on standard-8 and are an 8-job matrix.
+# RUNNER HISTORY (measured 2026-09-26, workflow_dispatch on identical commits):
+# Ubicloud improved Build & Test from 10.7-13.3m to 4.7-5.0m, capture from
+# ~12m to 3.9m (also sharded), source from 5.3m to 3.1m, and whole-run time
+# from ~22m to ~10.5m. CI now uses the repository's x64 spot pool for ordinary
+# jobs; retain these numbers as the prior baseline, not as a spot benchmark.
 jobs:
   lint:
     name: Lint & Audit
@@ -103,7 +102,9 @@ jobs:
     # (clippy --all-features). The dominant step is rustsec/audit-check at
     # ~2m55s, which is network I/O against the advisory database and does not
     # get faster with more cores.
-    runs-on: ubuntu-latest
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,7 +196,9 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    runs-on: ubicloud-standard-8
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 25
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
     # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
@@ -468,7 +471,9 @@ jobs:
     # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
     # it is not the long pole -- Build & Test is. Sizing it to finish just
     # inside that job is what this is worth paying for, not raw speed.
-    runs-on: ubicloud-standard-8
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -699,7 +704,9 @@ jobs:
   # Checks that need only the fetched ExifTool tree, not the capture.
   verify-tables-source:
     name: Verify Generated Tables / source and tier 2
-    runs-on: ubicloud-standard-8
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -774,7 +781,9 @@ jobs:
   verify-tables-catalog:
     name: Verify Generated Tables / catalog join
     needs: [verify-tables-capture]
-    runs-on: ubicloud-standard-8
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -892,7 +901,9 @@ jobs:
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
-    runs-on: ubuntu-latest
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -947,7 +958,9 @@ jobs:
   verify-tables-drift:
     name: Verify Generated Tables / staleness and drift
     needs: [verify-tables-capture]
-    runs-on: ubuntu-latest
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1004,7 +1017,9 @@ jobs:
     name: Verify Generated Tables
     needs: [verify-tables-capture, verify-tables-source, verify-tables-catalog, verify-tables-tools, verify-tables-drift]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 5
     steps:
       - name: Require every Verify Generated Tables job
@@ -1040,7 +1055,9 @@ jobs:
     # numbers after it, on hardware or methodology. If any of this changes
     # again, both jobs move together, in one commit, and the discontinuity is
     # recorded in CHANGELOG.md again.
-    runs-on: ubuntu-latest
+    runs-on:
+      group: oxidex-m4air
+      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # No `needs:` on purpose. This used to wait for Build & Test, which put
