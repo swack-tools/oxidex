@@ -174,6 +174,7 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
             "--read-policy-input", str(policy_input),
         ]
         with patch.object(qualification, "snapshot_caller", return_value=caller), \
+             patch.object(qualification, "_preflight_owned_signing"), \
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \

@@ -45,7 +45,8 @@ class CleanSnapshotTests(unittest.TestCase):
             f"[user]\n\tsigningkey = {self.key.with_suffix('.pub')}\n"
             f"[gpg \"ssh\"]\n\tallowedSignersFile = {self.allowed_signers}\n"
         )
-        env = patch.dict(os.environ, {"HOME": str(self.root)})
+        env = patch.dict(os.environ, {"HOME": str(self.root),
+                                      "GIT_CONFIG_GLOBAL": str(self.git_config)})
         env.start()
         self.addCleanup(env.stop)
         (self.owned / ".exiftool-version").write_text("13.59\n")
