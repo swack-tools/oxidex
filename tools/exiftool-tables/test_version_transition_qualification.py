@@ -174,6 +174,7 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
             "--read-policy-input", str(policy_input),
         ]
         with patch.object(qualification, "snapshot_caller", return_value=caller), \
+             patch.object(qualification, "_preflight_owned_signing"), \
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \
@@ -810,8 +811,74 @@ class SideAndRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(qualification.Refused, "journal digest"):
                 qualification._report_for(run_dir, journal, "11.78", "read")
 
+    def test_report_for_replays_raw_command_receipt_after_stage(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            raw_path = run_dir / "raw" / "generate.json"
+            raw_path.parent.mkdir(parents=True)
+            raw_path.write_text('{"status":"ok"}')
+            original = {"state": "passed", "raw_report": {
+                "path": str(raw_path), "sha256": qualification._sha_file(raw_path),
+            }}
+            report_path = run_dir / "stage-results" / "generate.json"
+            report_path.parent.mkdir()
+            report_path.write_text(json.dumps(original))
+            journal = {"releases": {"11.78": {"reports": {"generate": {
+                "path": str(report_path.relative_to(run_dir)),
+                "sha256": qualification.rehearsal.sha256_json(original),
+            }}}}}
+            self.assertEqual(qualification._report_for(run_dir, journal, "11.78", "generate"), original)
+            raw_path.unlink()
+            with self.assertRaisesRegex(qualification.Refused, "raw command report"):
+                qualification._report_for(run_dir, journal, "11.78", "generate")
+
 
 class ReadUnionTests(unittest.TestCase):
+    def test_committed_replay_refuses_deleted_test_or_write_command(self) -> None:
+        for missing_stage in ("test", "write"):
+            with self.subTest(missing_stage=missing_stage), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                run = root / "row" / "before"
+                (run / "inputs").mkdir(parents=True)
+                reports = run / "reports"
+                reports.mkdir()
+                bundle = root / "bundle"
+                bundle.mkdir()
+                (bundle / "locations.json").write_text(json.dumps({
+                    "kind": "oxidex_version_transition_input_locations",
+                    "archive_cache": str(root / "cache"), "source_root": str(root / "sources"),
+                }))
+                config = {"execution_source_commit": "a" * 40, "read_policy_input": {},
+                          "verified_input_bundle": str(bundle),
+                          "target_directories": {"13.59": str(root / "target")}}
+                (run / "inputs" / "config.json").write_text(json.dumps(config))
+                stage_reports = {}
+                for stage in ("generate", "build", "read", "test", "write"):
+                    command = reports / f"{stage}-command.json"
+                    command.write_text('{"status":"ok"}')
+                    value = {"raw_report": {"path": str(command),
+                                            "sha256": qualification._sha_file(command)}}
+                    result = reports / f"{stage}.json"
+                    result.write_text(json.dumps(value))
+                    stage_reports[stage] = {"path": str(result.relative_to(run)),
+                                            "sha256": qualification.rehearsal.sha256_json(value)}
+                journal = {"phase": "complete", "scope": {
+                    "read_acceptance": "pending_pair_policy", "write_acceptance": "passed_per_release"},
+                    "config_sha256": qualification.rehearsal.sha256_json(config),
+                    "releases": {"13.59": {"state": "measured_pending_pair_policy",
+                                            "stages": {"read": "measured"},
+                                            "reports": stage_reports}}}
+                journal_path = run / "execution-status.json"
+                journal_path.write_text(json.dumps(journal))
+                (reports / f"{missing_stage}-command.json").unlink()
+                row = {"id": "row", "read_policy_input": {}, "before": {
+                    "release": "13.59", "execution_journal_sha256": qualification._sha_file(journal_path),
+                    "instrument": {"source_commit": "a" * 40}}}
+                with patch.object(qualification.executor, "_verify_inputs"):
+                    with self.assertRaisesRegex(qualification.Refused,
+                                                f"{missing_stage}.*raw command report"):
+                        qualification._replay_committed_read_snapshot(row, "before", root)
+
     def test_same_pin_pair_replays_two_authenticated_side_reports(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -853,9 +920,13 @@ class ReadUnionTests(unittest.TestCase):
                 }]}))
                 raw_binding = {"path": str(raw_path),
                                "sha256": qualification._sha_file(raw_path)}
+                command_path = reports / "read-command.json"
+                command_path.write_text('{"status":"ok"}')
+                command_binding = {"path": str(command_path),
+                                   "sha256": qualification._sha_file(command_path)}
                 read = {"fixtures": {"entries": [{"source": str(source),
                         "sha256": sha, "bytes": 7, "corpus_path": str(staged)}]},
-                        "raw_maps": raw_binding}
+                        "raw_maps": raw_binding, "raw_report": command_binding}
                 (reports / "read.json").write_text(json.dumps(read))
                 read_sha = qualification.rehearsal.sha256_json(read)
                 journal = {"releases": {"13.59": {"reports": {"read": {
@@ -1266,7 +1337,7 @@ class WrapperCallTests(unittest.TestCase):
                           for name in qualification.INPUT_NAMES},
         }
 
-    def invoke(self, execute, *, matrix_path=None, repository=None):
+    def invoke(self, execute, *, matrix_path=None, repository=None, preflight=None):
         configs = []
         def initialize(run_dir, _capture, _catalog, _plan, _resolution, _materialization, config):
             run_dir.mkdir(parents=True)
@@ -1279,6 +1350,7 @@ class WrapperCallTests(unittest.TestCase):
             "generated_refusals": {"total": 0, "counters": []},
         }
         with patch.object(qualification, "snapshot_caller", return_value=self.caller), \
+             patch.object(qualification, "_preflight_owned_signing", side_effect=preflight), \
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
@@ -1295,6 +1367,34 @@ class WrapperCallTests(unittest.TestCase):
                 read_policy_input=self.policy_input, **self.receipts,
             )
         return result, configs
+
+    def test_unproven_signing_preflight_child_retains_transition_lease(self) -> None:
+        child = None
+
+        def preflight(_repository: Path, _output_root: Path):
+            nonlocal child
+            child = qualification.executor._spawn(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=False)
+            raise qualification.Refused("signing probe cannot prove cleanup")
+
+        try:
+            with self.assertRaises(qualification.LeaseRetained) as raised:
+                self.invoke(lambda *_args, **_kwargs: self.fail("stages must not run"),
+                            preflight=preflight)
+            self.assertIsNotNone(child)
+            self.assertIn(f"PID {child.pid}", str(raised.exception))
+            self.assertEqual(_contend(self.lease), "blocked")
+            release = json.loads(self.receipts["release_receipt"].read_text())
+            self.assertEqual(release["release_status"], "retained-unproven-child")
+            self.assertFalse(self.row_output.exists(), "no stage output may be created")
+        finally:
+            if child is not None:
+                child.kill()
+                child.wait(10)
+        self.assertEqual(qualification.executor.release_retained_locks(), [])
+        self.assertEqual(_contend(self.lease), "acquired")
 
     def test_wrapper_calls_real_executor_seam_twice_with_write_and_owned_lock(self) -> None:
         calls = []
