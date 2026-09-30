@@ -59,6 +59,53 @@ class CensusSelectionTests(unittest.TestCase):
                 selection["ordered_manifest"][1]["sha256"], hashlib.sha256(b"bb").hexdigest()
             )
 
+    def test_exact_empty_diagnostic_is_selected_but_not_scored(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            base = pathlib.Path(td)
+            corpus = base / "corpus"
+            (corpus / "FujiFilm").mkdir(parents=True)
+            (corpus / "FujiFilm/FujiFilmISPro.jpg").write_bytes(b"")
+            (corpus / "ordinary.jpg").write_bytes(b"normal")
+            manifest = base / "manifest.txt"
+            manifest.write_text("ordinary.jpg\nFujiFilm/FujiFilmISPro.jpg\n")
+            selected = attribute.create_bounded_selection(corpus, manifest, base / "run", 2)
+            self.assertEqual(selected["selected_files"], 2)
+            self.assertEqual(selected["scored_files"], 1)
+            self.assertEqual(selected["non_comparable_inputs"], [attribute.EMPTY_INPUT_DIAGNOSTIC])
+            self.assertEqual(selected["scored_path_set_sha256"], attribute.path_set_sha256(["ordinary.jpg"]))
+            (corpus / "FujiFilm/FujiFilmISPro.jpg").write_bytes(b"not empty")
+            with self.assertRaisesRegex(attribute.ReceiptError, "drift"):
+                attribute._verify_selection(selected)
+
+    def test_zero_byte_at_another_path_is_not_an_exception(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            base = pathlib.Path(td)
+            corpus = base / "corpus"
+            corpus.mkdir()
+            (corpus / "other.jpg").write_bytes(b"")
+            manifest = base / "manifest.txt"
+            manifest.write_text("other.jpg\n")
+            selected = attribute.create_bounded_selection(corpus, manifest, base / "run", 1)
+            self.assertEqual(selected["non_comparable_inputs"], [])
+            self.assertEqual(selected["scored_files"], 1)
+
+    def test_exact_diagnostic_rejects_nonempty_and_symlinked_source(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            base = pathlib.Path(td)
+            corpus = base / "corpus"
+            (corpus / "FujiFilm").mkdir(parents=True)
+            diagnostic = corpus / "FujiFilm/FujiFilmISPro.jpg"
+            manifest = base / "manifest.txt"
+            manifest.write_text("FujiFilm/FujiFilmISPro.jpg\n")
+            diagnostic.write_bytes(b"changed")
+            with self.assertRaisesRegex(attribute.ReceiptError, "identity changed"):
+                attribute.create_bounded_selection(corpus, manifest, base / "nonempty", 1)
+            diagnostic.unlink()
+            (corpus / "empty.jpg").write_bytes(b"")
+            diagnostic.symlink_to(corpus / "empty.jpg")
+            with self.assertRaisesRegex(attribute.ReceiptError, "not a regular non-symlink"):
+                attribute.create_bounded_selection(corpus, manifest, base / "symlink", 1)
+
     def test_manifest_refuses_escape_duplicate_symlink_and_existing_output(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             base = pathlib.Path(td)
