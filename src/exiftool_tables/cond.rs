@@ -155,6 +155,27 @@ impl CmpOp {
     }
 }
 
+/// Perl stringwise ordering, separate from [`CmpOp`] so a firmware
+/// comparison cannot silently become numeric ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrCmpOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl StrCmpOp {
+    fn apply(self, lhs: &[u8], rhs: &[u8]) -> bool {
+        match self {
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
+        }
+    }
+}
+
 /// Where a [`Cond::SetMember`] assignment's value comes from. `$count` is the
 /// only interpolated variable the census's assignment idioms ever assign
 /// (Canon.pm:1312's `$$self{CameraInfoCount} = $count`); a bare literal
@@ -204,6 +225,15 @@ pub enum Cond {
         member: &'static str,
         value: &'static str,
         negate: bool,
+    },
+    /// Nikon firmware `lt`/`le`/`gt`/`ge` against a source ASCII version
+    /// literal. Perl stringifies absent and numeric scalars before comparing;
+    /// byte scalars retain byte order. UTF-8 code-unit order also preserves
+    /// Unicode codepoint order for valid text.
+    MemberStrCmp {
+        member: &'static str,
+        op: StrCmpOp,
+        value: &'static str,
     },
     /// `$$self{Member} =~ /pattern/[i]` / `!~` (`negate` for `!~`).
     /// `pattern` is Rust `regex` syntax already translated from the Perl
@@ -378,6 +408,10 @@ impl Cond {
                 };
                 eq ^ negate
             }
+            Cond::MemberStrCmp { member, op, value } => {
+                let scalar = perl_string_bytes(ctx.members.get(*member));
+                op.apply(&scalar, value.as_bytes())
+            }
             Cond::MemberRegex {
                 member,
                 pattern,
@@ -460,6 +494,18 @@ impl Cond {
                 }
             }
         }
+    }
+}
+
+/// Perl scalar stringification for the firmware comparison's byte domain.
+/// Source literals are ASCII, so bytewise order equals Perl's `lt` family
+/// on byte scalars; valid UTF-8 preserves codepoint order for text scalars.
+fn perl_string_bytes(value: Option<&MemberValue>) -> std::borrow::Cow<'_, [u8]> {
+    match value {
+        None => std::borrow::Cow::Borrowed(b""),
+        Some(MemberValue::Bytes(bytes)) => std::borrow::Cow::Borrowed(bytes),
+        Some(MemberValue::Str(text)) => std::borrow::Cow::Borrowed(text.as_bytes()),
+        Some(MemberValue::Num(number)) => std::borrow::Cow::Owned(number.to_string().into_bytes()),
     }
 }
 
@@ -982,6 +1028,54 @@ mod tests {
             Some(&MemberValue::Num(1)),
             "a false left operand hands evaluation to the right"
         );
+    }
+
+    #[test]
+    fn firmware_string_order_is_lexical_for_bytes_text_numbers_and_absence() {
+        let lt = Cond::MemberStrCmp {
+            member: "FirmwareVersion",
+            op: StrCmpOp::Lt,
+            value: "02.00",
+        };
+        let ge = Cond::MemberStrCmp {
+            member: "FirmwareVersion",
+            op: StrCmpOp::Ge,
+            value: "02.00",
+        };
+        let mut members = HashMap::new();
+        assert!(lt.eval(&mut Ctx::new(&mut members))); // undef stringifies to ""
+        for (value, less) in [
+            (MemberValue::Str(String::new()), true),
+            (MemberValue::Str("2.00".into()), false),
+            (MemberValue::Str("01.99".into()), true),
+            (MemberValue::Num(3), false),
+            (MemberValue::Bytes(b"01.99".to_vec()), true),
+            (MemberValue::Bytes(vec![0xff]), false),
+        ] {
+            members.insert("FirmwareVersion", value);
+            assert_eq!(lt.eval(&mut Ctx::new(&mut members)), less);
+            assert_eq!(ge.eval(&mut Ctx::new(&mut members)), !less);
+        }
+    }
+
+    #[test]
+    fn canon_model_ascii_digit_does_not_match_unicode_digit() {
+        let cond = Cond::MemberRegex {
+            member: "Model",
+            pattern: "EOS R[0-9]",
+            ignore_case: false,
+            negate: false,
+        };
+        let mut members = HashMap::new();
+        for (value, matches) in [
+            (MemberValue::Str("EOS R5".into()), true),
+            (MemberValue::Str("EOS R٥".into()), false),
+            (MemberValue::Bytes(b"EOS R5".to_vec()), true),
+            (MemberValue::Bytes(b"EOS R\xd9\xa5".to_vec()), false),
+        ] {
+            members.insert("Model", value);
+            assert_eq!(cond.eval(&mut Ctx::new(&mut members)), matches);
+        }
     }
 
     #[test]

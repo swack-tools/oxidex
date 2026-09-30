@@ -6,8 +6,9 @@ a maintainer-approved seventh (bitmask).
 Same doctrine as `exprs.py` (this file's sibling for `ValueConv`/`PrintConv`):
 a `Condition` string compiles only if every one of its constructs is
 recognised and provably reproduced; anything else -- a parenthesised group,
-a `$format`/`$count`-sized-format eval, a `lt`/`ge` string comparison, a bare
-function call like `GetByteOrder()` -- fails to parse and `compile_cond`
+a `$format`/`$count`-sized-format eval, string ordering outside Nikon's
+source-proven FirmwareVersion domain, a bare function call like
+`GetByteOrder()` -- fails to parse and `compile_cond`
 returns `None`. There is no partial mode: a `_variants` array is only emitted
 as a schema `Variant` group when EVERY alternative's `Condition` (or absence
 of one) compiles, because dropping just the alternative that would have won
@@ -66,11 +67,11 @@ Regex patterns are validated structurally, not by a character allowlist:
 to prove the pattern is even syntactically sane) and admits only the opcodes
 a vetted, closed subset needs -- literals, alternation, grouping, `^`/`$`/`\b`
 anchors, character classes, and the `?` (0-or-1) quantifier. Lookaround,
-backreferences, `.`/`\d`/`\w` shorthand classes, and `*`/`+`/`{m,n}` general
-quantifiers are all refused: none of them appear in the pinned tree's
-binary-table `_variants` population, and admitting general quantifiers would
-require verifying Perl's and Rust's `regex` crate engines agree on
-catastrophic-backtracking-adjacent behaviour, not just on what matches.
+backreferences, `.`/`\w` shorthand classes, and `*`/`+`/`{m,n}` general
+quantifiers are refused. The single pinned Canon Model `/EOS R\d/` is
+translated to byte-domain `[0-9]`; other `\d` uses remain refused.
+Admitting general quantifiers would require separate Perl/Rust verification,
+not merely a syntactic match.
 `tools/exiftool-tables/verify_cond.py` differentially checks every pattern
 this module accepts against the pinned ExifTool's own Perl regex engine
 before trusting it; passing the AST allowlist is necessary, not sufficient.
@@ -116,6 +117,7 @@ _RE_NUM_ATOM = re.compile(
     rf"^{_MEMBER}\s*(==|!=|>=|<=|>|<)\s*(-?(?:0[xX][0-9a-fA-F]+|\d+))$"
 )
 _RE_STR_ATOM = re.compile(rf'^{_MEMBER}\s*(eq|ne)\s*"([^"]*)"$')
+_RE_STR_CMP_ATOM = re.compile(rf'^{_MEMBER}\s*(lt|le|gt|ge)\s*"([^"]*)"$')
 # A bare member. Its negation (`not $$self{X}`, `!$$self{X}`) is the
 # parser's job (`_Parser._negated`), never the atom's.
 _RE_BARE_ATOM = re.compile(rf"^{_MEMBER}$")
@@ -281,6 +283,12 @@ def _compile_atom(text):
         # A RawConv data member may be an unflagged Perl byte scalar. Keep
         # member patterns to ASCII byte grammar; high-byte `$valPt` patterns
         # use the separately proven byte path below.
+        # Canon.pm:9381's Exif Model is a byte scalar. Perl's /\d/ on those
+        # bytes means ASCII 0-9, whereas Rust's Unicode regex over Str would
+        # also accept non-ASCII digits. Admit only this pinned source
+        # expression and make its byte-domain meaning explicit.
+        if member == "Model" and op == "=~" and pattern == r"EOS R\d" and not flags:
+            pattern = "EOS R[0-9]"
         _validate_regex_pattern(pattern, ascii_source_only=True)
         rust_pattern = _perl_regex_to_rust(pattern)
         negate = "true" if op == "!~" else "false"
@@ -308,6 +316,19 @@ def _compile_atom(text):
         return (
             f"Cond::MemberStrEq {{ member: {_rust_str(member)}, "
             f"value: {_rust_str(s)}, negate: {negate} }}"
+        )
+
+    m = _RE_STR_CMP_ATOM.match(text)
+    if m:
+        member = _member_name(text)
+        op, literal = m.group(3), m.group(4)
+        # Nikon.pm's FirmwareVersion comparisons use ASCII version literals.
+        # Other domains and Perl double-quote escapes need separate proof.
+        if member != "FirmwareVersion" or not re.fullmatch(r"[0-9.]+", literal):
+            raise CondCompileError("string ordering outside the source-proven firmware domain")
+        return (
+            f"Cond::MemberStrCmp {{ member: {_rust_str(member)}, "
+            f"op: StrCmpOp::{op.title()}, value: {_rust_str(literal)} }}"
         )
 
     m = _RE_BITAND_CMP.match(text)
