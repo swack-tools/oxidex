@@ -634,6 +634,32 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(res.to_release, [])
         self.assertIsNone(res.refused_wholesale)
 
+    def test_failed_process_listing_owes_no_release_for_live_worker(self):
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid)
+
+        def unavailable():
+            raise fleetd.ProcessListingUnavailable("ps timeout")
+
+        res = self.adopt(pgid_probe=unavailable)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.adopted, [])
+        self.assertIsNotNone(res.refused_wholesale)
+        self.assertIsNone(p.poll(), "the journaled worker stays live")
+
+    def test_failed_identity_listing_owes_no_release_for_live_worker(self):
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid)
+
+        def unavailable(_pgid, _markers, _scope):
+            raise fleetd.ProcessListingUnavailable("ps malformed")
+
+        res = self.adopt(identity_probe=unavailable)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.adopted, [])
+        self.assertIsNotNone(res.refused_wholesale)
+        self.assertIsNone(p.poll())
+
     def test_a_journal_entry_whose_pgid_is_gone_is_released_never_adopted(self):
         p = self.spawn_stub()
         pgid = p.pid

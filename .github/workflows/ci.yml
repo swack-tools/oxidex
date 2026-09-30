@@ -194,7 +194,8 @@ jobs:
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
     runs-on: spot
-    timeout-minutes: 25
+    # Cold Spot runs need time for compilation, nextest, cargo test and parity checks.
+    timeout-minutes: 45
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
     # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
     # untouched.

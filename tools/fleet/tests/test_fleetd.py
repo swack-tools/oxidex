@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from _fixtures import break_hub, make_hub, within_sweep  # noqa: E402
 import cli
 import claim as claim_mod
 import fleetd
+from keel import runner as runner_mod
 from fleetlib import Hub
 
 HUB_TIP_REF = "refs/heads/refactor/tag-machinery"
@@ -230,6 +232,244 @@ class FleetdBase(WaitsForProcesses, HermeticCase):
             self.assertTrue(self.hub.create(fleetd.DESIRED_REF, doc))
         else:
             self.assertTrue(self.hub.update(fleetd.DESIRED_REF, doc, cur))
+
+
+class TestProcessListingFailure(FleetdBase):
+    def make_adopted_gate(self):
+        self.set_desired(gates=1)
+        self.assertEqual(len(self.reconcile().started), 1)
+        child = self.workers[0]
+        self.adopted_child = child
+        adopted = fleetd.Worker(child.branch, child.tag, child.pgid,
+                                child.claim, popen=None, kind=child.kind)
+        self.workers[0] = adopted
+        self.addCleanup(child.popen.wait, timeout=WAIT_BUDGET_S)
+        self.assertTrue(adopted.alive(), "positive control: adopted group is live")
+        return adopted
+
+    def test_failed_ps_keeps_live_adopted_gate_and_claim_without_duplicate(self):
+        adopted = self.make_adopted_gate()
+        before = self.hub.list("refs/fleet/claims/gate/")
+        real_run = subprocess.run
+
+        def failed_ps(argv, *args, **kwargs):
+            if isinstance(argv, (list, tuple)) and argv and argv[0] == "ps":
+                raise OSError(35, "process table unavailable")
+            return real_run(argv, *args, **kwargs)
+
+        try:
+            with mock.patch.object(runner_mod.subprocess, "run", failed_ps):
+                result = self.reconcile()
+            self.assertTrue(adopted.alive(), "worker survived the failed listing")
+            self.assertEqual(result.finished, [], "unknown is not proof of exit")
+            self.assertEqual(result.killed, [], "unknown alone cannot justify a kill")
+            self.assertIn(adopted, self.workers, "worker retains its slot")
+            self.assertEqual(result.started, [], "no duplicate gate may start")
+            self.assertEqual(self.hub.list("refs/fleet/claims/gate/"), before,
+                             "the live worker's claim must remain")
+        finally:
+            if adopted not in self.workers:
+                self.workers.append(adopted)
+
+    def test_negative_control_empty_listing_reaps_live_gate_and_duplicates(self):
+        adopted = self.make_adopted_gate()
+        try:
+            result = fleetd.reconcile_once(
+                self.hub, self.host, self.workers, [str(self.stub)],
+                self.tmp / "logs", Path(__file__).resolve().parents[3],
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                pgid_probe=lambda: set(), warnings=self.host_warnings)
+            self.assertIn(adopted.tag, result.finished)
+            self.assertTrue(adopted.alive(), "the reaped gate is still running")
+            self.assertEqual(len(result.started), 1, "the old answer frees a slot")
+            self.assertTrue(any(w.branch == adopted.branch for w in self.workers))
+        finally:
+            if adopted not in self.workers:
+                self.workers.append(adopted)
+
+    def test_startup_adoption_with_failed_listing_neither_releases_nor_sweeps(self):
+        adopted = self.make_adopted_gate()
+        before = self.hub.list("refs/fleet/claims/gate/")
+
+        def unavailable():
+            raise runner_mod.ProcessListingUnavailable("ps timeout")
+
+        with self.assertRaises(runner_mod.ProcessListingUnavailable):
+            runner_mod.adopt_workers(self.hub, self.host, [],
+                                     pgid_probe=unavailable,
+                                     worker_probe=lambda *_: self.fail("no orphan scan"),
+                                     killer=lambda *_a, **_kw: self.fail("no kill"))
+        self.assertTrue(adopted.alive())
+        self.assertEqual(self.hub.list("refs/fleet/claims/gate/"), before)
+
+    def test_adopted_claim_can_renew_after_failed_listing(self):
+        adopted = self.make_adopted_gate()
+        with mock.patch.object(runner_mod.subprocess, "run",
+                               side_effect=OSError("ps unavailable")):
+            # Probe directly; the claim's store I/O is a separate instrument.
+            with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                runner_mod.live_pgids()
+        old_sha = self.hub.sha(adopted.claim.ref)
+        self.assertTrue(adopted.claim.renew())
+        self.assertNotEqual(self.hub.sha(adopted.claim.ref), old_sha)
+        self.assertFalse(adopted.claim.lost)
+
+    def test_shutdown_after_failed_listing_drains_adopted_worker(self):
+        adopted = self.make_adopted_gate()
+        claim_ref = adopted.claim.ref
+
+        def adopt(_hub, _host, workers):
+            workers.append(adopted)
+            return runner_mod.AdoptionResult()
+
+        def reconcile(hub, host, workers, gate_command, log_dir, repo_root, **kwargs):
+            return fleetd.reconcile_once(
+                hub, host, workers, gate_command, log_dir, repo_root,
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                pgid_probe=lambda: (_ for _ in ()).throw(
+                    runner_mod.ProcessListingUnavailable("ps timeout")), **kwargs)
+
+        with mock.patch.object(runner_mod, "adopt_workers", side_effect=adopt), \
+             mock.patch.object(runner_mod, "check_toolchain_agreement",
+                               return_value=(True, "")):
+            rc = runner_mod.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.tmp / "logs", repo_root=Path(__file__).resolve().parents[3],
+                once=True, reconcile=reconcile)
+        self.assertEqual(rc, 0)
+        self.assertTrue(adopted.alive(), "shutdown drains rather than kills")
+        self.assertIsNotNone(self.hub.sha(claim_ref), "shutdown retains worker lease")
+        self.assertTrue(adopted.claim.renewer_running())
+
+    def test_lost_lease_still_kills_when_listing_and_verification_fail(self):
+        adopted = self.make_adopted_gate()
+        adopted.claim._mark_lost("lease no longer ours")
+        with mock.patch.object(runner_mod, "live_pgids",
+                               side_effect=runner_mod.ProcessListingUnavailable("ps failed")), \
+             mock.patch.object(runner_mod, "KILL_GRACE_S", 0.1):
+            result = fleetd.reconcile_once(
+                self.hub, self.host, self.workers, [str(self.stub)],
+                self.tmp / "logs", Path(__file__).resolve().parents[3],
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                pgid_probe=lambda: (_ for _ in ()).throw(
+                    runner_mod.ProcessListingUnavailable("ps failed")),
+                warnings=self.host_warnings)
+        self.assertEqual(len(result.killed), 1,
+                         "the independently proved lost lease requires stop-work")
+        self.adopted_child.popen.wait(timeout=WAIT_BUDGET_S)
+        self.assertFalse(adopted.alive(), "the fixture gate's group was stopped")
+        self.assertIsNone(self.hub.sha(adopted.claim.ref))
+
+    def test_direct_child_poll_still_reaps_when_listing_fails(self):
+        self.set_desired(gates=1)
+        self.assertEqual(len(self.reconcile().started), 1)
+        child = self.workers[0]
+        self.finish_worker(child.tag)
+        # The default probe was bound at function definition; pass it explicitly.
+        result = fleetd.reconcile_once(
+            self.hub, self.host, self.workers, [str(self.stub)],
+            self.tmp / "logs", Path(__file__).resolve().parents[3],
+            disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+            pgid_probe=lambda: (_ for _ in ()).throw(
+                runner_mod.ProcessListingUnavailable("ps")),
+            warnings=self.host_warnings)
+        self.assertIn(child.tag, result.finished, "Popen.poll proves child exit")
+        self.assertEqual(result.started, [], "unknown listing still blocks starts")
+
+
+class TestProcessListingProbe(HermeticCase):
+    def test_healthy_local_ps_includes_own_group(self):
+        self.assertIn(os.getpgrp(), runner_mod.live_pgids())
+
+    def test_spawn_timeout_nonzero_malformed_and_missing_self_are_unknown(self):
+        own = os.getpgrp()
+        outcomes = (
+            OSError(35, "cannot fork"),
+            subprocess.TimeoutExpired("ps", 10),
+            subprocess.CompletedProcess(["ps"], 1, "", "failed"),
+            subprocess.CompletedProcess(["ps"], 0, f"{own} Ss\nmalformed row\n", ""),
+            subprocess.CompletedProcess(["ps"], 0, f"{own + 1} Ss\n", ""),
+        )
+        for outcome in outcomes:
+            with self.subTest(outcome=repr(outcome)):
+                with mock.patch.object(runner_mod.subprocess, "run",
+                                       side_effect=outcome if isinstance(outcome, Exception)
+                                       else None, return_value=None if isinstance(outcome, Exception)
+                                       else outcome):
+                    with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                        runner_mod.live_pgids()
+
+    def test_linux_style_rows_filter_zombies_and_keep_live_groups(self):
+        proc = subprocess.CompletedProcess(["ps"], 0, "4321 Ss\n777 Z+\n888 R+\n", "")
+        with mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+             mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
+            self.assertEqual(runner_mod.live_pgids(), {4321, 888})
+
+    def test_pid_zero_kernel_row_does_not_hide_live_groups(self):
+        proc = subprocess.CompletedProcess(["ps"], 0, "0 Ss\n4321 Ss\n888 R+\n", "")
+        with mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+             mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
+            self.assertEqual(runner_mod.live_pgids(), {4321, 888})
+
+    def test_pid_zero_kernel_row_is_never_a_worker_or_adoption_match(self):
+        output = ("0 0 501 worker scope\n"
+                  "4321 4321 501 runner\n"
+                  "777 0 501 worker scope\n"
+                  "888 888 501 worker scope\n")
+        proc = subprocess.CompletedProcess(["ps"], 0, output, "")
+
+        with mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+             mock.patch.object(runner_mod.os, "getpgrp", return_value=4321), \
+             mock.patch.object(runner_mod.os, "getuid", return_value=501):
+            self.assertIsNone(runner_mod._scoped_worker_in_group(0, ("worker",), "scope"))
+            self.assertIsNone(runner_mod._scoped_worker_in_group(777, ("worker",), "scope"))
+            self.assertEqual(runner_mod._scoped_worker_in_group(888, ("worker",), "scope"),
+                             "worker scope")
+            self.assertEqual(runner_mod.fleet_worker_pgids(("worker",)),
+                             {888: "worker scope"})
+            self.assertIsNone(runner_mod.fleetd_marker_in_group(0, marker="worker"))
+            self.assertIsNone(runner_mod.fleetd_marker_in_group(777, marker="worker"))
+            self.assertEqual(runner_mod.fleetd_marker_in_group(888, marker="worker"),
+                             "worker scope")
+
+    def test_negative_process_identity_rows_still_refuse_listing(self):
+        listings = (("4321 Ss\n-1 Ss\n", runner_mod.live_pgids),
+                    ("4321 4321 501 runner\n-1 7 501 worker scope\n",
+                     lambda: runner_mod._scoped_worker_in_group(7, ("worker",), "scope")),
+                    ("4321 4321 501 runner\n7 -1 501 worker scope\n",
+                     lambda: runner_mod._scoped_worker_in_group(7, ("worker",), "scope")),
+                    ("4321 4321 501 runner\n7 -1 501 worker scope\n",
+                     lambda: runner_mod.fleet_worker_pgids(("worker",))))
+        for output, probe in listings:
+            proc = subprocess.CompletedProcess(["ps"], 0, output, "")
+            with self.subTest(output=output), \
+                 mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+                 mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
+                with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                    probe()
+                if "4321 4321" in output:
+                    self.assertIsNotNone(runner_mod.fleetd_marker_in_group(7))
+
+    def test_identity_and_sweep_listings_fail_closed_on_bad_rows(self):
+        for output in ("not-a-row\n", "4321 501 worker\nnot-a-row\n"):
+            proc = subprocess.CompletedProcess(["ps"], 0, output, "")
+            with self.subTest(output=output), \
+                 mock.patch.object(runner_mod.subprocess, "run", return_value=proc):
+                with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                    runner_mod._scoped_worker_in_group(4321, ("worker",), "scope")
+                with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                    runner_mod.fleet_worker_pgids(("worker",))
+                self.assertIsNotNone(runner_mod.fleetd_marker_in_group(4321))
+
+    def test_kill_verification_does_not_treat_unknown_as_exited(self):
+        with mock.patch.object(runner_mod.os, "getpgrp", return_value=999), \
+             mock.patch.object(runner_mod.os, "killpg") as killpg:
+            result = runner_mod.kill_process_group(
+                4321, grace=0, alive_probe=lambda _p: (_ for _ in ()).throw(
+                    runner_mod.ProcessListingUnavailable("ps unavailable")))
+        self.assertIn("SIGKILLed", result)
+        self.assertEqual([call.args[1] for call in killpg.call_args_list],
+                         [runner_mod.signal.SIGTERM, runner_mod.signal.SIGKILL])
 
 
 class TestConvergence(FleetdBase):

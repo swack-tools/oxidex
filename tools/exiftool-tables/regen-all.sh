@@ -266,6 +266,8 @@ python3 "$HERE/gen_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path dicom)"
 "$PERL" "$HERE/dump_lens_alternatives.pl" --exiftool-dir "$LIB/.." \
     --out "$(artifact_path lens-alternatives)"
+python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --out "$(artifact_path xmp-lens-maps)"
 
 echo ">> capturing XMP read priorities from the selected native source"
 XMP_PRIORITY_CAPTURE="$CACHE/xmp-priorities-$PIN.json"
@@ -314,6 +316,8 @@ python3 "$HERE/verify_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --input "$(artifact_path dicom)"
 python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"
+python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --check
 python3 "$HERE/verify_nikon_settings.py" --input "$(artifact_path nikon-settings)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"
 python3 "$HERE/verify_sony_plain.py" --input "$(artifact_path sony-plain)" \
