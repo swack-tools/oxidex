@@ -1682,13 +1682,6 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                       f"not {matrix_path}")
     matrix_binding = {"path": str(CANONICAL_MATRIX), "sha256": _sha_file(CANONICAL_MATRIX)}
     caller = snapshot_caller(repository)
-    # The owned checkout is a worktree, but its later signed measurement clone
-    # does not inherit repository-local SSH verification configuration. Refuse
-    # missing trust before the costly generation/build stages begin.
-    try:
-        preflight_signing = _preflight_owned_signing(repository, output_root)
-    except stage_adapter.clean_snapshot.Refused as error:
-        raise Refused(str(error)) from error
     pinned = caller["pin_version"]
     matrix = materialize_matrix(load_matrix(CANONICAL_MATRIX, pinned), output_root=output_root,
                                 target_root=target_root, run_id=run_id)
@@ -1718,6 +1711,13 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     with TransitionLease(lease=lease_path, run_id=run_id, owner_receipt=owner_receipt,
                          heartbeat_receipt=heartbeat_receipt, expiry_receipt=expiry_receipt,
                          release_receipt=release_receipt) as host_lease:
+        # The signed measurement clone does not inherit repository-local SSH
+        # verification configuration. Probe before costly stages, but under the
+        # lease so an unproven signing child retains the host boundary.
+        try:
+            preflight_signing = _preflight_owned_signing(repository, output_root)
+        except stage_adapter.clean_snapshot.Refused as error:
+            raise Refused(str(error)) from error
         _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                         "state": "preflight", "rows": [row["id"] for row in rows],
                                         "lease": str(lease_path),

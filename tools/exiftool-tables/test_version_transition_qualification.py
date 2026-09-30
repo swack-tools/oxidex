@@ -1337,7 +1337,7 @@ class WrapperCallTests(unittest.TestCase):
                           for name in qualification.INPUT_NAMES},
         }
 
-    def invoke(self, execute, *, matrix_path=None, repository=None):
+    def invoke(self, execute, *, matrix_path=None, repository=None, preflight=None):
         configs = []
         def initialize(run_dir, _capture, _catalog, _plan, _resolution, _materialization, config):
             run_dir.mkdir(parents=True)
@@ -1350,7 +1350,7 @@ class WrapperCallTests(unittest.TestCase):
             "generated_refusals": {"total": 0, "counters": []},
         }
         with patch.object(qualification, "snapshot_caller", return_value=self.caller), \
-             patch.object(qualification, "_preflight_owned_signing"), \
+             patch.object(qualification, "_preflight_owned_signing", side_effect=preflight), \
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
@@ -1367,6 +1367,34 @@ class WrapperCallTests(unittest.TestCase):
                 read_policy_input=self.policy_input, **self.receipts,
             )
         return result, configs
+
+    def test_unproven_signing_preflight_child_retains_transition_lease(self) -> None:
+        child = None
+
+        def preflight(_repository: Path, _output_root: Path):
+            nonlocal child
+            child = qualification.executor._spawn(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=False)
+            raise qualification.Refused("signing probe cannot prove cleanup")
+
+        try:
+            with self.assertRaises(qualification.LeaseRetained) as raised:
+                self.invoke(lambda *_args, **_kwargs: self.fail("stages must not run"),
+                            preflight=preflight)
+            self.assertIsNotNone(child)
+            self.assertIn(f"PID {child.pid}", str(raised.exception))
+            self.assertEqual(_contend(self.lease), "blocked")
+            release = json.loads(self.receipts["release_receipt"].read_text())
+            self.assertEqual(release["release_status"], "retained-unproven-child")
+            self.assertFalse(self.row_output.exists(), "no stage output may be created")
+        finally:
+            if child is not None:
+                child.kill()
+                child.wait(10)
+        self.assertEqual(qualification.executor.release_retained_locks(), [])
+        self.assertEqual(_contend(self.lease), "acquired")
 
     def test_wrapper_calls_real_executor_seam_twice_with_write_and_owned_lock(self) -> None:
         calls = []
