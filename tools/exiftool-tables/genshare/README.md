@@ -36,6 +36,13 @@ ICC fixture deltas. Those expectations were frozen only after the first valid
 matches them byte-for-byte before it may emit `status=success` or satisfy
 `--require-success`; any drift fails closed.
 
+A larger selected manifest may include these three reviewed fixtures and other
+files, including CRW. Their hashes and per-fixture controls still apply. The
+observed loss payload covers every selected file in manifest order. The reviewed
+exact expectations cover only the three fixtures, so an expanded run remains
+`observed_unreviewed` even when those controls match; its additional losses
+require separate review before any success claim.
+
 Run only through the exclusive measurement lock and use a new durable output
 directory every time:
 

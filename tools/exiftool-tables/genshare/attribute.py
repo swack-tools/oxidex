@@ -803,6 +803,13 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     fixture = receipt.get("fixture_contract")
     if not isinstance(fixture, dict):
         raise ReceiptError("fixture contract is required")
+    expectations_path = root / "contracts" / "bounded-corpus-expectations.json"
+    if not _inside(root, expectations_path) or sha256_file(expectations_path) != fixture.get("expectations_sha256"):
+        raise ReceiptError("retained fixture expectations do not verify")
+    expectations_document = json.loads(
+        expectations_path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_pairs
+    )
+    _validate_expectations_document(expectations_document, selection)
     expected_fixture = _fixture_observations(
         runs,
         recomputed,
@@ -810,14 +817,18 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
          for mode in expected_modes},
         {
             "sha256": fixture.get("expectations_sha256"),
-            "document": {
-                "review_status": fixture.get("review_status"),
-                "exact_loss_expectations": fixture.get("exact_loss_expectations"),
-            },
+            "document": expectations_document,
         },
     )
     if expected_fixture != fixture:
         raise ReceiptError("fixture observations do not replay")
+    expected_status = (
+        "success" if fixture["review_status"] == "reviewed_exact"
+        and fixture["exact_loss_expectations"] == fixture["observed_loss_payload"]
+        else "observed_unreviewed"
+    )
+    if receipt.get("status") != expected_status:
+        raise ReceiptError("receipt status does not match reviewed corpus scope")
 
 
 def _artifact_index(root: Path) -> list[dict]:
@@ -1311,13 +1322,22 @@ def _load_expectations(manifest: Path, selection: dict, root: Path) -> dict:
         document = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_pairs)
     except (OSError, ValueError) as exc:
         raise ReceiptError(f"cannot load bounded expectations {path}: {exc}") from exc
-    fixtures = document.get("fixtures") if isinstance(document, dict) else None
-    if not isinstance(fixtures, list):
-        raise ReceiptError("bounded expectations fixtures are required")
-    expected = [(row.get("relative_path"), row.get("sha256")) for row in fixtures]
-    actual = [(row["relative_path"], row["sha256"]) for row in selection["ordered_manifest"]]
-    if expected != actual:
-        raise ReceiptError("bounded fixture paths or content hashes do not match expectations")
+    _validate_expectations_document(document, selection)
+    retained = root / "contracts" / "bounded-corpus-expectations.json"
+    _atomic_write(retained, path.read_bytes())
+    return {
+        "source_path": str(path.resolve()),
+        "retained": _artifact_record(retained),
+        "sha256": sha256_file(path),
+        "document": document,
+    }
+
+
+def _validate_expectations_document(document: dict, selection: dict) -> None:
+    if not isinstance(document, dict):
+        raise ReceiptError("bounded expectations document is invalid")
+    _validate_fixture_selection(document, selection)
+    fixtures = document["fixtures"]
     review_status = document.get("review_status")
     exact = document.get("exact_loss_expectations")
     if review_status not in ("roles_only", "reviewed_exact"):
@@ -1327,16 +1347,19 @@ def _load_expectations(manifest: Path, selection: dict, root: Path) -> dict:
     if exact is not None and (
         not isinstance(exact, dict)
         or exact.get("schema") != "genshare-exact-loss/v1"
+        or exact.get("corpus") != [row["relative_path"] for row in fixtures]
     ):
         raise ReceiptError("bounded exact expectations schema is invalid")
-    retained = root / "contracts" / "bounded-corpus-expectations.json"
-    _atomic_write(retained, path.read_bytes())
-    return {
-        "source_path": str(path.resolve()),
-        "retained": _artifact_record(retained),
-        "sha256": sha256_file(path),
-        "document": document,
-    }
+
+
+def _validate_fixture_selection(document: dict, selection: dict) -> None:
+    fixtures = document.get("fixtures")
+    if not isinstance(fixtures, list) or len(fixtures) != 3:
+        raise ReceiptError("bounded expectations require the three reviewed fixtures")
+    expected = [(row.get("relative_path"), row.get("sha256")) for row in fixtures]
+    selected = {row["relative_path"]: row["sha256"] for row in selection["ordered_manifest"]}
+    if len(set(path for path, _ in expected)) != 3 or any(selected.get(path) != digest for path, digest in expected):
+        raise ReceiptError("bounded fixture paths or content hashes do not match expectations")
 
 
 def _route_ledger(repository: Path, root: Path) -> dict:
@@ -1470,37 +1493,45 @@ def _fixture_observations(
         )
         for relative in ("ICC_Profile.icc", "AAC.aac", "OOXML.docx")
     }
-    if observations["keyed"]["matched_lost"] != 0 or any(
+    if any(
         delta["removed"] or delta["added"] or delta["changed_or_reordered"]
         for delta in keyed_deltas.values()
     ):
-        raise ReceiptError("keyed changed Task 8 bounded-corpus output without a CRW fixture")
-    corpus = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
-    exact_loss_payload = {
-        "schema": "genshare-exact-loss/v1",
-        "corpus": corpus,
-        "modes": {
-            mode: {
-                "matched_lost": reconciliations[mode]["matched_lost"],
-                "missing_by_file": {
-                    relative: projections[mode]["per_file"][relative][
-                        "missing_occurrences"
-                    ]
-                    for relative in corpus
-                },
-            }
-            for mode in [*TOKENS, "union"]
-        },
-        "aac_producers_removed": [
-            row["raw_key"] for row in producer_aac_delta["removed"]
-        ],
-        "aac_union_equals_producers": True,
-        "icc_engine_matched_lost": engine_icc["matched_lost"],
-    }
+        raise ReceiptError("keyed changed Task 8 bounded-corpus output")
+    corpus = list(projections["control-empty"]["per_file"])
+    fixture_corpus = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+
+    def loss_payload(paths: list[str]) -> dict:
+        return {
+            "schema": "genshare-exact-loss/v1",
+            "corpus": paths,
+            "modes": {
+                mode: {
+                    "matched_lost": sum(
+                        reconcile(
+                            projections["control-empty"]["per_file"][relative],
+                            projections[mode]["per_file"][relative],
+                        )["matched_lost"]
+                        for relative in paths
+                    ),
+                    "missing_by_file": {
+                        relative: projections[mode]["per_file"][relative]["missing_occurrences"]
+                        for relative in paths
+                    },
+                }
+                for mode in [*TOKENS, "union"]
+            },
+            "aac_producers_removed": [
+                row["raw_key"] for row in producer_aac_delta["removed"]
+            ],
+            "aac_union_equals_producers": True,
+            "icc_engine_matched_lost": engine_icc["matched_lost"],
+        }
+    exact_loss_payload = loss_payload(corpus)
     expectation_document = expectations.get("document", {})
     reviewed_exact = expectation_document.get("exact_loss_expectations")
     review_status = expectation_document.get("review_status", "roles_only")
-    if review_status == "reviewed_exact" and reviewed_exact != exact_loss_payload:
+    if review_status == "reviewed_exact" and reviewed_exact != loss_payload(fixture_corpus):
         raise ReceiptError("observed losses do not match reviewed exact expectations")
     return {
         "review_status": review_status,
@@ -1808,6 +1839,7 @@ def census_main(argv: list[str]) -> int:
         receipt_status = (
             "success"
             if fixture_contract["review_status"] == "reviewed_exact"
+            and fixture_contract["exact_loss_expectations"] == fixture_contract["observed_loss_payload"]
             else "observed_unreviewed"
         )
         receipt = {
