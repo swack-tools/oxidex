@@ -981,6 +981,17 @@ pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
     )
 }
 
+pub(crate) fn borrowed_removal_refused(key: &str) -> ExifToolError {
+    ExifToolError::tag_not_written(
+        key.to_string(),
+        format!(
+            "Removing tag '{}' is not supported: its reader name belongs to a legacy EXIF entry \
+             that this writer carries raw, while writing the name addresses a different tag ID",
+            key
+        ),
+    )
+}
+
 /// The IFD a group-qualified write key names, for the three IFDs this
 /// writer edits. `EXIF:` names the family, not an IFD, and has none.
 fn key_ifd(key: &str) -> Option<IfdKind> {
@@ -1896,6 +1907,9 @@ fn plan_exif_write_inner(
         let key = match surfaced_reader_key(entry, original_map) {
             ReaderKey::Owned(key) => key,
             ReaderKey::Borrowed(key) => {
+                if !desired.contains_key(&key) && !groups.contains(&GroupRemoval::ExifIfd) {
+                    return Err(borrowed_removal_refused(&key));
+                }
                 // Carried raw; an edit to the name goes to the add path.
                 borrowed_keys.push(key);
                 placed.push(PlacedEntry {
@@ -7560,6 +7574,16 @@ mod tests {
         assert_eq!(
             (added.field_type, added.value.as_slice()),
             (3, &3u16.to_ne_bytes()[..])
+        );
+
+        let mut removal = original.clone();
+        removal.remove("ExifIFD:FocalPlaneResolutionUnit");
+        let error = plan_exif_write(&scan, &original, &removal)
+            .expect_err("borrowed legacy row removal must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("ExifIFD:FocalPlaneResolutionUnit")
         );
 
         let (tiff, original) = exif_ifd_shorts_jpeg(&[(0x9210, 2), (0xa210, 3)]);

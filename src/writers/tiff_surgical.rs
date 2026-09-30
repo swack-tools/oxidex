@@ -415,6 +415,11 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
                     keys.insert(0, engine_key);
                 }
             } else {
+                if !desired.contains_key(&engine_key) {
+                    return Err(crate::writers::exif_surgical::borrowed_removal_refused(
+                        &engine_key,
+                    ));
+                }
                 borrowed.push(engine_key);
                 // The generated reverse index can name this legacy row too.
                 // It remains a borrowed read name if its write ID differs.
@@ -1250,6 +1255,16 @@ mod tests {
         let mut shorts = exif_ifd_shorts(&out);
         shorts.sort_unstable();
         assert_eq!(shorts, [(0x9210, 2), (0xa001, 1), (0xa210, 3)]);
+
+        let mut removal = original.clone();
+        removal.remove("ExifIFD:FocalPlaneResolutionUnit");
+        let error = rewrite_tiff_file(&file, &original, &removal)
+            .expect_err("borrowed legacy row removal must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("ExifIFD:FocalPlaneResolutionUnit")
+        );
     }
 
     #[test]
