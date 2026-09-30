@@ -996,6 +996,12 @@ class DockerWorkflowTests(unittest.TestCase):
         self.assertIn("type=ref,event=tag", step)
         self.assertIn("type=semver,pattern={{version}}", step)
 
+    def test_docker_builds_use_native_architecture_runners(self):
+        build = job_block(self.text, "build")
+        self.assertIn('runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}", docker]', build)
+        self.assertIn('"runner_arch":"X64"', build)
+        self.assertIn('"runner_arch":"ARM64"', build)
+
 
 class TagRecipeTests(unittest.TestCase):
     text = (REPO / "justfile").read_text()
