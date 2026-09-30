@@ -1443,6 +1443,13 @@ verify-tables version="":
     export PERLLIB=
     export PERL5OPT=
 
+    # Compare Font.pm's runtime %ttLang directly with both committed lookup
+    # artifacts; a tag-table dump cannot establish this source lookup.
+    "$PERL" tools/exiftool-tables/capture_font_languages.pl "$LIB" \
+        > "$RUN_ROOT/font-languages-$PIN.json"
+    uv run python tools/exiftool-tables/font_language_specs.py \
+        --capture "$RUN_ROOT/font-languages-$PIN.json" --check
+
     # Migrated tables also require native-to-generated completeness, so an
     # upstream row addition cannot pass merely because old rows still match.
     # Include inactive keyed definitions and keep this scope in sync with CI.

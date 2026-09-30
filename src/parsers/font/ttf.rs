@@ -7,10 +7,11 @@
 
 #![allow(dead_code)]
 
-use super::mac_charset;
+use super::{generated_languages, mac_charset};
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use std::collections::HashMap;
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -21,45 +22,8 @@ const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
 const PLATFORM_WINDOWS: u16 = 3;
 
-/// Platform-specific language IDs for localized name records.
-///
-/// The Macintosh values are the ones ExifTool lists in `%ttLang{Macintosh}`
-/// (Font.pm) -- every value below is quoted from that table, not inferred
-/// from the language's name or position. Two of them were originally wrong
-/// (Spanish as 12, Italian as 4) and the recheck still passed, because
-/// Font.ttf's Spanish and Italian records are 6 and 3: constant 12 matched
-/// nothing, and 4 matched the *Dutch* record, so `FontSubfamily-it` would
-/// have carried Dutch text. A sample only exercises the IDs it happens to
-/// contain, so these must be read off the table rather than trusted to a
-/// green recheck.
-const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
-const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
-const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
-const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
-const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
-const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
-const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
-const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
-const LANGUAGE_SWEDISH_MACINTOSH: u16 = 5;
-const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;
-const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
-const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
-const LANGUAGE_CHINESE_TW_MACINTOSH: u16 = 19;
-const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
-const LANGUAGE_CHINESE_CN_MACINTOSH: u16 = 33;
-const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
-const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
-const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
-const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
-const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
-const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
-const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
+/// The legacy best-record selector still treats Windows 0x0409 as English.
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
-const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
-const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
-const LANGUAGE_DUTCH_NL_WINDOWS: u16 = 0x0413;
-const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
-const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
 /// (Font.pm). Only the two decoded inline are named here; the four CJK
@@ -104,13 +68,13 @@ pub(crate) struct TableEntry {
 
 /// How a name record's language maps onto ExifTool's tag naming -- see
 /// [`TTFParser::name_record_lang`].
-enum NameLang {
+enum NameLang<'a> {
     /// `$lang` is `'en'` or undefined: the tag name takes no suffix.
     Unsuffixed,
-    /// A `%ttLang` code this parser claims: `Tag-<code>`.
-    Suffixed(&'static str),
-    /// ExifTool would name a language this parser does not claim; the
-    /// record is omitted rather than emitted under a wrong name.
+    /// A source language code or a valid format-1 tag: `Tag-<code>`.
+    Suffixed(&'a str),
+    /// The format-1 language tag is absent or the value decoder is outside
+    /// this parser's supported platforms.
     Omitted,
 }
 
@@ -390,66 +354,9 @@ impl TTFParser {
         Ok(decoded)
     }
 
-    /// Returns the ExifTool language suffix for supported localized name records.
+    /// The exact source-defined suffix for this platform and language ID.
     fn language_suffix(record: &NameRecord) -> Option<&'static str> {
-        match (record.platform_id, record.language_id) {
-            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH) => Some("da"),
-            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH) => Some("de"),
-            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH) => Some("he"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH) => Some("es"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH) => Some("fi"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH) => Some("fr"),
-            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH) => Some("it"),
-            // Macintosh-only below. No Windows LCID is paired with these
-            // because ExifTool's %ttLang{Windows} spells most of them with a
-            // region subtag that %ttLang{Macintosh} does not use -- 0x0414
-            // is 'no-NO' not 'no', 0x041d is 'sv-SE' not 'sv', 0x0816 is
-            // 'pt-PT' and 0x0416 is 'pt-BR', neither of which is 'pt'. Four
-            // of today's backlog patches paired them anyway; that would have
-            // emitted FontSubfamily-no for a record ExifTool reports as
-            // FontSubfamily-no-NO. Only the Macintosh side is claimed here.
-            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH) => Some("nl-NL"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
-            (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
-            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
-            // Records in these languages carry the Macintosh CJK scripts,
-            // which `mac_charset` decodes with ExifTool's own tables.
-            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
-            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
-            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
-            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_CN_MACINTOSH) => Some("zh-CN"),
-            // Windows LCIDs are a SEPARATE table with SEPARATE spellings.
-            // `ProcessTTF` looks the record up in `%ttLang{Windows}` and uses
-            // whatever string it finds verbatim, so the Windows suffix for a
-            // language is not interchangeable with its Macintosh suffix: the
-            // Macintosh side calls German 'de' while %ttLang{Windows} calls
-            // 0x0407 'de-DE'. Pairing the two arms -- which this function did
-            // until now -- emitted `FontSubfamily-de` for a record ExifTool
-            // reports as `FontSubfamily-de-DE`. Every value below is quoted
-            // from %ttLang{Windows} in Font.pm.
-            //
-            // 0x0409 is 'en-US', NOT 'en', so ExifTool suffixes it like any
-            // other language -- `$lang ne 'en'` is false only for the literal
-            // string 'en', which no Windows LCID maps to. Confirmed against
-            // the corpus: `exiftool -G1 combined-samples/Font.dfont`, whose
-            // name table is entirely Plat=3/Windows Lang=0x409, prints
-            // `FontSubfamily-en-US`, `Copyright-en-US`, `FontName-en-US` and
-            // so on for every nameID it carries.
-            (PLATFORM_WINDOWS, LANGUAGE_ENGLISH_WINDOWS) => Some("en-US"),
-            (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
-            (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de-DE"),
-            (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
-            (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es-ES"),
-            (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
-            (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr-FR"),
-            (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it-IT"),
-            (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
-            (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
-            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS) => Some("nl-NL"),
-            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_TW_WINDOWS) => Some("zh-TW"),
-            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_CN_WINDOWS) => Some("zh-CN"),
-            _ => None,
-        }
+        generated_languages::font_language(record.platform_id, record.language_id)
     }
 
     /// Maps a name-table record's name ID to the key ExifTool reports it
@@ -493,99 +400,87 @@ impl TTFParser {
         }
     }
 
-    /// How ExifTool names the tag for this record's language: unsuffixed,
-    /// suffixed with a claimed `%ttLang` code, or not claimable here.
-    ///
-    /// `ProcessTableEntry` (Font.pm:504-521) computes
-    /// `$lang = $ttLang{$sys}{$langID}` and suffixes the tag name whenever
-    /// `$lang` is defined and `ne 'en'`; an *undefined* `$lang` leaves the
-    /// tag unsuffixed. So:
-    ///
-    /// * Macintosh language 0 is `'en'` (`%ttLang{Macintosh}: 0 => 'en'`)
-    ///   -- unsuffixed.
-    /// * A claimed (platform, language) pair from [`Self::language_suffix`]
-    ///   -- suffixed with that exact string.
-    /// * `%ttLang{Unicode}` is the EMPTY hash (Font.pm:184), so a
-    ///   Unicode-platform record's `$lang` is undef -- unsuffixed
-    ///   (language-tag IDs >= 0x8000 aside, next bullet).
-    /// * A Macintosh or Windows ID that `%ttLang` DEFINES but this parser
-    ///   has not claimed is OMITTED rather than emitted unsuffixed:
-    ///   ExifTool would suffix such a record with a code we cannot name,
-    ///   and an unsuffixed emission would be a wrong tag name, which is
-    ///   worse than an open gap. [`Self::ttlang_defines`] carries the key
-    ///   sets that decide this.
-    /// * A Macintosh or Windows ID that `%ttLang` does NOT define leaves
-    ///   `$lang` undef in the Perl, so the tag is UNSUFFIXED -- e.g.
-    ///   Windows language 0x0009 ("English, neutral") is absent from
-    ///   `%ttLang{Windows}` and its records land on the plain tag name.
-    /// * IDs >= 0x8000 index the format-1 naming table's language-tag
-    ///   records (`%langTag`, Font.pm:465-479), the `|| $langTag{$langID}`
-    ///   half of the lookup, on every platform. This parser does not read
-    ///   language-tag records, so such IDs are omitted rather than guessed
-    ///   unsuffixed.
-    /// * ISO (2) and Custom (4) platform records are also omitted: their
-    ///   `%ttLang` hashes are empty too, but `%ttCharset{ISO}` maps encoding
-    ///   1 to UCS2 (Font.pm:79-83) and this parser's fallback decode for
-    ///   those platforms is UTF-8, so the value could be mojibake under a
-    ///   correct name. Omit and count.
-    fn name_record_lang(record: &NameRecord) -> NameLang {
-        if record.language_id >= 0x8000 {
+    /// Match Font.pm's `%ttLang{$sys}{$langID} || %langTag{$langID}`.
+    /// Unknown source IDs stay unsuffixed. A missing format-1 tag is omitted
+    /// rather than guessed; ISO and Custom remain refused by the existing
+    /// text-decoding boundary.
+    fn name_record_lang_with_fallback<'a>(
+        record: &NameRecord,
+        format_one_language: Option<&'a str>,
+    ) -> NameLang<'a> {
+        if !matches!(
+            record.platform_id,
+            PLATFORM_MACINTOSH | PLATFORM_WINDOWS | PLATFORM_UNICODE
+        ) {
             return NameLang::Omitted;
         }
-        match record.platform_id {
-            PLATFORM_MACINTOSH if record.language_id == 0 => NameLang::Unsuffixed,
-            PLATFORM_MACINTOSH | PLATFORM_WINDOWS => match Self::language_suffix(record) {
-                Some(suffix) => NameLang::Suffixed(suffix),
-                None if Self::ttlang_defines(record) => NameLang::Omitted,
-                None => NameLang::Unsuffixed,
-            },
-            PLATFORM_UNICODE => NameLang::Unsuffixed,
-            _ => NameLang::Omitted,
+        let source = Self::language_suffix(record)
+            .or(format_one_language.filter(|language| !language.is_empty()));
+        if record.language_id >= 0x8000 && source.is_none() && format_one_language.is_none() {
+            return NameLang::Omitted;
+        }
+        match source {
+            Some("en") | None => NameLang::Unsuffixed,
+            Some(suffix) => NameLang::Suffixed(suffix),
         }
     }
 
-    /// Whether `%ttLang{Macintosh}` / `%ttLang{Windows}` defines this
-    /// language ID at all. The key sets were dumped from the pinned tree
-    /// itself -- `perl -Ilib -MImage::ExifTool::Font -e '... keys ...'` on
-    /// 13.59 -- not transcribed by eye: Macintosh holds 0x00-0x5e
-    /// contiguously plus 0x80-0x96 with 0x8f absent (117 keys), Windows the
-    /// 210 LCIDs below. `%ttLang{Unicode}`, `{ISO}` and `{Custom}` are
-    /// empty.
-    fn ttlang_defines(record: &NameRecord) -> bool {
-        /// The 210 keys of `%ttLang{Windows}` (Font.pm), sorted for binary
-        /// search.
-        const TTLANG_WINDOWS_IDS: [u16; 210] = [
-            0x0401, 0x0402, 0x0403, 0x0404, 0x0405, 0x0406, 0x0407, 0x0408, 0x0409, 0x040a, 0x040b,
-            0x040c, 0x040d, 0x040e, 0x040f, 0x0410, 0x0411, 0x0412, 0x0413, 0x0414, 0x0415, 0x0416,
-            0x0417, 0x0418, 0x0419, 0x041a, 0x041b, 0x041c, 0x041d, 0x041e, 0x041f, 0x0420, 0x0421,
-            0x0422, 0x0423, 0x0424, 0x0425, 0x0426, 0x0427, 0x0428, 0x042a, 0x042b, 0x042c, 0x042d,
-            0x042e, 0x042f, 0x0430, 0x0431, 0x0432, 0x0434, 0x0435, 0x0436, 0x0437, 0x0438, 0x0439,
-            0x043a, 0x043b, 0x043c, 0x043d, 0x043e, 0x043f, 0x0440, 0x0441, 0x0442, 0x0443, 0x0444,
-            0x0445, 0x0446, 0x0447, 0x0448, 0x0449, 0x044a, 0x044b, 0x044c, 0x044d, 0x044e, 0x044f,
-            0x0450, 0x0451, 0x0452, 0x0453, 0x0454, 0x0456, 0x0457, 0x045a, 0x045b, 0x045d, 0x045e,
-            0x0461, 0x0462, 0x0463, 0x0464, 0x0465, 0x0468, 0x046a, 0x046b, 0x046c, 0x046d, 0x046e,
-            0x046f, 0x0470, 0x0478, 0x047a, 0x047c, 0x047e, 0x0480, 0x0481, 0x0482, 0x0483, 0x0484,
-            0x0485, 0x0486, 0x0487, 0x048c, 0x0801, 0x0804, 0x0807, 0x0809, 0x080a, 0x080c, 0x0810,
-            0x0813, 0x0814, 0x0816, 0x0818, 0x0819, 0x081a, 0x081d, 0x082c, 0x082e, 0x083b, 0x083c,
-            0x083e, 0x0843, 0x0845, 0x0850, 0x085d, 0x085f, 0x086b, 0x0c01, 0x0c04, 0x0c07, 0x0c09,
-            0x0c0a, 0x0c0c, 0x0c1a, 0x0c3b, 0x0c6b, 0x1001, 0x1004, 0x1007, 0x1009, 0x100a, 0x100c,
-            0x101a, 0x103b, 0x1401, 0x1404, 0x1407, 0x1409, 0x140a, 0x140c, 0x141a, 0x143b, 0x1801,
-            0x1809, 0x180a, 0x180c, 0x181a, 0x183b, 0x1c01, 0x1c09, 0x1c0a, 0x1c1a, 0x1c3b, 0x2001,
-            0x2009, 0x200a, 0x201a, 0x203b, 0x2401, 0x2409, 0x240a, 0x243b, 0x2801, 0x2809, 0x280a,
-            0x2c01, 0x2c09, 0x2c0a, 0x3001, 0x3009, 0x300a, 0x3401, 0x3409, 0x340a, 0x3801, 0x380a,
-            0x3c01, 0x3c0a, 0x4001, 0x4009, 0x400a, 0x4409, 0x440a, 0x4809, 0x480a, 0x4c0a, 0x500a,
-            0x540a,
-        ];
-        match record.platform_id {
-            PLATFORM_MACINTOSH => {
-                record.language_id <= 0x5e
-                    || ((0x80..=0x96).contains(&record.language_id) && record.language_id != 0x8f)
-            }
-            PLATFORM_WINDOWS => TTLANG_WINDOWS_IDS
-                .binary_search(&record.language_id)
-                .is_ok(),
-            _ => false,
+    fn name_record_lang(record: &NameRecord) -> NameLang<'static> {
+        Self::name_record_lang_with_fallback(record, None)
+    }
+
+    /// Parse format-1 language tags with Font.pm's bounds, decode and filter.
+    fn format_one_language_tags(
+        reader: &dyn FileReader,
+        table: &TableEntry,
+    ) -> Result<HashMap<u16, String>> {
+        let mut tags = HashMap::new();
+        let table_start = table.offset as u64;
+        let size = table.length as u64;
+        if size < 6 || table_start + size > reader.size() {
+            return Ok(tags);
         }
+        let header = reader.read(table_start, 6)?;
+        let r = EndianReader::big_endian(header);
+        if r.u16_at(0) != Some(1) {
+            return Ok(tags);
+        }
+        let entries = r.u16_at(2).unwrap_or(0) as u64;
+        let str_start = r.u16_at(4).unwrap_or(0) as u64;
+        let rec_end = 6 + entries * 12;
+        if rec_end > size || str_start < rec_end || str_start > size || rec_end + 2 > size {
+            return Ok(tags);
+        }
+        let lang_count = reader.read(table_start + rec_end, 2)?;
+        let count = u16::from_be_bytes([lang_count[0], lang_count[1]]) as u64;
+        if count == 0 || rec_end + 2 + count * 4 >= size {
+            return Ok(tags);
+        }
+        for index in 0..count {
+            if index > 0x7fff {
+                break;
+            }
+            let record = reader.read(table_start + rec_end + 2 + index * 4, 4)?;
+            let len = u16::from_be_bytes([record[0], record[1]]) as u64;
+            let offset = u16::from_be_bytes([record[2], record[3]]) as u64;
+            if len == 0 || len % 2 != 0 || len > 40 || str_start + offset + len > size {
+                break;
+            }
+            let data = reader.read(table_start + str_start + offset, len as usize)?;
+            let utf16: Vec<u16> = data
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect();
+            let Ok(decoded) = String::from_utf16(&utf16) else {
+                break;
+            };
+            let filtered: String = decoded
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                .collect();
+            tags.insert(0x8000 + index as u16, filtered);
+        }
+        Ok(tags)
     }
 
     /// The name-table walk exactly as `ProcessTableEntry` performs it
@@ -614,12 +509,16 @@ impl TTFParser {
         let r = EndianReader::big_endian(header);
         let string_offset = r.u16_at(4).unwrap_or(0);
         let records = Self::parse_name_table(reader, table)?;
+        let format_one_tags = Self::format_one_language_tags(reader, table)?;
 
         for record in &records {
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
-            let key = match Self::name_record_lang(record) {
+            let key = match Self::name_record_lang_with_fallback(
+                record,
+                format_one_tags.get(&record.language_id).map(String::as_str),
+            ) {
                 NameLang::Unsuffixed => base_key.to_string(),
                 NameLang::Suffixed(suffix) => format!("{base_key}-{suffix}"),
                 NameLang::Omitted => continue,
@@ -914,10 +813,8 @@ mod tests {
     /// 4 as well, which silently routed Dutch text into FontSubfamily-it.
     #[test]
     fn macintosh_language_ids_match_exiftool_ttlang_table() {
-        // Literal IDs on purpose. Writing LANGUAGE_SPANISH_MACINTOSH here
-        // instead of 6 would make this a tautology -- it would feed the
-        // constant in and assert the constant's own meaning back out, and
-        // pass for any value it held. The literals ARE the table.
+        // Literal IDs and expected strings are independent of the generated
+        // Rust lookup; the complete fixture is checked against fresh Perl.
         for (id, expected) in [
             (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
             (2, "de"),  // 2 => 'de'
@@ -1001,10 +898,8 @@ mod tests {
         }
     }
 
-    /// `name_record_lang` reproduces `ProcessTableEntry`'s
-    /// `$lang = $ttLang{$sys}{$langID} || $langTag{$langID}` naming rule
-    /// (Font.pm:501) within the subset this parser claims, and omits the
-    /// rest rather than emitting a name ExifTool would spell differently.
+    /// `name_record_lang` uses Font.pm's platform-specific source mapping.
+    /// Missing IDs are unsuffixed; unavailable format-1 records are refused.
     #[test]
     fn name_record_lang_unsuffixes_omits_and_suffixes_per_ttlang() {
         let rec = |platform_id: u16, language_id: u16| NameRecord {
@@ -1025,16 +920,14 @@ mod tests {
             TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 2)),
             NameLang::Suffixed("de")
         ));
-        // %ttLang-defined but unclaimed Macintosh (12 => 'ar') and Windows
-        // (0x0414 => 'no-NO') IDs are omitted: ExifTool would suffix them
-        // with a code this parser has not claimed.
+        // Every source-defined ID uses its exact platform-specific suffix.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 12)),
-            NameLang::Omitted
+            NameLang::Suffixed("ar")
         ));
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_WINDOWS, 0x0414)),
-            NameLang::Omitted
+            NameLang::Suffixed("no-NO")
         ));
         // IDs ABSENT from %ttLang leave `$lang` undef -- unsuffixed. The
         // key sets are dumped from the pinned Perl: Windows has no 0x0009
@@ -1053,31 +946,39 @@ mod tests {
                 record.language_id,
             );
         }
-        // ...while their defined neighbours stay omitted.
-        for record in [
-            rec(PLATFORM_WINDOWS, 0x0408), // 'el'
-            rec(PLATFORM_MACINTOSH, 0x5e), // 'eo'
-            rec(PLATFORM_MACINTOSH, 0x90), // 'gd'
-        ] {
-            assert!(
-                matches!(TTFParser::name_record_lang(&record), NameLang::Omitted),
-                "platform {} language {:#06x} is defined in %ttLang but unclaimed",
-                record.platform_id,
-                record.language_id,
-            );
-        }
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_WINDOWS, 0x0408)),
+            NameLang::Suffixed("el")
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 0x5e)),
+            NameLang::Suffixed("eo")
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 0x90)),
+            NameLang::Suffixed("gd")
+        ));
         // %ttLang{Unicode} is empty (Font.pm), so $lang is undef and the
         // tag is unsuffixed -- for ordinary language IDs.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_UNICODE, 0)),
             NameLang::Unsuffixed
         ));
-        // ...but IDs >= 0x8000 index format-1 language-tag records
-        // (Font.pm:465-479, applied at Font.pm:501), which this parser does
-        // not read, so they are omitted rather than guessed unsuffixed.
+        // IDs >= 0x8000 without a valid format-1 language tag are omitted
+        // rather than guessed unsuffixed.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_UNICODE, 0x8000)),
             NameLang::Omitted
+        ));
+        // ExifTool treats a format-1 tag filtered to an empty string like
+        // an absent language; a literal 'en' is likewise unsuffixed.
+        assert!(matches!(
+            TTFParser::name_record_lang_with_fallback(&rec(PLATFORM_UNICODE, 0x8000), Some("")),
+            NameLang::Unsuffixed
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang_with_fallback(&rec(PLATFORM_UNICODE, 0x8000), Some("en")),
+            NameLang::Unsuffixed
         ));
         // ISO (2) and Custom (4) platforms: omitted (charset risk -- see
         // name_record_lang's doc).
@@ -1120,26 +1021,65 @@ mod tests {
         );
     }
 
-    /// The Windows LCIDs three backlog patches wanted to claim under the
-    /// Macintosh spelling. `%ttLang{Windows}` gives 0x0414 => 'no-NO',
-    /// 0x0416 => 'pt-BR' and 0x041d => 'sv-SE'; claiming them as 'no', 'pt'
-    /// and 'sv' would emit a tag name ExifTool never produces. Leaving them
-    /// unmapped keeps the gap open instead of filling it with a wrong name.
     #[test]
-    fn windows_region_tagged_language_ids_are_not_claimed_unqualified() {
-        for id in [
-            0x0414, /* no-NO, not 'no' */
-            0x0416, /* pt-BR, not 'pt' */
-            0x041d, /* sv-SE, not 'sv' */
-            0x0816, /* pt-PT, not 'pt' */
+    fn format_one_language_tag_names_font_family() {
+        // Format 1 has one Unicode record with language ID 0x8000 and one
+        // UTF-16BE language tag, nb-NO. The pinned native reader emits
+        // Font:FontFamily-nb-NO for this shape.
+        let language = "nb-NO"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family = "Recovery Format One"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one name record
+        data.extend_from_slice(&24u16.to_be_bytes()); // string storage
+        for field in [
+            0u16,
+            3,
+            0x8000,
+            1,
+            family.len() as u16,
+            language.len() as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&1u16.to_be_bytes()); // one language tag
+        data.extend_from_slice(&(language.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&language);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let tags = TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap();
+        assert_eq!(
+            tags.get("Font:FontFamily-nb-NO"),
+            Some(&TagValue::String("Recovery Format One".to_string()))
+        );
+        assert!(!tags.contains_key("Font:FontFamily"));
+    }
+
+    /// The Windows LCIDs retain Font.pm's region subtags.
+    #[test]
+    fn windows_region_tagged_language_ids_keep_source_suffixes() {
+        for (id, expected) in [
+            (0x0414, "no-NO"),
+            (0x0416, "pt-BR"),
+            (0x041d, "sv-SE"),
+            (0x0816, "pt-PT"),
         ] {
             let record = windows_record(id);
             assert_eq!(
                 TTFParser::language_suffix(&record),
-                None,
-                "Windows LCID {id:#06x} is spelled with a region subtag in \
-                 %ttLang{{Windows}}; claiming it unqualified would emit a tag \
-                 name ExifTool does not produce",
+                Some(expected),
+                "Windows LCID {id:#06x} must retain Font.pm's region subtag",
             );
         }
     }
@@ -1163,19 +1103,15 @@ mod tests {
         );
     }
 
-    /// The IDs ExifTool assigns to languages this parser does NOT claim.
-    /// Guards the specific failure mode above: mapping one of these to a
-    /// language we do support would emit that record's text under the
-    /// wrong suffix rather than simply leaving a gap open.
+    /// Source-defined Macintosh IDs are no longer dropped by a manual subset.
     #[test]
-    fn unclaimed_macintosh_language_ids_stay_unmapped() {
-        for id in [12 /* ar */, 14 /* el */, 32 /* ru */] {
+    fn source_defined_macintosh_language_ids_are_mapped() {
+        for (id, expected) in [(12, "ar"), (14, "el"), (32, "ru")] {
             let record = mac_record(id);
             assert_eq!(
                 TTFParser::language_suffix(&record),
-                None,
-                "Macintosh language ID {id} is not a language this parser claims; \
-                 mapping it would mislabel that record's text",
+                Some(expected),
+                "Macintosh language ID {id} must keep Font.pm's suffix",
             );
         }
     }
