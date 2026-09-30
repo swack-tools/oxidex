@@ -59,7 +59,7 @@ jobs:
     # Refuse to publish anything but the tip, whatever branch a manual
     # dispatch was started from.
     if: github.ref == 'refs/heads/refactor/tag-machinery'
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 20
     permissions:
       contents: read
@@ -114,7 +114,7 @@ jobs:
   deploy:
     name: Push preview to swack-tools/oxidex-next
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 10
     # The deploy key lives only in this environment, which the maintainer
     # restricts to refactor/tag-machinery. This job runs no project code: it

@@ -58,7 +58,7 @@ jobs:
     # Pinned image rather than ubuntu-latest: numbers are only comparable run
     # to run on the same runner class, and ubuntu-24.04's system perl is the
     # canonical 5.38.2 the other oracle jobs use.
-    runs-on: ubuntu-24.04
+    runs-on: spot
     timeout-minutes: 30
     env:
       RUNNER_LABEL: ubuntu-24.04

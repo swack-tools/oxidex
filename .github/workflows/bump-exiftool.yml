@@ -39,7 +39,7 @@ concurrency:
 jobs:
   bump:
     name: Bump ExifTool (${{ inputs.version }})
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 60
     permissions:
       # contents: write only matters on a real (non-dry-run) bump, to push

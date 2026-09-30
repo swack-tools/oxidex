@@ -44,7 +44,7 @@ jobs:
     # from cold and then runs it across the ExifTool sample corpus (restored
     # from the corpus cache below; downloaded only on the first run after an
     # .exiftool-version bump).
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 30
     permissions:
       contents: read
@@ -164,7 +164,7 @@ jobs:
     needs: [comparison-report]
     # 2x: npm ci plus a VitePress build (~45s). This job compiles no Rust --
     # it consumes what comparison-report produced and what ci.yml measured.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 20
     permissions:
       contents: read

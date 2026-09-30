@@ -102,9 +102,7 @@ jobs:
     # (clippy --all-features). The dominant step is rustsec/audit-check at
     # ~2m55s, which is network I/O against the advisory database and does not
     # get faster with more cores.
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,9 +194,7 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 25
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
     # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
@@ -471,9 +467,7 @@ jobs:
     # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
     # it is not the long pole -- Build & Test is. Sizing it to finish just
     # inside that job is what this is worth paying for, not raw speed.
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -522,7 +516,7 @@ jobs:
   # concurrent workflow starts can race between selection and assignment.
   select_read_gate_runner:
     name: Select runner / read gate
-    runs-on: ubuntu-latest
+    runs-on: spot
     permissions:
       contents: read
     outputs:
@@ -537,7 +531,7 @@ jobs:
   read-regression-gate:
     name: Corpus Read Regression Gate
     needs: [select_read_gate_runner]
-    runs-on: ${{ fromJSON(needs.select_read_gate_runner.outputs.runs_on) }}
+    runs-on: spot
     timeout-minutes: 30
     env:
       # The receipt's build command is fixed (`cargo build --release --bin
@@ -638,7 +632,7 @@ jobs:
     name: Select runner / tables capture
     needs: [read-regression-gate]
     if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: spot
     permissions:
       contents: read
     outputs:
@@ -655,7 +649,7 @@ jobs:
     # Run after the gate so this job's availability check sees whether another
     # workflow has occupied the M4 Air in the meantime.
     needs: [select_capture_runner]
-    runs-on: ${{ fromJSON(needs.select_capture_runner.outputs.runs_on) }}
+    runs-on: spot
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -704,9 +698,7 @@ jobs:
   # Checks that need only the fetched ExifTool tree, not the capture.
   verify-tables-source:
     name: Verify Generated Tables / source and tier 2
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -781,9 +773,7 @@ jobs:
   verify-tables-catalog:
     name: Verify Generated Tables / catalog join
     needs: [verify-tables-capture]
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -901,9 +891,7 @@ jobs:
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -958,9 +946,7 @@ jobs:
   verify-tables-drift:
     name: Verify Generated Tables / staleness and drift
     needs: [verify-tables-capture]
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1017,9 +1003,7 @@ jobs:
     name: Verify Generated Tables
     needs: [verify-tables-capture, verify-tables-source, verify-tables-catalog, verify-tables-tools, verify-tables-drift]
     if: always()
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 5
     steps:
       - name: Require every Verify Generated Tables job
@@ -1055,9 +1039,7 @@ jobs:
     # numbers after it, on hardware or methodology. If any of this changes
     # again, both jobs move together, in one commit, and the discontinuity is
     # recorded in CHANGELOG.md again.
-    runs-on:
-      group: oxidex-m4air
-      labels: [self-hosted, Linux, X64, oxidex-spot-7x27, spot]
+    runs-on: spot
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # No `needs:` on purpose. This used to wait for Build & Test, which put

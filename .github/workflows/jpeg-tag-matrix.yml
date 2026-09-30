@@ -68,7 +68,7 @@ jobs:
     #
     # Raising the ceiling is a cost decision, not a technical one. Re-run the
     # benchmark before changing this; do not adjust it by intuition.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 90
     # Read-only. This job no longer pushes to main -- see the "Report docs
     # changes" step below for why -- so it needs nothing more than checkout.

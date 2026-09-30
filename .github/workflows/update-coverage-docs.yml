@@ -57,7 +57,7 @@ jobs:
     #
     # Debug, not release: 44 files is nothing to parse, so the whole job is
     # compile time and `--release` would only add LTO for no measured gain.
-    runs-on: ubuntu-latest
+    runs-on: spot
     timeout-minutes: 30
     # Read-only. This job no longer pushes to main -- see the "Report
     # changes" step below for why -- so it needs nothing more than checkout.
