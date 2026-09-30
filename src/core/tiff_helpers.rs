@@ -3639,7 +3639,7 @@ impl Ifd1Hand {
 /// the one place that decision is made. The IFD engine's own guard starts
 /// empty per walk and cannot see the hand-walked IFD0/ExifIFD/GPS/InteropIFD,
 /// so the check must stay in front of it.
-fn legal_ifd1_offset(
+pub(crate) fn legal_ifd1_offset(
     reader: &dyn FileReader,
     ifd0_offset: u64,
     ifd0_entry_count: usize,

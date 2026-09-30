@@ -1770,22 +1770,16 @@ fn extract_rw2_embedded_exif_tags(
     // header; ExifTool reports ThumbnailOffset as a position in the physical
     // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
     // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
-    // `parse_ifd` omits malformed entries, so its result length is not the
-    // directory's on-disk entry count. The next pointer follows every slot,
-    // including entries we could not decode.
-    let ifd0_entry_count = reader
-        .read(first_ifd_offset, 2)
-        .ok()
-        .and_then(|bytes| read_tiff_u16(bytes, byte_order))
-        .map(u64::from);
-    let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
-        first_ifd_offset
-            .checked_add(2)?
-            .checked_add(entry_count.checked_mul(12)?)
-    });
-    let thumbnail_ifd_offset = next_ifd_position
-        .and_then(|offset| reader.read(offset, 4).ok())
-        .map(|bytes| u64::from(read_u32(bytes, byte_order)));
+    // The shared IFD1 resolver reads the physical entry count (decoded
+    // `ifd0_tags` may omit malformed entries) and refuses pointers back to
+    // IFD0 or an already visited Exif/GPS/Interop directory. Otherwise this
+    // preview path could relabel a previous directory as thumbnail metadata.
+    let thumbnail_ifd_offset = crate::core::tiff_helpers::legal_ifd1_offset(
+        &reader,
+        first_ifd_offset,
+        ifd0_tags.len(),
+        byte_order,
+    );
 
     if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
         && thumbnail_ifd_offset != 0

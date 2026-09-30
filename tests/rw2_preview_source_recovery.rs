@@ -117,6 +117,41 @@ fn thumbnail_pointer_uses_declared_ifd0_count_when_an_entry_is_unreadable() {
 }
 
 #[test]
+fn looping_preview_ifd1_pointer_does_not_relabel_ifd0_tags() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let print_im = entry(&data, ifd0, 0xC4A5);
+    let count = usize::from(read_u16(&data, ifd0));
+    let next_ifd_pointer = ifd0 + 2 + count * 12;
+    assert_eq!(read_u32(&data, next_ifd_pointer), 10310);
+
+    // Make IFD0 contain plausible thumbnail entries, then point its own
+    // next-IFD link back to itself. Pinned ExifTool 13.59 refuses that
+    // already-visited directory rather than calling these IFD1 tags.
+    data[exif_pointer..exif_pointer + 2].copy_from_slice(&0x0201u16.to_le_bytes());
+    data[print_im..print_im + 2].copy_from_slice(&0x0202u16.to_le_bytes());
+    data[print_im + 2..print_im + 4].copy_from_slice(&4u16.to_le_bytes());
+    data[print_im + 4..print_im + 8].copy_from_slice(&1u32.to_le_bytes());
+    data[print_im + 8..print_im + 12].copy_from_slice(&28u32.to_le_bytes());
+    data[next_ifd_pointer..next_ifd_pointer + 4]
+        .copy_from_slice(&u32::try_from(ifd0 - tiff).unwrap().to_le_bytes());
+
+    let metadata = parse(&data);
+    assert_eq!(
+        metadata.get_string("IFD0:ModifyDate"),
+        Some("2008:08:06 15:21:56")
+    );
+    for key in [
+        "IFD1:ThumbnailOffset",
+        "IFD1:ThumbnailLength",
+        "IFD1:ThumbnailImage",
+    ] {
+        assert!(metadata.get(key).is_none(), "unexpected {key}");
+    }
+}
+
+#[test]
 fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
