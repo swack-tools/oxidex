@@ -39,10 +39,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Runners: ordinary CI jobs use the x64 spot pool in the `oxidex-m4air`
-# organization runner group. The corpus read gate and table capture prefer
-# the M4 Air runners when idle, then fall back to ubuntu-latest. The small
-# runner-selector jobs stay on ubuntu-latest so fallback selection can run.
+# Runners: ordinary x64 CI jobs use the spot pool. The corpus read gate
+# and table capture use the Linux ARM64 M4 runners directly. GitHub queues
+# jobs when those runners are busy; no runner-status credential is needed.
 # The per-job
 # "2x/4x/8x" notes and the table below are the historical WarpBuild sizing
 # measurements (2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64), kept as evidence
@@ -509,29 +508,9 @@ jobs:
   # or the oracle/corpus is not the snapshot's). Re-run on 2; read the LOST
   # lines on 1.
   #
-  # Select immediately before dispatch. The M4 Air is used only when its
-  # registered runners are online and idle; otherwise the job uses GitHub's
-  # ubuntu-latest runner. The runner API requires an organization Self-hosted runners
-  # read token, supplied as RUNNER_STATUS_TOKEN. The API check is advisory, so
-  # concurrent workflow starts can race between selection and assignment.
-  select_read_gate_runner:
-    name: Select runner / read gate
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      runs_on: ${{ steps.select.outputs.runs_on }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: select
-        uses: ./.github/actions/select-m4air-runner
-        with:
-          runner-status-token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
   read-regression-gate:
     name: Corpus Read Regression Gate
-    needs: [select_read_gate_runner]
-    runs-on: ${{ fromJSON(needs.select_read_gate_runner.outputs.runs_on) }}
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 30
     env:
       # The receipt's build command is fixed (`cargo build --release --bin
@@ -628,28 +607,12 @@ jobs:
   #
   # The full dump is 1.25 GB of JSON (16 MB zstd); it is captured once and
   # passed as an artifact so every dependent job checks the same bytes.
-  select_capture_runner:
-    name: Select runner / tables capture
-    needs: [read-regression-gate]
-    if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      runs_on: ${{ steps.select.outputs.runs_on }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: select
-        uses: ./.github/actions/select-m4air-runner
-        with:
-          runner-status-token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
   verify-tables-capture:
     name: Verify Generated Tables / capture
-    # Run after the gate so this job's availability check sees whether another
-    # workflow has occupied the M4 Air in the meantime.
-    needs: [select_capture_runner]
-    runs-on: ${{ fromJSON(needs.select_capture_runner.outputs.runs_on) }}
+    # Avoid competing with the read measurement on the same M4 host.
+    needs: [read-regression-gate]
+    if: ${{ always() && !cancelled() }}
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
