@@ -8,7 +8,7 @@ A Rust reimplementation of [ExifTool](https://exiftool.org/) for metadata extrac
 ## What is OxiDex?
 
 OxiDex is a memory-safe Rust reimplementation of the Perl-based ExifTool. The
-current development snapshot contains 16,683 generated metadata tag
+current development snapshot contains 30,039 generated metadata tag
 definitions. Source inspection maps 131 formats for detection and 129 to a
 parser; an identified format is not necessarily parsed. See [Supported
 formats](https://oxidex.net/reference/formats/) for those scopes and [Tag

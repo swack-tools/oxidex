@@ -94,7 +94,7 @@ ExifTool; see [Writing metadata](/guide/writing).
 
 ## Tag definitions
 
-The tag database holds 16,683 tag definitions, synced from ExifTool's
+The tag database holds 30,039 tag definitions, synced from ExifTool's
 documentation view (`exiftool -listx`). They are browsable by domain under
 [Tag domains](/tag-domains/). A definition says ExifTool knows a tag, not
 that OxiDex reads it.

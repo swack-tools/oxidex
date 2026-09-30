@@ -1537,6 +1537,17 @@ def gen_table(mod_name, tbl_name, tbl, stats, verified_exprs, omitted_native):
         # by nothing at all".
         stats["table_ifd" if is_ifd_table(meta) else "table_not_binary"] += 1
         return None
+    # ExifTool applies a table-level PRINT_CONV to fields without their own
+    # PrintConv. The field emitter has no inheritance path, so refuse such a
+    # table instead of publishing an unconverted value under its real name.
+    if "PRINT_CONV" in meta and any(
+        "PrintConv" not in alternative
+        for tag in tbl.get("tags", {}).values()
+        for alternative in (tag.get("_variants", []) if isinstance(tag, dict) and "_variants" in tag else [tag])
+        if isinstance(alternative, dict)
+    ):
+        stats["table_print_conv_inheritance_unsupported"] += 1
+        return None
     fmt_name = meta.get("FORMAT")
     if not isinstance(fmt_name, str):
         # ExifTool's ProcessBinaryData does `$$tagTablePtr{FORMAT} || 'int8u'`.

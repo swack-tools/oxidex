@@ -20,8 +20,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 80)
-        self.assertEqual(len(all_items), 81 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 86)
+        self.assertEqual(len(all_items), 87 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="png_shift_contract")},
                          {"png-shift-contract"})
         self.assertEqual({item.key for item in artifacts.select(producer="scene_type_inverse_codegen")},
@@ -35,9 +35,12 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual({item.key for item in artifacts.select(producer="conv_codegen")},
                          {"conv-registry", "conv-exif-main", "conv-exif-main-ledger",
                           "conv-exif-main-worklist"})
-        self.assertEqual(len(artifacts.select(1)), 55 + members)
+        self.assertEqual(len(artifacts.select(1)), 61 + members)
         self.assertEqual(len(artifacts.select(2)), 26)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
+        self.assertEqual({item.key for item in artifacts.select(producer='gen_tag_registry')},
+                         {f'registry-{domain}' for domain in
+                          ('core', 'camera', 'media', 'image', 'document', 'specialty')})
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
         self.assertTrue(all(a.path.endswith('.rs') for a in artifacts.select(kind='rust')))
         for producer in {a.producer for a in all_items}:

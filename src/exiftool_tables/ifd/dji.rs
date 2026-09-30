@@ -191,7 +191,7 @@ pub static IFD_DJI_XMP: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 29)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 28)],
     },
     tags: &[],
     variants: &[],

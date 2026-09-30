@@ -114,6 +114,16 @@ fn registry_id_matches(table: &str, here: i64, wanted: &HashSet<i64>) -> bool {
                 .any(|id| id & !0xffff == 0x30000 && id & 0xffff == here))
 }
 
+// Pinned 13.59 source declares these as SubDirectory pointers. `-listx`
+// omits the pointer rows, while a PrintConv in the same table happens to use
+// the same display word. Keep this exception exact and require every member
+// to remain exercised below.
+const SOURCE_ONLY_CONTAINERS: &[(&str, &str)] = &[
+    ("Matroska::Main", "Video"),
+    ("Matroska::Main", "Audio"),
+    ("LNK::Main", "LinkInfo"),
+];
+
 #[test]
 fn packed_lnk_ids_do_not_hide_real_printconv_collisions() {
     assert!(registry_id_matches(
@@ -191,9 +201,14 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
     // PrintConv (for example, `Compression` is both a real EXIF tag and a value
     // elsewhere).
     let mut violations = Vec::new();
+    let mut exempted = HashSet::new();
     for domain in DOMAINS {
         for e in entries(domain) {
             if real.contains(&(e.table.clone(), e.name.clone())) {
+                continue;
+            }
+            if SOURCE_ONLY_CONTAINERS.contains(&(e.table.as_str(), e.name.as_str())) {
+                exempted.insert((e.table.clone(), e.name.clone()));
                 continue;
             }
             let is_display_value = values
@@ -214,6 +229,12 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
         violations.len(),
         violations.join("\n")
     );
+    for &(table, name) in SOURCE_ONLY_CONTAINERS {
+        assert!(
+            exempted.contains(&(table.to_string(), name.to_string())),
+            "source-only container exemption is stale: {table}::{name}"
+        );
+    }
 }
 
 /// The subtlest shape of the same bug, and the one that actually misnames tags.

@@ -106,7 +106,7 @@ original design.
 
 ### Tag definitions are not tag coverage
 
-The six `oxidex-tags-*` crates hold 16,683 tag definitions, synced from
+The six `oxidex-tags-*` crates hold 30,039 tag definitions, synced from
 `exiftool -f -listx`. That is ExifTool's *documentation* view: name, ID,
 type, writability and description, with no layout, `SubDirectory`,
 `Condition` or conversion. The definitions say a tag exists, not that OxiDex

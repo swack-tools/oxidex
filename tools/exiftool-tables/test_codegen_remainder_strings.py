@@ -21,6 +21,17 @@ def native_table(tags):
 
 
 class RemainderStringSchema(unittest.TestCase):
+    def test_table_print_conv_without_field_override_refuses(self):
+        table = native_table({"0": {"Name": "Bare"}})
+        table["meta"]["PRINT_CONV"] = {"__perl": "CODE"}
+        stats = collections.Counter()
+        self.assertIsNone(codegen.gen_table("Example", "Bare", table, stats, set(), []))
+        self.assertEqual(stats["table_print_conv_inheritance_unsupported"], 1)
+
+        # A field with its own PrintConv does not inherit the table default.
+        table["tags"]["0"]["PrintConv"] = {"kind": "enum", "map": {"1": "One"}}
+        self.assertIsNotNone(codegen.gen_table("Example", "Own", table, collections.Counter(), set(), []))
+
     def test_default_string_stride_fixed_string_and_remainder_are_distinct(self):
         output = codegen.gen_table(
             "Example",

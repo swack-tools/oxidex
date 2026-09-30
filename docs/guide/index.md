@@ -27,7 +27,7 @@ Perl subroutine at a time. See [Architecture](/architecture/).
 
 ## What it can do today
 
-- ✅ 16,683 metadata tag definitions, synced from ExifTool's own tag database
+- ✅ 30,039 metadata tag definitions, synced from ExifTool's own tag database
   in this development snapshot. A definition says a tag exists, not that
   OxiDex reads it; it is not a v2.0.0-beta.1 parity receipt.
 - 🔶 **Reading.** Development-state source inspection maps 131 formats for

@@ -3,8 +3,7 @@
 //! This module provides a static registry of 500+ metadata tags covering EXIF (300+),
 //! GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats.
 //! This is a manual implementation. Automated tag generation now lives in
-//! `src/tag_sync/` and `src/bin/sync_tags.rs` (run explicitly via
-//! `cargo run --bin sync_tags`, not as part of the build).
+//! `src/tag_sync/` and `src/bin/gen_tag_registry.rs` (run by Tier 1).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use crate::tag_db::generated_scalar_descriptor_fallback::{self, SourceValueClass};
