@@ -21074,7 +21074,7 @@ tables:
         description: "Channels"
       - id: "Duration"
         name: "Duration"
-        writable: true
+        writable: false
         type: "rational64u"
         description: "Duration"
       - id: "data"
@@ -21888,7 +21888,7 @@ tables:
         description: "Codec"
       - id: "Duration"
         name: "Duration"
-        writable: true
+        writable: false
         type: "rational64u"
         description: "Duration"
       - id: "data"
@@ -23362,7 +23362,7 @@ tables:
         description: "URL"
       - id: "1054"
         name: "URL_List"
-        writable: true
+        writable: false
         type: "?"
         description: "URL List"
       - id: "1045"

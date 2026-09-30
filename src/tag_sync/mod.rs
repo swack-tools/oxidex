@@ -288,19 +288,48 @@ fn strip_format_count(format: &str) -> &str {
     format.split('[').next().unwrap_or(format).trim()
 }
 
-/// Resolves ExifTool's `WRITABLE` inheritance for one tag: the tag's own
-/// `Writable` wins if present; failing that, the table's `WRITABLE` applies.
-/// A resolved value of `"0"`/empty/`"false"` means not writable; anything
-/// else (a type name, or the boolean toggle `"1"`) means writable. Verified
-/// against real dumps: `Canon::CameraInfo1DX`'s `FirmwareVersion` (index 640)
-/// declares `Writable => 0` and reads back `writable='false'` from `-listx`
-/// despite `Format => 'string[6]'` being present, and `QuickTime::Keys`
-/// entries with no per-tag `Writable` at all read `writable='true'` because
-/// the table declares `WRITABLE => 1`.
-fn resolve_writable(entry: &serde_json::Value, table_writable: Option<&str>) -> bool {
+/// Perl treats references as true, including empty hashes and arrays.
+fn perl_truthy(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
+        serde_json::Value::String(value) => !value.is_empty() && value != "0",
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
+    }
+}
+
+fn source_write_also(doc: &serde_json::Value, module: &str, table: &str, id: &str) -> bool {
+    let control =
+        &doc["native_write_tables"][module][table]["rows"][id]["write_controls"]["WriteAlso"];
+    control["present"].as_bool() == Some(true) && perl_truthy(&control["value"])
+}
+
+/// Mirror TagInfoXML's effective writable rule: a source write format is
+/// necessary, and a code/string conversion needs an inverse unless WriteAlso
+/// supplies the write path. Hash and array conversions need no explicit inverse.
+fn resolve_writable(
+    entry: &serde_json::Value,
+    table_writable: Option<&str>,
+    write_also: bool,
+) -> bool {
     let own = entry.get("Writable").and_then(|v| v.as_str());
     let effective = own.or(table_writable);
-    !matches!(effective, None | Some("0" | "" | "false"))
+    if matches!(effective, None | Some("0" | "" | "false")) {
+        return false;
+    }
+    for (forward, inverse) in [("PrintConv", "PrintConvInv"), ("ValueConv", "ValueConvInv")] {
+        let Some(conversion) = entry.get(forward).filter(|value| perl_truthy(value)) else {
+            continue;
+        };
+        let is_hash_or_array = conversion["kind"]
+            .as_str()
+            .is_some_and(|kind| matches!(kind, "enum" | "enum_partial" | "list"));
+        if !is_hash_or_array && !entry.get(inverse).is_some_and(perl_truthy) && !write_also {
+            return false;
+        }
+    }
+    true
 }
 
 /// Resolves the `type` `-listx` would report for one tag: a per-tag
@@ -570,7 +599,11 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                             table: "Composite".to_string(),
                             id: format!("{module_name}-{tag_key}"),
                             name: name.clone(),
-                            writable: resolve_writable(entry, None),
+                            writable: resolve_writable(
+                                entry,
+                                None,
+                                source_write_also(doc, module_name, table_symbol, tag_key),
+                            ),
                             type_name: resolve_type(entry),
                             description: Some(entry_description(entry, &name)),
                         });
@@ -712,7 +745,11 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                     table: table_name.clone(),
                     id,
                     name: name.clone(),
-                    writable: resolve_writable(entry, table_writable),
+                    writable: resolve_writable(
+                        entry,
+                        table_writable,
+                        source_write_also(doc, module_name, table_symbol, tag_key),
+                    ),
                     type_name: resolve_type(entry),
                     description: Some(entry_description(entry, &name)),
                 });
@@ -923,6 +960,39 @@ pub fn count_ids_in_yaml(yaml_content: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversion_without_inverse_is_not_writable() {
+        let photoshop = serde_json::json!({
+            "Name": "URL_List", "Writable": "1", "ValueConv": {"kind": "code"}
+        });
+        assert!(!resolve_writable(&photoshop, None, false));
+        assert!(resolve_writable(&photoshop, None, true));
+
+        let enum_conversion = serde_json::json!({
+            "Writable": "1", "PrintConv": {"kind": "enum"}
+        });
+        assert!(resolve_writable(&enum_conversion, None, false));
+
+        let inverse = serde_json::json!({
+            "Writable": "1", "ValueConv": {"kind": "expr"},
+            "ValueConvInv": {"kind": "expr"}
+        });
+        assert!(resolve_writable(&inverse, None, false));
+
+        let sidecar = serde_json::json!({"native_write_tables": {"Exif": {"Composite": {
+            "rows": {"GPSPosition": {"write_controls": {"WriteAlso": {
+                "present": true, "value": {"GPSLatitude": "$val"}
+            }}}}
+        }}}});
+        assert!(source_write_also(
+            &sidecar,
+            "Exif",
+            "Composite",
+            "GPSPosition"
+        ));
+        assert!(!source_write_also(&sidecar, "Exif", "Composite", "Other"));
+    }
 
     #[test]
     fn source_control_bytes_are_escaped_and_round_trip() {

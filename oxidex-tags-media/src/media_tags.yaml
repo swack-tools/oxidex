@@ -17539,7 +17539,7 @@ tables:
     tags:
       - id: "vrot"
         name: "AccelerometerData"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Accelerometer Data"
       - id: "albm"
@@ -17634,7 +17634,7 @@ tables:
         description: "Casio QVMI"
       - id: "chpl"
         name: "ChapterList"
-        writable: true
+        writable: false
         type: "?"
         description: "Chapter List"
       - id: "clsf"
@@ -18039,7 +18039,7 @@ tables:
         description: "Maker URL"
       - id: "MUID"
         name: "MediaUID"
-        writable: true
+        writable: false
         type: "?"
         description: "Media UID"
       - id: "meta"

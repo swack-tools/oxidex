@@ -8,7 +8,7 @@ tables:
         description: "AE Average"
       - id: "2"
         name: "AEMatrix"
-        writable: true
+        writable: false
         type: "?"
         description: "AE Matrix"
       - id: "4"
@@ -48,22 +48,22 @@ tables:
         description: "Acceleration Vector"
       - id: "78"
         name: "Apple_0x004e"
-        writable: true
+        writable: false
         type: "?"
         description: "Apple 0x 004e"
       - id: "79"
         name: "Apple_0x004f"
-        writable: true
+        writable: false
         type: "?"
         description: "Apple 0x 004f"
       - id: "84"
         name: "Apple_0x0054"
-        writable: true
+        writable: false
         type: "?"
         description: "Apple 0x 0054"
       - id: "90"
         name: "Apple_0x005a"
-        writable: true
+        writable: false
         type: "?"
         description: "Apple 0x 005a"
       - id: "11"
@@ -78,7 +78,7 @@ tables:
         description: "Camera Type"
       - id: "62"
         name: "ColorCorrectionMatrix"
-        writable: true
+        writable: false
         type: "?"
         description: "Color Correction Matrix"
       - id: "45"
@@ -188,17 +188,17 @@ tables:
         description: "Scene Flags"
       - id: "64"
         name: "SemanticStyle"
-        writable: true
+        writable: false
         type: "?"
         description: "Semantic Style"
       - id: "66"
         name: "SemanticStylePreset"
-        writable: true
+        writable: false
         type: "?"
         description: "Semantic Style Preset"
       - id: "65"
         name: "SemanticStyleRenderingVer"
-        writable: true
+        writable: false
         type: "?"
         description: "Semantic Style Rendering Ver"
       - id: "39"
@@ -12688,7 +12688,7 @@ tables:
         description: "AF Mode"
       - id: "8225"
         name: "AFPointPosition"
-        writable: true
+        writable: false
         type: "?"
         description: "AF Point Position"
       - id: "12315"
@@ -24160,7 +24160,7 @@ tables:
         description: "Subject Program"
       - id: "3"
         name: "WhiteBalance"
-        writable: true
+        writable: false
         type: "?"
         description: "White Balance"
       - id: "47"
@@ -24956,7 +24956,7 @@ tables:
         description: "IS Info A100"
       - id: "24#ImageStabilization"
         name: "ImageStabilization"
-        writable: true
+        writable: false
         type: "?"
         description: "Image Stabilization"
       - id: "263"
@@ -25203,7 +25203,7 @@ tables:
         description: "Rotation"
       - id: "4172"
         name: "TiffMeteringImage"
-        writable: true
+        writable: false
         type: "undef"
         description: "Tiff Metering Image"
       - id: "43"
@@ -25628,7 +25628,7 @@ tables:
         description: "Sharpness"
       - id: "4"
         name: "WBMode"
-        writable: true
+        writable: false
         type: "?"
         description: "WB Mode"
       - id: "16"
@@ -26117,32 +26117,32 @@ tables:
         description: "Focus Point Schema"
       - id: "47"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "47"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "47"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "49"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "49"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "49"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "56"
@@ -26229,32 +26229,32 @@ tables:
         description: "AF Points Used"
       - id: "67"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "67"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "67"
         name: "FocusPositionHorizontal"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Horizontal"
       - id: "69"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "69"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "69"
         name: "FocusPositionVertical"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Position Vertical"
       - id: "74"
@@ -26474,12 +26474,12 @@ tables:
     tags:
       - id: "1"
         name: "AutoCaptureCriteria"
-        writable: true
+        writable: false
         type: "?"
         description: "Auto Capture Criteria"
       - id: "95"
         name: "AutoCaptureCriteriaMotionDirection"
-        writable: true
+        writable: false
         type: "?"
         description: "Auto Capture Criteria Motion Direction"
       - id: "100"
@@ -26504,12 +26504,12 @@ tables:
         description: "Auto Capture Criteria Subject Type"
       - id: "74"
         name: "AutoCaptureDistanceFar"
-        writable: true
+        writable: false
         type: "?"
         description: "Auto Capture Distance Far"
       - id: "78"
         name: "AutoCaptureDistanceNear"
-        writable: true
+        writable: false
         type: "?"
         description: "Auto Capture Distance Near"
       - id: "55"
@@ -26848,17 +26848,17 @@ tables:
         description: "Distortion Correction Version"
       - id: "20"
         name: "RadialDistortionCoefficient1"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Radial Distortion Coefficient 1"
       - id: "28"
         name: "RadialDistortionCoefficient2"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Radial Distortion Coefficient 2"
       - id: "36"
         name: "RadialDistortionCoefficient3"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Radial Distortion Coefficient 3"
   - name: Nikon::FaceDetect
@@ -27718,7 +27718,7 @@ tables:
         description: "Flash Control Mode"
       - id: "538"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "558"
@@ -27758,7 +27758,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "432"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "424"
@@ -27810,7 +27810,7 @@ tables:
         description: "Interval Frame"
       - id: "36"
         name: "IntervalShooting"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Interval Shooting"
   - name: Nikon::JPGInfoD500
@@ -28081,7 +28081,7 @@ tables:
         description: "Focus Distance"
       - id: "78"
         name: "FocusDistance"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Focus Distance"
       - id: "76"
@@ -28111,7 +28111,7 @@ tables:
         description: "Lens F Stops"
       - id: "52"
         name: "LensFirmwareVersion"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Lens Firmware Version"
       - id: "48"
@@ -28934,7 +28934,7 @@ tables:
         description: "Sharpness"
       - id: "137"
         name: "ShootingMode"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Shooting Mode"
       - id: "145#ShotInfo02xx"
@@ -29333,7 +29333,7 @@ tables:
         description: "Flash Control Mode"
       - id: "730"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "750"
@@ -29378,7 +29378,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "544"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "536"
@@ -29498,12 +29498,12 @@ tables:
         description: "Nikon Metering Mode"
       - id: "908"
         name: "PixelShiftDelay"
-        writable: true
+        writable: false
         type: "?"
         description: "Pixel Shift Delay"
       - id: "910"
         name: "PixelShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Pixel Shift Interval"
       - id: "906"
@@ -29600,7 +29600,7 @@ tables:
         description: "Flash Control Mode"
       - id: "334"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "354"
@@ -29640,7 +29640,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "228"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "220"
@@ -29765,7 +29765,7 @@ tables:
         description: "Nikon Metering Mode"
       - id: "92"
         name: "ReleaseMode"
-        writable: true
+        writable: false
         type: "?"
         description: "Release Mode"
       - id: "180"
@@ -29842,7 +29842,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "252"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "244"
@@ -29887,7 +29887,7 @@ tables:
         description: "ISO Auto Hi Limit"
       - id: "350"
         name: "ISOAutoShutterTime"
-        writable: true
+        writable: false
         type: "int16s"
         description: "ISO Auto Shutter Time"
       - id: "184"
@@ -30149,7 +30149,7 @@ tables:
         description: "Monitor Brightness"
       - id: "1734"
         name: "NonCPULens10FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 10 Focal Length"
       - id: "1774"
@@ -30159,7 +30159,7 @@ tables:
         description: "Non CPU Lens 10 Max Aperture"
       - id: "1736"
         name: "NonCPULens11FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 11 Focal Length"
       - id: "1776"
@@ -30169,7 +30169,7 @@ tables:
         description: "Non CPU Lens 11 Max Aperture"
       - id: "1738"
         name: "NonCPULens12FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 12 Focal Length"
       - id: "1778"
@@ -30179,7 +30179,7 @@ tables:
         description: "Non CPU Lens 12 Max Aperture"
       - id: "1740"
         name: "NonCPULens13FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 13 Focal Length"
       - id: "1780"
@@ -30189,7 +30189,7 @@ tables:
         description: "Non CPU Lens 13 Max Aperture"
       - id: "1742"
         name: "NonCPULens14FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 14 Focal Length"
       - id: "1782"
@@ -30199,7 +30199,7 @@ tables:
         description: "Non CPU Lens 14 Max Aperture"
       - id: "1744"
         name: "NonCPULens15FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 15 Focal Length"
       - id: "1784"
@@ -30209,7 +30209,7 @@ tables:
         description: "Non CPU Lens 15 Max Aperture"
       - id: "1746"
         name: "NonCPULens16FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 16 Focal Length"
       - id: "1786"
@@ -30219,7 +30219,7 @@ tables:
         description: "Non CPU Lens 16 Max Aperture"
       - id: "1748"
         name: "NonCPULens17FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 17 Focal Length"
       - id: "1788"
@@ -30229,7 +30229,7 @@ tables:
         description: "Non CPU Lens 17 Max Aperture"
       - id: "1750"
         name: "NonCPULens18FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 18 Focal Length"
       - id: "1790"
@@ -30239,7 +30239,7 @@ tables:
         description: "Non CPU Lens 18 Max Aperture"
       - id: "1752"
         name: "NonCPULens19FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 19 Focal Length"
       - id: "1792"
@@ -30249,7 +30249,7 @@ tables:
         description: "Non CPU Lens 19 Max Aperture"
       - id: "1716"
         name: "NonCPULens1FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 1 Focal Length"
       - id: "1756"
@@ -30259,7 +30259,7 @@ tables:
         description: "Non CPU Lens 1 Max Aperture"
       - id: "1754"
         name: "NonCPULens20FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 20 Focal Length"
       - id: "1794"
@@ -30269,7 +30269,7 @@ tables:
         description: "Non CPU Lens 20 Max Aperture"
       - id: "1718"
         name: "NonCPULens2FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 2 Focal Length"
       - id: "1758"
@@ -30279,7 +30279,7 @@ tables:
         description: "Non CPU Lens 2 Max Aperture"
       - id: "1720"
         name: "NonCPULens3FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 3 Focal Length"
       - id: "1760"
@@ -30289,7 +30289,7 @@ tables:
         description: "Non CPU Lens 3 Max Aperture"
       - id: "1722"
         name: "NonCPULens4FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 4 Focal Length"
       - id: "1762"
@@ -30299,7 +30299,7 @@ tables:
         description: "Non CPU Lens 4 Max Aperture"
       - id: "1724"
         name: "NonCPULens5FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 5 Focal Length"
       - id: "1764"
@@ -30309,7 +30309,7 @@ tables:
         description: "Non CPU Lens 5 Max Aperture"
       - id: "1726"
         name: "NonCPULens6FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 6 Focal Length"
       - id: "1766"
@@ -30319,7 +30319,7 @@ tables:
         description: "Non CPU Lens 6 Max Aperture"
       - id: "1728"
         name: "NonCPULens7FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 7 Focal Length"
       - id: "1768"
@@ -30329,7 +30329,7 @@ tables:
         description: "Non CPU Lens 7 Max Aperture"
       - id: "1730"
         name: "NonCPULens8FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 8 Focal Length"
       - id: "1770"
@@ -30339,7 +30339,7 @@ tables:
         description: "Non CPU Lens 8 Max Aperture"
       - id: "1732"
         name: "NonCPULens9FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 9 Focal Length"
       - id: "1772"
@@ -30436,202 +30436,202 @@ tables:
         description: "Monitor Brightness"
       - id: "1750"
         name: "NonCPULens10FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 10 Focal Length"
       - id: "1848"
         name: "NonCPULens10MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 10 Max Aperture"
       - id: "1752"
         name: "NonCPULens11FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 11 Focal Length"
       - id: "1852"
         name: "NonCPULens11MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 11 Max Aperture"
       - id: "1754"
         name: "NonCPULens12FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 12 Focal Length"
       - id: "1856"
         name: "NonCPULens12MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 12 Max Aperture"
       - id: "1756"
         name: "NonCPULens13FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 13 Focal Length"
       - id: "1860"
         name: "NonCPULens13MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 13 Max Aperture"
       - id: "1758"
         name: "NonCPULens14FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 14 Focal Length"
       - id: "1864"
         name: "NonCPULens14MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 14 Max Aperture"
       - id: "1760"
         name: "NonCPULens15FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 15 Focal Length"
       - id: "1868"
         name: "NonCPULens15MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 15 Max Aperture"
       - id: "1762"
         name: "NonCPULens16FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 16 Focal Length"
       - id: "1872"
         name: "NonCPULens16MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 16 Max Aperture"
       - id: "1764"
         name: "NonCPULens17FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 17 Focal Length"
       - id: "1876"
         name: "NonCPULens17MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 17 Max Aperture"
       - id: "1766"
         name: "NonCPULens18FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 18 Focal Length"
       - id: "1880"
         name: "NonCPULens18MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 18 Max Aperture"
       - id: "1768"
         name: "NonCPULens19FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 19 Focal Length"
       - id: "1884"
         name: "NonCPULens19MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 19 Max Aperture"
       - id: "1732"
         name: "NonCPULens1FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 1 Focal Length"
       - id: "1812"
         name: "NonCPULens1MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 1 Max Aperture"
       - id: "1770"
         name: "NonCPULens20FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 20 Focal Length"
       - id: "1888"
         name: "NonCPULens20MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 20 Max Aperture"
       - id: "1734"
         name: "NonCPULens2FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 2 Focal Length"
       - id: "1816"
         name: "NonCPULens2MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 2 Max Aperture"
       - id: "1736"
         name: "NonCPULens3FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 3 Focal Length"
       - id: "1820"
         name: "NonCPULens3MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 3 Max Aperture"
       - id: "1738"
         name: "NonCPULens4FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 4 Focal Length"
       - id: "1824"
         name: "NonCPULens4MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 4 Max Aperture"
       - id: "1740"
         name: "NonCPULens5FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 5 Focal Length"
       - id: "1828"
         name: "NonCPULens5MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 5 Max Aperture"
       - id: "1742"
         name: "NonCPULens6FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 6 Focal Length"
       - id: "1832"
         name: "NonCPULens6MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 6 Max Aperture"
       - id: "1744"
         name: "NonCPULens7FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 7 Focal Length"
       - id: "1836"
         name: "NonCPULens7MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 7 Max Aperture"
       - id: "1746"
         name: "NonCPULens8FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 8 Focal Length"
       - id: "1840"
         name: "NonCPULens8MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 8 Max Aperture"
       - id: "1748"
         name: "NonCPULens9FocalLength"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Non CPU Lens 9 Focal Length"
       - id: "1844"
         name: "NonCPULens9MaxAperture"
-        writable: true
+        writable: false
         type: "int32u"
         description: "Non CPU Lens 9 Max Aperture"
       - id: "2050"
@@ -30768,7 +30768,7 @@ tables:
         description: "Flash Control Mode"
       - id: "430"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "426"
@@ -30803,7 +30803,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "240"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "232"
@@ -30833,7 +30833,7 @@ tables:
         description: "ISO Auto Hi Limit"
       - id: "334"
         name: "ISOAutoShutterTime"
-        writable: true
+        writable: false
         type: "int16s"
         description: "ISO Auto Shutter Time"
       - id: "188"
@@ -30868,7 +30868,7 @@ tables:
         description: "Microphone Sensitivity"
       - id: "1434"
         name: "MonitorBrightness"
-        writable: true
+        writable: false
         type: "?"
         description: "Monitor Brightness"
       - id: "710"
@@ -31120,7 +31120,7 @@ tables:
         description: "Flash Control Mode"
       - id: "450"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "446"
@@ -31150,7 +31150,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "256"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "248"
@@ -31190,7 +31190,7 @@ tables:
         description: "ISO Auto Hi Limit"
       - id: "354"
         name: "ISOAutoShutterTime"
-        writable: true
+        writable: false
         type: "int16s"
         description: "ISO Auto Shutter Time"
       - id: "204"
@@ -31512,7 +31512,7 @@ tables:
         description: "Exposure Compensation Button"
       - id: "2048"
         name: "ExposureDelay"
-        writable: true
+        writable: false
         type: "fixed32u"
         description: "Exposure Delay"
       - id: "292"
@@ -31527,7 +31527,7 @@ tables:
         description: "Flash Control Mode"
       - id: "450"
         name: "FlashGNDistance"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash GN Distance"
       - id: "446"
@@ -31567,7 +31567,7 @@ tables:
         description: "Focus Shift Exposure Lock"
       - id: "256"
         name: "FocusShiftInterval"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Interval"
       - id: "248"
@@ -31617,7 +31617,7 @@ tables:
         description: "ISO Auto Hi Limit"
       - id: "354"
         name: "ISOAutoShutterTime"
-        writable: true
+        writable: false
         type: "int16s"
         description: "ISO Auto Shutter Time"
       - id: "1942"
@@ -31787,202 +31787,202 @@ tables:
         description: "Multiple Exposure Mode"
       - id: "1568"
         name: "NonCPULens10FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 10 Focal Length"
       - id: "1648"
         name: "NonCPULens10MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 10 Max Aperture"
       - id: "1572"
         name: "NonCPULens11FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 11 Focal Length"
       - id: "1652"
         name: "NonCPULens11MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 11 Max Aperture"
       - id: "1576"
         name: "NonCPULens12FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 12 Focal Length"
       - id: "1656"
         name: "NonCPULens12MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 12 Max Aperture"
       - id: "1580"
         name: "NonCPULens13FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 13 Focal Length"
       - id: "1660"
         name: "NonCPULens13MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 13 Max Aperture"
       - id: "1584"
         name: "NonCPULens14FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 14 Focal Length"
       - id: "1664"
         name: "NonCPULens14MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 14 Max Aperture"
       - id: "1588"
         name: "NonCPULens15FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 15 Focal Length"
       - id: "1668"
         name: "NonCPULens15MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 15 Max Aperture"
       - id: "1592"
         name: "NonCPULens16FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 16 Focal Length"
       - id: "1672"
         name: "NonCPULens16MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 16 Max Aperture"
       - id: "1596"
         name: "NonCPULens17FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 17 Focal Length"
       - id: "1676"
         name: "NonCPULens17MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 17 Max Aperture"
       - id: "1600"
         name: "NonCPULens18FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 18 Focal Length"
       - id: "1680"
         name: "NonCPULens18MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 18 Max Aperture"
       - id: "1604"
         name: "NonCPULens19FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 19 Focal Length"
       - id: "1684"
         name: "NonCPULens19MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 19 Max Aperture"
       - id: "1532"
         name: "NonCPULens1FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 1 Focal Length"
       - id: "1612"
         name: "NonCPULens1MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 1 Max Aperture"
       - id: "1608"
         name: "NonCPULens20FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 20 Focal Length"
       - id: "1688"
         name: "NonCPULens20MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 20 Max Aperture"
       - id: "1536"
         name: "NonCPULens2FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 2 Focal Length"
       - id: "1616"
         name: "NonCPULens2MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 2 Max Aperture"
       - id: "1540"
         name: "NonCPULens3FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 3 Focal Length"
       - id: "1620"
         name: "NonCPULens3MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 3 Max Aperture"
       - id: "1544"
         name: "NonCPULens4FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 4 Focal Length"
       - id: "1624"
         name: "NonCPULens4MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 4 Max Aperture"
       - id: "1548"
         name: "NonCPULens5FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 5 Focal Length"
       - id: "1628"
         name: "NonCPULens5MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 5 Max Aperture"
       - id: "1552"
         name: "NonCPULens6FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 6 Focal Length"
       - id: "1632"
         name: "NonCPULens6MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 6 Max Aperture"
       - id: "1556"
         name: "NonCPULens7FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 7 Focal Length"
       - id: "1636"
         name: "NonCPULens7MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 7 Max Aperture"
       - id: "1560"
         name: "NonCPULens8FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 8 Focal Length"
       - id: "1640"
         name: "NonCPULens8MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 8 Max Aperture"
       - id: "1564"
         name: "NonCPULens9FocalLength"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 9 Focal Length"
       - id: "1644"
         name: "NonCPULens9MaxAperture"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Non CPU Lens 9 Max Aperture"
       - id: "290"
@@ -32658,12 +32658,12 @@ tables:
         description: "AF Area Initial Width"
       - id: "3048"
         name: "AFAreaInitialXPosition"
-        writable: true
+        writable: false
         type: "int8s"
         description: "AF Area Initial X Position"
       - id: "3049"
         name: "AFAreaInitialYPosition"
-        writable: true
+        writable: false
         type: "int8s"
         description: "AF Area Initial Y Position"
   - name: Nikon::OrientationInfo
@@ -32917,7 +32917,7 @@ tables:
     tags:
       - id: "160"
         name: "PortraitImpressionBalance"
-        writable: true
+        writable: false
         type: "?"
         description: "Portrait Impression Balance"
   - name: Nikon::PreviewIFD
@@ -32990,12 +32990,12 @@ tables:
         description: "Flicker Reduction Indicator"
       - id: "32"
         name: "Interval"
-        writable: true
+        writable: false
         type: "?"
         description: "Interval"
       - id: "36"
         name: "IntervalFrame"
-        writable: true
+        writable: false
         type: "?"
         description: "Interval Frame"
       - id: "26"
@@ -33079,14 +33079,14 @@ tables:
         description: "Interval Frame"
       - id: "36"
         name: "IntervalShooting"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Interval Shooting"
   - name: Nikon::SeqInfoZ9
     tags:
       - id: "32"
         name: "FocusShiftShooting"
-        writable: true
+        writable: false
         type: "?"
         description: "Focus Shift Shooting"
       - id: "42"
@@ -33096,7 +33096,7 @@ tables:
         description: "Interval Frame"
       - id: "40"
         name: "IntervalShooting"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Interval Shooting"
   - name: Nikon::SettingsInfoD810
@@ -34260,17 +34260,17 @@ tables:
     tags:
       - id: "36"
         name: "VignetteCoefficient1"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Vignette Coefficient 1"
       - id: "52"
         name: "VignetteCoefficient2"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Vignette Coefficient 2"
       - id: "68"
         name: "VignetteCoefficient3"
-        writable: true
+        writable: false
         type: "rational64s"
         description: "Vignette Coefficient 3"
       - id: "0"
@@ -39794,12 +39794,12 @@ tables:
         description: "Flash Exposure Comp Area"
       - id: "91"
         name: "FlashShutterSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Shutter Speed"
       - id: "87"
         name: "FlashSyncSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Sync Speed"
       - id: "559"
@@ -39949,7 +39949,7 @@ tables:
         description: "Manual Focus Ring In AF Mode"
       - id: "65"
         name: "MaxContinuousRelease"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Max Continuous Release"
       - id: "57"
@@ -40291,7 +40291,7 @@ tables:
         description: "Exposure Control Step Size"
       - id: "753"
         name: "ExposureDelay"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Exposure Delay"
       - id: "258"
@@ -40336,12 +40336,12 @@ tables:
         description: "Flash Exposure Comp Area"
       - id: "87"
         name: "FlashShutterSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Shutter Speed"
       - id: "83"
         name: "FlashSyncSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Sync Speed"
       - id: "607"
@@ -40516,7 +40516,7 @@ tables:
         description: "Matrix Metering"
       - id: "61"
         name: "MaxContinuousRelease"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Max Continuous Release"
       - id: "53"
@@ -40586,7 +40586,7 @@ tables:
         description: "Movie Lens Control Ring"
       - id: "537"
         name: "MovieMidtoneDisplayRange"
-        writable: true
+        writable: false
         type: "?"
         description: "Movie Midtone Display Range"
       - id: "535"
@@ -40968,12 +40968,12 @@ tables:
         description: "Flash Exposure Comp Area"
       - id: "87"
         name: "FlashShutterSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Shutter Speed"
       - id: "83"
         name: "FlashSyncSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Sync Speed"
       - id: "607"
@@ -41193,7 +41193,7 @@ tables:
         description: "Matrix Metering"
       - id: "61"
         name: "MaxContinuousRelease"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Max Continuous Release"
       - id: "53"
@@ -41273,7 +41273,7 @@ tables:
         description: "Movie Lens Control Ring"
       - id: "537"
         name: "MovieMidtoneDisplayRange"
-        writable: true
+        writable: false
         type: "?"
         description: "Movie Midtone Display Range"
       - id: "535"
@@ -41685,12 +41685,12 @@ tables:
         description: "Flash Exposure Comp Area"
       - id: "87"
         name: "FlashShutterSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Shutter Speed"
       - id: "83"
         name: "FlashSyncSpeed"
-        writable: true
+        writable: false
         type: "?"
         description: "Flash Sync Speed"
       - id: "631"
@@ -41910,7 +41910,7 @@ tables:
         description: "Matrix Metering"
       - id: "61"
         name: "MaxContinuousRelease"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Max Continuous Release"
       - id: "53"
@@ -41985,7 +41985,7 @@ tables:
         description: "Movie Lens Control Ring"
       - id: "561"
         name: "MovieMidtoneDisplayRange"
-        writable: true
+        writable: false
         type: "?"
         description: "Movie Midtone Display Range"
       - id: "559"
@@ -43439,7 +43439,7 @@ tables:
         description: "AE Lock"
       - id: "772"
         name: "AFAreas"
-        writable: true
+        writable: false
         type: "?"
         description: "AF Areas"
       - id: "774"
@@ -43514,7 +43514,7 @@ tables:
         description: "Contrast Setting"
       - id: "1283"
         name: "CustomSaturation"
-        writable: true
+        writable: false
         type: "?"
         description: "Custom Saturation"
       - id: "2312"
@@ -43529,7 +43529,7 @@ tables:
         description: "Distortion Correction"
       - id: "1536"
         name: "DriveMode"
-        writable: true
+        writable: false
         type: "?"
         description: "Drive Mode"
       - id: "512"
@@ -43679,7 +43679,7 @@ tables:
         description: "Noise Reduction"
       - id: "1537"
         name: "PanoramaMode"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Panorama Mode"
       - id: "1312"
@@ -43982,7 +43982,7 @@ tables:
         description: "AF Point"
       - id: "795"
         name: "AFPointDetails"
-        writable: true
+        writable: false
         type: "int16u"
         description: "AF Point Details"
       - id: "795"
@@ -44047,7 +44047,7 @@ tables:
         description: "Focus Step Near"
       - id: "5632"
         name: "ImageStabilization"
-        writable: true
+        writable: false
         type: "undef"
         description: "Image Stabilization"
       - id: "4616"
@@ -44062,7 +44062,7 @@ tables:
         description: "Macro LED"
       - id: "4617"
         name: "ManualFlash"
-        writable: true
+        writable: false
         type: "?"
         description: "Manual Flash"
       - id: "529"
@@ -44114,7 +44114,7 @@ tables:
         description: "Black Level 2"
       - id: "4870"
         name: "CameraTemperature"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Camera Temperature"
       - id: "512"
@@ -45054,7 +45054,7 @@ tables:
         description: "Print Image Matching"
       - id: "513"
         name: "Quality"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Quality"
       - id: "8241"
@@ -45149,7 +45149,7 @@ tables:
         description: "Shutter Speed Value"
       - id: "512"
         name: "SpecialMode"
-        writable: true
+        writable: false
         type: "?"
         description: "Special Mode"
       - id: "520"
@@ -46558,7 +46558,7 @@ tables:
         description: "Dynamic Range Boost"
       - id: "78"
         name: "FaceDetInfo"
-        writable: true
+        writable: false
         type: "?"
         description: "Face Det Info"
       - id: "97"
@@ -48660,7 +48660,7 @@ tables:
         description: "AF Integration Time"
       - id: "20"
         name: "AFPointValues"
-        writable: true
+        writable: false
         type: "?"
         description: "AF Point Values"
       - id: "11"
@@ -48670,12 +48670,12 @@ tables:
         description: "AF Points In Focus"
       - id: "298"
         name: "AFPointsSelected"
-        writable: true
+        writable: false
         type: "?"
         description: "AF Points Selected"
       - id: "399"
         name: "AFPointsUnknown"
-        writable: true
+        writable: false
         type: "?"
         description: "AF Points Unknown"
       - id: "0"
@@ -48917,7 +48917,7 @@ tables:
     tags:
       - id: "1.1"
         name: "CAFGridSize"
-        writable: true
+        writable: false
         type: "?"
         description: "CAF Grid Size"
       - id: "2"
@@ -48932,7 +48932,7 @@ tables:
         description: "CAF Points Selected"
       - id: "1"
         name: "NumCAFPoints"
-        writable: true
+        writable: false
         type: "?"
         description: "Num CAF Points"
   - name: Pentax::CameraInfo
@@ -50509,7 +50509,7 @@ tables:
         description: "AF Points In Focus"
       - id: "60"
         name: "AFPointsInFocus"
-        writable: true
+        writable: false
         type: "int32u"
         description: "AF Points In Focus"
       - id: "104"
@@ -51139,7 +51139,7 @@ tables:
         description: "Raw Development Process"
       - id: "57"
         name: "RawImageSize"
-        writable: true
+        writable: false
         type: "?"
         description: "Raw Image Size"
       - id: "28"
@@ -51239,12 +51239,12 @@ tables:
         description: "Time Info"
       - id: "1026"
         name: "ToneCurve"
-        writable: true
+        writable: false
         type: "?"
         description: "Tone Curve"
       - id: "1027"
         name: "ToneCurves"
-        writable: true
+        writable: false
         type: "?"
         description: "Tone Curves"
       - id: "1029"
@@ -51545,7 +51545,7 @@ tables:
         description: "Sensor Temperature 2"
       - id: "10"
         name: "ShotNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Shot Number"
   - name: Pentax::TimeInfo
@@ -51740,7 +51740,7 @@ tables:
         description: "Camera Model"
       - id: "256"
         name: "CameraOrientation"
-        writable: true
+        writable: false
         type: "?"
         description: "Camera Orientation"
       - id: "262"
@@ -51810,7 +51810,7 @@ tables:
         description: "Min Aperture Value"
       - id: "549"
         name: "PhaseOne_0x0225"
-        writable: true
+        writable: false
         type: "?"
         description: "Phase One 0x 0225"
       - id: "555"
@@ -51820,12 +51820,12 @@ tables:
         description: "Phase One 0x 022b"
       - id: "600"
         name: "PhaseOne_0x0258"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Phase One 0x 0258"
       - id: "602"
         name: "PhaseOne_0x025a"
-        writable: true
+        writable: false
         type: "int16s"
         description: "Phase One 0x 025a"
       - id: "271"
@@ -52490,7 +52490,7 @@ tables:
         description: "Motion Sensitivity"
       - id: "24"
         name: "SDCardID"
-        writable: true
+        writable: false
         type: "?"
         description: "SD Card ID"
       - id: "104"
@@ -53204,7 +53204,7 @@ tables:
     tags:
       - id: "768"
         name: "RicohMake"
-        writable: true
+        writable: false
         type: "undef"
         description: "Ricoh Make"
       - id: "519"
@@ -57485,7 +57485,7 @@ tables:
         description: "Lens E-mount Version"
       - id: "1011"
         name: "LensFirmwareVersion"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Lens Firmware Version"
       - id: "153"
@@ -57659,12 +57659,12 @@ tables:
         description: "Battery Temperature"
       - id: "2"
         name: "BatteryUnknown"
-        writable: true
+        writable: false
         type: "undef"
         description: "Battery Unknown"
       - id: "8"
         name: "BatteryVoltage"
-        writable: true
+        writable: false
         type: "undef"
         description: "Battery Voltage"
       - id: "26"
@@ -57916,7 +57916,7 @@ tables:
         description: "Face Test 8"
       - id: "3"
         name: "FacesDetected"
-        writable: true
+        writable: false
         type: "?"
         description: "Faces Detected"
       - id: "11"
@@ -58048,7 +58048,7 @@ tables:
         description: "Shutter Count"
       - id: "4368"
         name: "TiffMeteringImage"
-        writable: true
+        writable: false
         type: "undef"
         description: "Tiff Metering Image"
       - id: "44"
@@ -58864,7 +58864,7 @@ tables:
         description: "WB Shift AB GM"
       - id: "8230"
         name: "WBShiftAB_GM_Precise"
-        writable: true
+        writable: false
         type: "?"
         description: "WB Shift AB GM Precise"
       - id: "277"
@@ -58973,82 +58973,82 @@ tables:
     tags:
       - id: "0"
         name: "MeterInfo1Row1"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 1"
       - id: "90"
         name: "MeterInfo1Row2"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 2"
       - id: "180"
         name: "MeterInfo1Row3"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 3"
       - id: "270"
         name: "MeterInfo1Row4"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 4"
       - id: "360"
         name: "MeterInfo1Row5"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 5"
       - id: "450"
         name: "MeterInfo1Row6"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 6"
       - id: "540"
         name: "MeterInfo1Row7"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 1 Row 7"
       - id: "630"
         name: "MeterInfo2Row1"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 1"
       - id: "740"
         name: "MeterInfo2Row2"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 2"
       - id: "850"
         name: "MeterInfo2Row3"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 3"
       - id: "960"
         name: "MeterInfo2Row4"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 4"
       - id: "1070"
         name: "MeterInfo2Row5"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 5"
       - id: "1180"
         name: "MeterInfo2Row6"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 6"
       - id: "1290"
         name: "MeterInfo2Row7"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 7"
       - id: "1400"
         name: "MeterInfo2Row8"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 8"
       - id: "1510"
         name: "MeterInfo2Row9"
-        writable: true
+        writable: false
         type: "undef"
         description: "Meter Info 2 Row 9"
   - name: Sony::MoreInfo
@@ -61353,7 +61353,7 @@ tables:
         description: "Flash Status"
       - id: "124"
         name: "InternalSerialNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Internal Serial Number"
       - id: "240"
@@ -61495,7 +61495,7 @@ tables:
         description: "Flash Status"
       - id: "136"
         name: "InternalSerialNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Internal Serial Number"
       - id: "262"
@@ -61625,7 +61625,7 @@ tables:
         description: "Sony Min Aperture"
       - id: "97"
         name: "SonyTimeMinSec"
-        writable: true
+        writable: false
         type: "undef"
         description: "Sony Time Min Sec"
   - name: Sony::Tag9050c
@@ -61637,12 +61637,12 @@ tables:
         description: "Flash Status"
       - id: "136"
         name: "InternalSerialNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Internal Serial Number"
       - id: "138"
         name: "InternalSerialNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Internal Serial Number"
       - id: "107"
@@ -61694,7 +61694,7 @@ tables:
     tags:
       - id: "56"
         name: "InternalSerialNumber"
-        writable: true
+        writable: false
         type: "?"
         description: "Internal Serial Number"
       - id: "31"
@@ -61731,7 +61731,7 @@ tables:
         description: "Digital Zoom"
       - id: "82"
         name: "ModelReleaseYear"
-        writable: true
+        writable: false
         type: "int8u"
         description: "Model Release Year"
       - id: "41"
@@ -61766,7 +61766,7 @@ tables:
         description: "Shot Number Since Power Up"
       - id: "68"
         name: "SonyImageHeight"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Sony Image Height"
   - name: Sony::Tag9400b
@@ -61783,7 +61783,7 @@ tables:
         description: "Digital Zoom"
       - id: "70"
         name: "ModelReleaseYear"
-        writable: true
+        writable: false
         type: "int8u"
         description: "Model Release Year"
       - id: "37"
@@ -61818,7 +61818,7 @@ tables:
         description: "Shot Number Since Power Up"
       - id: "63"
         name: "SonyImageHeight"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Sony Image Height"
   - name: Sony::Tag9400c
@@ -61830,7 +61830,7 @@ tables:
         description: "Camera Orientation"
       - id: "83"
         name: "ModelReleaseYear"
-        writable: true
+        writable: false
         type: "int8u"
         description: "Model Release Year"
       - id: "42"
@@ -62379,7 +62379,7 @@ tables:
         description: "Lens E-mount Version"
       - id: "20"
         name: "LensFirmwareVersion"
-        writable: true
+        writable: false
         type: "int16u"
         description: "Lens Firmware Version"
       - id: "8"

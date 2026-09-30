@@ -9,6 +9,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn sha256(bytes: &[u8]) -> String {
@@ -206,26 +207,26 @@ fn main() -> Result<()> {
         staged.push((domain, path, yaml, count));
     }
 
-    let stage_root = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target"));
-    fs::create_dir_all(&stage_root)?;
-    let stage_dir = stage_root.join(format!("registry-stage-{}", std::process::id()));
-    fs::create_dir(&stage_dir).context("creating registry staging directory")?;
     let mut pending = Vec::new();
-    for (domain, _, yaml, count) in &staged {
-        let tmp = stage_dir.join(format!("{domain}.yaml"));
-        if let Err(error) = fs::write(&tmp, yaml) {
-            let _ = fs::remove_dir_all(&stage_dir);
-            return Err(error).with_context(|| format!("staging {domain} registry"));
-        }
-        pending.push((*count, tmp));
+    for (domain, path, yaml, _) in &staged {
+        // Rename is atomic only within a filesystem. Keep each temporary
+        // file beside its registry, even when Cargo builds on another volume.
+        let mut tmp = tempfile::Builder::new()
+            .prefix(".registry-stage-")
+            .tempfile_in(path.parent().context("registry has no parent directory")?)
+            .with_context(|| format!("staging {domain} registry"))?;
+        tmp.write_all(yaml.as_bytes())
+            .with_context(|| format!("writing staged {domain} registry"))?;
+        tmp.as_file()
+            .set_permissions(fs::metadata(path)?.permissions())
+            .with_context(|| format!("preserving {domain} registry permissions"))?;
+        pending.push(tmp);
     }
-    for ((domain, path, _, count), (_, tmp)) in staged.iter().zip(&pending) {
-        fs::rename(tmp, path).with_context(|| format!("replacing {domain} registry"))?;
+    for ((domain, path, _, count), tmp) in staged.iter().zip(pending) {
+        tmp.persist(path)
+            .with_context(|| format!("replacing {domain} registry"))?;
         println!("{domain}: {count} rows; {}", sha256(&fs::read(path)?));
     }
-    fs::remove_dir(&stage_dir)?;
     println!(
         "ExifTool {pin}; source {} sha256 {claimed_sha}; dump {} sha256 {}",
         source_path.display(),
