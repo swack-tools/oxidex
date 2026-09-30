@@ -471,9 +471,10 @@ impl TTFParser {
                 .chunks_exact(2)
                 .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
                 .collect();
-            let Ok(decoded) = String::from_utf16(&utf16) else {
-                break;
-            };
+            // Font.pm's UCS2 decoder replaces an invalid surrogate and keeps
+            // processing later language records. The ASCII name filter below
+            // removes that replacement character.
+            let decoded = String::from_utf16_lossy(&utf16);
             let filtered: String = decoded
                 .chars()
                 .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
@@ -1064,6 +1065,57 @@ mod tests {
             Some(&TagValue::String("Recovery Format One".to_string()))
         );
         assert!(!tags.contains_key("Font:FontFamily"));
+    }
+
+    #[test]
+    fn malformed_format_one_language_does_not_hide_later_valid_tag() {
+        // Pinned ExifTool decodes A, a lone surrogate, B to a string whose
+        // language-name filter is AB, then still reads the next nb-NO tag.
+        let malformed = [0, b'A', 0xd8, 0, 0, b'B'];
+        let later = "nb-NO"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family = "Later Valid"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one name record
+        data.extend_from_slice(&28u16.to_be_bytes()); // string storage
+        for field in [
+            0u16,
+            3,
+            0x8001,
+            1,
+            family.len() as u16,
+            (malformed.len() + later.len()) as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&2u16.to_be_bytes()); // two language tags
+        for (len, offset) in [(malformed.len(), 0), (later.len(), malformed.len())] {
+            data.extend_from_slice(&(len as u16).to_be_bytes());
+            data.extend_from_slice(&(offset as u16).to_be_bytes());
+        }
+        data.extend_from_slice(&malformed);
+        data.extend_from_slice(&later);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let reader = TestReader::new(data);
+        let languages = TTFParser::format_one_language_tags(&reader, &table).unwrap();
+        assert_eq!(languages.get(&0x8000).map(String::as_str), Some("AB"));
+        assert_eq!(languages.get(&0x8001).map(String::as_str), Some("nb-NO"));
+        let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+        assert_eq!(
+            tags.get("Font:FontFamily-nb-NO"),
+            Some(&TagValue::String("Later Valid".to_string()))
+        );
     }
 
     /// The Windows LCIDs retain Font.pm's region subtags.

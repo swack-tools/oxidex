@@ -938,6 +938,8 @@ jobs:
           # The IFD sample, QuickTime source/oracle snapshots and the bounded
           # Garmin FIT source (test_garmin_fit_specs.FreshSourceTests) are
           # independently checked fixtures, not outputs of gen_staleness_facts.py.
+          # Font's language fixture is checked against fresh pinned Font.pm by
+          # test_font_language_specs and just verify-tables.
           if ! diff -ru tools/exiftool-tables/fixtures "$TMPFIX" \
               --exclude hand_enum_drift_baseline.json \
               --exclude quicktime_source_13_59.json \
@@ -947,6 +949,7 @@ jobs:
               --exclude garmin_fit_source.json \
               --exclude xmp_namespaces_13_59.json \
               --exclude xmp_priorities.json \
+              --exclude font_languages.json \
               --exclude ifd_tables_sample.rs; then
             echo "::error::committed staleness fixtures are stale relative to ExifTool ${ET_VERSION} -- re-run 'python3 tools/exiftool-tables/gen_staleness_facts.py <dump.json> tools/exiftool-tables/fixtures', update the Rust these fixtures check, and commit both." >&2
             exit 1
