@@ -691,11 +691,9 @@ enum ReaderKey {
     Borrowed(String),
 }
 
-/// The key `original_map` holds for an ExifIFD entry `tag_id` that
-/// `tag_db` has no name for, when the reader surfaced it under the name the
-/// generated `Exif::Main` reports it by (slice E-2: 178 reported ids have no
-/// `tag_db` name; `lookup_tag_name` gives `ExifIFD:0x9210`, the engine row
-/// is `ExifIFD:FocalPlaneResolutionUnit`).
+/// The reader key for an ExifIFD entry from generated `Exif::Main`.
+/// A source-generated reverse name can match this key for a legacy row,
+/// while the physical ID still differs from that name's write address.
 pub(crate) fn engine_reader_key(tag_id: u16, original_map: &MetadataMap) -> Option<String> {
     let name = crate::core::exif_dir_engine::exif_main_reported_name(tag_id)?;
     let key = format!("ExifIFD:{name}");
@@ -719,14 +717,17 @@ pub(crate) fn key_writes_tag_id(key: &str, tag_id: u16) -> bool {
 fn surfaced_reader_key(entry: &RawEntry, original_map: &MetadataMap) -> ReaderKey {
     let key = lookup_tag_name(entry.tag_id, entry.ifd.prefix());
     if entry.ifd == IfdKind::ExifIfd
-        && !original_map.contains_key(&key)
         && let Some(engine_key) = engine_reader_key(entry.tag_id, original_map)
     {
-        return if key_writes_tag_id(&engine_key, entry.tag_id) {
-            ReaderKey::Owned(engine_key)
-        } else {
-            ReaderKey::Borrowed(engine_key)
-        };
+        // A source-derived reverse name may now be the same as the engine
+        // name, but that does not make a legacy, read-only ID the address a
+        // write of this name owns. Check the destination ID in either case.
+        if !key_writes_tag_id(&engine_key, entry.tag_id) {
+            return ReaderKey::Borrowed(engine_key);
+        }
+        if !original_map.contains_key(&key) {
+            return ReaderKey::Owned(engine_key);
+        }
     }
     ReaderKey::Owned(key)
 }

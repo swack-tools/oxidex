@@ -70,9 +70,27 @@ tools/exiftool-tables/regen-all.sh
 5. Verify  → -listx independently checks documented names and IDs
 ```
 
-The generator resolves table-level `WRITABLE` inheritance and withholds
-numeric array types that the CLI scalar parser cannot honor. Source-only
+The generator resolves table-level `WRITABLE` inheritance and checks
+conversion inverses before publishing write capability. It withholds numeric
+array types that the CLI scalar parser cannot honor. For example, pinned
+ExifTool declares `YCbCrCoefficients` as three writable `rational64u` values;
+the registry retains `writable: true` and uses `type: "?"` so it does not
+claim a scalar numeric type. Some older hand-authored CLI descriptors take
+precedence over the YAML projection; count-aware CLI writes remain separate
+consumer work. Exif `CreateDate` and `ModifyDate` use source-backed
+semantic overlays: their stored type is `string`, while `ValidateExifDate` and
+`InverseDateTime` make the public write value a date-time. Source-only
 SubDirectory pointers remain in the registry even when `-listx` omits them.
+Metadata-free source hashes whose rows contain only collector bookkeeping are
+kept in the authenticated dump but excluded from the tag registry. This omits
+four lookup tables (15 rows) in the pinned 13.59 source, including QuickTime's
+handler map `%eeBox`; real metadata-free tables with tag declarations remain.
+
+Numeric source IDs are serialized as decimal strings in the six YAML files.
+For example, Exif ID `0x0211` is `529`. The public `lookup_tag_name` API takes
+a numeric `u16` and resolves either spelling through the generated reverse
+index. Code reading a raw `Tag.id` string should compare its numeric value,
+not depend on its former hexadecimal spelling.
 
 ### Generated Code Structure
 

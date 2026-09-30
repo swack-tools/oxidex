@@ -515,6 +515,24 @@ fn is_probably_a_value_lookup_table(
     (unshaped as f64 / names.len() as f64) > 0.5
 }
 
+/// A hash admitted by the dump collector solely because its values are
+/// structured can still be a lookup, not a tag table. The collector records
+/// unrecognized nested fields as `_extra_keys`; when those are the only
+/// fields in every row and the table has no tag metadata, there is no tag
+/// declaration to project into the registry. Keep the source dump intact for
+/// consumers of these lookup hashes (such as QuickTime's `%eeBox`).
+fn is_metadata_free_lookup_table(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    tags: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    meta.is_none_or(|fields| fields.is_empty())
+        && tags.values().all(|entry| {
+            entry
+                .as_object()
+                .is_some_and(|fields| fields.keys().all(|field| field == "_extra_keys"))
+        })
+}
+
 fn entry_description(entry: &serde_json::Value, tag_name: &str) -> String {
     entry
         .get("Description")
@@ -625,6 +643,9 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
             }
 
             let table_meta = table_val.get("meta").and_then(|m| m.as_object());
+            if is_metadata_free_lookup_table(table_meta, tags) {
+                continue;
+            }
             let table_writable = table_meta
                 .and_then(|m| m.get("WRITABLE"))
                 .and_then(|w| w.as_str());
@@ -1008,6 +1029,63 @@ mod tests {
         assert!(yaml.contains("\\u0000") && yaml.contains("\\u0005"));
         assert!(!yaml.contains('\0'));
         assert_eq!(parse_domain_yaml(&yaml), vec![record]);
+    }
+
+    #[test]
+    fn metadata_free_lookup_hashes_do_not_become_tags() {
+        let dump = serde_json::json!({"modules": {
+            "Exif": {"tables": {"printParameter": {
+                "full_name": "Image::ExifTool::Exif::printParameter", "meta": {},
+                "tags": {"PrintConv": {"_extra_keys": ["0", "OTHER"]}}
+            }}},
+            "Font": {"tables": {"ttLang": {
+                "full_name": "Image::ExifTool::Font::ttLang", "meta": {},
+                "tags": {"Custom": {}, "English": {"_extra_keys": ["0"]}}
+            }}},
+            "QuickTime": {"tables": {
+                "eeBox": {
+                    "full_name": "Image::ExifTool::QuickTime::eeBox", "meta": {},
+                    "tags": {"": {"_extra_keys": ["gps "]},
+                             "vide": {"_extra_keys": ["stco", "stsz"]}}
+                },
+                "Keys": {
+                    "full_name": "Image::ExifTool::QuickTime::Keys",
+                    "meta": {"WRITABLE": "1"}, "tags": {"artist": {}}
+                }
+            }},
+            "TagInfoXML": {"tables": {"allTables": {
+                "full_name": "Image::ExifTool::TagInfoXML::allTables", "meta": {},
+                "tags": {"Composite": {"_extra_keys": ["Exif-DateTimeOriginal"]}}
+            }}},
+            "PDF": {"tables": {
+                "ColorSpace": {
+                    "full_name": "Image::ExifTool::PDF::ColorSpace", "meta": {},
+                    "tags": {"CS0": {"SubDirectory": {"TagTable": "PDF::DefaultRGB"},
+                                      "_extra_keys": ["ConvertToDict"]}}
+                },
+                "Kids": {
+                    "full_name": "Image::ExifTool::PDF::Kids", "meta": {},
+                    "tags": {"Metadata": {"Condition": "1",
+                                           "SubDirectory": {"TagTable": "PDF::Metadata"}}}
+                }
+            }}
+        }});
+        let records = tag_records_from_dump_document(&dump).expect("project source tables");
+        for table in [
+            "Exif::printParameter",
+            "Font::ttLang",
+            "QuickTime::eeBox",
+            "TagInfoXML::allTables",
+        ] {
+            assert!(records.iter().all(|tag| tag.table != table), "{table}");
+        }
+        for table in ["QuickTime::Keys", "PDF::ColorSpace", "PDF::Kids"] {
+            assert!(records.iter().any(|tag| tag.table == table), "{table}");
+        }
+        assert!(
+            dump["modules"]["Font"]["tables"]["ttLang"]["tags"]["English"].is_object(),
+            "the source dump remains available to locale lookup consumers"
+        );
     }
 
     #[test]

@@ -408,13 +408,17 @@ pub(crate) fn rewrite_tiff_payload_with_removals(
     for entry in &scan.entries {
         let mut keys = entry_keys(entry);
         if entry.ifd == IfdKind::ExifIfd
-            && !keys.iter().any(|k| original.contains_key(k))
             && let Some(engine_key) = engine_reader_key(entry.tag_id, original)
         {
             if key_writes_tag_id(&engine_key, entry.tag_id) {
-                keys.insert(0, engine_key);
+                if !keys.iter().any(|k| original.contains_key(k)) {
+                    keys.insert(0, engine_key);
+                }
             } else {
                 borrowed.push(engine_key);
+                // The generated reverse index can name this legacy row too.
+                // It remains a borrowed read name if its write ID differs.
+                keys.clear();
             }
         }
         // A deletion this writer can make: a surfaced entry the map drops, or

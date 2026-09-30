@@ -18828,48 +18828,6 @@ tables:
         writable: false
         type: "?"
         description: "Padding"
-  - name: QuickTime::eeBox
-    tags:
-      - id: "camm"
-        name: "Camm"
-        writable: false
-        type: "?"
-        description: "Camm"
-      - id: "ctbx"
-        name: "Ctbx"
-        writable: false
-        type: "?"
-        description: "Ctbx"
-      - id: "data"
-        name: "Data"
-        writable: false
-        type: "?"
-        description: "Data"
-      - id: "meta"
-        name: "Meta"
-        writable: false
-        type: "?"
-        description: "Meta"
-      - id: "sbtl"
-        name: "Sbtl"
-        writable: false
-        type: "?"
-        description: "Sbtl"
-      - id: ""
-        name: "Tag"
-        writable: false
-        type: "?"
-        description: "Tag"
-      - id: "text"
-        name: "Text"
-        writable: false
-        type: "?"
-        description: "Text"
-      - id: "vide"
-        name: "Vide"
-        writable: false
-        type: "?"
-        description: "Vide"
   - name: QuickTime::equi
     tags:
       - id: "2"

@@ -6522,13 +6522,6 @@ tables:
         writable: false
         type: "?"
         description: "ZIF Metadata"
-  - name: Exif::printParameter
-    tags:
-      - id: "PrintConv"
-        name: "PrintConv"
-        writable: false
-        type: "?"
-        description: "Print Conv"
   - name: FlashPix::CompObj
     tags:
       - id: "1"
@@ -31433,13 +31426,6 @@ tables:
         writable: false
         type: "?"
         description: "Preview Quality"
-  - name: TagInfoXML::allTables
-    tags:
-      - id: "Image::ExifTool::Composite"
-        name: "ImageExifToolComposite"
-        writable: false
-        type: "?"
-        description: "Image Exif Tool Composite"
   - name: Text::Main
     tags:
       - id: "ByteOrderMark"

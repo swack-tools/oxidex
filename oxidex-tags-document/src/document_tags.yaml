@@ -908,33 +908,6 @@ tables:
         writable: false
         type: "?"
         description: "Version"
-  - name: Font::ttLang
-    tags:
-      - id: "Custom"
-        name: "Custom"
-        writable: false
-        type: "?"
-        description: "Custom"
-      - id: "ISO"
-        name: "ISO"
-        writable: false
-        type: "?"
-        description: "ISO"
-      - id: "Macintosh"
-        name: "Macintosh"
-        writable: false
-        type: "?"
-        description: "Macintosh"
-      - id: "Unicode"
-        name: "Unicode"
-        writable: false
-        type: "?"
-        description: "Unicode"
-      - id: "Windows"
-        name: "Windows"
-        writable: false
-        type: "?"
-        description: "Windows"
   - name: FotoStation::Main
     tags:
       - id: "1"

@@ -325,3 +325,11 @@ fn embedded_numeric_array_count_does_not_force_scalar_cli_parse() {
         TagValue::String("1 2 3 4".to_string())
     );
 }
+
+#[test]
+fn decimal_source_ids_keep_numeric_exif_lookup() {
+    use oxidex::tag_db::lookup_tag_name;
+
+    assert_eq!(lookup_tag_name(0x0211, "IFD0"), "IFD0:YCbCrCoefficients");
+    assert_eq!(lookup_tag_name(0x9010, "ExifIFD"), "ExifIFD:OffsetTime");
+}
