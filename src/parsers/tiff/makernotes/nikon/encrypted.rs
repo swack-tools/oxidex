@@ -350,10 +350,14 @@ fn parse_encrypted(
             if data[4..20].iter().any(|&byte| byte != 0) {
                 ctx.set(Dm::OldLensData, Scalar::Num(1.0));
             }
+            let hand_overlap = lens_data::encrypted_overlap_fields(&data, root.name, ctx);
+            for field in &hand_overlap {
+                out.insert(format!("Nikon:{}", field.name), field.print.clone());
+            }
             return GeneratedLensData {
                 owned: false,
                 rows: Vec::new(),
-                hand_overlap: lens_data::encrypted_overlap_fields(&data, root.name, ctx),
+                hand_overlap,
             };
         }
         // Other variants with no DecryptStart are plaintext layouts or
@@ -603,6 +607,27 @@ mod dispatch_tests {
                 ("LensFStops", 14, "4.58"),
             ]
         );
+        let mut ctx = Ctx::new(Some("NIKON D810"), None);
+        let mut out = HashMap::new();
+        parse_lens_data(
+            &old,
+            old.len(),
+            Some(keys),
+            ByteOrder::LittleEndian,
+            &mut ctx,
+            &mut out,
+        );
+        for (name, printed) in [
+            ("ExitPupilPosition", "97.5 mm"),
+            ("AFAperture", "2.8"),
+            ("LensFStops", "4.58"),
+        ] {
+            assert_eq!(
+                out.get(&format!("Nikon:{name}")).map(String::as_str),
+                Some(printed),
+                "public non-occurrence LensData API must retain {name}"
+            );
+        }
         assert!(generated_lens_rows(&old, None).hand_overlap.is_empty());
         assert!(
             generated_lens_rows(&old[..19], Some(keys))

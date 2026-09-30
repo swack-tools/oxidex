@@ -370,6 +370,50 @@ fn conditional_0800_old_lens_data_survives_generated_0204() {
 }
 
 #[test]
+fn omitted_1264_0800_fields_reach_non_occurrence_makernote_api() {
+    if oxidex::exiftool_oracle::repo_pin() != "12.64" {
+        return;
+    }
+    for older_last in [false, true] {
+        let exif = d810_mixed_encrypted(b"0800", older_last);
+        let nikon = exif
+            .windows(10)
+            .position(|window| window == b"Nikon\0\x02\x11\0\0")
+            .expect("Nikon MakerNote signature");
+        let context = MakerNoteContext::detached(&exif[nikon..]);
+        let mut session = Session::new();
+        let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
+        let mut condition = Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        NikonParser
+            .parse_with_context_and_values_and_session(
+                &context,
+                ByteOrder::LittleEndian,
+                Some("NIKON D810"),
+                &mut session,
+                &mut condition,
+                &mut tags,
+                &mut value_forms,
+            )
+            .expect("parse non-occurrence Nikon MakerNote");
+        assert_eq!(
+            tags.get("Nikon:ExitPupilPosition").map(String::as_str),
+            Some("97.5 mm")
+        );
+        assert_eq!(
+            tags.get("Nikon:AFAperture").map(String::as_str),
+            Some("2.8")
+        );
+        assert_eq!(
+            tags.get("Nikon:LensFStops").map(String::as_str),
+            Some(if older_last { "4.58" } else { "6.00" }),
+            "last physical LensData entry wins the legacy flat map"
+        );
+    }
+}
+
+#[test]
 fn truncated_plaintext_field_does_not_invent_lens_fstops() {
     for (version, cut) in [(b"0100", 7u32), (b"0101", 12u32)] {
         let mut exif = d810_plaintext_lens_fstops(version, true);
