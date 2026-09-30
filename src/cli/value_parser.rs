@@ -806,6 +806,37 @@ pub(crate) fn parse_cli_tag_value_with_mode(
         raw
     };
 
+    // GPS.pm stores these printed references as one letter in string[2]
+    // fields. Writer.pl applies ReverseLookup before CheckValue's Count
+    // check; doing the Count check on the label would reject valid writes.
+    // Resolve only the GPS table's own generated StrEnum rows, never an XMP
+    // tag that happens to have the same leaf name. Raw mode skips PrintConv.
+    let raw = if !raw_mode && let Some(gps_key) = gps_str_enum_reference_key(declared_tag_name) {
+        let Some(crate::exiftool_tables::PrintConv::StrEnum(entries)) =
+            transcribed_row(gps_key).map(|row| row.print_conv)
+        else {
+            return Err(invalid(tag_name, "GPS reference PrintConv is unavailable"));
+        };
+        invert_str_enum(entries, raw).map_err(|reason| {
+            invalid(
+                tag_name,
+                format!(
+                    "Can't convert {} ({})",
+                    display_tag_for_message(
+                        tag_name,
+                        declared_tag_name.rsplit(':').next().unwrap()
+                    ),
+                    match reason {
+                        EnumInverseError::Ambiguous => "matches more than one PrintConv",
+                        EnumInverseError::NoMatch => "not in PrintConv",
+                    }
+                ),
+            )
+        })?
+    } else {
+        raw
+    };
+
     // Exif.pm 0x9291/0x9292 (SubSecTimeOriginal/SubSecTime) is a ValueConv
     // (fraction extraction), not a PrintConv -- ExifTool's `#`/`-n` bypass
     // PrintConvInv only, never ValueConvInv, so this stays active under
@@ -1759,6 +1790,61 @@ fn invert_int_enum(
         }
     }
     Err(EnumInverseError::NoMatch)
+}
+
+/// ReverseLookup for a generated string-keyed PrintConv hash. The lookup
+/// tiers and ambiguity rule are the same as [`invert_int_enum`]; duplicate
+/// exact labels choose the first key in Perl's string sort.
+fn invert_str_enum<'a>(
+    entries: &'a [(&'a str, &'a str)],
+    raw: &str,
+) -> std::result::Result<&'a str, EnumInverseError> {
+    let raw = raw.trim_end_matches([' ', '\t', '\n', '\r', '\u{b}', '\u{c}']);
+    let lower = raw.to_ascii_lowercase();
+    for tier in 0..4 {
+        let mut matches: Vec<&str> = entries
+            .iter()
+            .filter(|(_, label)| match tier {
+                0 => *label == raw,
+                1 => label.eq_ignore_ascii_case(raw),
+                2 => label.to_ascii_lowercase().starts_with(&lower),
+                _ => label.to_ascii_lowercase().contains(&lower),
+            })
+            .map(|(code, _)| *code)
+            .collect();
+        if matches.is_empty() {
+            continue;
+        }
+        matches.sort_unstable();
+        if tier < 2 || matches.len() == 1 {
+            return Ok(matches[0]);
+        }
+        return Err(EnumInverseError::Ambiguous);
+    }
+    Err(EnumInverseError::NoMatch)
+}
+
+/// The four GPS string enums whose printed labels must be inverted before
+/// their one-byte Count check. ExifTool accepts bare and EXIF-qualified
+/// aliases for these GPS rows; a non-EXIF group with the same leaf is not a
+/// GPS write. The generated GPS table still supplies every conversion.
+fn gps_str_enum_reference_key(tag_name: &str) -> Option<&'static str> {
+    let (group, leaf) = tag_name
+        .split_once(':')
+        .map_or((None, tag_name), |(group, leaf)| (Some(group), leaf));
+    if group.is_some_and(|group| {
+        !group.eq_ignore_ascii_case("GPS") && !group.eq_ignore_ascii_case("EXIF")
+    }) {
+        return None;
+    }
+    [
+        "GPS:GPSDestBearingRef",
+        "GPS:GPSImgDirectionRef",
+        "GPS:GPSSpeedRef",
+        "GPS:GPSTrackRef",
+    ]
+    .into_iter()
+    .find(|key| key.rsplit(':').next().unwrap().eq_ignore_ascii_case(leaf))
 }
 
 /// Whether `declared_tag_name` may be inverted against `Exif::Main`
@@ -2825,8 +2911,9 @@ fn print_conv_is_lookup_hash(declared_tag_name: &str) -> bool {
 /// addressed bare or under `GPS:`. Every one is `Writable => 'string'`,
 /// `Count => 2` in the transcribed `GPS::Main` table.
 fn is_gps_reference_string(declared_tag_name: &str) -> bool {
-    is_gps_enum_reference(declared_tag_name)
-        && matches!(declared_tag_name.split_once(':'), None | Some(("GPS", _)))
+    gps_str_enum_reference_key(declared_tag_name).is_some()
+        || (is_gps_enum_reference(declared_tag_name)
+            && matches!(declared_tag_name.split_once(':'), None | Some(("GPS", _))))
 }
 
 /// The transcribed `Exif::Main`/`GPS::Main` row `declared_tag_name`
@@ -3404,6 +3491,53 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("String too long for GPS:GPSStatus"), "{err}");
+    }
+
+    #[test]
+    fn printed_gps_reference_labels_invert_before_the_string_count_check() {
+        for (tag, label, stored) in [
+            ("GPS:GPSDestBearingRef", "Magnetic North", "M"),
+            ("GPS:GPSImgDirectionRef", "Magnetic North", "M"),
+            ("GPS:GPSSpeedRef", "km/h", "K"),
+            ("GPS:GPSTrackRef", "Magnetic North", "M"),
+        ] {
+            assert_eq!(
+                parse(tag, label).unwrap(),
+                TagValue::String(stored.into()),
+                "{tag}"
+            );
+            assert_eq!(
+                parse_cli_tag_value_with_mode(tag, stored, true).unwrap(),
+                TagValue::String(stored.into()),
+                "{tag} raw"
+            );
+            assert!(
+                parse_cli_tag_value_with_mode(tag, label, true).is_err(),
+                "{tag} raw label must exceed Count"
+            );
+            assert!(parse(tag, "not a declared label").is_err(), "{tag}");
+        }
+        assert_eq!(
+            parse("GPS:GPSSpeedRef", "Unknown (Z)").unwrap(),
+            TagValue::String("Z".into())
+        );
+        assert_eq!(
+            parse("XMP-exif:GPSSpeedRef", "km/h").unwrap(),
+            TagValue::String("km/h".into())
+        );
+        for alias in ["GPSSpeedRef", "EXIF:GPSSpeedRef", "gps:gpsspeedref"] {
+            assert_eq!(parse(alias, "km/h").unwrap(), TagValue::String("K".into()));
+            assert_eq!(parse(alias, "KM/H ").unwrap(), TagValue::String("K".into()));
+            assert_eq!(parse(alias, "km").unwrap(), TagValue::String("K".into()));
+            assert_eq!(parse(alias, "ots").unwrap(), TagValue::String("N".into()));
+            assert!(parse(alias, "k").is_err(), "{alias} ambiguous prefix");
+            assert!(parse(alias, "K").is_err(), "{alias} ambiguous printed code");
+            assert!(parse_cli_tag_value_with_mode(alias, "km/h", true).is_err());
+        }
+        assert_eq!(
+            parse("GPS:GPSTrackRef", "M").unwrap(),
+            TagValue::String("M".into())
+        );
     }
 
     /// Codex pre-review of PR #959 (round 5): raw mode skips every
