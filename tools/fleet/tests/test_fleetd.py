@@ -405,6 +405,51 @@ class TestProcessListingProbe(HermeticCase):
              mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
             self.assertEqual(runner_mod.live_pgids(), {4321, 888})
 
+    def test_pid_zero_kernel_row_does_not_hide_live_groups(self):
+        proc = subprocess.CompletedProcess(["ps"], 0, "0 Ss\n4321 Ss\n888 R+\n", "")
+        with mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+             mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
+            self.assertEqual(runner_mod.live_pgids(), {4321, 888})
+
+    def test_pid_zero_kernel_row_is_never_a_worker_or_adoption_match(self):
+        output = ("0 0 501 worker scope\n"
+                  "4321 4321 501 runner\n"
+                  "777 0 501 worker scope\n"
+                  "888 888 501 worker scope\n")
+        proc = subprocess.CompletedProcess(["ps"], 0, output, "")
+
+        with mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+             mock.patch.object(runner_mod.os, "getpgrp", return_value=4321), \
+             mock.patch.object(runner_mod.os, "getuid", return_value=501):
+            self.assertIsNone(runner_mod._scoped_worker_in_group(0, ("worker",), "scope"))
+            self.assertIsNone(runner_mod._scoped_worker_in_group(777, ("worker",), "scope"))
+            self.assertEqual(runner_mod._scoped_worker_in_group(888, ("worker",), "scope"),
+                             "worker scope")
+            self.assertEqual(runner_mod.fleet_worker_pgids(("worker",)),
+                             {888: "worker scope"})
+            self.assertIsNone(runner_mod.fleetd_marker_in_group(0, marker="worker"))
+            self.assertIsNone(runner_mod.fleetd_marker_in_group(777, marker="worker"))
+            self.assertEqual(runner_mod.fleetd_marker_in_group(888, marker="worker"),
+                             "worker scope")
+
+    def test_negative_process_identity_rows_still_refuse_listing(self):
+        listings = (("4321 Ss\n-1 Ss\n", runner_mod.live_pgids),
+                    ("4321 4321 501 runner\n-1 7 501 worker scope\n",
+                     lambda: runner_mod._scoped_worker_in_group(7, ("worker",), "scope")),
+                    ("4321 4321 501 runner\n7 -1 501 worker scope\n",
+                     lambda: runner_mod._scoped_worker_in_group(7, ("worker",), "scope")),
+                    ("4321 4321 501 runner\n7 -1 501 worker scope\n",
+                     lambda: runner_mod.fleet_worker_pgids(("worker",))))
+        for output, probe in listings:
+            proc = subprocess.CompletedProcess(["ps"], 0, output, "")
+            with self.subTest(output=output), \
+                 mock.patch.object(runner_mod.subprocess, "run", return_value=proc), \
+                 mock.patch.object(runner_mod.os, "getpgrp", return_value=4321):
+                with self.assertRaises(runner_mod.ProcessListingUnavailable):
+                    probe()
+                if "4321 4321" in output:
+                    self.assertIsNotNone(runner_mod.fleetd_marker_in_group(7))
+
     def test_identity_and_sweep_listings_fail_closed_on_bad_rows(self):
         for output in ("not-a-row\n", "4321 501 worker\nnot-a-row\n"):
             proc = subprocess.CompletedProcess(["ps"], 0, output, "")

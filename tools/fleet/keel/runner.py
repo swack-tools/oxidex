@@ -288,9 +288,10 @@ def _ps_fields(line: str, count: int) -> list[str]:
         numbers = [int(part) for part in parts[:-1]]
     except ValueError as exc:
         raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}") from exc
-    # macOS ps reports some system identities as uid -2. Only process
-    # group and pid must be positive; uid may be signed.
-    if numbers[0] < 0 or (count == 4 and numbers[1] <= 0):
+    # macOS ps may include kernel_task with pgid/pid 0, and some system
+    # identities have uid -2. Reject negative process identities here;
+    # consumers exclude zero before treating a row as a live candidate.
+    if numbers[0] < 0 or (count == 4 and numbers[1] < 0):
         raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}")
     return parts
 
@@ -302,7 +303,7 @@ def live_pgids() -> set:
         pgid, state = _ps_fields(line, 2)
         if len(state.split()) != 1 or not (state[0].isalpha() or state[0] == "?"):
             raise ProcessListingUnavailable(f"malformed ps state: {line[:120]!r}")
-        if not state.startswith("Z"):
+        if int(pgid) != 0 and not state.startswith("Z"):
             pgids.add(int(pgid))
     if os.getpgrp() not in pgids:
         raise ProcessListingUnavailable("ps reported this runner's group only as a zombie")
@@ -433,18 +434,19 @@ def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
     if scope_token is None:
         return None
     markers = tuple(markers) if markers else worker_markers()
-    lines = _ps_lines(["ps", "-wweo", "pgid=,uid=,command="], env=_ps_env())
+    lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,command="], env=_ps_env())
     try:
         uid = os.getuid()
     except AttributeError:
         uid = None
-    rows = [_ps_fields(line, 3) for line in lines]
-    for parts in rows:
-        if int(parts[0]) != pgid:
+    rows = [_ps_fields(line, 4) for line in lines]
+    for spgid, spid, suid, command in rows:
+        if int(spgid) == 0 or int(spid) == 0:
             continue
-        if uid is not None and int(parts[1]) != uid:
+        if int(spgid) != pgid:
             continue
-        command = parts[2]
+        if uid is not None and int(suid) != uid:
+            continue
         if any(m in command for m in markers) and scope_token in command:
             return command
     return None
@@ -485,6 +487,8 @@ def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
     for parts in rows:
         spgid, spid, suid, command = parts
         pgid, pid, puid = int(spgid), int(spid), int(suid)
+        if pgid == 0 or pid == 0:
+            continue
         if uid is not None and puid != uid:
             continue
         if pid != pgid:
@@ -604,6 +608,8 @@ def fleetd_marker_in_group(pgid: int, exclude_pid: Optional[int] = None,
         return "<ps listing malformed -- refusing to declare pgid %d dead>" % pgid
     for spgid, spid, suid, command in rows:
         rpgid, rpid, ruid = int(spgid), int(spid), int(suid)
+        if rpgid == 0 or rpid == 0:
+            continue
         if rpgid != pgid:
             continue
         if uid is not None and ruid != uid:
