@@ -40,7 +40,11 @@ Do not delegate unless the user or applicable instructions authorize it.
    candidate has no unresolved actionable findings. After two repair rounds,
    diagnose a common cause or split the scope before starting another round.
 5. Push only the reviewed candidate. Local review helps anticipate GitHub
-   Codex feedback; it does not replace GitHub review or fresh CI.
+   Codex feedback. It may satisfy the review gate only when the maintainer
+   explicitly authorizes a fallback for unavailable GitHub review, the
+   exact-head local result has been inspected, and all actionable findings
+   are disposed. Fresh CI and the complete, zero-actionable GitHub review
+   thread gate still apply. Preserve GitHub's actual review decision.
 
 For later pushes, review and repair the delta from the last reviewed commit
 before pushing. Review the full candidate again when its base or a shared

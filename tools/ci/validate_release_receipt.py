@@ -20,6 +20,11 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+try:
+    from tools.ci import release_pr_gate
+except ModuleNotFoundError:  # Direct script invocation from a fresh checkout.
+    import release_pr_gate
+
 
 KINDS = ("parity", "documentation", "finalization")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -769,7 +774,57 @@ def _validate_finalization(
                 if record.get(field) != checks.value(f"version_reconciliation.{field}"):
                     checks.error(f"version_reconciliation.{field}", "does not match referenced reconciliation")
     checks.string("promotion.pr_url")
-    checks.equal("promotion.review_decision", "APPROVED")
+    review_basis = checks.value("promotion.review_basis")
+    if review_basis == "local_review_fallback":
+        decision = checks.value("promotion.review_decision")
+        if decision not in (None, "", "REVIEW_REQUIRED"):
+            checks.error("promotion.review_decision", "local fallback requires the actual unapproved GitHub decision")
+        gate_path_raw = checks.string("promotion.gate_evidence")
+        gate_sha = checks.sha256("promotion.gate_sha256")
+        if gate_path_raw is not None:
+            gate_path = _evidence_path(gate_path_raw)
+            try:
+                actual_sha = _file_sha256(gate_path)
+                gate = load_receipt(gate_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                checks.error("promotion.gate_evidence", f"cannot load gate evidence: {exc}")
+            else:
+                if gate_sha != actual_sha:
+                    checks.error("promotion.gate_sha256", "does not match gate evidence")
+                try:
+                    replay = release_pr_gate.validate(
+                        pathlib.Path(gate["pr_state_path"]),
+                        pathlib.Path(gate["review_threads_path"]),
+                        pathlib.Path(gate["required_checks_path"]),
+                        payload.get("candidate_sha"),
+                        pathlib.Path(gate["local_review_path"]),
+                        gate.get("base_sha"),
+                        payload.get("candidate_tree"),
+                    )
+                except (KeyError, TypeError, release_pr_gate.PrGateError, OSError) as exc:
+                    checks.error("promotion.gate_evidence", f"gate replay refused: {exc}")
+                else:
+                    if gate != replay or gate.get("review_basis") != "local_review_fallback":
+                        checks.error("promotion.gate_evidence", "gate evidence does not match replay")
+                    for receipt_field, gate_field in (
+                        ("review_decision", "review_decision"),
+                        ("required_checks_status", "required_checks_status"),
+                        ("unresolved_actionable_threads", "unresolved_actionable_threads"),
+                        ("review_threads_evidence", "review_threads_path"),
+                        ("review_threads_sha256", "review_threads_sha256"),
+                        ("pr_state_evidence", "pr_state_path"),
+                        ("pr_state_sha256", "pr_state_sha256"),
+                        ("required_checks_evidence", "required_checks_path"),
+                        ("required_checks_sha256", "required_checks_sha256"),
+                    ):
+                        if checks.value(f"promotion.{receipt_field}") != gate.get(gate_field):
+                            checks.error(f"promotion.{receipt_field}", "does not match replayed gate")
+                    if gate.get("expected_head") != payload.get("candidate_sha") or gate.get("head_tree") != candidate_tree:
+                        checks.error("promotion.gate_evidence", "stale candidate identity")
+    else:
+        if review_basis not in (None, "github_approved"):
+            checks.error("promotion.review_basis", "unsupported review basis")
+        checks.equal("promotion.review_decision", "APPROVED")
     checks.equal("promotion.required_checks_status", "success")
     checks.equal("promotion.unresolved_actionable_threads", 0)
     checks.string("promotion.review_threads_evidence")

@@ -39,6 +39,9 @@
   "promotion": {
     "pr_url": null,
     "review_decision": null,
+    "review_basis": null,
+    "gate_evidence": null,
+    "gate_sha256": null,
     "required_checks_status": null,
     "unresolved_actionable_threads": null,
     "review_threads_evidence": null,

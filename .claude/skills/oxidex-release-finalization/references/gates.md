@@ -186,7 +186,7 @@ test -n "$PR_URL"
 printf '%s\n' "$PR_URL" | tee "$EVIDENCE_DIR/pr-url.txt"
 PR=$(gh pr view "$PR_URL" --json number --jq '.number')
 test -n "$PR"
-gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup \
+gh pr view "$PR" --json url,baseRefName,baseRefOid,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup \
   | tee "$EVIDENCE_DIR/pr-state.json"
 gh pr checks "$PR" --required --json name,state,link \
   | tee "$EVIDENCE_DIR/required-checks.json"
@@ -214,10 +214,51 @@ jq -er '.unresolved_actionable_threads' "$EVIDENCE_DIR/reviewed-promotion.json" 
   | tee "$EVIDENCE_DIR/unresolved-actionable-review-threads.txt"
 ```
 
-Require review approval, all required checks, a complete review-thread page,
-and zero unresolved non-outdated review threads. The verified promotion JSON
-also records SHA-256 identities for both raw inputs. A general review decision
-does not prove that inline comments were resolved. After the authorized merge:
+The default invocation requires GitHub `reviewDecision == APPROVED`.
+For the user's explicitly authorized local-review fallback when GitHub has no
+review decision or returns `REVIEW_REQUIRED`, retain the raw GitHub state and
+pass `--local-review "$LOCAL_REVIEW_ACCEPTANCE" --expected-base "$BASE_SHA"
+--expected-tree "$CANDIDATE_TREE"` to the same gate. `BASE_SHA` must be the
+exact full `baseRefOid` captured in `pr-state.json`, and `CANDIDATE_TREE` must
+be `git rev-parse "$CANDIDATE_SHA^{tree}"`. Do not use this route for
+`CHANGES_REQUESTED`, an unknown decision, or a moved base/head.
+
+The local acceptance JSON must contain `schema_version: 1`, `status: accepted`,
+`base`, `head`, `tree`, `reviewer`, `reviewed_at`,
+`result_disposition: no_unresolved_actionable_findings`, and
+`unresolved_actionable_findings: 0`. It must give absolute `*_path` and
+`*_sha256` pairs for `review_receipt`, `review_result`, `findings`, and
+`authorization`. The receipt must be a completed, clean `tools/codex_task.py`
+`review` or `acceptance` run against that exact base/head/tree, with its
+`--output-last-message` path matching the result. The findings JSON must bind
+the same identity, have `status: reviewed`, an array of individually disposed
+findings (`resolved` or `not_actionable` with reasons), and zero unresolved
+actionable findings. The authorization JSON is the canonical structured authorization source:
+`schema_version: 1`, `decision: approved`, `scope: local_review_fallback`,
+`assessment: affirmative_in_scope`, `authorized_by`, `authorized_at`,
+`assessed_by`, and `assessed_at`. Its absolute `original_instruction_path` and
+`original_instruction_sha256` bind the retained raw user instruction;
+`assessed_instruction_sha256` must equal that exact digest. An independent
+assessor records that this instruction affirmatively grants the stated scope.
+The gate checks the structured source and provenance consistency, while the
+natural-language interpretation remains an independent assessment, not a
+mechanically proven fact. The evidence producer must be trusted; a local
+attestation cannot prevent its author from making a false claim. Every
+severity-bearing line in the raw review result must appear verbatim as a
+`review_line` in the findings ledger, which also binds
+`review_result_sha256`. This acceptance is an independent assessment of the
+review; `completed` and process exit zero alone are not approval.
+
+Require successful current required checks, a complete review-thread page,
+and zero unresolved non-outdated review threads under either route. The gate
+records raw GitHub `reviewDecision` and SHA-256 identities for all its inputs;
+it never synthesizes `APPROVED`. For the fallback, set finalization receipt
+`promotion.review_basis` to `local_review_fallback`, preserve the gate's actual
+`review_decision`, and set `promotion.gate_evidence`/`gate_sha256` to the gate
+output. The finalization validator replays the gate and checks its bound
+candidate identity and promotion fields. The GitHub-approved route may leave
+these conditional fields null. A general review decision alone does not prove
+that inline comments were resolved. After the authorized merge:
 
 ```bash
 set -euo pipefail
