@@ -229,7 +229,7 @@ mod tests {
 
 use std::collections::HashMap;
 
-use super::binary_data::{Ctx, Root, process, select_root};
+use super::binary_data::{Ctx, Dm, Root, Scalar, process, select_root};
 use super::encrypted_tables::{
     COLOR_BALANCE_ROOTS, LENS_DATA_ROOTS, SHOT_INFO_ROOTS, XLAT0, XLAT1,
 };
@@ -331,9 +331,33 @@ fn parse_encrypted(
     let Some(root) = select_root(roots, value, entry_count) else {
         return unavailable();
     };
-    // A variant with no DecryptStart is one of the plaintext layouts, which
-    // the hand-written parsers already cover.
+    // The 12.64 LensData0800 table is deliberately omitted from the generated
+    // interpreter: its newer Z-lens fields use unsupported state-dependent
+    // conversions. Its three older overlap fields already have a source-backed
+    // hand decoder. Nikon.pm decrypts from byte 4 and sets OldLensData only
+    // when its undef[17] at byte 3 is not one byte followed by NUL padding.
+    // Do not infer any of the omitted newer fields from this limited route.
     let Some(enc) = root.encrypted else {
+        if root.name == "LensData0800" && crate::exiftool_oracle::repo_pin() == "12.64" {
+            let Some(keys) = keys else {
+                return unavailable();
+            };
+            if value.len() < 20 {
+                return unavailable();
+            }
+            let mut data = value.to_vec();
+            Decryptor::new(keys.serial, keys.count).decrypt_from(&mut data, 4);
+            if data[4..20].iter().any(|&byte| byte != 0) {
+                ctx.set(Dm::OldLensData, Scalar::Num(1.0));
+            }
+            return GeneratedLensData {
+                owned: false,
+                rows: Vec::new(),
+                hand_overlap: lens_data::encrypted_overlap_fields(&data, root.name, ctx),
+            };
+        }
+        // Other variants with no DecryptStart are plaintext layouts or
+        // source-recorded omissions; neither may be guessed here.
         return unavailable();
     };
     // No usable key means ExifTool warns and extracts nothing here.
@@ -547,6 +571,55 @@ mod dispatch_tests {
                 .map(|row| row.stored.clone())
         };
         assert_ne!(pupil(&rows.rows), pupil(&wrong.rows));
+    }
+
+    #[test]
+    fn omitted_1264_0800_recovers_only_old_fields_when_condition_holds() {
+        if tested_source() != TestedSource::V1264 {
+            return;
+        }
+        let keys = Keys {
+            serial: 3126,
+            count: 485,
+        };
+        let mut old = vec![0; 20];
+        old[..4].copy_from_slice(b"0800");
+        old[4] = 21;
+        old[5] = 36;
+        old[14] = 55;
+        Decryptor::new(keys.serial, keys.count).decrypt_from(&mut old, 4);
+
+        let rows = generated_lens_rows(&old, Some(keys));
+        assert!(!rows.owned, "the omitted table has no generated owner");
+        assert!(rows.rows.is_empty());
+        assert_eq!(
+            rows.hand_overlap
+                .iter()
+                .map(|row| (row.name, row.offset, row.print.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("ExitPupilPosition", 4, "97.5 mm"),
+                ("AFAperture", 5, "2.8"),
+                ("LensFStops", 14, "4.58"),
+            ]
+        );
+        assert!(generated_lens_rows(&old, None).hand_overlap.is_empty());
+        assert!(
+            generated_lens_rows(&old[..19], Some(keys))
+                .hand_overlap
+                .is_empty()
+        );
+
+        let mut padding = vec![0; 20];
+        padding[..4].copy_from_slice(b"0800");
+        Decryptor::new(keys.serial, keys.count).decrypt_from(&mut padding, 4);
+        let rows = generated_lens_rows(&padding, Some(keys));
+        assert!(!rows.owned);
+        assert!(rows.rows.is_empty());
+        assert!(
+            rows.hand_overlap.is_empty(),
+            "no OldLensData flag from padding"
+        );
     }
 
     #[test]
