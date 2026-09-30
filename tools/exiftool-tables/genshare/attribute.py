@@ -25,12 +25,22 @@ import stat
 import subprocess
 import sys
 import time
+from types import MappingProxyType
 import uuid
 
 
 TOKENS = ("engine", "legacy-l1", "legacy-l2", "producers", "serial", "keyed")
 UNION = ",".join(TOKENS)
 SCHEMA = "genshare-receipt/v3"
+EMPTY_INPUT_DIAGNOSTIC = MappingProxyType({
+    "relative_path": "FujiFilm/FujiFilmISPro.jpg",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "returncode": 1,
+    "error_key": "ExifTool:Error",
+    "error_value": "File is empty",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+})
 COUNTERS = (
     "oracle_occurrences",
     "candidate_occurrences",
@@ -241,6 +251,32 @@ def _file_identity(path: Path, *, relative_path: str | None = None) -> dict:
     return result
 
 
+def _eligible_paths(selection: dict) -> list[str]:
+    exceptions = selection.get("non_comparable_inputs", [])
+    if exceptions not in ([], [EMPTY_INPUT_DIAGNOSTIC]):
+        raise ReceiptError("non-comparable input is not the exact authenticated diagnostic")
+    paths = selection["ordered_paths"]
+    if exceptions:
+        row = next((row for row in selection["ordered_manifest"]
+                    if row["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"]), None)
+        if row is None or row["size"] != 0 or row["sha256"] != EMPTY_INPUT_DIAGNOSTIC["sha256"]:
+            raise ReceiptError("empty input identity does not match selected manifest")
+        staged = Path(row["staged_path"])
+        if _file_identity(staged)["size"] != 0 or sha256_file(staged) != EMPTY_INPUT_DIAGNOSTIC["sha256"]:
+            raise ReceiptError("empty input staged bytes changed")
+    return [path for path in paths if not exceptions or path != EMPTY_INPUT_DIAGNOSTIC["relative_path"]]
+
+
+def _validate_empty_diagnostic(parsed: dict, stderr: bytes) -> None:
+    if sha256_bytes(stderr) != EMPTY_INPUT_DIAGNOSTIC["stderr_sha256"] \
+            or parsed.get(EMPTY_INPUT_DIAGNOSTIC["error_key"]) != EMPTY_INPUT_DIAGNOSTIC["error_value"] \
+            or parsed.get("ExifTool:ExifToolVersion") != "13.59" \
+            or {key for key in parsed if key.startswith("ExifTool:")} != {
+                "ExifTool:ExifToolVersion", "ExifTool:Error"
+            }:
+        raise ReceiptError("oracle empty-input diagnostic is not exact")
+
+
 def _stage_selection(corpus: Path, manifest: Path, run_root: Path, min_files: int) -> dict:
     corpus = corpus.resolve(strict=True)
     if not corpus.is_dir():
@@ -292,6 +328,14 @@ def _stage_selection(corpus: Path, manifest: Path, run_root: Path, min_files: in
         {key: row[key] for key in ("relative_path", "size", "mode", "sha256")}
         for row in records
     ]
+    exceptions = ([dict(EMPTY_INPUT_DIAGNOSTIC)] if any(
+        row["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"] for row in records
+    ) else [])
+    if exceptions:
+        row = next(row for row in records if row["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"])
+        if row["size"] != 0 or row["sha256"] != EMPTY_INPUT_DIAGNOSTIC["sha256"]:
+            raise ReceiptError("selected empty-input diagnostic identity changed")
+    scored_paths = [path for path in rows if not exceptions or path != EMPTY_INPUT_DIAGNOSTIC["relative_path"]]
     return {
         "source_root": str(corpus),
         "selection_root": str(selection_root.resolve()),
@@ -300,6 +344,9 @@ def _stage_selection(corpus: Path, manifest: Path, run_root: Path, min_files: in
         "manifest_sha256": canonical_sha256(manifest_commitment),
         "path_set_sha256": path_set_sha256(rows),
         "selected_files": len(rows),
+        "scored_files": len(scored_paths),
+        "scored_path_set_sha256": path_set_sha256(scored_paths),
+        "non_comparable_inputs": exceptions,
     }
 
 
@@ -438,6 +485,7 @@ def capture_process(
     environment: dict,
     *,
     timeout: int = 120,
+    allow_empty_diagnostic: bool = False,
 ) -> dict:
     """Run one child and retain raw bytes, outcome, parse status, and identities."""
     child_dir.mkdir(parents=True, exist_ok=True)
@@ -528,7 +576,8 @@ def capture_process(
     if identity_error is not None:
         write_json(child_dir / f"{side}.process.json", record)
         raise ChildProcessError(identity_error)
-    if returncode != 0:
+    if returncode != 0 and not (side == "oracle" and allow_empty_diagnostic
+                                and returncode == EMPTY_INPUT_DIAGNOSTIC["returncode"]):
         write_json(child_dir / f"{side}.process.json", record)
         raise ChildProcessError(f"{side} child returned return code {returncode}")
     try:
@@ -537,6 +586,13 @@ def capture_process(
         record["parse_status"] = "failed"
         write_json(child_dir / f"{side}.process.json", record)
         raise ChildProcessError(str(exc)) from exc
+    if returncode == EMPTY_INPUT_DIAGNOSTIC["returncode"]:
+        try:
+            _validate_empty_diagnostic(parsed, stderr)
+        except ReceiptError as exc:
+            record["parse_status"] = "failed"
+            write_json(child_dir / f"{side}.process.json", record)
+            raise ChildProcessError(str(exc)) from exc
     write_json(parsed_path, parsed)
     record["parse_status"] = "ok"
     record["parsed"] = _artifact_record(parsed_path)
@@ -708,6 +764,33 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     recomputed = {}
     expected_paths = receipt.get("selection", {}).get("ordered_paths")
     expected_path_hash = path_set_sha256(expected_paths) if isinstance(expected_paths, list) else None
+    selection = receipt.get("selection")
+    if not isinstance(selection, dict) or not isinstance(expected_paths, list):
+        raise ReceiptError("selection is required for replay")
+    rows = selection.get("ordered_manifest")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows) \
+            or any(not isinstance(path, str) for path in expected_paths) \
+            or len(expected_paths) != len(set(expected_paths)):
+        raise ReceiptError("selection manifest paths are invalid")
+    for relative in expected_paths:
+        _safe_relative(relative)
+    scored_paths = _eligible_paths(selection)
+    scored_path_set = set(scored_paths)
+    manifest_by_path = {row["relative_path"]: row for row in selection["ordered_manifest"]}
+    scored_path_hash = path_set_sha256(scored_paths)
+    has_diagnostic = bool(selection.get("non_comparable_inputs"))
+    if has_diagnostic and (selection.get("scored_files") != len(scored_paths)
+                           or selection.get("scored_path_set_sha256") != scored_path_hash):
+        raise ReceiptError("scored selection counters or hash do not verify")
+    if not has_diagnostic and ("scored_files" in selection or "scored_path_set_sha256" in selection):
+        if selection.get("scored_files") != len(scored_paths) \
+                or selection.get("scored_path_set_sha256") != scored_path_hash:
+            raise ReceiptError("scored selection counters or hash do not verify")
+    floors = receipt.get("floors")
+    if has_diagnostic and not isinstance(floors, dict):
+        raise ReceiptError("diagnostic receipt lacks exact floors")
+    if isinstance(floors, dict) and floors.get("min_files") != len(expected_paths):
+        raise ReceiptError("selected file floor does not replay")
     for mode, run in runs.items():
         children = run.get("children") if isinstance(run, dict) else None
         if not isinstance(children, list):
@@ -715,6 +798,17 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
         paths = [row.get("relative_path") for row in children]
         if paths != expected_paths or run.get("path_set_sha256") != expected_path_hash:
             raise ReceiptError(f"run {mode} path set is not exact")
+        if has_diagnostic and (
+            run.get("oracle_path_set_sha256") != expected_path_hash
+            or run.get("candidate_path_set_sha256") != expected_path_hash
+            or run.get("scored_path_set_sha256") != scored_path_hash
+        ):
+            raise ReceiptError(f"run {mode} selected or scored path hash differs")
+        if has_diagnostic and run.get("non_comparable_inputs") != [
+            {"relative_path": EMPTY_INPUT_DIAGNOSTIC["relative_path"], "process": child["process"]}
+            for child in children if child["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"]
+        ]:
+            raise ReceiptError(f"run {mode} diagnostic process identity differs")
         per_file = {}
         for child in children:
             process_path = Path(child["process"]["path"])
@@ -726,10 +820,21 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
             sides = {}
             for side in ("oracle", "candidate"):
                 record = process.get(side)
-                if not isinstance(record, dict) or record.get("returncode") != 0 \
+                diagnostic_oracle = (has_diagnostic and side == "oracle"
+                                     and child["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"])
+                expected_returncode = EMPTY_INPUT_DIAGNOSTIC["returncode"] if diagnostic_oracle else 0
+                if not isinstance(record, dict) or record.get("returncode") != expected_returncode \
                         or record.get("timed_out") or record.get("signal") is not None \
                         or record.get("parse_status") != "ok":
                     raise ReceiptError(f"run {mode} {side} child outcome is not successful")
+                if has_diagnostic:
+                    entry = manifest_by_path[child["relative_path"]]
+                    argv = record.get("argv")
+                    if not isinstance(argv, list) or not argv or argv[-1] != entry["staged_path"] \
+                            or record.get("environment") != ({} if side == "oracle" else _mode_environment(mode)) \
+                            or process.get("source_sha256") != entry["sha256"] \
+                            or process.get("staged_sha256") != entry["sha256"]:
+                        raise ReceiptError(f"run {mode} {side} diagnostic child binding differs")
                 _validate_process_identity_record(record)
                 for artifact_name in ("stdout", "stderr", "returncode_artifact", "parsed"):
                     artifact = record.get(artifact_name)
@@ -737,7 +842,13 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                     if not _inside(root, path) or _artifact_record(path) != artifact:
                         raise ReceiptError(f"run {mode} {side} {artifact_name} does not verify")
                 raw = Path(record["stdout"]["path"]).read_bytes()
+                stderr = Path(record["stderr"]["path"]).read_bytes()
+                returncode_raw = Path(record["returncode_artifact"]["path"]).read_bytes()
+                if returncode_raw != f"{expected_returncode}\n".encode():
+                    raise ReceiptError(f"run {mode} {side} raw return code differs")
                 parsed = parse_json_output(raw, side)
+                if diagnostic_oracle:
+                    _validate_empty_diagnostic(parsed, stderr)
                 retained = json.loads(
                     Path(record["parsed"]["path"]).read_text(encoding="utf-8"),
                     object_pairs_hook=_reject_duplicate_pairs,
@@ -749,10 +860,15 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                 # comparator's duplicate pairing is order-sensitive.
                 sides[side] = retained
             relative = child["relative_path"]
-            per_file[relative] = project_file(
-                normalize_access_date_output(sides["oracle"], oracle=True),
-                normalize_access_date_output(sides["candidate"], oracle=False),
-            )
+            if relative in scored_path_set:
+                per_file[relative] = project_file(
+                    normalize_access_date_output(sides["oracle"], oracle=True),
+                    normalize_access_date_output(sides["candidate"], oracle=False),
+                )
+            elif has_diagnostic and relative != EMPTY_INPUT_DIAGNOSTIC["relative_path"]:
+                raise ReceiptError("unexpected unscored path")
+        if list(per_file) != scored_paths:
+            raise ReceiptError(f"scored path order differs in {mode}")
         recomputed[mode] = {"per_file": per_file, "aggregate": _sum_projection(per_file)}
         if recomputed[mode] != projections.get(mode):
             raise ReceiptError(f"projection counters or rows do not replay: {mode}")
@@ -763,10 +879,6 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
         if not isinstance(aggregate, dict):
             raise ReceiptError(f"projection {mode} lacks aggregate counters")
         validate_equations(aggregate)
-    selection = receipt.get("selection")
-    if not isinstance(selection, dict):
-        raise ReceiptError("selection is required for replay")
-    rows = selection.get("ordered_manifest")
     if not isinstance(rows, list) or [row.get("relative_path") for row in rows] != expected_paths:
         raise ReceiptError("selection manifest path order does not verify")
     commitment = [
@@ -784,6 +896,26 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     control = projections.get("control-empty", {}).get("aggregate")
     if control is None:
         raise ReceiptError("control-empty projection is required")
+    if isinstance(floors, dict) and control["oracle_occurrences"] < floors.get("min_tags", 0):
+        raise ReceiptError("oracle occurrence floor does not replay")
+    if has_diagnostic:
+        baseline_oracles = runs["control-empty"].get("oracle_stable_sha256")
+        for mode, run in runs.items():
+            if list(run.get("oracle_parsed_sha256", {})) != expected_paths \
+                    or list(run.get("oracle_stable_sha256", {})) != expected_paths \
+                    or run.get("oracle_stable_sha256") != baseline_oracles:
+                raise ReceiptError(f"oracle diagnostic ledger differs in {mode}")
+            for child in run["children"]:
+                process = json.loads(Path(child["process"]["path"]).read_text(encoding="utf-8"),
+                                     object_pairs_hook=_reject_duplicate_pairs)
+                raw = Path(process["oracle"]["parsed"]["path"]).read_text(encoding="utf-8")
+                parsed = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+                relative = child["relative_path"]
+                if run["oracle_parsed_sha256"][relative] != canonical_sha256(parsed) \
+                        or run["oracle_stable_sha256"][relative] != canonical_sha256(
+                            normalize_access_date_output(parsed, oracle=True)):
+                    raise ReceiptError(f"oracle retained hash does not replay: {mode}.{relative}")
+        _validate_diagnostic_candidate_inertness(runs)
     expected_modes = [*TOKENS, "union"]
     if set(reconciliations) != set(expected_modes):
         raise ReceiptError("reconciliation token/mode set is not exact")
@@ -1239,6 +1371,7 @@ def _run_mode(
     oracle_hashes = {}
     oracle_stable_hashes = {}
     started = utc_now()
+    scored_paths = set(_eligible_paths(selection))
     for number, entry in enumerate(selection["ordered_manifest"], 1):
         relative = entry["relative_path"]
         child = mode_root / "children" / f"{number:06d}"
@@ -1258,8 +1391,11 @@ def _run_mode(
             str(staged),
         ]
         oracle_record = capture_process(
-            oracle_argv, repository, child, "oracle", {}, timeout=120
+            oracle_argv, repository, child, "oracle", {}, timeout=120,
+            allow_empty_diagnostic=relative not in scored_paths,
         )
+        if relative not in scored_paths and oracle_record["returncode"] != EMPTY_INPUT_DIAGNOSTIC["returncode"]:
+            raise ReceiptError("oracle empty input did not produce the exact diagnostic exit")
         candidate_record = capture_process(
             [str(binary), "-j", "-G1", "-a", str(staged)],
             repository,
@@ -1274,7 +1410,8 @@ def _run_mode(
         stable_oracle = normalize_access_date_output(oracle, oracle=True)
         stable_candidate = normalize_access_date_output(candidate, oracle=False)
         oracle_stable_hashes[relative] = canonical_sha256(stable_oracle)
-        per_file[relative] = project_file(stable_oracle, stable_candidate)
+        if relative in scored_paths:
+            per_file[relative] = project_file(stable_oracle, stable_candidate)
         raw_occurrences = occurrence_sequence(candidate, normalize_access_date=False)
         normalized_occurrences = occurrence_sequence(candidate, normalize_access_date=True)
         process = {
@@ -1320,6 +1457,11 @@ def _run_mode(
         "oracle_stable_sha256": oracle_stable_hashes,
         "children": children,
     }
+    if selection["non_comparable_inputs"]:
+        mode_record["non_comparable_inputs"] = [
+            {"relative_path": EMPTY_INPUT_DIAGNOSTIC["relative_path"], "process": row["process"]}
+            for row in children if row["relative_path"] == EMPTY_INPUT_DIAGNOSTIC["relative_path"]
+        ]
     mode_path = mode_root / "mode.json"
     write_json(mode_path, mode_record)
     projection = {"per_file": per_file, "aggregate": _sum_projection(per_file)}
@@ -1334,7 +1476,10 @@ def _verify_selection(selection: dict) -> None:
     for row in selection["ordered_manifest"]:
         source = Path(row["source_path"])
         staged = Path(row["staged_path"])
-        if sha256_file(source) != row["sha256"] or sha256_file(staged) != row["sha256"]:
+        if source.is_symlink() or staged.is_symlink() \
+                or _file_identity(source)["size"] != row["size"] \
+                or _file_identity(staged)["size"] != row["size"] \
+                or sha256_file(source) != row["sha256"] or sha256_file(staged) != row["sha256"]:
             raise ReceiptError(f"source or staged corpus drift: {row['relative_path']}")
 
 
@@ -1360,6 +1505,11 @@ def _validate_expectations_document(document: dict, selection: dict) -> None:
         raise ReceiptError("bounded expectations document is invalid")
     _validate_fixture_selection(document, selection)
     fixtures = document["fixtures"]
+    expected_exceptions = selection.get("non_comparable_inputs", [])
+    if expected_exceptions and document.get("non_comparable_inputs") != expected_exceptions:
+        raise ReceiptError("bounded expectations do not bind the exact non-comparable input")
+    if not expected_exceptions and document.get("non_comparable_inputs", []) != []:
+        raise ReceiptError("bounded expectations contain an extra non-comparable input")
     review_status = document.get("review_status")
     exact = document.get("exact_loss_expectations")
     if review_status not in ("roles_only", "reviewed_exact"):
@@ -1369,7 +1519,13 @@ def _validate_expectations_document(document: dict, selection: dict) -> None:
     if exact is not None and (
         not isinstance(exact, dict)
         or exact.get("schema") != "genshare-exact-loss/v1"
-        or exact.get("corpus") != [row["relative_path"] for row in fixtures]
+        or exact.get("corpus") != [row["relative_path"] for row in fixtures
+                                      if row["relative_path"] not in {
+                                          entry["relative_path"] for entry in expected_exceptions
+                                      }]
+        or (exact.get("non_comparable_inputs", []) != expected_exceptions
+            if len(fixtures) == len(selection["ordered_manifest"])
+            else "non_comparable_inputs" in exact)
     ):
         raise ReceiptError("bounded exact expectations schema is invalid")
 
@@ -1556,6 +1712,11 @@ def _fixture_observations(
         }
     exact_loss_payload = loss_payload(corpus)
     expectation_document = expectations.get("document", {})
+    exceptions = expectation_document.get("non_comparable_inputs", [])
+    if exceptions:
+        exact_loss_payload["non_comparable_inputs"] = exceptions
+        # A bounded three-control expectation still describes only its own
+        # three scored controls, not the full-corpus diagnostic exception.
     reviewed_exact = expectation_document.get("exact_loss_expectations")
     review_status = expectation_document.get("review_status", "roles_only")
     reviewed_scope = (
@@ -1563,7 +1724,10 @@ def _fixture_observations(
         else "bounded_controls" if reviewed_exact is not None else "none"
     )
     reviewed_paths = corpus if reviewed_scope == "selected_corpus" else fixture_corpus
-    if review_status == "reviewed_exact" and reviewed_exact != loss_payload(reviewed_paths):
+    expected_reviewed = loss_payload(reviewed_paths)
+    if exceptions and reviewed_scope == "selected_corpus":
+        expected_reviewed["non_comparable_inputs"] = exceptions
+    if review_status == "reviewed_exact" and reviewed_exact != expected_reviewed:
         raise ReceiptError("observed losses do not match reviewed exact expectations")
     return {
         "review_status": review_status,
@@ -1583,6 +1747,42 @@ def _candidate_sequence(mode: dict, relative_path: str) -> list[dict]:
     child_row = next(row for row in mode["children"] if row["relative_path"] == relative_path)
     process = json.loads(Path(child_row["process"]["path"]).read_text(encoding="utf-8"))
     return process["candidate_occurrences"]
+
+
+def _validate_diagnostic_candidate_inertness(runs: dict) -> None:
+    relative = EMPTY_INPUT_DIAGNOSTIC["relative_path"]
+    identity_trio = {
+        "File:FileType": "JPEG",
+        "File:FileTypeExtension": "jpg",
+        "File:MIMEType": "image/jpeg",
+    }
+    def candidate_output(mode: str) -> tuple[list[tuple[str, bytes]], str]:
+        child = next(row for row in runs[mode]["children"] if row["relative_path"] == relative)
+        process = json.loads(Path(child["process"]["path"]).read_text(encoding="utf-8"),
+                             object_pairs_hook=_reject_duplicate_pairs)
+        stdout_path = Path(process["candidate"]["stdout"]["path"])
+        if _artifact_record(stdout_path) != process["candidate"]["stdout"]:
+            raise ReceiptError(f"diagnostic candidate stdout changed under {mode}")
+        # The retained parsed artifact is canonicalized with sorted keys. The
+        # raw one-object stdout preserves the order this relation must check.
+        raw_document = parse_json_output(stdout_path.read_bytes(), "candidate")
+        normalized = normalize_access_date_output(raw_document, oracle=False)
+        ordered_typed = [(key, canonical_bytes(value)) for key, value in normalized.items()]
+        stderr_path = Path(process["candidate"]["stderr"]["path"])
+        if stderr_path.read_bytes():
+            raise ReceiptError(f"diagnostic candidate stderr is not empty under {mode}")
+        return (ordered_typed,
+                process["candidate"]["stderr"]["sha256"])
+    baseline = candidate_output("control-empty")
+    baseline_values = dict(baseline[0])
+    if any(baseline_values.get(key) != canonical_bytes(value)
+           for key, value in identity_trio.items()):
+        raise ReceiptError("diagnostic control lacks the exact JPEG identity trio")
+    without_trio = ([row for row in baseline[0] if row[0] not in identity_trio], baseline[1])
+    for mode in ("control-unset", *TOKENS, "union"):
+        expected = without_trio if mode in ("producers", "union") else baseline
+        if candidate_output(mode) != expected:
+            raise ReceiptError(f"diagnostic candidate output changed under {mode}")
 
 
 def sequence_delta(control: list[dict], probe: list[dict]) -> dict:
@@ -1837,11 +2037,9 @@ def census_main(argv: list[str]) -> int:
             projections[mode] = projection
         exact_path_hash = selection["path_set_sha256"]
         for mode, run in runs.items():
-            hashes = {
-                run["path_set_sha256"], run["oracle_path_set_sha256"],
-                run["candidate_path_set_sha256"], run["scored_path_set_sha256"],
-            }
-            if hashes != {exact_path_hash}:
+            if {run["path_set_sha256"], run["oracle_path_set_sha256"],
+                run["candidate_path_set_sha256"]} != {exact_path_hash} \
+                    or run["scored_path_set_sha256"] != selection["scored_path_set_sha256"]:
                 raise ReceiptError(f"selected/oracle/candidate/scored path sets differ in {mode}")
         baseline_oracles = runs["control-empty"]["oracle_stable_sha256"]
         if any(run["oracle_stable_sha256"] != baseline_oracles for run in runs.values()):
@@ -1859,6 +2057,8 @@ def census_main(argv: list[str]) -> int:
             if result["oracle_residual"] or result["candidate_residual"]:
                 raise ReceiptError(f"Task 6 reconciliation failed for {mode}")
         inertness = _validate_inertness(runs, selection)
+        if selection["non_comparable_inputs"]:
+            _validate_diagnostic_candidate_inertness(runs)
         pre_seam_control = _validate_pre_seam_control(runs, selection)
         fixture_contract = _fixture_observations(
             runs, projections, reconciliations, expectations

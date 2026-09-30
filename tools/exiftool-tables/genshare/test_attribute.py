@@ -186,6 +186,44 @@ class ParsingAndProjectionTests(unittest.TestCase):
             self.assertEqual((child / "oracle.returncode").read_text(), "7\n")
             self.assertIn("bad", (child / "oracle.stderr").read_text())
 
+    def test_only_exact_oracle_empty_diagnostic_may_retain_exit_one(self):
+        valid = [{"ExifTool:ExifToolVersion": 13.59, "ExifTool:Error": "File is empty"}]
+        for label, document, stderr, code in (
+            ("valid", valid, "", 1),
+            ("wrong error", [{"ExifTool:ExifToolVersion": 13.59, "ExifTool:Error": "bad"}], "", 1),
+            ("extra ExifTool", [{**valid[0], "ExifTool:Model": "wrong"}], "", 1),
+            ("stderr", valid, "unexpected", 1),
+            ("wrong exit", valid, "", 2),
+            ("bad parse", "not JSON", "", 1),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+                child = pathlib.Path(td)
+                stdout = json.dumps(document) if not isinstance(document, str) else document
+                program = f"import sys; print({stdout!r}); print({stderr!r}, file=sys.stderr, end=''); sys.exit({code})"
+                if label == "valid":
+                    record = attribute.capture_process(
+                        [sys.executable, "-c", program], child, child, "oracle", {},
+                        allow_empty_diagnostic=True,
+                    )
+                    self.assertEqual(record["returncode"], 1)
+                    self.assertEqual(record["parse_status"], "ok")
+                    self.assertEqual((child / "oracle.returncode").read_text(), "1\n")
+                else:
+                    with self.assertRaises(attribute.ChildProcessError):
+                        attribute.capture_process(
+                            [sys.executable, "-c", program], child, child, "oracle", {},
+                            allow_empty_diagnostic=True,
+                        )
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            child = pathlib.Path(td)
+            program = f"import sys; print({json.dumps(valid)!r}); sys.exit(1)"
+            for side in ("oracle", "candidate"):
+                with self.subTest(side=side), self.assertRaises(attribute.ChildProcessError):
+                    attribute.capture_process(
+                        [sys.executable, "-c", program], child, child, side, {},
+                        allow_empty_diagnostic=(side == "candidate"),
+                    )
+
 
 class ArtifactValidationTests(unittest.TestCase):
     def test_reviewed_fixture_hashes_allow_an_additional_selected_crw(self):
@@ -748,6 +786,254 @@ class ArtifactValidationTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(attribute.ReceiptError, "built.*retained|binary identity"):
                 attribute.validate_v3_receipt(tampered, root, replay=True)
+
+
+class EmptyDiagnosticReceiptTests(unittest.TestCase):
+    def test_five_selected_four_scored_all_mode_replay_and_refusals(self):
+        paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx", "ordinary.bin",
+                 attribute.EMPTY_INPUT_DIAGNOSTIC["relative_path"]]
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            base = pathlib.Path(td)
+            corpus = base / "corpus"
+            corpus.mkdir()
+            for relative in paths:
+                file = corpus / relative
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b"" if relative == paths[-1] else relative.encode())
+            manifest = base / "manifest.txt"
+            manifest.write_text("\n".join(paths) + "\n")
+            root = base / "run"
+            selection = attribute.create_bounded_selection(corpus, manifest, root, 5)
+            expectations_document = {
+                "review_status": "roles_only",
+                "fixtures": [{"relative_path": row["relative_path"], "sha256": row["sha256"]}
+                             for row in selection["ordered_manifest"]],
+                "non_comparable_inputs": [dict(attribute.EMPTY_INPUT_DIAGNOSTIC)],
+            }
+            attribute._validate_expectations_document(expectations_document, selection)
+            expectations_path = root / "contracts" / "bounded-corpus-expectations.json"
+            attribute.write_json(expectations_path, expectations_document)
+            real_capture = attribute.capture_process
+
+            def synthetic_capture(argv, cwd, child_dir, side, environment, **kwargs):
+                mode = child_dir.parents[1].name
+                relative = paths[int(child_dir.name) - 1]
+                if side == "oracle" and relative == paths[-1]:
+                    document = {"ExifTool:ExifToolVersion": 13.59,
+                                "ExifTool:Error": "File is empty"}
+                    returncode = 1
+                elif side == "candidate" and relative == paths[-1]:
+                    document = {
+                        "File:FileType": "JPEG",
+                        "File:FileTypeExtension": "jpg",
+                        "File:MIMEType": "image/jpeg",
+                        "File:Warning": "Unsupported format",
+                        "Status": "Unsupported",
+                    }
+                    if mode in ("producers", "union"):
+                        for key in ("File:FileType", "File:FileTypeExtension", "File:MIMEType"):
+                            document.pop(key)
+                    returncode = 0
+                else:
+                    document = {
+                        "File:FileType": "TEST",
+                        "File:FileTypeExtension": "bin",
+                        "File:MIMEType": "application/octet-stream",
+                        "Test:Payload": relative,
+                    }
+                    if side == "candidate":
+                        if mode in ("engine", "union") and relative == "ICC_Profile.icc":
+                            document.pop("Test:Payload")
+                        if mode in ("producers", "union"):
+                            for key in ("File:FileType", "File:FileTypeExtension", "File:MIMEType"):
+                                document.pop(key)
+                    returncode = 0
+                program = (f"import sys; print({json.dumps([document])!r}); "
+                           f"sys.exit({returncode})")
+                record = real_capture([sys.executable, "-c", program], cwd, child_dir,
+                                      side, environment, **kwargs)
+                record["argv"] = argv
+                attribute.write_json(child_dir / f"{side}.process.json", record)
+                return record
+
+            runs = {}
+            projections = {}
+            modes = ("pre-seam-control", "control-unset", "control-empty", *attribute.TOKENS, "union")
+            with mock.patch.object(attribute, "capture_process", side_effect=synthetic_capture):
+                for mode in modes:
+                    runs[mode], projections[mode] = attribute._run_mode(
+                        root, mode, selection, root, pathlib.Path("candidate"),
+                        pathlib.Path("perl"), root,
+                    )
+            self.assertEqual(selection["selected_files"], 5)
+            self.assertEqual(selection["scored_files"], 4)
+            for mode in modes:
+                self.assertEqual([row["relative_path"] for row in runs[mode]["children"]], paths)
+                self.assertEqual(list(projections[mode]["per_file"]), paths[:4])
+                self.assertEqual(runs[mode]["scored_path_set_sha256"],
+                                 attribute.path_set_sha256(paths[:4]))
+            reconciliations = {
+                mode: attribute.reconcile(projections["control-empty"]["aggregate"],
+                                          projections[mode]["aggregate"])
+                for mode in (*attribute.TOKENS, "union")
+            }
+            fixture = attribute._fixture_observations(
+                runs, projections, reconciliations,
+                {"sha256": attribute.sha256_file(expectations_path),
+                 "document": expectations_document},
+            )
+            receipt = {
+                "schema": attribute.SCHEMA, "status": "observed_unreviewed",
+                "run_root": str(root.resolve()), "token_contract": {
+                    "individual": list(attribute.TOKENS), "union": attribute.UNION,
+                },
+                "selection": selection, "floors": {"min_files": 5, "min_tags": 4},
+                "runs": runs, "projections": projections,
+                "reconciliations": reconciliations, "fixture_contract": fixture,
+                "pre_seam": {}, "pre_seam_control": attribute._validate_pre_seam_control(runs, selection),
+                "inertness": attribute._validate_inertness(runs, selection),
+                "failed_stage": None, "failure": None,
+            }
+            receipt["artifact_index"] = attribute._artifact_index(root)
+            with mock.patch.object(attribute, "_validate_pre_seam_proof"):
+                attribute.validate_v3_receipt(receipt, root, replay=True)
+                for label, change in (
+                    ("selected count", lambda r: r["selection"].update(selected_files=4)),
+                    ("scored count", lambda r: r["selection"].update(scored_files=5)),
+                    ("scored hash", lambda r: r["selection"].update(scored_path_set_sha256="0" * 64)),
+                    ("exception", lambda r: r["selection"].update(non_comparable_inputs=[])),
+                    ("extra exception", lambda r: r["selection"]["non_comparable_inputs"].append(
+                        {**attribute.EMPTY_INPUT_DIAGNOSTIC, "relative_path": "ordinary.bin"})),
+                    ("missing child", lambda r: r["runs"]["union"]["children"].pop()),
+                    ("wrong run hash", lambda r: r["runs"]["engine"].update(scored_path_set_sha256="0" * 64)),
+                    ("loss corpus", lambda r: r["fixture_contract"]["observed_loss_payload"].update(corpus=paths)),
+                    ("floor", lambda r: r["floors"].update(min_tags=400000)),
+                    ("file floor", lambda r: r["floors"].update(min_files=4)),
+                ):
+                    forged = copy.deepcopy(receipt)
+                    change(forged)
+                    with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                        attribute.validate_v3_receipt(forged, root, replay=True)
+                for label, mode, relative, side, change in (
+                    ("forged oracle exit", "union", paths[-1], "oracle",
+                     lambda p: p["oracle"].update(returncode=0)),
+                    ("second failing file", "union", paths[3], "oracle",
+                     lambda p: p["oracle"].update(returncode=1)),
+                    ("candidate exit", "union", paths[-1], "candidate",
+                     lambda p: p["candidate"].update(returncode=1)),
+                    ("oracle timeout", "union", paths[-1], "oracle",
+                     lambda p: p["oracle"].update(timed_out=True)),
+                    ("oracle parse failure", "union", paths[-1], "oracle",
+                     lambda p: p["oracle"].update(parse_status="failed")),
+                    ("oracle argv", "union", paths[-1], "oracle",
+                     lambda p: p["oracle"]["argv"].__setitem__(-1, "other.jpg")),
+                ):
+                    forged = copy.deepcopy(receipt)
+                    index = paths.index(relative)
+                    child = forged["runs"][mode]["children"][index]
+                    process_path = pathlib.Path(child["process"]["path"])
+                    original = process_path.read_bytes()
+                    try:
+                        process = json.loads(original)
+                        change(process)
+                        attribute.write_json(process_path, process)
+                        child["process"] = attribute._artifact_record(process_path)
+                        if relative == paths[-1]:
+                            forged["runs"][mode]["non_comparable_inputs"][0]["process"] = child["process"]
+                        forged["artifact_index"] = attribute._artifact_index(root)
+                        with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                            attribute.validate_v3_receipt(forged, root, replay=True)
+                    finally:
+                        process_path.write_bytes(original)
+                for label, mode, document in (
+                    ("wrong mode deletion", "engine", {"File:Warning": "Unsupported format", "Status": "Unsupported"}),
+                    ("partial trio deletion", "producers", {"File:MIMEType": "image/jpeg", "File:Warning": "Unsupported format", "Status": "Unsupported"}),
+                    ("altered remaining value", "producers", {"File:Warning": "changed", "Status": "Unsupported"}),
+                    ("added field", "union", {"File:Warning": "Unsupported format", "Status": "Unsupported", "Extra": 1}),
+                    ("reordered fields", "union", {"Status": "Unsupported", "File:Warning": "Unsupported format"}),
+                    ("retyped field", "producers", {"File:Warning": "Unsupported format", "Status": 1}),
+                ):
+                    forged = copy.deepcopy(receipt)
+                    child = forged["runs"][mode]["children"][-1]
+                    process_path = pathlib.Path(child["process"]["path"])
+                    process_original = process_path.read_bytes()
+                    process = json.loads(process_original)
+                    stdout_path = pathlib.Path(process["candidate"]["stdout"]["path"])
+                    parsed_path = pathlib.Path(process["candidate"]["parsed"]["path"])
+                    stdout_original = stdout_path.read_bytes()
+                    parsed_original = parsed_path.read_bytes()
+                    try:
+                        stdout_path.write_text(json.dumps([document]) + "\n")
+                        attribute.write_json(parsed_path, document)
+                        process["candidate"]["stdout"] = attribute._artifact_record(stdout_path)
+                        process["candidate"]["parsed"] = attribute._artifact_record(parsed_path)
+                        attribute.write_json(process_path, process)
+                        child["process"] = attribute._artifact_record(process_path)
+                        forged["runs"][mode]["non_comparable_inputs"][0]["process"] = child["process"]
+                        forged["artifact_index"] = attribute._artifact_index(root)
+                        with self.subTest(label=label), self.assertRaisesRegex(
+                            attribute.ReceiptError, "diagnostic candidate output changed"
+                        ):
+                            attribute.validate_v3_receipt(forged, root, replay=True)
+                    finally:
+                        process_path.write_bytes(process_original)
+                        stdout_path.write_bytes(stdout_original)
+                        parsed_path.write_bytes(parsed_original)
+                for label, side, artifact_name, raw, parsed in (
+                    ("forged oracle error", "oracle", "stdout",
+                     b'[{"ExifTool:ExifToolVersion":13.59,"ExifTool:Error":"wrong"}]\n',
+                     {"ExifTool:ExifToolVersion": "13.59", "ExifTool:Error": "wrong"}),
+                    ("candidate stderr", "candidate", "stderr", b"unexpected", None),
+                ):
+                    forged = copy.deepcopy(receipt)
+                    child = forged["runs"]["union"]["children"][-1]
+                    process_path = pathlib.Path(child["process"]["path"])
+                    process_original = process_path.read_bytes()
+                    process = json.loads(process_original)
+                    artifact_path = pathlib.Path(process[side][artifact_name]["path"])
+                    artifact_original = artifact_path.read_bytes()
+                    parsed_path = pathlib.Path(process[side]["parsed"]["path"])
+                    parsed_original = parsed_path.read_bytes()
+                    try:
+                        artifact_path.write_bytes(raw)
+                        process[side][artifact_name] = attribute._artifact_record(artifact_path)
+                        if parsed is not None:
+                            attribute.write_json(parsed_path, parsed)
+                            process[side]["parsed"] = attribute._artifact_record(parsed_path)
+                        attribute.write_json(process_path, process)
+                        child["process"] = attribute._artifact_record(process_path)
+                        forged["runs"]["union"]["non_comparable_inputs"][0]["process"] = child["process"]
+                        forged["artifact_index"] = attribute._artifact_index(root)
+                        with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                            attribute.validate_v3_receipt(forged, root, replay=True)
+                    finally:
+                        process_path.write_bytes(process_original)
+                        artifact_path.write_bytes(artifact_original)
+                        parsed_path.write_bytes(parsed_original)
+                reviewed_document = copy.deepcopy(expectations_document)
+                reviewed_document["review_status"] = "reviewed_exact"
+                reviewed_document["exact_loss_expectations"] = copy.deepcopy(
+                    fixture["observed_loss_payload"]
+                )
+                self.assertEqual(reviewed_document["exact_loss_expectations"]["corpus"], paths[:4])
+                self.assertEqual(reviewed_document["exact_loss_expectations"]["non_comparable_inputs"],
+                                 [attribute.EMPTY_INPUT_DIAGNOSTIC])
+                attribute._validate_expectations_document(reviewed_document, selection)
+                wrong_document = copy.deepcopy(reviewed_document)
+                wrong_document["exact_loss_expectations"]["corpus"] = paths
+                with self.assertRaisesRegex(attribute.ReceiptError, "exact expectations schema"):
+                    attribute._validate_expectations_document(wrong_document, selection)
+                attribute.write_json(expectations_path, reviewed_document)
+                reviewed_receipt = copy.deepcopy(receipt)
+                reviewed_receipt["fixture_contract"] = attribute._fixture_observations(
+                    runs, projections, reconciliations,
+                    {"sha256": attribute.sha256_file(expectations_path),
+                     "document": reviewed_document},
+                )
+                reviewed_receipt["status"] = "success"
+                reviewed_receipt["artifact_index"] = attribute._artifact_index(root)
+                attribute.validate_v3_receipt(reviewed_receipt, root, replay=True)
+                attribute.require_success_status(reviewed_receipt["status"])
 
 
 class RouteLedgerTests(unittest.TestCase):
