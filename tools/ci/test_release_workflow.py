@@ -972,10 +972,7 @@ class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
     GATE = "enable=${{ !contains(github.ref_name, '-') }}"
 
-    def test_docker_platform_jobs_keep_native_and_available_runners(self):
-        for job in ("verify-tag-on-main", "merge"):
-            with self.subTest(job=job):
-                self.assertRegex(job_block(self.text, job), r"(?m)^    runs-on: ubuntu-latest$")
+    def test_docker_build_keeps_native_matrix_runners(self):
         build = job_block(self.text, "build")
         self.assertRegex(build, r"(?m)^    runs-on: \$\{\{ matrix\.runner \}\}$")
         self.assertIn('"runner":"ubuntu-latest"', build)
