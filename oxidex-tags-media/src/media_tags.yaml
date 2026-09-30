@@ -17929,7 +17929,7 @@ tables:
         description: "Information"
       - id: "kywd"
         name: "Keywords"
-        writable: true
+        writable: false
         type: "?"
         description: "Keywords"
       - id: "DcMD"
@@ -17994,7 +17994,7 @@ tables:
         description: "Make"
       - id: "manu"
         name: "Make"
-        writable: true
+        writable: false
         type: "?"
         description: "Make"
       - id: "©mak"
@@ -18084,7 +18084,7 @@ tables:
         description: "Camera Model Name"
       - id: "modl"
         name: "Model"
-        writable: true
+        writable: false
         type: "?"
         description: "Camera Model Name"
       - id: "©mdl"
@@ -18219,7 +18219,7 @@ tables:
         description: "Play Selection"
       - id: "RTHU"
         name: "PreviewImage"
-        writable: true
+        writable: false
         type: "?"
         description: "Preview Image"
       - id: "SIGM#PreviewImage"
@@ -18464,7 +18464,7 @@ tables:
         description: "Thumbnail PNG"
       - id: "nail"
         name: "ThumbnailTIFF"
-        writable: true
+        writable: false
         type: "?"
         description: "Thumbnail TIFF"
       - id: "time"

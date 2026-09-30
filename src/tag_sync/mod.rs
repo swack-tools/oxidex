@@ -305,6 +305,20 @@ fn source_write_also(doc: &serde_json::Value, module: &str, table: &str, id: &st
     control["present"].as_bool() == Some(true) && perl_truthy(&control["value"])
 }
 
+/// The authenticated native sidecar records per-tag effective Writable after
+/// ExifTool applies table defaults and conversion rules. Its explicit false
+/// value vetoes a raw table-level WRITABLE inheritance.
+fn source_effective_writable_refused(
+    doc: &serde_json::Value,
+    module: &str,
+    table: &str,
+    id: &str,
+) -> bool {
+    let property =
+        &doc["native_write_tables"][module][table]["rows"][id]["effective_properties"]["Writable"];
+    property["present"].as_bool() == Some(true) && !perl_truthy(&property["value"])
+}
+
 /// Mirror TagInfoXML's effective writable rule: a source write format is
 /// necessary, and a code/string conversion needs an inverse unless WriteAlso
 /// supplies the write path. Hash and array conversions need no explicit inverse.
@@ -312,7 +326,11 @@ fn resolve_writable(
     entry: &serde_json::Value,
     table_writable: Option<&str>,
     write_also: bool,
+    effective_refused: bool,
 ) -> bool {
+    if effective_refused {
+        return false;
+    }
     let own = entry.get("Writable").and_then(|v| v.as_str());
     let effective = own.or(table_writable);
     if matches!(effective, None | Some("0" | "" | "false")) {
@@ -621,6 +639,12 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                                 entry,
                                 None,
                                 source_write_also(doc, module_name, table_symbol, tag_key),
+                                source_effective_writable_refused(
+                                    doc,
+                                    module_name,
+                                    table_symbol,
+                                    tag_key,
+                                ),
                             ),
                             type_name: resolve_type(entry),
                             description: Some(entry_description(entry, &name)),
@@ -770,6 +794,7 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                         entry,
                         table_writable,
                         source_write_also(doc, module_name, table_symbol, tag_key),
+                        source_effective_writable_refused(doc, module_name, table_symbol, tag_key),
                     ),
                     type_name: resolve_type(entry),
                     description: Some(entry_description(entry, &name)),
@@ -987,19 +1012,57 @@ mod tests {
         let photoshop = serde_json::json!({
             "Name": "URL_List", "Writable": "1", "ValueConv": {"kind": "code"}
         });
-        assert!(!resolve_writable(&photoshop, None, false));
-        assert!(resolve_writable(&photoshop, None, true));
+        assert!(!resolve_writable(&photoshop, None, false, false));
+        assert!(resolve_writable(&photoshop, None, true, false));
 
         let enum_conversion = serde_json::json!({
             "Writable": "1", "PrintConv": {"kind": "enum"}
         });
-        assert!(resolve_writable(&enum_conversion, None, false));
+        assert!(resolve_writable(&enum_conversion, None, false, false));
 
         let inverse = serde_json::json!({
             "Writable": "1", "ValueConv": {"kind": "expr"},
             "ValueConvInv": {"kind": "expr"}
         });
-        assert!(resolve_writable(&inverse, None, false));
+        assert!(resolve_writable(&inverse, None, false, false));
+
+        let sidecar = serde_json::json!({"native_write_tables": {"QuickTime": {"UserData": {
+            "rows": {
+                "kywd": {"effective_properties": {"Writable": {
+                    "present": true, "value": "0"
+                }}},
+                "name": {"effective_properties": {"Writable": {
+                    "present": false, "value": null
+                }}}
+            }
+        }}}});
+        let table_default = Some("1");
+        let keyword = serde_json::json!({"Name": "Keyword"});
+        let name = serde_json::json!({"Name": "Name"});
+        assert!(source_effective_writable_refused(
+            &sidecar,
+            "QuickTime",
+            "UserData",
+            "kywd"
+        ));
+        assert!(!resolve_writable(
+            &keyword,
+            table_default,
+            false,
+            source_effective_writable_refused(&sidecar, "QuickTime", "UserData", "kywd")
+        ));
+        assert!(!source_effective_writable_refused(
+            &sidecar,
+            "QuickTime",
+            "UserData",
+            "name"
+        ));
+        assert!(resolve_writable(
+            &name,
+            table_default,
+            false,
+            source_effective_writable_refused(&sidecar, "QuickTime", "UserData", "name")
+        ));
 
         let sidecar = serde_json::json!({"native_write_tables": {"Exif": {"Composite": {
             "rows": {"GPSPosition": {"write_controls": {"WriteAlso": {
@@ -1013,6 +1076,30 @@ mod tests {
             "GPSPosition"
         ));
         assert!(!source_write_also(&sidecar, "Exif", "Composite", "Other"));
+    }
+
+    #[test]
+    fn explicit_native_writable_refusal_overrides_table_default() {
+        let dump = serde_json::json!({
+            "modules": {"QuickTime": {"tables": {"UserData": {
+                "full_name": "Image::ExifTool::QuickTime::UserData",
+                "meta": {"WRITABLE": "1"},
+                "tags": {"kywd": {"Name": "Keyword"}, "name": {"Name": "Name"}}
+            }}}},
+            "native_write_tables": {"QuickTime": {"UserData": {"rows": {
+                "kywd": {"effective_properties": {"Writable": {
+                    "present": true, "value": "0"
+                }}},
+                "name": {"effective_properties": {"Writable": {
+                    "present": false, "value": null
+                }}}
+            }}}}
+        });
+        let records = tag_records_from_dump_document(&dump).expect("project source table");
+        let keyword = records.iter().find(|record| record.id == "kywd").unwrap();
+        let name = records.iter().find(|record| record.id == "name").unwrap();
+        assert!(!keyword.writable);
+        assert!(name.writable);
     }
 
     #[test]
