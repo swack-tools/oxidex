@@ -222,6 +222,9 @@ struct Frame {
     /// This element's contribution to the flattened tag ID, or `None` when its
     /// namespace prefix is one ExifTool ignores.
     part: Option<String>,
+    /// Raw source identity before FlatName and field display-name rewrites.
+    namespace: String,
+    local: String,
     /// Namespace URI backing `part`, used to scope the FlatName overrides.
     uri: Option<String>,
     /// ExifTool family-1 group (`XMP-<prefix>`) for this element's prefix,
@@ -248,6 +251,37 @@ struct Frame {
 /// collected into one List-valued tag joined with `", "`, the way ExifTool's own
 /// text output joins a List.
 pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
+    Ok(extract_flattened_struct_fields_with_priority(xml_bytes)?
+        .into_iter()
+        .map(|(tag, values, _)| (tag, values))
+        .collect())
+}
+
+/// Generic structure values with FoundXMP priority from each raw RDF path.
+pub(crate) fn extract_flattened_struct_fields_with_priority(
+    xml_bytes: &[u8],
+) -> Result<Vec<(String, Vec<String>, i16)>> {
+    extract_flattened_struct_fields_in_directory(xml_bytes, false)
+}
+
+pub(crate) fn extract_flattened_struct_fields_in_directory(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, Vec<String>, i16)>> {
+    Ok(
+        extract_flattened_struct_fields_with_identity(xml_bytes, low_default)?
+            .into_iter()
+            .map(|(tag, values, priority, _)| (tag, values, priority))
+            .collect(),
+    )
+}
+
+pub(crate) type RawPath = Vec<(String, String)>;
+
+pub(crate) fn extract_flattened_struct_fields_with_identity(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, Vec<String>, i16, RawPath)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
@@ -255,7 +289,7 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
     let mut buf = Vec::new();
     let mut stack: Vec<Frame> = Vec::new();
     // (flattened id, values) in first-seen order.
-    let mut collected: Vec<(String, Vec<String>)> = Vec::new();
+    let mut collected: Vec<(String, Vec<String>, i16, RawPath)> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -266,14 +300,14 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
                 // carrying it, so `<Camera:DepthMap DepthMap:Far="0.32"/>`
                 // is CamerasCameraDepthMapFar, not CamerasCameraFar.
                 stack.push(frame);
-                emit_attributes(&e, &resolver, &stack, &mut collected)?;
+                emit_attributes(&e, &resolver, &stack, &mut collected, low_default)?;
             }
 
             Ok(Event::Empty(e)) => {
                 let frame = push_frame(&e, &mut resolver, &mut stack)?;
                 stack.push(frame);
-                emit_attributes(&e, &resolver, &stack, &mut collected)?;
-                close_frame(&mut stack, &mut collected);
+                emit_attributes(&e, &resolver, &stack, &mut collected, low_default)?;
+                close_frame(&mut stack, &mut collected, low_default);
                 resolver.pop_element_scope();
             }
 
@@ -287,7 +321,7 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
             }
 
             Ok(Event::End(_)) => {
-                close_frame(&mut stack, &mut collected);
+                close_frame(&mut stack, &mut collected, low_default);
                 resolver.pop_element_scope();
             }
 
@@ -334,6 +368,12 @@ fn push_frame(
     Ok(Frame {
         part: (!ignored).then(|| tag_id_segment(rename_field(uri.as_deref(), local))),
         group: resolver.group_for_prefix(prefix),
+        namespace: resolver
+            .group_for_prefix(prefix)
+            .strip_prefix("XMP-")
+            .unwrap_or("")
+            .to_string(),
+        local: local.to_string(),
         uri,
         lang: lang_attribute(element)?,
         // An element with no content of its own takes its value from
@@ -356,7 +396,11 @@ fn push_frame(
 
 /// Pops the innermost frame, reporting its text as a leaf value when it had no
 /// child elements of its own.
-fn close_frame(stack: &mut Vec<Frame>, collected: &mut Vec<(String, Vec<String>)>) {
+fn close_frame(
+    stack: &mut Vec<Frame>,
+    collected: &mut Vec<(String, Vec<String>, i16, RawPath)>,
+    low_default: bool,
+) {
     let Some(frame) = stack.pop() else {
         return;
     };
@@ -375,7 +419,13 @@ fn close_frame(stack: &mut Vec<Frame>, collected: &mut Vec<(String, Vec<String>)
     if frame.uri.as_deref() == Some(RDF_NS)
         && let Some(tag) = google_device_container_type_tag(stack, &value)
     {
-        record(collected, tag, value.clone());
+        record(
+            collected,
+            tag,
+            value.clone(),
+            path_priority(stack, None, low_default),
+            raw_path(stack, None),
+        );
     }
     if value.is_empty() {
         // An empty struct field -- `<mwg-rs:Extensions rdf:parseType="Resource"/>`
@@ -389,7 +439,8 @@ fn close_frame(stack: &mut Vec<Frame>, collected: &mut Vec<(String, Vec<String>)
     }
     stack.push(frame);
     if let Some(tag) = flat_tag_name(stack, None) {
-        record(collected, tag, value);
+        let priority = path_priority(stack, None, low_default);
+        record(collected, tag, value, priority, raw_path(stack, None));
     }
     stack.pop();
 }
@@ -419,7 +470,8 @@ fn emit_attributes(
     element: &BytesStart,
     resolver: &NamespaceResolver,
     stack: &[Frame],
-    collected: &mut Vec<(String, Vec<String>)>,
+    collected: &mut Vec<(String, Vec<String>, i16, RawPath)>,
+    low_default: bool,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -444,10 +496,49 @@ fn emit_attributes(
         }
         let leaf = rename_field(uri, local);
         if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(leaf))) {
-            record(collected, tag, value.to_string());
+            let namespace = resolver.group_for_prefix(prefix);
+            let priority = path_priority(
+                stack,
+                Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
+                low_default,
+            );
+            record(
+                collected,
+                tag,
+                value.to_string(),
+                priority,
+                raw_path(
+                    stack,
+                    Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
+                ),
+            );
         }
     }
     Ok(())
+}
+
+fn path_priority(stack: &[Frame], extra: Option<(&str, &str)>, low_default: bool) -> i16 {
+    let mut path: Vec<super::priority::PathProperty<'_>> = stack
+        .iter()
+        .filter(|frame| frame.part.is_some())
+        .map(|frame| super::priority::PathProperty::new(&frame.namespace, &frame.local))
+        .collect();
+    if let Some((namespace, local)) = extra {
+        path.push(super::priority::PathProperty::new(namespace, local));
+    }
+    super::priority::property_priority_in_directory(&path, low_default).into()
+}
+
+fn raw_path(stack: &[Frame], extra: Option<(&str, &str)>) -> RawPath {
+    let mut path: RawPath = stack
+        .iter()
+        .filter(|frame| frame.part.is_some())
+        .map(|frame| (frame.namespace.clone(), frame.local.clone()))
+        .collect();
+    if let Some((namespace, local)) = extra {
+        path.push((namespace.to_string(), local.to_string()));
+    }
+    path
 }
 
 /// Builds the reported tag name for the current path, or `None` when the path
@@ -573,6 +664,45 @@ fn rename_field<'a>(uri: Option<&str>, local: &'a str) -> &'a str {
 /// `ParseXMPElement` diverts them into the blank-node table instead of calling
 /// `FoundXMP`.
 pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    Ok(extract_blank_node_fields_with_priority(xml_bytes)?
+        .into_iter()
+        .map(|(tag, value, _)| (tag, value))
+        .collect())
+}
+
+#[derive(Clone)]
+struct NodeField {
+    name: String,
+    value: String,
+    namespace: String,
+    local: String,
+}
+
+/// Blank-node union with the reference property's original path and each
+/// field's own namespace. Definition-site display names cannot identify the
+/// table entry when two raw IDs print under the same name.
+pub(crate) fn extract_blank_node_fields_with_priority(
+    xml_bytes: &[u8],
+) -> Result<Vec<(String, String, i16)>> {
+    extract_blank_node_fields_in_directory(xml_bytes, false)
+}
+
+pub(crate) fn extract_blank_node_fields_in_directory(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, String, i16)>> {
+    Ok(
+        extract_blank_node_fields_with_identity(xml_bytes, low_default)?
+            .into_iter()
+            .map(|(tag, value, priority, _)| (tag, value, priority))
+            .collect(),
+    )
+}
+
+pub(crate) fn extract_blank_node_fields_with_identity(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<Vec<(String, String, i16, RawPath)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
@@ -580,9 +710,9 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
     let mut buf = Vec::new();
     let mut stack: Vec<Frame> = Vec::new();
     // nodeID -> (field name, value), in first-seen order.
-    let mut nodes: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut nodes: Vec<(String, Vec<NodeField>)> = Vec::new();
     // (tag-name prefix, nodeID) for each property referencing a node.
-    let mut references: Vec<(String, String)> = Vec::new();
+    let mut references: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
     // Depth at which the innermost node definition started, and its ID.
     let mut node_scope: Vec<(usize, String)> = Vec::new();
 
@@ -603,14 +733,19 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                     if let Some(prefix) = reference_prefix(&stack) {
                         // `prefix` is `XMP-<ns>:<Name>`: the reference
                         // property's group and flattened name.
-                        references.push((prefix, node_id.clone()));
+                        let path = stack
+                            .iter()
+                            .filter(|frame| frame.part.is_some())
+                            .map(|frame| (frame.namespace.clone(), frame.local.clone()))
+                            .collect();
+                        references.push((prefix, node_id.clone(), path));
                     }
                     if nodes.iter().all(|(id, _)| *id != node_id) {
                         nodes.push((node_id.clone(), Vec::new()));
                     }
                     // Attributes on the node element are fields of the node.
-                    for (name, value) in shorthand_fields(e, &resolver)? {
-                        push_node_field(&mut nodes, &node_id, name, value);
+                    for field in shorthand_fields(e, &resolver)? {
+                        push_node_field(&mut nodes, &node_id, field);
                     }
                     if !is_empty {
                         node_scope.push((stack.len(), node_id));
@@ -622,7 +757,17 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                     // A direct child element of a node definition is one of its
                     // fields; an rdf:resource attribute stands in for the value.
                     if let Some(resource) = attribute_value(e, b"rdf:resource")? {
-                        push_node_field(&mut nodes, &id, part, resource);
+                        let frame = &stack[stack.len() - 1];
+                        push_node_field(
+                            &mut nodes,
+                            &id,
+                            NodeField {
+                                name: part,
+                                value: resource,
+                                namespace: frame.namespace.clone(),
+                                local: frame.local.clone(),
+                            },
+                        );
                     }
                 }
 
@@ -649,7 +794,16 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                     {
                         let value = frame.text.trim();
                         if !value.is_empty() {
-                            push_node_field(&mut nodes, &id, part.clone(), value.to_string());
+                            push_node_field(
+                                &mut nodes,
+                                &id,
+                                NodeField {
+                                    name: part.clone(),
+                                    value: value.to_string(),
+                                    namespace: frame.namespace.clone(),
+                                    local: frame.local.clone(),
+                                },
+                            );
                         }
                     }
                     if node_scope
@@ -674,15 +828,33 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
         buf.clear();
     }
 
-    let mut out = Vec::new();
-    for (prefix, node_id) in &references {
+    let mut out: Vec<(String, String, i16, RawPath)> = Vec::new();
+    for (prefix, node_id, path) in &references {
         let Some((_, fields)) = nodes.iter().find(|(id, _)| id == node_id) else {
             continue;
         };
-        for (field, value) in fields {
-            let tag = format!("{prefix}{field}");
-            if !out.iter().any(|(t, _): &(String, String)| *t == tag) {
-                out.push((tag, value.clone()));
+        for field in fields {
+            let tag = format!("{prefix}{}", field.name);
+            let mut source_path = path.clone();
+            source_path.push((field.namespace.clone(), field.local.clone()));
+            if !out
+                .iter()
+                .any(|(_, _, _, known_path)| *known_path == source_path)
+            {
+                let mut raw = path
+                    .iter()
+                    .map(|(namespace, local)| super::priority::PathProperty::new(namespace, local))
+                    .collect::<Vec<_>>();
+                raw.push(super::priority::PathProperty::new(
+                    &field.namespace,
+                    &field.local,
+                ));
+                out.push((
+                    tag,
+                    field.value.clone(),
+                    super::priority::property_priority_in_directory(&raw, low_default).into(),
+                    source_path,
+                ));
             }
         }
     }
@@ -705,12 +877,7 @@ fn reference_prefix(stack: &[Frame]) -> Option<String> {
     group.map(|group| format!("{group}:{prefix}"))
 }
 
-fn push_node_field(
-    nodes: &mut Vec<(String, Vec<(String, String)>)>,
-    node_id: &str,
-    name: String,
-    value: String,
-) {
+fn push_node_field(nodes: &mut Vec<(String, Vec<NodeField>)>, node_id: &str, field: NodeField) {
     let entry = match nodes.iter_mut().find(|(id, _)| id == node_id) {
         Some(entry) => entry,
         None => {
@@ -720,16 +887,17 @@ fn push_node_field(
                 .expect("just pushed a node entry, so last_mut cannot be None")
         }
     };
-    if !entry.1.iter().any(|(n, _)| *n == name) {
-        entry.1.push((name, value));
+    if !entry
+        .1
+        .iter()
+        .any(|known| known.namespace == field.namespace && known.local == field.local)
+    {
+        entry.1.push(field);
     }
 }
 
 /// The non-ignored prefixed attributes of `element` as `(FieldName, value)`.
-fn shorthand_fields(
-    element: &BytesStart,
-    resolver: &NamespaceResolver,
-) -> Result<Vec<(String, String)>> {
+fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Result<Vec<NodeField>> {
     let mut out = Vec::new();
     for attr in element.attributes().flatten() {
         let Ok(key) = std::str::from_utf8(attr.key.as_ref()) else {
@@ -752,7 +920,16 @@ fn shorthand_fields(
         if value.is_empty() {
             continue;
         }
-        out.push((tag_id_segment(rename_field(uri, local)), value.to_string()));
+        out.push(NodeField {
+            name: tag_id_segment(rename_field(uri, local)),
+            value: value.to_string(),
+            namespace: resolver
+                .group_for_prefix(prefix)
+                .strip_prefix("XMP-")
+                .unwrap_or("")
+                .to_string(),
+            local: local.to_string(),
+        });
     }
     Ok(out)
 }
@@ -769,10 +946,19 @@ fn attribute_value(element: &BytesStart, name: &[u8]) -> Result<Option<String>> 
     Ok(None)
 }
 
-fn record(collected: &mut Vec<(String, Vec<String>)>, tag: String, value: String) {
-    match collected.iter_mut().find(|(id, _)| *id == tag) {
-        Some((_, values)) => values.push(value),
-        None => collected.push((tag, vec![value])),
+fn record(
+    collected: &mut Vec<(String, Vec<String>, i16, RawPath)>,
+    tag: String,
+    value: String,
+    priority: i16,
+    path: RawPath,
+) {
+    match collected
+        .iter_mut()
+        .find(|(id, _, _, known_path)| *id == tag && *known_path == path)
+    {
+        Some((_, values, _, _)) => values.push(value),
+        None => collected.push((tag, vec![value], priority, path)),
     }
 }
 
@@ -811,6 +997,37 @@ fn register_namespaces(element: &BytesStart, resolver: &mut NamespaceResolver) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_structure_paths_keep_fixed_and_variable_table_priorities() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:iptcExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+          xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+          xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
+          xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#">
+          <rdf:Description>
+            <iptcExt:ImageRegion rdf:parseType="Resource"><xmp:Rating>5</xmp:Rating></iptcExt:ImageRegion>
+            <xmpMM:DerivedFrom rdf:parseType="Resource" stRef:documentID="raw-id"/>
+          </rdf:Description></rdf:RDF>"#;
+        let fields = extract_flattened_struct_fields_with_priority(xml).unwrap();
+        assert_eq!(
+            fields
+                .iter()
+                .find(|(tag, _, _)| tag == "XMP-iptcExt:ImageRegionRating")
+                .map(|(_, _, p)| *p),
+            Some(1)
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|(tag, _, _)| tag == "XMP-xmpMM:DerivedFromDocumentID")
+                .map(|(_, _, p)| *p),
+            Some(1)
+        );
+    }
 
     fn value_of(tags: &[(String, Vec<String>)], tag: &str) -> Option<String> {
         tags.iter()

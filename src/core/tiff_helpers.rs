@@ -746,6 +746,26 @@ fn process_tiff_ifd_tags_indexed<'a>(
         }
         arbiter.see_entry(*tag_id, *field_type, bytes, byte_order);
 
+        // Exif::Main routes IFD0 tag 700 through XMP::Main at this entry's
+        // physical position. Keep each raw-ID copy and its signed priority.
+        if *tag_id == 0x02bc
+            && let Ok((entries, value_forms, gps_sources)) =
+                crate::parsers::xmp::rdf_parser::parse_xmp_entries_with_source_forms(bytes)
+        {
+            for (entry, source) in entries.iter().zip(&gps_sources) {
+                crate::parsers::xmp::rdf_parser::insert_xmp_entry_with_source(
+                    metadata,
+                    entry,
+                    entry.tag_value(true),
+                    source.as_deref(),
+                );
+            }
+            for (tag_name, form) in value_forms {
+                metadata.set_value_form(tag_name, form);
+            }
+            continue;
+        }
+
         // Check for EXIF Sub-IFD pointer (tag 0x8769): ExifTool reads the
         // sub-directory here, before the entries after it.
         if *tag_id == 0x8769 && bytes.len() >= 4 {
@@ -6006,7 +6026,11 @@ mod exif_subifd_tests {
         assert_eq!(metadata.get_string("ExifIFD:WhiteBalance"), Some("Manual"));
         let occurrences = metadata.occurrences_for("ExifIFD:WhiteBalance");
         assert_eq!(occurrences.len(), 2);
-        assert_eq!(occurrences[0].priority, SHIM_DEFAULT_PRIORITY, "engine");
+        assert_eq!(
+            occurrences[0].priority,
+            i16::from(SHIM_DEFAULT_PRIORITY),
+            "engine"
+        );
         assert_eq!(occurrences[1].priority, 0, "residual 0xfe4e: Avoid");
         let hand = walk_exif(&data, None, None, &[]);
         // The hand arm stores 0xa403 unconverted: 1 is `Manual`.
@@ -8081,7 +8105,7 @@ mod interop_tests {
             }
             assert_eq!(
                 metadata.occurrences_for("InteropIFD:Compression")[0].priority,
-                SHIM_DEFAULT_PRIORITY,
+                i16::from(SHIM_DEFAULT_PRIORITY),
                 "{producer}"
             );
             assert_eq!(
@@ -8495,7 +8519,7 @@ mod interop_tests {
             let key = format!("InteropIFD:{name}");
             assert_eq!(
                 metadata.occurrences_for(&key)[0].priority,
-                SHIM_DEFAULT_PRIORITY,
+                i16::from(SHIM_DEFAULT_PRIORITY),
                 "{key}"
             );
             let winner = crate::cli::tag_resolution::resolve_requested_tags(

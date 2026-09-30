@@ -68,7 +68,9 @@ use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
 use crate::io::ByteOrder;
-use crate::parsers::xmp::generic_xml::{XmlWalkOptions, extract_xml_properties_with};
+use crate::parsers::xmp::generic_xml::{
+    XmlWalkOptions, extract_xml_properties_with, xml_table_priority,
+};
 
 /// Jpeg2000.pm:1547-1548, the two `jP` signature boxes `ProcessJP2` accepts.
 const JP2_SIGNATURES: [&[u8]; 2] = [
@@ -491,14 +493,14 @@ fn xml_box(payload: &[u8], metadata: &mut MetadataMap) {
         return;
     };
     for property in properties {
-        metadata.insert_occurrence(
-            format!("{}:{}", property.group1, property.name),
+        let priority = xml_table_priority(&property);
+        metadata.insert_xmp_occurrence(
+            format!("XML:{}", property.name),
             TagValue::new_string(property.value),
-            // `FoundXMP` mints an unknown tag at priority 0 (XMP.pm:3595) --
-            // the same reasoning `generic_xml::parse_xml_file` records.
-            0,
+            None,
+            None,
+            priority,
             &property.group1,
-            Instance::default(),
         );
     }
 }
@@ -553,7 +555,7 @@ fn uuid_box(payload: &[u8], metadata: &mut MetadataMap) {
         metadata.insert_copied_occurrence(
             key.clone(),
             occurrence,
-            priority,
+            priority.into(),
             &group1,
             Instance::default(),
         );

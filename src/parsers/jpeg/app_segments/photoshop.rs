@@ -55,6 +55,7 @@ const RES_SLICE_INFO: u16 = 0x041A;
 const RES_URL_LIST: u16 = 0x041E;
 const RES_VERSION_INFO: u16 = 0x0421;
 const RES_IPTC_DIGEST: u16 = 0x0425;
+const RES_XMP: u16 = 0x0424;
 const RES_PRINT_SCALE_INFO: u16 = 0x0426;
 const RES_PIXEL_INFO: u16 = 0x0428;
 const RES_PHOTOSHOP_THUMBNAIL: u16 = 0x040C;
@@ -346,6 +347,16 @@ fn parse_url_list(data: &[u8]) -> Option<TagValue> {
 ///
 /// Returns `ParseError` if the data doesn't start with the Photoshop signature.
 pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
+    parse_photoshop_irb_with_context(data, false)
+}
+
+/// Exif.pm may reach a Photoshop IRB from a JPEG's TIFF IFD0 instead of
+/// APP13. Photoshop.pm scopes LOW_PRIORITY_DIR{'*'} around that nonstandard
+/// parent only; the APP13, PSD and PDF callers pass false.
+pub(crate) fn parse_photoshop_irb_with_context(
+    data: &[u8],
+    low_default: bool,
+) -> Result<MetadataMap> {
     // Every row here is read from the file (`metadata_map::file_rows`):
     // a caller's later `insert`/`get_mut` is what counts as assigned.
     crate::core::metadata_map::file_rows(|| -> Result<MetadataMap> {
@@ -427,6 +438,18 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
                         ),
                     );
                 }
+                // Photoshop.pm:263-267 routes this resource through
+                // XMP::Main. In a JPEG APP13 directory the scoped
+                // LOW_PRIORITY_DIR{'*'} branch at :1043 is false.
+                RES_XMP => {
+                    let _ = crate::parsers::xmp::rdf_parser::insert_xmp_packet_with_context(
+                        &mut metadata,
+                        block.data,
+                        true,
+                        false,
+                        low_default,
+                    );
+                }
                 // PixelInfo (Photoshop.pm:513-522): ProcessBinaryData,
                 // FIRST_ENTRY 0, only field is index 4 `PixelAspectRatio`
                 // (`Format => 'double'`, no PrintConv -- the raw double prints
@@ -473,6 +496,25 @@ pub fn parse_photoshop_irb(data: &[u8]) -> Result<MetadataMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app13_xmp_resource_keeps_same_group_raw_id_copies() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let file = include_bytes!("../../../../tests/fixtures/xmp_priority/photoshop-app13.jpg");
+        // JPEG SOI (2), APP13 marker and length (4), then IRB preamble.
+        let end = 4 + u16::from_be_bytes([file[4], file[5]]) as usize;
+        let metadata = parse_photoshop_irb(&file[6..end]).unwrap();
+        assert_eq!(metadata.occurrences_for("XMP:Title").len(), 2);
+        assert_eq!(
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "Title")
+                .unwrap()
+                .raw
+                .as_string(),
+            Some("KNOWN")
+        );
+    }
 
     /// Builds one 8BIM resource block with an empty resource name.
     fn irb_block(id: u16, data: &[u8]) -> Vec<u8> {

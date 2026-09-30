@@ -316,6 +316,13 @@ pub(super) fn extract_metadata_with_moov_uuid(
 
         // Extract file-level metadata from ftyp and mdat atoms
         extract_file_level_metadata(root_atoms, &mut metadata);
+        // QuickTime.pm:10016 sets PRIORITY_DIR=XMP except for HEIC. Determine
+        // this from the raw brand, before processing the moov/udta XMP_ atom.
+        let xmp_priority_directory = !root_atoms
+            .iter()
+            .find(|atom| atom.atom_type.matches("ftyp"))
+            .and_then(|atom| atom.data.get(..4))
+            .is_some_and(|brand| brand == b"heic");
 
         // Find the moov atom (movie container) - optional for HEIF/HIF files
         let moov = root_atoms
@@ -343,7 +350,9 @@ pub(super) fn extract_metadata_with_moov_uuid(
                                 extract_track_metadata(&atom, &mut metadata, track_index, is_cr3);
                             track_index += 1;
                         }
-                        "udta" => extract_moov_user_data(&atom, &mut metadata)?,
+                        "udta" => {
+                            extract_moov_user_data(&atom, &mut metadata, xmp_priority_directory)?
+                        }
                         "meta" => extract_mp4_metadata(&atom, &mut metadata)?,
                         _ => {}
                     }
@@ -369,7 +378,7 @@ pub(super) fn extract_metadata_with_moov_uuid(
                 }
 
                 if let Some(udta) = moov.find_child("udta") {
-                    extract_moov_user_data(&udta, &mut metadata)?;
+                    extract_moov_user_data(&udta, &mut metadata, xmp_priority_directory)?;
                 }
 
                 // Extract MP4 metadata (moov→meta with keys/ilst)
@@ -419,7 +428,11 @@ pub(super) fn extract_metadata_with_moov_uuid(
     })
 }
 
-fn extract_moov_user_data(udta: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
+fn extract_moov_user_data(
+    udta: &Atom,
+    metadata: &mut MetadataMap,
+    xmp_priority_directory: bool,
+) -> Result<(), String> {
     // Extract handler metadata (hdlr) - may be in udta or udta→meta
     if let Some(meta) = udta.find_child("meta") {
         // Parse meta children (skip version/flags)
@@ -441,7 +454,7 @@ fn extract_moov_user_data(udta: &Atom, metadata: &mut MetadataMap) -> Result<(),
         extract_handler_metadata(&hdlr, metadata)?;
     }
     // Extract classic QuickTime user data (©xxx atoms)
-    extract_user_data_atoms(udta, metadata)?;
+    extract_user_data_atoms(udta, metadata, xmp_priority_directory)?;
 
     // Extract iTunes-style metadata (udta→meta)
     if let Some(meta) = udta.find_child("meta") {
@@ -2013,7 +2026,11 @@ fn days_to_month_day(mut days: u32, is_leap: bool) -> (u32, u32) {
 }
 
 /// Extract classic QuickTime user data atoms (©xxx and others)
-fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
+fn extract_user_data_atoms(
+    udta: &Atom,
+    metadata: &mut MetadataMap,
+    xmp_priority_directory: bool,
+) -> Result<(), String> {
     let children = udta.parse_children().unwrap_or_default();
 
     for atom in children {
@@ -2227,7 +2244,7 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
                 }
                 "XMP_" => {
                     // XMP metadata atom
-                    let _ = extract_xmp_from_atom(atom.data, metadata);
+                    let _ = extract_xmp_from_atom(atom.data, metadata, xmp_priority_directory);
                 }
                 _ => {
                     // Skip unknown atoms
@@ -3422,7 +3439,11 @@ fn extract_pentax_maker_notes(data: &[u8], metadata: &mut MetadataMap) -> Result
 }
 
 /// Extract XMP metadata from XMP_ atom in QuickTime files
-fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), String> {
+fn extract_xmp_from_atom(
+    data: &[u8],
+    metadata: &mut MetadataMap,
+    xmp_priority_directory: bool,
+) -> Result<(), String> {
     // XMP_ atom contains raw XMP data (XML format)
     // Find the start of XMP data - may start directly or after some header
     let xmp_start = if data.starts_with(b"<?xpacket") {
@@ -3439,7 +3460,12 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
     // The XMP parser's storage keys are already grouped (`XMP:Title`,
     // `XMP-exif:FocalLength`); an extra `XMP:` prefix here used to file
     // `XMP-exif:FocalLength` under the name `XMP-exif:FocalLength`.
-    let _ = crate::parsers::xmp::rdf_parser::insert_xmp_packet(metadata, xmp_data, false);
+    let _ = crate::parsers::xmp::rdf_parser::insert_xmp_packet_in_directory(
+        metadata,
+        xmp_data,
+        false,
+        xmp_priority_directory,
+    );
 
     Ok(())
 }
@@ -3448,6 +3474,43 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 mod tests {
     use super::*;
     use crate::parsers::quicktime::FourCC;
+
+    #[test]
+    fn xmp_priority_directory_applies_to_mov_but_not_heic() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        for (bytes, expected) in [
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/quicktime-priority-isom.mp4")
+                    .as_slice(),
+                "2020:01:01 00:00:00Z",
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/quicktime-priority-heic.mp4")
+                    .as_slice(),
+                "2003:12:30 00:00:00",
+            ),
+            (
+                include_bytes!("../../../tests/fixtures/xmp_priority/quicktime-priority-heix.mp4")
+                    .as_slice(),
+                "2020:01:01 00:00:00Z",
+            ),
+        ] {
+            let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(bytes)
+                .expect("pinned QuickTime priority probe");
+            let winner = crate::cli::tag_resolution::resolve_requested_tag(&metadata, "CreateDate")
+                .expect("CreateDate");
+            assert_eq!(winner.raw.as_string(), Some(expected));
+            assert_eq!(
+                metadata
+                    .occurrences()
+                    .filter(|row| row.name.as_ref() == "CreateDate")
+                    .count(),
+                2
+            );
+        }
+    }
 
     #[test]
     fn multiple_mdat_atoms_keep_individual_sizes_and_sum_only_for_bitrate() {

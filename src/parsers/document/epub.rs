@@ -2,6 +2,9 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::xmp::generic_xml::{
+    XmlWalkOptions, extract_xml_properties_with, xml_table_priority,
+};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::io::{Cursor, Read};
@@ -62,6 +65,37 @@ impl FormatParser for EpubParser {
                     ExifToolError::parse_error(format!("Failed to read OPF file: {}", e))
                 })?;
 
+                // ZIP.pm:696 reads OPF through XMP::XML after ignoring its
+                // package/metadata wrappers. Keep the raw ID and XML family
+                // groups for priority arbitration, including case variants.
+                let options = XmlWalkOptions {
+                    group0: "XML",
+                    ignore_prop: &["package", "metadata"],
+                    ..XmlWalkOptions::default()
+                };
+                if let Ok(properties) = extract_xml_properties_with(content.as_bytes(), &options) {
+                    for property in properties {
+                        let priority = xml_table_priority(&property);
+                        let value = if property.group1 == "XML" && property.raw_id == "lastUpdate" {
+                            // XMP::XML's lastUpdate ValueConv/PrintConv is
+                            // ConvertXMPDate/ConvertDateTime.
+                            property.value.replacen('-', ":", 2)
+                        } else {
+                            property.value
+                        };
+                        metadata.insert_xmp_occurrence(
+                            format!("XML:{}", property.name),
+                            TagValue::new_string(value),
+                            None,
+                            None,
+                            priority,
+                            &property.group1,
+                        );
+                    }
+                }
+                // Retain the legacy EPUB fallback only for OPF fields the XML
+                // walk did not publish. A second EPUB:Title alongside XML-dc
+                // Title is not a separate ExifTool occurrence under -a.
                 parse_opf_metadata(&content, &mut metadata)?;
             }
 
@@ -153,7 +187,11 @@ fn parse_opf_metadata(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                             continue;
                         }
                     };
-                    metadata.insert(tag_name.to_string(), TagValue::new_string(text.to_string()));
+                    let xml_key = format!("XML:{}", tag_name.trim_start_matches("EPUB:"));
+                    if !metadata.contains_key(&xml_key) {
+                        metadata
+                            .insert(tag_name.to_string(), TagValue::new_string(text.to_string()));
+                    }
                 }
             }
             Ok(Event::Eof) => break,
@@ -191,6 +229,25 @@ pub fn parse_epub_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opf_xml_table_uses_raw_dc_ids_and_last_update() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let reader = crate::io::buffered_reader::BufferedReader::from_bytes(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/xml-special.epub"
+        ));
+        let metadata = EpubParser.parse(&reader).unwrap();
+        let titles = metadata.occurrences_for("XML:Title");
+        assert_eq!(titles.len(), 2);
+        assert_eq!(
+            titles.iter().map(|row| row.priority).collect::<Vec<_>>(),
+            [1, 0]
+        );
+        assert!(titles.iter().all(|row| row.group1.as_ref() == "XML-dc"));
+        assert_eq!(metadata.get_string("XML:LastUpdate"), Some("2020:01:01"));
+    }
 
     #[test]
     fn test_extract_opf_path() {

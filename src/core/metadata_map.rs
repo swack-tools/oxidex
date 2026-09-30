@@ -645,11 +645,38 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
-        occurrence.priority = priority;
+        occurrence.priority = priority.into();
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         self.sink.record(key, occurrence);
         previous
+    }
+
+    /// XMP's source table may assign a negative priority (for example
+    /// `XMP-pdf:Keywords` is -1 in ExifTool 13.59). Carry that signed value
+    /// through the same occurrence sink as the ordinary reader rows.
+    pub(crate) fn insert_xmp_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        value_form: Option<TagValue>,
+        stored_form: Option<TagValue>,
+        priority: i16,
+        group1: &str,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let is_list = matches!(&display, TagValue::Array(_));
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = priority;
+        occurrence.is_list = is_list;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.value = value_form;
+        occurrence.stored = stored_form;
+        if occurrence.value.is_some() {
+            occurrence.print = Some(occurrence.raw.clone());
+        }
+        self.sink.record(key, occurrence);
     }
 
     /// Records a row whose physical family-0 group differs from its public
@@ -668,7 +695,7 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
-        occurrence.priority = priority;
+        occurrence.priority = priority.into();
         occurrence.group0 = super::tag_occurrence::intern(group0);
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
@@ -730,7 +757,7 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
-        occurrence.priority = priority;
+        occurrence.priority = priority.into();
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = Some(no_print_conv_value);
@@ -755,22 +782,23 @@ impl MetadataMap {
         &mut self,
         key: K,
         source: &TagOccurrence,
-        priority: u8,
+        priority: i16,
         group1: &str,
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
-        match &source.value {
-            Some(value) => self.insert_occurrence_with_forms(
-                key,
-                source.raw.clone(),
-                value.clone(),
-                source.stored.clone(),
-                priority,
-                group1,
-                instance,
-            ),
-            None => self.insert_occurrence(key, source.raw.clone(), priority, group1, instance),
-        }
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.instance = instance;
+        occurrence.value = source.value.clone();
+        occurrence.print = source.value.as_ref().map(|_| occurrence.raw.clone());
+        occurrence.stored = source.stored.clone();
+        occurrence.is_list = source.is_list;
+        self.sink.record(key, occurrence);
+        previous
     }
 
     /// [`insert()`](Self::insert) of `source`'s value under `key` -- the
@@ -1823,7 +1851,7 @@ mod tests {
         value: Option<TagValue>,
         print: Option<TagValue>,
         stored: Option<TagValue>,
-        priority: u8,
+        priority: i16,
         is_list: bool,
         order: u32,
         origin: Provenance,

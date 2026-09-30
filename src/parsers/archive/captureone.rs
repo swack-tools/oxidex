@@ -317,7 +317,7 @@ fn parse_image_member(
         metadata.insert_copied_occurrence(
             key.as_str(),
             occurrence,
-            SHIM_DEFAULT_PRIORITY,
+            SHIM_DEFAULT_PRIORITY.into(),
             &group1,
             instance,
         );

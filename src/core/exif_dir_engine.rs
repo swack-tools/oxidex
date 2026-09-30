@@ -536,7 +536,7 @@ impl DirEngineRows {
                     value: Some(value),
                     print: Some(row.display.clone()),
                     stored,
-                    priority: row.priority,
+                    priority: row.priority.into(),
                     is_list: tag.flags.list,
                     order: 0,
                     origin: Provenance {
@@ -1673,7 +1673,7 @@ mod tests {
         );
         let occurrences = metadata.occurrences_for("InteropIFD:InteropIndex");
         assert_eq!(occurrences.len(), 1, "one occurrence, recorded once");
-        assert_eq!(occurrences[0].priority, SHIM_DEFAULT_PRIORITY);
+        assert_eq!(occurrences[0].priority, i16::from(SHIM_DEFAULT_PRIORITY));
         assert_eq!(
             metadata
                 .without_print_conv()
@@ -1821,7 +1821,7 @@ mod tests {
         );
         assert_eq!(
             metadata.occurrences_for("InteropIFD:XResolution")[0].priority,
-            SHIM_DEFAULT_PRIORITY
+            i16::from(SHIM_DEFAULT_PRIORITY)
         );
     }
 
