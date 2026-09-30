@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -426,6 +427,72 @@ class CleanSnapshotTests(unittest.TestCase):
         with patch.dict(os.environ, {"SSH_AUTH_SOCK": ""}):
             with self.assertRaisesRegex(qualification.Refused, "signing probe failed"):
                 qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
+
+    def test_owned_signing_probe_ignores_caller_commit_hooks(self) -> None:
+        hooks = self.root / "rejecting-hooks"
+        hooks.mkdir()
+        pre_commit = hooks / "pre-commit"
+        pre_commit.write_text("#!/bin/sh\nexit 42\n")
+        pre_commit.chmod(0o700)
+        git(self.owned, "config", "--local", "core.hooksPath", str(hooks))
+        rejected = subprocess.run(
+            ["git", "-C", str(self.owned), "commit", "--allow-empty", "-S",
+             "-m", "hook should reject"], capture_output=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
+
+    def _detaching_signer(self, name: str, started: Path, escaped: Path) -> Path:
+        wrapper = self.root / name
+        child_script = ("import pathlib,time; time.sleep(1.5); "
+                        f"pathlib.Path({str(escaped)!r}).write_text('escaped')")
+        wrapper.write_text(
+            "#!/usr/bin/env python3\nimport pathlib, subprocess, sys, time\n"
+            f"pathlib.Path({str(started)!r}).write_text('started')\n"
+            f"subprocess.Popen([sys.executable, '-c', {child_script!r}], "
+            "stdout=sys.stdout, stderr=sys.stderr, start_new_session=True)\n"
+            "time.sleep(5)\n")
+        wrapper.chmod(0o700)
+        return wrapper
+
+    def test_owned_signing_probe_reaps_detached_descendant_on_timeout(self) -> None:
+        started = self.root / "signer-started"
+        escaped = self.root / "escaped-marker"
+        wrapper = self._detaching_signer("detaching-signer", started, escaped)
+        git(self.owned, "config", "--local", "gpg.ssh.program", str(wrapper))
+        with patch.object(qualification, "SIGNING_PROBE_TIMEOUT_SECONDS", 0.3):
+            with self.assertRaisesRegex(qualification.Refused, "signing probe timed out"):
+                qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertTrue(started.exists())
+        time.sleep(1.7)
+        self.assertFalse(escaped.exists())
+        self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
+
+    def test_owned_signing_probe_reaps_on_keyboard_interrupt(self) -> None:
+        started = self.root / "interrupt-signer-started"
+        escaped = self.root / "interrupt-escaped-marker"
+        wrapper = self._detaching_signer("interrupt-signer", started, escaped)
+        git(self.owned, "config", "--local", "gpg.ssh.program", str(wrapper))
+        original = subprocess.Popen.communicate
+        interrupted = False
+
+        def interrupt_commit(process: subprocess.Popen, *args: object, **kwargs: object):
+            nonlocal interrupted
+            if not interrupted and "commit" in process.args:
+                deadline = time.monotonic() + 3
+                while not started.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(started.exists())
+                interrupted = True
+                raise KeyboardInterrupt
+            return original(process, *args, **kwargs)
+
+        with patch.object(subprocess.Popen, "communicate", interrupt_commit):
+            with self.assertRaises(KeyboardInterrupt):
+                qualification._preflight_owned_signing(self.owned, self.root)
+        time.sleep(1.7)
+        self.assertFalse(escaped.exists())
         self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
 
     def test_owned_preflight_refuses_includeif_config_lost_in_worktree(self) -> None:
