@@ -972,11 +972,8 @@ class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
     GATE = "enable=${{ !contains(github.ref_name, '-') }}"
 
-    def test_docker_build_keeps_native_matrix_runners(self):
+    def test_docker_build_runs_native_image_smoke_test(self):
         build = job_block(self.text, "build")
-        self.assertRegex(build, r"(?m)^    runs-on: \$\{\{ matrix\.runner \}\}$")
-        self.assertIn('"runner":"ubuntu-latest"', build)
-        self.assertIn('"runner":"ubuntu-24.04-arm"', build)
         self.assertIn("docker run --rm", build)
         self.assertNotIn("setup-qemu-action@", build)
 
@@ -1014,6 +1011,12 @@ class DockerWorkflowTests(unittest.TestCase):
         step = self.meta_step()
         self.assertIn("type=ref,event=tag", step)
         self.assertIn("type=semver,pattern={{version}}", step)
+
+    def test_docker_builds_use_native_architecture_runners(self):
+        build = job_block(self.text, "build")
+        self.assertIn('runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}", docker]', build)
+        self.assertIn('"runner_arch":"X64"', build)
+        self.assertIn('"runner_arch":"ARM64"', build)
 
 
 class TagRecipeTests(unittest.TestCase):
