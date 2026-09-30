@@ -1432,9 +1432,14 @@ mod tests {
             let trailer_start = crate::writers::exif_surgical::jpeg_scan_start(&file)
                 .and_then(|from| crate::parsers::vivo::jpeg_trailer_start(&file, from));
             assert!(trailer_start.is_some());
+            let expected = if matches!(crate::exiftool_oracle::repo_pin(), "11.78" | "12.64") {
+                None
+            } else {
+                Some(MieExif::Absent)
+            };
             assert_eq!(
                 trailer_exif(&file, trailer_start),
-                Some(MieExif::Absent),
+                expected,
                 "no EXIF in its MIE"
             );
             assert_eq!(trailer_exif(&file, None), None, "behind Vivo");

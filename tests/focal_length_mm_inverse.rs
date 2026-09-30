@@ -992,7 +992,10 @@ fn tiff_family_deletions_remove_surfaced_exififd_focal_length() {
         return;
     };
     let source = oracle.command().args(["-ver"]).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&source.stdout).trim(), "13.59");
+    assert_eq!(
+        String::from_utf8_lossy(&source.stdout).trim(),
+        exiftool_oracle::repo_pin()
+    );
     let fixture = fixtures::required_t_images_fixture_path("ExifTool.tif");
     for spelling in ["FocalLength", "EXIF:FocalLength"] {
         let dir = tempfile::tempdir().unwrap();

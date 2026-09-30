@@ -1,9 +1,9 @@
-//! Integration tests for ExifTool's CR3-only local-time rendering of
+//! Integration tests for ExifTool's release-specific CR3 rendering of
 //! QuickTime-container timestamps.
 //!
 //! QuickTime.pm's shared `%timeInfo` block (QuickTime.pm:242-291, reused by
 //! CreateDate/ModifyDate/MediaCreateDate/MediaModifyDate/TrackCreateDate/
-//! TrackModifyDate) renders those fields through:
+//! TrackModifyDate) renders those fields through this 12.64/13.59 rule:
 //! ```text
 //! ValueConv => 'ConvertUnixTime($val, $self->Options("QuickTimeUTC") || $$self{FileType} eq "CR3")',
 //! PrintConv => '$self->ConvertDateTime($val)',
@@ -11,10 +11,9 @@
 //! (QuickTime.pm:280,287). `ConvertUnixTime`'s second argument selects
 //! `localtime` plus a `TimeZoneString` offset suffix over zone-less `gmtime`
 //! (ExifTool.pm:6784-6810). With no `QuickTimeUTC` option, that argument is
-//! `$$self{FileType} eq "CR3"` -- true only for a Canon CR3 still, resolved
-//! from the file's `CNCV` box (Canon.pm's `%Canon::uuid` `CNCV` entry:
-//! `OverrideFileType($1) if $val =~ /^Canon(\w{3})/i`), never for a Canon RAW
-//! movie (`CRM`) and never for a generic QuickTime/MP4 container.
+//! `$$self{FileType} eq "CR3"` in 12.64/13.59; 11.78 ignores the file type
+//! and renders zone-less UTC. The `CNCV` box resolves the still as CR3,
+//! distinct from CRM movies and generic QuickTime/MP4 containers.
 //!
 //! These tests run the built CLI binary in a subprocess with an explicit
 //! `TZ` env var, rather than mutating the test process's own environment,
@@ -60,17 +59,16 @@ fn run_oxidex_json(path: &std::path::Path, tz: &str) -> serde_json::Value {
 }
 
 #[test]
-fn cr3_create_date_renders_local_time_with_offset_under_america_chicago() {
+fn cr3_create_date_follows_pinned_release_under_america_chicago() {
     let Some(path) = fixtures::pinned_combined_fixture_path("CanonRaw.cr3") else {
         eprintln!("skipping: combined corpus fixture CanonRaw.cr3 is absent");
         return;
     };
 
-    // Ground truth, instrument named: pinned oracle
-    // (`/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib
-    // /tmp/oxidex-exiftool-cache/exiftool/exiftool`, ExifTool 13.59) run as
-    // `TZ=America/Chicago exiftool -a -G1 -s t/images/CanonRaw.cr3` reports
-    // `[QuickTime] CreateDate = 2018:02:21 06:08:56-06:00`, while
+    // Pinned native 11.78 reports zone-less UTC; 12.64 and 13.59 report
+    // Chicago local time with an offset on this same committed corpus file.
+    // All three exact Perl/source/fixture captures are retained in
+    // pr1007-review-repair/cr3-native-probe.json. In 13.59,
     // `[ExifIFD] CreateDate = 2018:02:21 12:08:56` (zone-less) and
     // `[Canon] TimeZone = +00:00` stay untouched -- confirming this file's
     // camera-local and UTC instants coincide, which is why the local-time
@@ -78,24 +76,29 @@ fn cr3_create_date_renders_local_time_with_offset_under_america_chicago() {
     // recognizable "12:08:56"/"06:08:56" pair instead of an unrelated time.
     let json = run_oxidex_json(&path, "America/Chicago");
 
+    let expected_quicktime = match oxidex::exiftool_oracle::repo_pin() {
+        "11.78" => "2018:02:21 12:08:56",
+        "12.64" | "13.59" => "2018:02:21 06:08:56-06:00",
+        pin => panic!("unreviewed ExifTool release {pin}"),
+    };
     assert_eq!(
         json.get("QuickTime:CreateDate").and_then(|v| v.as_str()),
-        Some("2018:02:21 06:08:56-06:00"),
-        "CR3 QuickTime:CreateDate must convert to local time with a UTC offset suffix"
+        Some(expected_quicktime),
+        "CR3 QuickTime:CreateDate must follow the pinned native release"
     );
     assert_eq!(
         json.get("QuickTime:ModifyDate").and_then(|v| v.as_str()),
-        Some("2018:02:21 06:08:56-06:00")
+        Some(expected_quicktime)
     );
     assert_eq!(
         json.get("QuickTime:MediaCreateDate")
             .and_then(|v| v.as_str()),
-        Some("2018:02:21 06:08:56-06:00")
+        Some(expected_quicktime)
     );
     assert_eq!(
         json.get("QuickTime:TrackCreateDate")
             .and_then(|v| v.as_str()),
-        Some("2018:02:21 06:08:56-06:00")
+        Some(expected_quicktime)
     );
 
     // The EXIF-side timestamp of the very same instant must stay zone-less:

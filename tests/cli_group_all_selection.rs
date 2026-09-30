@@ -173,6 +173,12 @@ fn unmodeled_selectors_are_refused_by_name_with_a_failing_exit() {
         let output = oxidex(args, Path::new(REPO_FIXTURE));
         let stderr = String::from_utf8_lossy(&output.stderr);
         let selector = args.last().unwrap();
+        if *selector == "-ls-l" && oxidex::exiftool_oracle::repo_pin() == "11.78" {
+            assert!(output.status.success(), "{args:?}: {stderr}");
+            assert!(output.stdout.is_empty(), "{args:?} printed rows");
+            assert!(stderr.is_empty(), "{args:?}: {stderr}");
+            continue;
+        }
         assert!(!output.status.success(), "{args:?} must fail");
         assert!(output.stdout.is_empty(), "{args:?} printed rows");
         assert!(stderr.contains(selector), "{args:?}: {stderr}");
