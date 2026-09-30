@@ -1266,7 +1266,7 @@ fn walk_main_through_engine(
                     value: Some(value),
                     print: Some(tag.value),
                     stored: Some(tag.stored),
-                    priority: u8::from(!(tag.low_priority || tag.avoid)),
+                    priority: i16::from(!(tag.low_priority || tag.avoid)),
                     is_list: tag.is_list,
                     order: 0,
                     origin: Provenance {

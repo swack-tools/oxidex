@@ -1540,7 +1540,7 @@ fn panasonic_generated_occurrence(row: Emitted) -> Option<(String, TagOccurrence
             value: Some(value),
             print: Some(row.value),
             stored: Some(row.stored),
-            priority: u8::from(!(row.low_priority || row.avoid)),
+            priority: i16::from(!(row.low_priority || row.avoid)),
             is_list: row.is_list,
             order: 0,
             origin: Provenance {

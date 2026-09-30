@@ -966,6 +966,45 @@ fn dedupe_repeated_rows(resolved: Vec<ResolvedOccurrence<'_>>) -> Vec<ResolvedOc
         .collect()
 }
 
+/// JSON keys carry the requested group label, so distinct groups of one tag
+/// remain visible without `-a`. Within one label, ExifTool still emits only
+/// that group's priority winner (`-j -G1 -Title` on dc:Title/dc:title).
+fn json_group_winners<'m>(
+    resolved: Vec<ResolvedOccurrence<'m>>,
+    families: &[u8],
+) -> Vec<ResolvedOccurrence<'m>> {
+    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (index, entry) in resolved.iter().enumerate() {
+        groups
+            .entry((
+                joined_family_label(entry.occurrence, families),
+                entry.occurrence.name.to_string(),
+            ))
+            .or_default()
+            .push(index);
+    }
+    let retained: HashSet<usize> = groups
+        .values()
+        .filter_map(|indices| {
+            let (_, winner) = arbitrate_keyed(indices.iter().map(|&index| {
+                (
+                    resolved[index].lookup_key.as_str(),
+                    resolved[index].occurrence,
+                )
+            }))?;
+            indices
+                .iter()
+                .copied()
+                .find(|&index| std::ptr::eq(resolved[index].occurrence, winner))
+        })
+        .collect();
+    resolved
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| retained.contains(&index).then_some(entry))
+        .collect()
+}
+
 /// The value to display for `occurrence`: PrintConv-formatted (matching
 /// `exiftool_compat`'s per-tag rules, without final output escaping)
 /// per occurrence when `no_print_conv` is
@@ -1302,6 +1341,7 @@ pub enum ResolvedFileOutput {
 ///   escaping belongs to the selected formatter.
 pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> ResolvedFileOutput {
     let no_print_conv = !args.exiftool_compat();
+    let grouped_json = args.json && args.group_display.is_some() && !args.all_tags;
 
     // ExifTool's short text levels (`-s`, `-s2`/`-S`, `-s3`) render straight
     // from the resolved occurrences, in request or file order, through
@@ -1331,12 +1371,20 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         let mut resolved = select_occurrences(
             raw_metadata,
             &selection,
-            args.all_tags,
+            args.all_tags || grouped_json,
             |key| options.shows_key(key),
             group_sort,
         );
         if args.json || args.csv {
             resolved = dedupe_repeated_rows(resolved);
+        }
+        if grouped_json {
+            resolved = json_group_winners(
+                resolved,
+                args.group_display
+                    .as_deref()
+                    .expect("grouped JSON has a group"),
+            );
         }
         if short_text {
             return ResolvedFileOutput::Lines(render_short_lines(
@@ -1401,7 +1449,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     let surviving = options.strip_extended_only(raw_metadata);
     if args.group_display.is_some() || args.all_tags || short_text {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
-        let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags {
+        let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags || grouped_json {
             // Full and requested listings must replay the same FoundTag
             // duplicate numbering. The display map reserves the bare key for
             // copy zero, which can be either the first or a later occurrence.
@@ -1425,6 +1473,14 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .collect()
         };
         resolved.sort_by_key(|entry| entry.occurrence.order);
+        if grouped_json {
+            resolved = json_group_winners(
+                resolved,
+                args.group_display
+                    .as_deref()
+                    .expect("grouped JSON has a group"),
+            );
+        }
         // With `-G`, the `exiftool` script sorts the full listing by that
         // group (`exiftool` 13.59:1852-1855, `Sort => "Group$showGroup"`):
         // groups in order of first appearance, file order within each
@@ -1547,7 +1603,7 @@ mod tests {
             value: Some(TagValue::Float(value)),
             print: Some(TagValue::new_string(print)),
             stored: Some(TagValue::Integer(stored)),
-            priority,
+            priority: priority.into(),
             is_list: false,
             order: 999,
             origin: Provenance {
@@ -1654,6 +1710,46 @@ mod tests {
     }
 
     #[test]
+    fn grouped_json_keeps_distinct_xmp_groups_and_one_winner_per_group() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let mut metadata = MetadataMap::new();
+        crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+            &mut metadata,
+            include_bytes!("../../tests/fixtures/xmp_priority/title-known-later.xmp"),
+            true,
+        )
+        .unwrap();
+        let group1 = output_map(
+            &metadata,
+            &canonical_cli_args(&["Title"], false, false, Some(vec![1])),
+        );
+        assert_eq!(group1.get_string("XMP-aaa:Title"), Some("AAA"));
+        assert_eq!(group1.get_string("XMP-dc:Title"), Some("DC"));
+        let group0 = output_map(
+            &metadata,
+            &canonical_cli_args(&["Title"], false, false, Some(vec![0])),
+        );
+        assert_eq!(group0.get_string("XMP:Title"), Some("DC"));
+        assert_eq!(group0.len(), 1);
+
+        let mut same_group = MetadataMap::new();
+        crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+            &mut same_group,
+            include_bytes!("../../tests/fixtures/xmp_priority/same-group.xmp"),
+            true,
+        )
+        .unwrap();
+        let output = output_map(
+            &same_group,
+            &canonical_cli_args(&["Title"], false, false, Some(vec![1])),
+        );
+        assert_eq!(output.get_string("XMP-dc:Title"), Some("KNOWN"));
+        assert_eq!(output.len(), 1);
+    }
+
+    #[test]
     fn resolve_file_output_replays_the_complete_canonical_occurrence_matrix() {
         fn occurrence(
             name: &str,
@@ -1674,7 +1770,7 @@ mod tests {
                 value: Some(TagValue::Float(value)),
                 print: Some(TagValue::new_string(print)),
                 stored: Some(TagValue::Integer(stored)),
-                priority,
+                priority: priority.into(),
                 is_list: false,
                 order: u32::MAX,
                 origin: Provenance {

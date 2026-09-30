@@ -201,7 +201,7 @@ fn read_mobi_header(
                     // physical Palm/MOBI groups and all three value forms.
                     let physical_key = format!("{}:{name}", table.group0);
                     let mut occurrence = TagOccurrence::from_insert_shim(&physical_key, printed, 0);
-                    occurrence.priority = SHIM_DEFAULT_PRIORITY;
+                    occurrence.priority = SHIM_DEFAULT_PRIORITY.into();
                     occurrence.group1 = intern(table.group1);
                     occurrence.value = Some(TagValue::Integer(raw));
                     occurrence.print = Some(occurrence.raw.clone());

@@ -1299,7 +1299,7 @@ impl NikonParser {
                                         value: Some(value),
                                         print: Some(tag.value),
                                         stored: Some(tag.stored),
-                                        priority: u8::from(!(tag.low_priority || tag.avoid)),
+                                        priority: i16::from(!(tag.low_priority || tag.avoid)),
                                         is_list: tag.is_list,
                                         order: 0,
                                         origin: Provenance {
@@ -1928,7 +1928,7 @@ impl NikonParser {
                                             form.value,
                                         ))),
                                         print: Some(displayed),
-                                        priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                                        priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                                         is_list: false,
                                         order: 0,
                                         origin: crate::core::Provenance {

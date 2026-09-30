@@ -267,6 +267,13 @@ python3 "$HERE/gen_dicom_dict.py" --exiftool-dir "$LIB/.." \
 "$PERL" "$HERE/dump_lens_alternatives.pl" --exiftool-dir "$LIB/.." \
     --out "$(artifact_path lens-alternatives)"
 
+echo ">> capturing XMP read priorities from the selected native source"
+XMP_PRIORITY_CAPTURE="$CACHE/xmp-priorities-$PIN.json"
+"$PERL" "$HERE/capture_xmp_priorities.pl" "$LIB" > "$XMP_PRIORITY_CAPTURE"
+python3 "$HERE/xmp_priority_specs.py" --capture "$XMP_PRIORITY_CAPTURE" \
+    --fixture-out "$(artifact_path xmp-priority-capture)" \
+    --rust-out "$(artifact_path xmp-priority-rust)"
+
 echo "=========================================================="
 echo ">> TIER 2g: SetNewValue's defined-tag-name set (TagLookup + Shortcuts)"
 echo "=========================================================="

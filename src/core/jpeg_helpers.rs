@@ -477,6 +477,24 @@ fn process_ifd0_tags(
             continue; // Don't add the pointer tag to metadata
         }
 
+        // Exif.pm:2003 routes IFD0 tag 0x8649 through Photoshop::Main.
+        // In a JPEG this is the non-APP13 parent for which Photoshop.pm:1043
+        // scopes LOW_PRIORITY_DIR{'*'}. Its XMP resource must be read here,
+        // at the IFD entry, rather than as an ordinary binary EXIF value.
+        if *tag_id == 0x8649 && bytes.starts_with(b"8BIM") {
+            let mut wrapped = Vec::with_capacity(b"Photoshop 3.0\0".len() + bytes.len());
+            wrapped.extend_from_slice(b"Photoshop 3.0\0");
+            wrapped.extend_from_slice(bytes);
+            if let Ok(photoshop) =
+                crate::parsers::jpeg::app_segments::photoshop::parse_photoshop_irb_with_context(
+                    &wrapped, true,
+                )
+            {
+                metadata.merge(photoshop);
+            }
+            continue;
+        }
+
         // Exif.pm 0xc4a5 is a SubDirectory into PrintIM.pm, not a printable
         // binary tag. ProcessPrintIM validates the directory and exposes only
         // PrintIMVersion by default.
@@ -761,11 +779,7 @@ pub fn process_photoshop_segments(
                 return;
             }
             match parse_photoshop_irb(combined) {
-                Ok(photoshop_metadata) => {
-                    for (key, value) in photoshop_metadata.iter() {
-                        metadata.insert(key.clone(), value.clone());
-                    }
-                }
+                Ok(photoshop_metadata) => metadata.merge(photoshop_metadata),
                 Err(e) => {
                     diagnostics.push(Diagnostic::warning(format!(
                         "Failed to parse APP13 Photoshop segment: {e}"
@@ -3413,7 +3427,8 @@ mod xp_string_tests {
                 let occurrences = metadata.occurrences_for(&key);
                 assert_eq!(occurrences.len(), 1, "{label} {key}: one occurrence");
                 assert_eq!(
-                    occurrences[0].priority, SHIM_DEFAULT_PRIORITY,
+                    occurrences[0].priority,
+                    i16::from(SHIM_DEFAULT_PRIORITY),
                     "{label} {key}: priority"
                 );
                 for channel in [ValueChannel::PrintConv, ValueChannel::ValueConv] {
@@ -3648,5 +3663,31 @@ mod transfer_function_tests {
                 .get_string("IFD0:TransferFunction"),
             Some("(Binary data 10 bytes, use -b option to extract)")
         );
+    }
+}
+#[cfg(test)]
+mod xmp_photoshop_priority_tests {
+    use super::*;
+    use crate::parsers::jpeg::segment_parser::parse_segments;
+    use crate::test_support::TestReader;
+
+    #[test]
+    fn non_app13_photoshop_directory_demotes_only_default_xmp_priorities() {
+        if crate::exiftool_oracle::repo_pin() != "13.59" {
+            return;
+        }
+        let reader = TestReader::new(
+            include_bytes!("../../tests/fixtures/xmp_priority/photoshop-low-dir.jpg").to_vec(),
+        );
+        let segments = parse_segments(&reader).unwrap();
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+        for (name, priority) in [("Title", 0), ("Rating", 0), ("Keywords", -1)] {
+            let row = metadata
+                .occurrences()
+                .find(|row| row.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(row.priority, priority, "{name}");
+        }
     }
 }

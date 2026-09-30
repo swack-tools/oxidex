@@ -771,7 +771,7 @@ mod tests {
 
     fn occ(value: &str, priority: u8, order: u32) -> TagOccurrence {
         TagOccurrence {
-            priority,
+            priority: priority.into(),
             order,
             ..TagOccurrence::from_insert_shim("EXIF:Make", TagValue::new_string(value), order)
         }

@@ -47,13 +47,14 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::core::tag_occurrence::Instance;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
 use crate::io::ByteOrder;
-use crate::parsers::xmp::generic_xml::{XmlWalkOptions, extract_xml_properties_with};
+use crate::parsers::xmp::generic_xml::{
+    XmlWalkOptions, extract_xml_properties_with, xml_table_priority,
+};
 
 /// ZISRAW.pm:173, `$raf->Read($buff, 100) == 100`.
 const HEADER_LEN: usize = 100;
@@ -377,13 +378,14 @@ fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &m
         return;
     };
     for property in properties {
-        metadata.insert_occurrence(
-            format!("{}:{}", property.group1, property.name),
+        let priority = xml_table_priority(&property);
+        metadata.insert_xmp_occurrence(
+            format!("XML:{}", property.name),
             TagValue::new_string(property.value),
-            // `FoundXMP` mints an unknown tag at priority 0 (XMP.pm:3595).
-            0,
+            None,
+            None,
+            priority,
             &property.group1,
-            Instance::default(),
         );
     }
 }

@@ -219,7 +219,7 @@ fn type4_occurrence(row: crate::exiftool_tables::Emitted) -> (String, TagOccurre
             value: Some(value),
             print: Some(row.value),
             stored: Some(row.stored),
-            priority: u8::from(!(row.low_priority || row.avoid)),
+            priority: i16::from(!(row.low_priority || row.avoid)),
             is_list: row.is_list,
             order: 0,
             origin: Provenance {
