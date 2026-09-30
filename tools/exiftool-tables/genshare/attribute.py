@@ -824,6 +824,7 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
         raise ReceiptError("fixture observations do not replay")
     expected_status = (
         "success" if fixture["review_status"] == "reviewed_exact"
+        and fixture["reviewed_scope"] == "selected_corpus"
         and fixture["exact_loss_expectations"] == fixture["observed_loss_payload"]
         else "observed_unreviewed"
     )
@@ -1354,12 +1355,17 @@ def _validate_expectations_document(document: dict, selection: dict) -> None:
 
 def _validate_fixture_selection(document: dict, selection: dict) -> None:
     fixtures = document.get("fixtures")
-    if not isinstance(fixtures, list) or len(fixtures) != 3:
-        raise ReceiptError("bounded expectations require the three reviewed fixtures")
+    if not isinstance(fixtures, list) or any(not isinstance(row, dict) for row in fixtures):
+        raise ReceiptError("bounded expectations fixtures are invalid")
     expected = [(row.get("relative_path"), row.get("sha256")) for row in fixtures]
-    selected = {row["relative_path"]: row["sha256"] for row in selection["ordered_manifest"]}
-    if len(set(path for path, _ in expected)) != 3 or any(selected.get(path) != digest for path, digest in expected):
-        raise ReceiptError("bounded fixture paths or content hashes do not match expectations")
+    selected = [(row["relative_path"], row["sha256"]) for row in selection["ordered_manifest"]]
+    controls = ("ICC_Profile.icc", "AAC.aac", "OOXML.docx")
+    selected_by_path = dict(selected)
+    bounded = [(path, selected_by_path.get(path)) for path in controls]
+    if any(digest is None for _, digest in bounded):
+        raise ReceiptError("selected corpus is missing a required control fixture")
+    if expected != bounded and expected != selected:
+        raise ReceiptError("bounded fixture paths or content hashes must match the three controls or the complete ordered selected manifest")
 
 
 def _route_ledger(repository: Path, root: Path) -> dict:
@@ -1531,10 +1537,16 @@ def _fixture_observations(
     expectation_document = expectations.get("document", {})
     reviewed_exact = expectation_document.get("exact_loss_expectations")
     review_status = expectation_document.get("review_status", "roles_only")
-    if review_status == "reviewed_exact" and reviewed_exact != loss_payload(fixture_corpus):
+    reviewed_scope = (
+        "selected_corpus" if reviewed_exact is not None and reviewed_exact.get("corpus") == corpus
+        else "bounded_controls" if reviewed_exact is not None else "none"
+    )
+    reviewed_paths = corpus if reviewed_scope == "selected_corpus" else fixture_corpus
+    if review_status == "reviewed_exact" and reviewed_exact != loss_payload(reviewed_paths):
         raise ReceiptError("observed losses do not match reviewed exact expectations")
     return {
         "review_status": review_status,
+        "reviewed_scope": reviewed_scope,
         "expectations_sha256": expectations["sha256"],
         "token_observations": observations,
         "icc_engine": engine_icc,
@@ -1839,6 +1851,7 @@ def census_main(argv: list[str]) -> int:
         receipt_status = (
             "success"
             if fixture_contract["review_status"] == "reviewed_exact"
+            and fixture_contract["reviewed_scope"] == "selected_corpus"
             and fixture_contract["exact_loss_expectations"] == fixture_contract["observed_loss_payload"]
             else "observed_unreviewed"
         )

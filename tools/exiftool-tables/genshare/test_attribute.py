@@ -315,12 +315,20 @@ class ArtifactValidationTests(unittest.TestCase):
             reviewed_payload = attribute._fixture_observations(
                 runs, fixture_projections, fixture_reconciliations, {"sha256": "f" * 64}
             )["observed_loss_payload"]
+            unchanged_three = attribute._fixture_observations(
+                runs, fixture_projections, fixture_reconciliations,
+                {"sha256": "f" * 64, "document": {
+                    "review_status": "reviewed_exact", "exact_loss_expectations": reviewed_payload,
+                }},
+            )
+            self.assertEqual(unchanged_three["reviewed_scope"], "selected_corpus")
             reviewed = attribute._fixture_observations(
                 runs, projections, reconciliations,
                 {"sha256": "f" * 64, "document": {
                     "review_status": "reviewed_exact", "exact_loss_expectations": reviewed_payload,
                 }},
             )
+            self.assertEqual(reviewed["reviewed_scope"], "bounded_controls")
             self.assertNotEqual(reviewed["observed_loss_payload"], reviewed["exact_loss_expectations"])
             wrong_review = copy.deepcopy(reviewed_payload)
             wrong_review["modes"]["keyed"]["matched_lost"] = 1
@@ -342,10 +350,10 @@ class ArtifactValidationTests(unittest.TestCase):
                 changed.write_text(original)
             self.assertEqual(runs["keyed"]["children"], baseline)
 
-    def test_validator_replays_raw_children_and_rejects_mutated_counter(self):
+    def test_validator_replays_four_file_reviewed_exact_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             root = pathlib.Path(td)
-            relative_paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+            relative_paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx", "CanonRaw.crw"]
             selection_root = root / "selection"
             selection_root.mkdir()
             manifest_rows = []
@@ -461,7 +469,7 @@ class ArtifactValidationTests(unittest.TestCase):
                         for row in manifest_rows
                     ]),
                     "path_set_sha256": attribute.path_set_sha256(relative_paths),
-                    "selected_files": 3,
+                    "selected_files": len(relative_paths),
                 },
                 "runs": runs,
                 "projections": projections,
@@ -500,10 +508,46 @@ class ArtifactValidationTests(unittest.TestCase):
                 },
             )
             self.assertEqual(reviewed["review_status"], "reviewed_exact")
+            self.assertEqual(reviewed["reviewed_scope"], "selected_corpus")
             self.assertEqual(reviewed["exact_loss_expectations"], observed_payload)
+            self.assertEqual(observed_payload["corpus"], relative_paths)
+            self.assertEqual(
+                list(observed_payload["modes"]["engine"]["missing_by_file"]),
+                relative_paths,
+            )
+            complete_document = {
+                "review_status": "reviewed_exact",
+                "fixtures": [
+                    {"relative_path": row["relative_path"], "sha256": row["sha256"]}
+                    for row in manifest_rows
+                ],
+                "exact_loss_expectations": observed_payload,
+            }
+            attribute._validate_expectations_document(complete_document, receipt["selection"])
+            bounded_document = copy.deepcopy(complete_document)
+            bounded_document["fixtures"] = bounded_document["fixtures"][:3]
+            bounded_document["exact_loss_expectations"] = copy.deepcopy(observed_payload)
+            bounded_document["exact_loss_expectations"]["corpus"] = relative_paths[:3]
+            attribute._validate_fixture_selection(bounded_document, receipt["selection"])
+            for label, change in (
+                ("missing", lambda rows: rows.pop()),
+                ("reordered", lambda rows: rows.reverse()),
+                ("hash mismatch", lambda rows: rows[-1].update(sha256="0" * 64)),
+                ("duplicate", lambda rows: rows.__setitem__(-1, copy.deepcopy(rows[0]))),
+            ):
+                malformed = copy.deepcopy(complete_document)
+                change(malformed["fixtures"])
+                with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                    attribute._validate_expectations_document(malformed, receipt["selection"])
             wrong_payloads = []
             wrong = copy.deepcopy(observed_payload)
             wrong["modes"]["engine"]["matched_lost"] += 1
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            wrong["modes"]["engine"]["missing_by_file"]["CanonRaw.crw"] += 1
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            del wrong["modes"]["engine"]["missing_by_file"]["CanonRaw.crw"]
             wrong_payloads.append(wrong)
             wrong = copy.deepcopy(observed_payload)
             wrong["corpus"] = list(reversed(wrong["corpus"]))
@@ -594,6 +638,28 @@ class ArtifactValidationTests(unittest.TestCase):
             forged_success["status"] = "success"
             with self.assertRaisesRegex(attribute.ReceiptError, "reviewed corpus scope"):
                 attribute.validate_v3_receipt(forged_success, root, replay=True)
+            attribute.write_json(expectations_path, complete_document)
+            receipt["fixture_contract"] = attribute._fixture_observations(
+                runs, projections, reconciliations,
+                {"sha256": attribute.sha256_file(expectations_path), "document": complete_document},
+            )
+            receipt["status"] = "success"
+            receipt["artifact_index"] = attribute._artifact_index(root)
+            attribute.validate_v3_receipt(receipt, root, replay=True)
+            self.assertEqual(receipt["fixture_contract"]["reviewed_scope"], "selected_corpus")
+            for label, change in (
+                ("missing selected", lambda rows: rows.pop()),
+                ("reordered selected", lambda rows: rows.reverse()),
+                ("hash-mismatched selected", lambda rows: rows[-1].update(sha256="0" * 64)),
+            ):
+                forged = copy.deepcopy(receipt)
+                change(forged["selection"]["ordered_manifest"])
+                with self.subTest(label=label), self.assertRaises(attribute.ReceiptError):
+                    attribute.validate_v3_receipt(forged, root, replay=True)
+            forged = copy.deepcopy(receipt)
+            forged["fixture_contract"]["observed_loss_payload"]["modes"]["engine"]["matched_lost"] += 1
+            with self.assertRaisesRegex(attribute.ReceiptError, "fixture observations do not replay"):
+                attribute.validate_v3_receipt(forged, root, replay=True)
             self.assertTrue(observed_key_orders)
             self.assertTrue(
                 all(

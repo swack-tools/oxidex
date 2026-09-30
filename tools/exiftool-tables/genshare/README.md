@@ -38,10 +38,13 @@ matches them byte-for-byte before it may emit `status=success` or satisfy
 
 A larger selected manifest may include these three reviewed fixtures and other
 files, including CRW. Their hashes and per-fixture controls still apply. The
-observed loss payload covers every selected file in manifest order. The reviewed
-exact expectations cover only the three fixtures, so an expanded run remains
-`observed_unreviewed` even when those controls match; its additional losses
-require separate review before any success claim.
+observed loss payload covers every selected file in manifest order. A document
+listing only the three controls has `reviewed_scope=bounded_controls`, so the
+expanded run remains `observed_unreviewed`. After independent review, an
+expectations document may instead list every selected file in manifest order
+with its content hash and exact full-corpus losses. It then has
+`reviewed_scope=selected_corpus` and can produce `status=success` when the
+observed population and loss payload match exactly.
 
 Run only through the exclusive measurement lock and use a new durable output
 directory every time:
