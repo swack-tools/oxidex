@@ -66,6 +66,15 @@ pub(crate) struct TableEntry {
     length: u32,
 }
 
+/// Whether the supported source charset has UCS2's BMP-only boundary.
+#[derive(Clone, Copy)]
+enum FontValueCharset {
+    /// Font.pm's UCS2 is equivalent to this reader only for BMP text.
+    Ucs2BmpOnly,
+    /// A supported Macintosh source table or Unicode UTF16.
+    FullyDecoded,
+}
+
 /// How a name record's language maps onto ExifTool's tag naming -- see
 /// [`TTFParser::name_record_lang`].
 enum NameLang<'a> {
@@ -429,6 +438,25 @@ impl TTFParser {
         Self::name_record_lang_with_fallback(record, None)
     }
 
+    /// Which Font.pm name charset this reader can reproduce for a `Font:`
+    /// value. `%ttLang` is independent of `%ttCharset`: adding a language
+    /// name must not turn an unsupported script into a guessed text value.
+    fn font_value_charset(record: &NameRecord) -> Option<FontValueCharset> {
+        match (record.platform_id, record.encoding_id) {
+            (PLATFORM_MACINTOSH, MAC_ENCODING_ROMAN | MAC_ENCODING_HEBREW) => {
+                Some(FontValueCharset::FullyDecoded)
+            }
+            (PLATFORM_MACINTOSH, encoding) if mac_charset::for_mac_encoding(encoding).is_some() => {
+                Some(FontValueCharset::FullyDecoded)
+            }
+            (PLATFORM_WINDOWS, 1) | (PLATFORM_UNICODE, 0..=3) => {
+                Some(FontValueCharset::Ucs2BmpOnly)
+            }
+            (PLATFORM_UNICODE, 4) => Some(FontValueCharset::FullyDecoded),
+            _ => None,
+        }
+    }
+
     /// Parse format-1 language tags with Font.pm's bounds, decode and filter.
     fn format_one_language_tags(
         reader: &dyn FileReader,
@@ -516,15 +544,9 @@ impl TTFParser {
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
-            // The language lookup names more Macintosh records than the
-            // current charset reader can reproduce. Keep those values out of
-            // the Font group until their source charset is supported.
-            if record.platform_id == PLATFORM_MACINTOSH
-                && !matches!(record.encoding_id, MAC_ENCODING_ROMAN | MAC_ENCODING_HEBREW)
-                && mac_charset::for_mac_encoding(record.encoding_id).is_none()
-            {
+            let Some(charset) = Self::font_value_charset(record) else {
                 continue;
-            }
+            };
             let key = match Self::name_record_lang_with_fallback(
                 record,
                 format_one_tags.get(&record.language_id).map(String::as_str),
@@ -536,6 +558,14 @@ impl TTFParser {
             if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
                 && !value.is_empty()
             {
+                // UTF-16BE combines surrogate pairs, but Font.pm's UCS2
+                // decoder does not. Refuse that wrong value; ordinary BMP
+                // text and Unicode encoding 4 (UTF16) remain readable.
+                if matches!(charset, FontValueCharset::Ucs2BmpOnly)
+                    && value.chars().any(|ch| ch.len_utf16() == 2)
+                {
+                    continue;
+                }
                 metadata.insert(key, TagValue::String(value));
             }
         }
@@ -1375,6 +1405,83 @@ mod tests {
         let reader = TestReader::new(data);
         let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
         assert!(!tags.contains_key("Font:FontFamily-ar"));
+    }
+
+    #[test]
+    fn font_group_respects_platform_charset_and_ucs2_boundary() {
+        // These bytes were checked against pinned Font.pm 13.59: ShiftJIS
+        // 82 a0 is あ, while interpreting it as UTF-16BE produces 芠.
+        // UCS2 does not combine D83D DE00 into the emoji that UTF16 does.
+        let smile = &[0xd8, 0x3d, 0xde, 0x00];
+        let omega = &[0x03, 0xa9];
+        let cases: &[(u16, u16, u16, &[u8], &str, Option<&str>)] = &[
+            (
+                PLATFORM_WINDOWS,
+                2,
+                0x0414,
+                &[0x82, 0xa0],
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                0,
+                0x0414,
+                omega,
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                0x0414,
+                smile,
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                0x0414,
+                omega,
+                "Font:FontFamily-no-NO",
+                Some("Ω"),
+            ),
+            (PLATFORM_UNICODE, 0, 0, smile, "Font:FontFamily", None),
+            (PLATFORM_UNICODE, 0, 0, omega, "Font:FontFamily", Some("Ω")),
+            (PLATFORM_UNICODE, 4, 0, smile, "Font:FontFamily", Some("😀")),
+            (PLATFORM_UNICODE, 5, 0, omega, "Font:FontFamily", None),
+        ];
+        for &(platform, encoding, language, bytes, key, expected) in cases {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&1u16.to_be_bytes()); // one record
+            data.extend_from_slice(&18u16.to_be_bytes()); // string storage
+            for field in [
+                platform,
+                encoding,
+                language,
+                NAME_FONT_FAMILY,
+                bytes.len() as u16,
+                0,
+            ] {
+                data.extend_from_slice(&field.to_be_bytes());
+            }
+            data.extend_from_slice(bytes);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let reader = TestReader::new(data);
+            let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+            let expected_value = expected.map(|value| TagValue::String(value.to_string()));
+            assert_eq!(
+                tags.get(key),
+                expected_value.as_ref(),
+                "platform {platform}, encoding {encoding}, language {language}"
+            );
+        }
     }
 
     /// End-to-end check that a Macintosh CJK record reaches the right tag
