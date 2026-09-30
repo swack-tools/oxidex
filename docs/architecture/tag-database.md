@@ -8,7 +8,7 @@ identity; read coverage is measured separately.
 
 | Metric | Value |
 |--------|-------|
-| Total Tags | 30,039 (tag definitions; see [Tag Coverage](/reference/tag-coverage-analysis) for measured extraction) |
+| Total Tags | 32,271 (tag definitions; see [Tag Coverage](/reference/tag-coverage-analysis) for measured extraction) |
 | Modules Parsed | 140+ |
 | Lookup Time | O(1) |
 | Memory | ~5-10MB (lazy loaded) |

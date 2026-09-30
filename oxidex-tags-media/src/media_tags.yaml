@@ -126,11 +126,31 @@ tables:
         description: "Name"
   - name: APE::Main
     tags:
+      - id: "Album"
+        name: "Album"
+        writable: false
+        type: "?"
+        description: "Album"
+      - id: "Artist"
+        name: "Artist"
+        writable: false
+        type: "?"
+        description: "Artist"
       - id: "DURATION"
         name: "Duration"
         writable: false
         type: "?"
         description: "Duration"
+      - id: "Genre"
+        name: "Genre"
+        writable: false
+        type: "?"
+        description: "Genre"
+      - id: "Title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
       - id: "Tool Name"
         name: "ToolName"
         writable: false
@@ -141,6 +161,16 @@ tables:
         writable: false
         type: "?"
         description: "Tool Version"
+      - id: "Track"
+        name: "Track"
+        writable: false
+        type: "?"
+        description: "Track"
+      - id: "Year"
+        name: "Year"
+        writable: false
+        type: "?"
+        description: "Year"
   - name: APE::NewHeader
     tags:
       - id: "8"
@@ -210,6 +240,38 @@ tables:
         writable: false
         type: "int32u"
         description: "Total Frames"
+  - name: ASF::CodecList
+    tags:
+      - id: "AudioCodecDescription"
+        name: "AudioCodecDescription"
+        writable: false
+        type: "?"
+        description: "Audio Codec Description"
+      - id: "AudioCodecName"
+        name: "AudioCodecName"
+        writable: false
+        type: "?"
+        description: "Audio Codec Name"
+      - id: "OtherCodecDescription"
+        name: "OtherCodecDescription"
+        writable: false
+        type: "?"
+        description: "Other Codec Description"
+      - id: "OtherCodecName"
+        name: "OtherCodecName"
+        writable: false
+        type: "?"
+        description: "Other Codec Name"
+      - id: "VideoCodecDescription"
+        name: "VideoCodecDescription"
+        writable: false
+        type: "?"
+        description: "Video Codec Description"
+      - id: "VideoCodecName"
+        name: "VideoCodecName"
+        writable: false
+        type: "?"
+        description: "Video Codec Name"
   - name: ASF::ContentBranding
     tags:
       - id: "1"
@@ -261,11 +323,666 @@ tables:
         description: "Title"
   - name: ASF::ExtendedDescr
     tags:
+      - id: "ASFLeakyBucketPairs"
+        name: "ASFLeakyBucketPairs"
+        writable: false
+        type: "?"
+        description: "ASF Leaky Bucket Pairs"
+      - id: "ASFPacketCount"
+        name: "ASFPacketCount"
+        writable: false
+        type: "?"
+        description: "ASF Packet Count"
+      - id: "ASFSecurityObjectsSize"
+        name: "ASFSecurityObjectsSize"
+        writable: false
+        type: "?"
+        description: "ASF Security Objects Size"
+      - id: "AlbumArtist"
+        name: "AlbumArtist"
+        writable: false
+        type: "?"
+        description: "Album Artist"
+      - id: "AlbumCoverURL"
+        name: "AlbumCoverURL"
+        writable: false
+        type: "?"
+        description: "Album Cover URL"
+      - id: "AlbumTitle"
+        name: "AlbumTitle"
+        writable: false
+        type: "?"
+        description: "Album Title"
+      - id: "AspectRatioX"
+        name: "AspectRatioX"
+        writable: false
+        type: "?"
+        description: "Aspect Ratio X"
+      - id: "AspectRatioY"
+        name: "AspectRatioY"
+        writable: false
+        type: "?"
+        description: "Aspect Ratio Y"
+      - id: "AudioFileURL"
+        name: "AudioFileURL"
+        writable: false
+        type: "?"
+        description: "Audio File URL"
+      - id: "AudioSourceURL"
+        name: "AudioSourceURL"
+        writable: false
+        type: "?"
+        description: "Audio Source URL"
+      - id: "Author"
+        name: "Author"
+        writable: false
+        type: "?"
+        description: "Author"
+      - id: "AuthorURL"
+        name: "AuthorURL"
+        writable: false
+        type: "?"
+        description: "Author URL"
+      - id: "AverageLevel"
+        name: "AverageLevel"
+        writable: false
+        type: "?"
+        description: "Average Level"
+      - id: "BannerImageData"
+        name: "BannerImageData"
+        writable: false
+        type: "?"
+        description: "Banner Image Data"
+      - id: "BannerImageType"
+        name: "BannerImageType"
+        writable: false
+        type: "?"
+        description: "Banner Image Type"
+      - id: "BannerImageURL"
+        name: "BannerImageURL"
+        writable: false
+        type: "?"
+        description: "Banner Image URL"
+      - id: "BeatsPerMinute"
+        name: "BeatsPerMinute"
+        writable: false
+        type: "?"
+        description: "Beats Per Minute"
+      - id: "Bitrate"
+        name: "Bitrate"
+        writable: false
+        type: "?"
+        description: "Bitrate"
+      - id: "Broadcast"
+        name: "Broadcast"
+        writable: false
+        type: "?"
+        description: "Broadcast"
+      - id: "BufferAverage"
+        name: "BufferAverage"
+        writable: false
+        type: "?"
+        description: "Buffer Average"
+      - id: "Can_Skip_Backward"
+        name: "Can_Skip_Backward"
+        writable: false
+        type: "?"
+        description: "Can Skip Backward"
+      - id: "Can_Skip_Forward"
+        name: "Can_Skip_Forward"
+        writable: false
+        type: "?"
+        description: "Can Skip Forward"
+      - id: "Category"
+        name: "Category"
+        writable: false
+        type: "?"
+        description: "Category"
+      - id: "Codec"
+        name: "Codec"
+        writable: false
+        type: "?"
+        description: "Codec"
+      - id: "Composer"
+        name: "Composer"
+        writable: false
+        type: "?"
+        description: "Composer"
+      - id: "Conductor"
+        name: "Conductor"
+        writable: false
+        type: "?"
+        description: "Conductor"
+      - id: "ContainerFormat"
+        name: "ContainerFormat"
+        writable: false
+        type: "?"
+        description: "Container Format"
+      - id: "ContentDistributor"
+        name: "ContentDistributor"
+        writable: false
+        type: "?"
+        description: "Content Distributor"
+      - id: "ContentGroupDescription"
+        name: "ContentGroupDescription"
+        writable: false
+        type: "?"
+        description: "Content Group Description"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: false
+        type: "?"
+        description: "Copyright"
+      - id: "CopyrightURL"
+        name: "CopyrightURL"
+        writable: false
+        type: "?"
+        description: "Copyright URL"
+      - id: "CurrentBitrate"
+        name: "CurrentBitrate"
+        writable: false
+        type: "?"
+        description: "Current Bitrate"
+      - id: "DRM"
+        name: "DRM"
+        writable: false
+        type: "?"
+        description: "DRM"
+      - id: "DRM_ContentID"
+        name: "DRM_ContentID"
+        writable: false
+        type: "?"
+        description: "DRM Content ID"
+      - id: "DRM_DRMHeader"
+        name: "DRM_DRMHeader"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header"
+      - id: "DRM_DRMHeader_ContentDistributor"
+        name: "DRM_DRMHeader_ContentDistributor"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header Content Distributor"
+      - id: "DRM_DRMHeader_ContentID"
+        name: "DRM_DRMHeader_ContentID"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header Content ID"
+      - id: "DRM_DRMHeader_IndividualizedVersion"
+        name: "DRM_DRMHeader_IndividualizedVersion"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header Individualized Version"
+      - id: "DRM_DRMHeader_KeyID"
+        name: "DRM_DRMHeader_KeyID"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header Key ID"
+      - id: "DRM_DRMHeader_LicenseAcqURL"
+        name: "DRM_DRMHeader_LicenseAcqURL"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header License Acq URL"
+      - id: "DRM_DRMHeader_SubscriptionContentID"
+        name: "DRM_DRMHeader_SubscriptionContentID"
+        writable: false
+        type: "?"
+        description: "DRM DRM Header Subscription Content ID"
+      - id: "DRM_IndividualizedVersion"
+        name: "DRM_IndividualizedVersion"
+        writable: false
+        type: "?"
+        description: "DRM Individualized Version"
+      - id: "DRM_KeyID"
+        name: "DRM_KeyID"
+        writable: false
+        type: "?"
+        description: "DRM Key ID"
+      - id: "DRM_LASignatureCert"
+        name: "DRM_LASignatureCert"
+        writable: false
+        type: "?"
+        description: "DRM LA Signature Cert"
+      - id: "DRM_LASignatureLicSrvCert"
+        name: "DRM_LASignatureLicSrvCert"
+        writable: false
+        type: "?"
+        description: "DRM LA Signature Lic Srv Cert"
+      - id: "DRM_LASignaturePrivKey"
+        name: "DRM_LASignaturePrivKey"
+        writable: false
+        type: "?"
+        description: "DRM LA Signature Priv Key"
+      - id: "DRM_LASignatureRootCert"
+        name: "DRM_LASignatureRootCert"
+        writable: false
+        type: "?"
+        description: "DRM LA Signature Root Cert"
+      - id: "DRM_LicenseAcqURL"
+        name: "DRM_LicenseAcqURL"
+        writable: false
+        type: "?"
+        description: "DRM License Acq URL"
+      - id: "DRM_V1LicenseAcqURL"
+        name: "DRM_V1LicenseAcqURL"
+        writable: false
+        type: "?"
+        description: "DRM V1 License Acq URL"
+      - id: "DVDID"
+        name: "DVDID"
+        writable: false
+        type: "?"
+        description: "DVDID"
+      - id: "Description"
+        name: "Description"
+        writable: false
+        type: "?"
+        description: "Description"
+      - id: "Director"
+        name: "Director"
+        writable: false
+        type: "?"
+        description: "Director"
+      - id: "Duration"
+        name: "Duration"
+        writable: false
+        type: "?"
+        description: "Duration"
+      - id: "EncodedBy"
+        name: "EncodedBy"
+        writable: false
+        type: "?"
+        description: "Encoded By"
+      - id: "EncodingSettings"
+        name: "EncodingSettings"
+        writable: false
+        type: "?"
+        description: "Encoding Settings"
+      - id: "EncodingTime"
+        name: "EncodingTime"
+        writable: false
+        type: "?"
+        description: "Encoding Time"
+      - id: "FileSize"
+        name: "FileSize"
+        writable: false
+        type: "?"
+        description: "File Size"
+      - id: "Genre"
+        name: "Genre"
+        writable: false
+        type: "?"
+        description: "Genre"
+      - id: "GenreID"
+        name: "GenreID"
+        writable: false
+        type: "?"
+        description: "Genre ID"
+      - id: "HasArbitraryDataStream"
+        name: "HasArbitraryDataStream"
+        writable: false
+        type: "?"
+        description: "Has Arbitrary Data Stream"
+      - id: "HasAttachedImages"
+        name: "HasAttachedImages"
+        writable: false
+        type: "?"
+        description: "Has Attached Images"
+      - id: "HasAudio"
+        name: "HasAudio"
+        writable: false
+        type: "?"
+        description: "Has Audio"
+      - id: "HasFileTransferStream"
+        name: "HasFileTransferStream"
+        writable: false
+        type: "?"
+        description: "Has File Transfer Stream"
+      - id: "HasImage"
+        name: "HasImage"
+        writable: false
+        type: "?"
+        description: "Has Image"
+      - id: "HasScript"
+        name: "HasScript"
+        writable: false
+        type: "?"
+        description: "Has Script"
+      - id: "HasVideo"
+        name: "HasVideo"
+        writable: false
+        type: "?"
+        description: "Has Video"
+      - id: "ISRC"
+        name: "ISRC"
+        writable: false
+        type: "?"
+        description: "ISRC"
+      - id: "InitialKey"
+        name: "InitialKey"
+        writable: false
+        type: "?"
+        description: "Initial Key"
+      - id: "IsVBR"
+        name: "IsVBR"
+        writable: false
+        type: "?"
+        description: "Is VBR"
+      - id: "Is_Protected"
+        name: "Is_Protected"
+        writable: false
+        type: "?"
+        description: "Is Protected"
+      - id: "Is_Trusted"
+        name: "Is_Trusted"
+        writable: false
+        type: "?"
+        description: "Is Trusted"
+      - id: "Language"
+        name: "Language"
+        writable: false
+        type: "?"
+        description: "Language"
+      - id: "Lyrics"
+        name: "Lyrics"
+        writable: false
+        type: "?"
+        description: "Lyrics"
+      - id: "Lyrics_Synchronised"
+        name: "Lyrics_Synchronised"
+        writable: false
+        type: "?"
+        description: "Lyrics Synchronised"
+      - id: "MCDI"
+        name: "MCDI"
+        writable: false
+        type: "?"
+        description: "MCDI"
+      - id: "MediaClassPrimaryID"
+        name: "MediaClassPrimaryID"
+        writable: false
+        type: "?"
+        description: "Media Class Primary ID"
+      - id: "MediaClassSecondaryID"
+        name: "MediaClassSecondaryID"
+        writable: false
+        type: "?"
+        description: "Media Class Secondary ID"
+      - id: "MediaCredits"
+        name: "MediaCredits"
+        writable: false
+        type: "?"
+        description: "Media Credits"
+      - id: "MediaIsDelay"
+        name: "MediaIsDelay"
+        writable: false
+        type: "?"
+        description: "Media Is Delay"
+      - id: "MediaIsFinale"
+        name: "MediaIsFinale"
+        writable: false
+        type: "?"
+        description: "Media Is Finale"
+      - id: "MediaIsLive"
+        name: "MediaIsLive"
+        writable: false
+        type: "?"
+        description: "Media Is Live"
+      - id: "MediaIsPremiere"
+        name: "MediaIsPremiere"
+        writable: false
+        type: "?"
+        description: "Media Is Premiere"
+      - id: "MediaIsRepeat"
+        name: "MediaIsRepeat"
+        writable: false
+        type: "?"
+        description: "Media Is Repeat"
+      - id: "MediaIsSAP"
+        name: "MediaIsSAP"
+        writable: false
+        type: "?"
+        description: "Media Is SAP"
+      - id: "MediaIsStereo"
+        name: "MediaIsStereo"
+        writable: false
+        type: "?"
+        description: "Media Is Stereo"
+      - id: "MediaIsSubtitled"
+        name: "MediaIsSubtitled"
+        writable: false
+        type: "?"
+        description: "Media Is Subtitled"
+      - id: "MediaIsTape"
+        name: "MediaIsTape"
+        writable: false
+        type: "?"
+        description: "Media Is Tape"
+      - id: "MediaNetworkAffiliation"
+        name: "MediaNetworkAffiliation"
+        writable: false
+        type: "?"
+        description: "Media Network Affiliation"
+      - id: "MediaOriginalBroadcastDateTime"
+        name: "MediaOriginalBroadcastDateTime"
+        writable: false
+        type: "?"
+        description: "Media Original Broadcast Date Time"
+      - id: "MediaOriginalChannel"
+        name: "MediaOriginalChannel"
+        writable: false
+        type: "?"
+        description: "Media Original Channel"
+      - id: "MediaStationCallSign"
+        name: "MediaStationCallSign"
+        writable: false
+        type: "?"
+        description: "Media Station Call Sign"
+      - id: "MediaStationName"
+        name: "MediaStationName"
+        writable: false
+        type: "?"
+        description: "Media Station Name"
+      - id: "ModifiedBy"
+        name: "ModifiedBy"
+        writable: false
+        type: "?"
+        description: "Modified By"
+      - id: "Mood"
+        name: "Mood"
+        writable: false
+        type: "?"
+        description: "Mood"
+      - id: "NSC_Address"
+        name: "NSC_Address"
+        writable: false
+        type: "?"
+        description: "NSC Address"
+      - id: "NSC_Description"
+        name: "NSC_Description"
+        writable: false
+        type: "?"
+        description: "NSC Description"
+      - id: "NSC_Email"
+        name: "NSC_Email"
+        writable: false
+        type: "?"
+        description: "NSC Email"
+      - id: "NSC_Name"
+        name: "NSC_Name"
+        writable: false
+        type: "?"
+        description: "NSC Name"
+      - id: "NSC_Phone"
+        name: "NSC_Phone"
+        writable: false
+        type: "?"
+        description: "NSC Phone"
+      - id: "NumberOfFrames"
+        name: "NumberOfFrames"
+        writable: false
+        type: "?"
+        description: "Number Of Frames"
+      - id: "OptimalBitrate"
+        name: "OptimalBitrate"
+        writable: false
+        type: "?"
+        description: "Optimal Bitrate"
+      - id: "OriginalAlbumTitle"
+        name: "OriginalAlbumTitle"
+        writable: false
+        type: "?"
+        description: "Original Album Title"
+      - id: "OriginalArtist"
+        name: "OriginalArtist"
+        writable: false
+        type: "?"
+        description: "Original Artist"
       - id: "OriginalFilename"
         name: "OriginalFileName"
         writable: false
         type: "?"
         description: "Original File Name"
+      - id: "OriginalLyricist"
+        name: "OriginalLyricist"
+        writable: false
+        type: "?"
+        description: "Original Lyricist"
+      - id: "OriginalReleaseTime"
+        name: "OriginalReleaseTime"
+        writable: false
+        type: "?"
+        description: "Original Release Time"
+      - id: "OriginalReleaseYear"
+        name: "OriginalReleaseYear"
+        writable: false
+        type: "?"
+        description: "Original Release Year"
+      - id: "ParentalRating"
+        name: "ParentalRating"
+        writable: false
+        type: "?"
+        description: "Parental Rating"
+      - id: "ParentalRatingReason"
+        name: "ParentalRatingReason"
+        writable: false
+        type: "?"
+        description: "Parental Rating Reason"
+      - id: "PartOfSet"
+        name: "PartOfSet"
+        writable: false
+        type: "?"
+        description: "Part Of Set"
+      - id: "PeakBitrate"
+        name: "PeakBitrate"
+        writable: false
+        type: "?"
+        description: "Peak Bitrate"
+      - id: "PeakValue"
+        name: "PeakValue"
+        writable: false
+        type: "?"
+        description: "Peak Value"
+      - id: "Period"
+        name: "Period"
+        writable: false
+        type: "?"
+        description: "Period"
+      - id: "Picture"
+        name: "Picture"
+        writable: false
+        type: "?"
+        description: "Picture"
+      - id: "PlaylistDelay"
+        name: "PlaylistDelay"
+        writable: false
+        type: "?"
+        description: "Playlist Delay"
+      - id: "Producer"
+        name: "Producer"
+        writable: false
+        type: "?"
+        description: "Producer"
+      - id: "PromotionURL"
+        name: "PromotionURL"
+        writable: false
+        type: "?"
+        description: "Promotion URL"
+      - id: "ProtectionType"
+        name: "ProtectionType"
+        writable: false
+        type: "?"
+        description: "Protection Type"
+      - id: "Provider"
+        name: "Provider"
+        writable: false
+        type: "?"
+        description: "Provider"
+      - id: "ProviderCopyright"
+        name: "ProviderCopyright"
+        writable: false
+        type: "?"
+        description: "Provider Copyright"
+      - id: "ProviderRating"
+        name: "ProviderRating"
+        writable: false
+        type: "?"
+        description: "Provider Rating"
+      - id: "ProviderStyle"
+        name: "ProviderStyle"
+        writable: false
+        type: "?"
+        description: "Provider Style"
+      - id: "Publisher"
+        name: "Publisher"
+        writable: false
+        type: "?"
+        description: "Publisher"
+      - id: "RadioStationName"
+        name: "RadioStationName"
+        writable: false
+        type: "?"
+        description: "Radio Station Name"
+      - id: "RadioStationOwner"
+        name: "RadioStationOwner"
+        writable: false
+        type: "?"
+        description: "Radio Station Owner"
+      - id: "Rating"
+        name: "Rating"
+        writable: false
+        type: "?"
+        description: "Rating"
+      - id: "Seekable"
+        name: "Seekable"
+        writable: false
+        type: "?"
+        description: "Seekable"
+      - id: "SharedUserRating"
+        name: "SharedUserRating"
+        writable: false
+        type: "?"
+        description: "Shared User Rating"
+      - id: "Signature_Name"
+        name: "Signature_Name"
+        writable: false
+        type: "?"
+        description: "Signature Name"
+      - id: "StreamTypeInfo"
+        name: "StreamTypeInfo"
+        writable: false
+        type: "?"
+        description: "Stream Type Info"
+      - id: "Stridable"
+        name: "Stridable"
+        writable: false
+        type: "?"
+        description: "Stridable"
+      - id: "SubscriptionContentID"
+        name: "SubscriptionContentID"
+        writable: false
+        type: "?"
+        description: "Subscription Content ID"
       - id: "SubTitle"
         name: "Subtitle"
         writable: false
@@ -276,6 +993,116 @@ tables:
         writable: false
         type: "?"
         description: "Subtitle Description"
+      - id: "Text"
+        name: "Text"
+        writable: false
+        type: "?"
+        description: "Text"
+      - id: "Title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
+      - id: "ToolName"
+        name: "ToolName"
+        writable: false
+        type: "?"
+        description: "Tool Name"
+      - id: "ToolVersion"
+        name: "ToolVersion"
+        writable: false
+        type: "?"
+        description: "Tool Version"
+      - id: "Track"
+        name: "Track"
+        writable: false
+        type: "?"
+        description: "Track"
+      - id: "TrackNumber"
+        name: "TrackNumber"
+        writable: false
+        type: "?"
+        description: "Track Number"
+      - id: "UniqueFileIdentifier"
+        name: "UniqueFileIdentifier"
+        writable: false
+        type: "?"
+        description: "Unique File Identifier"
+      - id: "UserWebURL"
+        name: "UserWebURL"
+        writable: false
+        type: "?"
+        description: "User Web URL"
+      - id: "VBRPeak"
+        name: "VBRPeak"
+        writable: false
+        type: "?"
+        description: "VBR Peak"
+      - id: "VideoClosedCaptioning"
+        name: "VideoClosedCaptioning"
+        writable: false
+        type: "?"
+        description: "Video Closed Captioning"
+      - id: "VideoFrameRate"
+        name: "VideoFrameRate"
+        writable: false
+        type: "?"
+        description: "Video Frame Rate"
+      - id: "VideoHeight"
+        name: "VideoHeight"
+        writable: false
+        type: "?"
+        description: "Video Height"
+      - id: "VideoWidth"
+        name: "VideoWidth"
+        writable: false
+        type: "?"
+        description: "Video Width"
+      - id: "WMADRCAverageReference"
+        name: "WMADRCAverageReference"
+        writable: false
+        type: "?"
+        description: "WMADRC Average Reference"
+      - id: "WMADRCAverageTarget"
+        name: "WMADRCAverageTarget"
+        writable: false
+        type: "?"
+        description: "WMADRC Average Target"
+      - id: "WMADRCPeakReference"
+        name: "WMADRCPeakReference"
+        writable: false
+        type: "?"
+        description: "WMADRC Peak Reference"
+      - id: "WMADRCPeakTarget"
+        name: "WMADRCPeakTarget"
+        writable: false
+        type: "?"
+        description: "WMADRC Peak Target"
+      - id: "WMCollectionGroupID"
+        name: "WMCollectionGroupID"
+        writable: false
+        type: "?"
+        description: "WM Collection Group ID"
+      - id: "WMCollectionID"
+        name: "WMCollectionID"
+        writable: false
+        type: "?"
+        description: "WM Collection ID"
+      - id: "WMContentID"
+        name: "WMContentID"
+        writable: false
+        type: "?"
+        description: "WM Content ID"
+      - id: "Writer"
+        name: "Writer"
+        writable: false
+        type: "?"
+        description: "Writer"
+      - id: "Year"
+        name: "Year"
+        writable: false
+        type: "?"
+        description: "Year"
   - name: ASF::FileProperties
     tags:
       - id: "24"
@@ -829,11 +1656,46 @@ tables:
         description: "Video"
   - name: Flash::Main
     tags:
+      - id: "Compressed"
+        name: "Compressed"
+        writable: false
+        type: "?"
+        description: "Compressed"
+      - id: "Duration"
+        name: "Duration"
+        writable: false
+        type: "?"
+        description: "Duration"
       - id: "69"
         name: "FlashAttributes"
         writable: false
         type: "?"
         description: "Flash Attributes"
+      - id: "FlashVersion"
+        name: "FlashVersion"
+        writable: false
+        type: "?"
+        description: "Flash Version"
+      - id: "FrameCount"
+        name: "FrameCount"
+        writable: false
+        type: "?"
+        description: "Frame Count"
+      - id: "FrameRate"
+        name: "FrameRate"
+        writable: false
+        type: "?"
+        description: "Frame Rate"
+      - id: "ImageHeight"
+        name: "ImageHeight"
+        writable: false
+        type: "?"
+        description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: false
+        type: "?"
+        description: "Image Width"
       - id: "77"
         name: "XMP"
         writable: false
@@ -1296,6 +2158,23 @@ tables:
         writable: false
         type: "int32u"
         description: "White Balance"
+  - name: H264::Main
+    tags:
+      - id: "ImageHeight"
+        name: "ImageHeight"
+        writable: false
+        type: "?"
+        description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: false
+        type: "?"
+        description: "Image Width"
+      - id: "MDPM"
+        name: "MDPM"
+        writable: false
+        type: "?"
+        description: "MDPM"
   - name: H264::MakeModel
     tags:
       - id: "0"
@@ -1319,6 +2198,26 @@ tables:
         description: "Exposure Time"
   - name: ID3::GEOB
     tags:
+      - id: "GEOB-Data"
+        name: "GEOB-Data"
+        writable: false
+        type: "?"
+        description: "GEOB-Data"
+      - id: "GEOB-Desc"
+        name: "GEOB-Desc"
+        writable: false
+        type: "?"
+        description: "GEOB-Desc"
+      - id: "GEOB-File"
+        name: "GEOB-File"
+        writable: false
+        type: "?"
+        description: "GEOB-File"
+      - id: "GEOB-Mime"
+        name: "GEOB-Mime"
+        writable: false
+        type: "?"
+        description: "GEOB-Mime"
       - id: "application/x-c2pa-manifest-store"
         name: "JUMBF"
         writable: false
@@ -1400,6 +2299,16 @@ tables:
         description: "ID3v 2 4"
   - name: ID3::Private
     tags:
+      - id: "AverageLevel"
+        name: "AverageLevel"
+        writable: false
+        type: "?"
+        description: "Average Level"
+      - id: "PeakValue"
+        name: "PeakValue"
+        writable: false
+        type: "?"
+        description: "Peak Value"
       - id: "WM_WMCollectionGroupID"
         name: "WM_CollectionGroupID"
         writable: false
@@ -1415,6 +2324,26 @@ tables:
         writable: false
         type: "?"
         description: "WM Content ID"
+      - id: "WM_MediaClassPrimaryID"
+        name: "WM_MediaClassPrimaryID"
+        writable: false
+        type: "?"
+        description: "WM Media Class Primary ID"
+      - id: "WM_MediaClassSecondaryID"
+        name: "WM_MediaClassSecondaryID"
+        writable: false
+        type: "?"
+        description: "WM Media Class Secondary ID"
+      - id: "WM_Provider"
+        name: "WM_Provider"
+        writable: false
+        type: "?"
+        description: "WM Provider"
+      - id: "XMP"
+        name: "XMP"
+        writable: false
+        type: "?"
+        description: "XMP"
   - name: ID3::SynLyrics
     tags:
       - id: "desc"
@@ -1462,7 +2391,7 @@ tables:
       - id: "125"
         name: "Track"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Track"
       - id: "93"
         name: "Year"
@@ -2682,6 +3611,45 @@ tables:
         writable: false
         type: "?"
         description: "iTunes U"
+  - name: M2TS::AC3
+    tags:
+      - id: "AudioBitrate"
+        name: "AudioBitrate"
+        writable: false
+        type: "?"
+        description: "Audio Bitrate"
+      - id: "AudioChannels"
+        name: "AudioChannels"
+        writable: false
+        type: "?"
+        description: "Audio Channels"
+      - id: "AudioSampleRate"
+        name: "AudioSampleRate"
+        writable: false
+        type: "?"
+        description: "Audio Sample Rate"
+      - id: "SurroundMode"
+        name: "SurroundMode"
+        writable: false
+        type: "?"
+        description: "Surround Mode"
+  - name: M2TS::Main
+    tags:
+      - id: "AudioStreamType"
+        name: "AudioStreamType"
+        writable: false
+        type: "?"
+        description: "Audio Stream Type"
+      - id: "Duration"
+        name: "Duration"
+        writable: false
+        type: "?"
+        description: "Duration"
+      - id: "VideoStreamType"
+        name: "VideoStreamType"
+        writable: false
+        type: "?"
+        description: "Video Stream Type"
   - name: MPC::Main
     tags:
       - id: "Bit216-223"
@@ -2927,7 +3895,7 @@ tables:
       - id: "0"
         name: "MXFVersion"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "MXF Version"
   - name: MXF::Main
     tags:
@@ -13060,7 +14028,7 @@ tables:
       - id: "24"
         name: "Channel1Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 1 Coordinates"
       - id: "20"
         name: "Channel1Flags"
@@ -13075,7 +14043,7 @@ tables:
       - id: "44"
         name: "Channel2Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 2 Coordinates"
       - id: "40"
         name: "Channel2Flags"
@@ -13090,7 +14058,7 @@ tables:
       - id: "64"
         name: "Channel3Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 3 Coordinates"
       - id: "60"
         name: "Channel3Flags"
@@ -13105,7 +14073,7 @@ tables:
       - id: "84"
         name: "Channel4Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 4 Coordinates"
       - id: "80"
         name: "Channel4Flags"
@@ -13120,7 +14088,7 @@ tables:
       - id: "104"
         name: "Channel5Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 5 Coordinates"
       - id: "100"
         name: "Channel5Flags"
@@ -13135,7 +14103,7 @@ tables:
       - id: "124"
         name: "Channel6Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 6 Coordinates"
       - id: "120"
         name: "Channel6Flags"
@@ -13150,7 +14118,7 @@ tables:
       - id: "144"
         name: "Channel7Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 7 Coordinates"
       - id: "140"
         name: "Channel7Flags"
@@ -13165,7 +14133,7 @@ tables:
       - id: "164"
         name: "Channel8Coordinates"
         writable: false
-        type: "float"
+        type: "?"
         description: "Channel 8 Coordinates"
       - id: "160"
         name: "Channel8Flags"
@@ -13503,7 +14471,7 @@ tables:
       - id: "1"
         name: "GenFlags"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Gen Flags"
       - id: "4"
         name: "GenGraphicsMode"
@@ -13518,7 +14486,7 @@ tables:
       - id: "6"
         name: "GenOpColor"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Gen Op Color"
   - name: QuickTime::HEVCConfig
     tags:
@@ -13550,7 +14518,7 @@ tables:
       - id: "6"
         name: "ConstraintIndicatorFlags"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Constraint Indicator Flags"
       - id: "2"
         name: "GenProfileCompatibilityFlags"
@@ -14473,6 +15441,16 @@ tables:
         writable: true
         type: "int64s"
         description: "Apple Photos Variation Identifier"
+      - id: "artist"
+        name: "Artist"
+        writable: true
+        type: "?"
+        description: "Artist"
+      - id: "artwork"
+        name: "Artwork"
+        writable: true
+        type: "?"
+        description: "Artwork"
       - id: "player.movie.audio.gain"
         name: "AudioGain"
         writable: true
@@ -14513,6 +15491,11 @@ tables:
         writable: true
         type: "?"
         description: "Color"
+      - id: "comment"
+        name: "Comment"
+        writable: true
+        type: "?"
+        description: "Comment"
       - id: "compatible_brands"
         name: "CompatibleBrands"
         writable: true
@@ -14543,6 +15526,11 @@ tables:
         writable: true
         type: "?"
         description: "Creation Time"
+      - id: "description"
+        name: "Description"
+        writable: true
+        type: "?"
+        description: "Description"
       - id: "detected-face.bounds"
         name: "DetectedFaceBounds"
         writable: false
@@ -14563,6 +15551,11 @@ tables:
         writable: false
         type: "?"
         description: "Detected Face Yaw Angle"
+      - id: "director"
+        name: "Director"
+        writable: true
+        type: "?"
+        description: "Director"
       - id: "displayname"
         name: "DisplayName"
         writable: true
@@ -14573,6 +15566,11 @@ tables:
         writable: true
         type: "?"
         description: "Encoded With"
+      - id: "encoder"
+        name: "Encoder"
+        writable: true
+        type: "?"
+        description: "Encoder"
       - id: "detected-face"
         name: "FaceInfo"
         writable: false
@@ -14588,6 +15586,21 @@ tables:
         writable: true
         type: "?"
         description: "GPS Coordinates"
+      - id: "genre"
+        name: "Genre"
+        writable: true
+        type: "?"
+        description: "Genre"
+      - id: "information"
+        name: "Information"
+        writable: true
+        type: "?"
+        description: "Information"
+      - id: "keywords"
+        name: "Keywords"
+        writable: true
+        type: "?"
+        description: "Keywords"
       - id: "live-photo.auto"
         name: "LivePhotoAuto"
         writable: true
@@ -14673,6 +15686,16 @@ tables:
         writable: true
         type: "?"
         description: "Player Version"
+      - id: "producer"
+        name: "Producer"
+        writable: true
+        type: "?"
+        description: "Producer"
+      - id: "publisher"
+        name: "Publisher"
+        writable: true
+        type: "?"
+        description: "Publisher"
       - id: "sdpd"
         name: "SDPD"
         writable: true
@@ -14723,6 +15746,11 @@ tables:
         writable: false
         type: "?"
         description: "Smartstyle Tone"
+      - id: "software"
+        name: "Software"
+        writable: true
+        type: "?"
+        description: "Software"
       - id: "still-image-time"
         name: "StillImageTime"
         writable: false
@@ -14733,6 +15761,11 @@ tables:
         writable: true
         type: "?"
         description: "Tint"
+      - id: "title"
+        name: "Title"
+        writable: true
+        type: "?"
+        description: "Title"
       - id: "player.movie.audio.treble"
         name: "Treble"
         writable: true
@@ -14773,6 +15806,11 @@ tables:
         writable: true
         type: "int32s"
         description: "Xiaomi Preview Video Cover"
+      - id: "year"
+        name: "Year"
+        writable: true
+        type: "?"
+        description: "Year"
   - name: QuickTime::Main
     tags:
       - id: "ardt"
@@ -14815,6 +15853,11 @@ tables:
         writable: false
         type: "?"
         description: "File Type"
+      - id: "free#Free"
+        name: "Free"
+        writable: false
+        type: "?"
+        description: "Free"
       - id: "udta#GKUData"
         name: "GKUData"
         writable: false
@@ -14860,6 +15903,11 @@ tables:
         writable: false
         type: "?"
         description: "JUMBF"
+      - id: "junk"
+        name: "Junk"
+        writable: false
+        type: "?"
+        description: "Junk"
       - id: "kfix"
         name: "KFIX"
         writable: false
@@ -15045,6 +16093,11 @@ tables:
         writable: false
         type: "?"
         description: "UUID-Unknown"
+      - id: "wide"
+        name: "Wide"
+        writable: false
+        type: "?"
+        description: "Wide"
       - id: "uuid#XMP"
         name: "XMP"
         writable: false
@@ -15492,6 +16545,261 @@ tables:
         description: "Time Scale"
   - name: QuickTime::Nextbase
     tags:
+      - id: "Alerts"
+        name: "Alerts"
+        writable: false
+        type: "?"
+        description: "Alerts"
+      - id: "Alexa"
+        name: "Alexa"
+        writable: false
+        type: "?"
+        description: "Alexa"
+      - id: "Alexa - Paired Device Name"
+        name: "Alexa-PairedDeviceName"
+        writable: false
+        type: "?"
+        description: "Alexa-Paired Device Name"
+      - id: "Alexa - Pairing"
+        name: "Alexa-Pairing"
+        writable: false
+        type: "?"
+        description: "Alexa-Pairing"
+      - id: "Alexa - Privacy Mode"
+        name: "Alexa-PrivacyMode"
+        writable: false
+        type: "?"
+        description: "Alexa-Privacy Mode"
+      - id: "Alexa - Wake Word Language"
+        name: "Alexa-WakeWordLanguage"
+        writable: false
+        type: "?"
+        description: "Alexa-Wake Word Language"
+      - id: "Audio"
+        name: "Audio"
+        writable: false
+        type: "?"
+        description: "Audio"
+      - id: "Auto Power Off"
+        name: "AutoPowerOff"
+        writable: false
+        type: "?"
+        description: "Auto Power Off"
+      - id: "Battery Status"
+        name: "BatteryStatus"
+        writable: false
+        type: "?"
+        description: "Battery Status"
+      - id: "Bluetooth MAC Address"
+        name: "BluetoothMACAddress"
+        writable: false
+        type: "?"
+        description: "Bluetooth MAC Address"
+      - id: "Bluetooth Name"
+        name: "BluetoothName"
+        writable: false
+        type: "?"
+        description: "Bluetooth Name"
+      - id: "Country"
+        name: "Country"
+        writable: false
+        type: "?"
+        description: "Country"
+      - id: "Default Settings"
+        name: "DefaultSettings"
+        writable: false
+        type: "?"
+        description: "Default Settings"
+      - id: "Device Sounds"
+        name: "DeviceSounds"
+        writable: false
+        type: "?"
+        description: "Device Sounds"
+      - id: "Dual Files"
+        name: "DualFiles"
+        writable: false
+        type: "?"
+        description: "Dual Files"
+      - id: "Emergency SOS"
+        name: "EmergencySOS"
+        writable: false
+        type: "?"
+        description: "Emergency SOS"
+      - id: "Exposure"
+        name: "Exposure"
+        writable: false
+        type: "?"
+        description: "Exposure"
+      - id: "Extreme Weather Mode"
+        name: "ExtremeWeatherMode"
+        writable: false
+        type: "?"
+        description: "Extreme Weather Mode"
+      - id: "FCC-ID"
+        name: "FCC-ID"
+        writable: false
+        type: "?"
+        description: "FCC-ID"
+      - id: "Firmware"
+        name: "Firmware"
+        writable: false
+        type: "?"
+        description: "Firmware"
+      - id: "Firmware Version"
+        name: "FirmwareVersion"
+        writable: false
+        type: "?"
+        description: "Firmware Version"
+      - id: "Format SD Card"
+        name: "FormatSDCard"
+        writable: false
+        type: "?"
+        description: "Format SD Card"
+      - id: "GPS Stamp"
+        name: "GPSStamp"
+        writable: false
+        type: "?"
+        description: "GPS Stamp"
+      - id: "G Sensor"
+        name: "GSensor"
+        writable: false
+        type: "?"
+        description: "G Sensor"
+      - id: "Image Stabilisation"
+        name: "ImageStabilisation"
+        writable: false
+        type: "?"
+        description: "Image Stabilisation"
+      - id: "Keep User Settings"
+        name: "KeepUserSettings"
+        writable: false
+        type: "?"
+        description: "Keep User Settings"
+      - id: "Language"
+        name: "Language"
+        writable: false
+        type: "?"
+        description: "Language"
+      - id: "Linux"
+        name: "Linux"
+        writable: false
+        type: "?"
+        description: "Linux"
+      - id: "Model"
+        name: "Model"
+        writable: false
+        type: "?"
+        description: "Model"
+      - id: "Model Stamp"
+        name: "ModelStamp"
+        writable: false
+        type: "?"
+        description: "Model Stamp"
+      - id: "MyNextbase - Paired Device Name"
+        name: "MyNextbase-PairedDeviceName"
+        writable: false
+        type: "?"
+        description: "My Nextbase-Paired Device Name"
+      - id: "MyNextbase - Pairing"
+        name: "MyNextbase-Pairing"
+        writable: false
+        type: "?"
+        description: "My Nextbase-Pairing"
+      - id: "NBCD"
+        name: "NBCD"
+        writable: false
+        type: "?"
+        description: "NBCD"
+      - id: "Number / License Plate"
+        name: "NumberLicensePlate"
+        writable: false
+        type: "?"
+        description: "Number License Plate"
+      - id: "Parking Mode"
+        name: "ParkingMode"
+        writable: false
+        type: "?"
+        description: "Parking Mode"
+      - id: "RTOS"
+        name: "RTOS"
+        writable: false
+        type: "?"
+        description: "RTOS"
+      - id: "Recording History"
+        name: "RecordingHistory"
+        writable: false
+        type: "?"
+        description: "Recording History"
+      - id: "Resolution"
+        name: "Resolution"
+        writable: false
+        type: "?"
+        description: "Resolution"
+      - id: "Reversing Camera"
+        name: "ReversingCamera"
+        writable: false
+        type: "?"
+        description: "Reversing Camera"
+      - id: "SD Card Class"
+        name: "SDCardClass"
+        writable: false
+        type: "?"
+        description: "SD Card Class"
+      - id: "SD Card Format"
+        name: "SDCardFormat"
+        writable: false
+        type: "?"
+        description: "SD Card Format"
+      - id: "SD Card Manf Date"
+        name: "SDCardManfDate"
+        writable: false
+        type: "?"
+        description: "SD Card Manf Date"
+      - id: "SD Card Manf ID"
+        name: "SDCardManfID"
+        writable: false
+        type: "?"
+        description: "SD Card Manf ID"
+      - id: "SD Card Model No"
+        name: "SDCardModelNo"
+        writable: false
+        type: "?"
+        description: "SD Card Model No"
+      - id: "SD Card OEM ID"
+        name: "SDCardOEMID"
+        writable: false
+        type: "?"
+        description: "SD Card OEMID"
+      - id: "SD Card Serial No"
+        name: "SDCardSerialNo"
+        writable: false
+        type: "?"
+        description: "SD Card Serial No"
+      - id: "SD Card Size"
+        name: "SDCardSize"
+        writable: false
+        type: "?"
+        description: "SD Card Size"
+      - id: "SD Card Type"
+        name: "SDCardType"
+        writable: false
+        type: "?"
+        description: "SD Card Type"
+      - id: "SD Card Used Space"
+        name: "SDCardUsedSpace"
+        writable: false
+        type: "?"
+        description: "SD Card Used Space"
+      - id: "Screen Dimming"
+        name: "ScreenDimming"
+        writable: false
+        type: "?"
+        description: "Screen Dimming"
+      - id: "Screen Saver"
+        name: "ScreenSaver"
+        writable: false
+        type: "?"
+        description: "Screen Saver"
       - id: "2nd Cam"
         name: "SecondCam"
         writable: false
@@ -15502,11 +16810,41 @@ tables:
         writable: false
         type: "?"
         description: "Serial Number"
+      - id: "Speed Stamp"
+        name: "SpeedStamp"
+        writable: false
+        type: "?"
+        description: "Speed Stamp"
+      - id: "Speed Units"
+        name: "SpeedUnits"
+        writable: false
+        type: "?"
+        description: "Speed Units"
+      - id: "System Info"
+        name: "SystemInfo"
+        writable: false
+        type: "?"
+        description: "System Info"
       - id: "Time & Date"
         name: "TimeAndDate"
         writable: false
         type: "?"
         description: "Time And Date"
+      - id: "Time Lapse"
+        name: "TimeLapse"
+        writable: false
+        type: "?"
+        description: "Time Lapse"
+      - id: "Time Zone / DST"
+        name: "TimeZoneDST"
+        writable: false
+        type: "?"
+        description: "Time Zone DST"
+      - id: "Video Length"
+        name: "VideoLength"
+        writable: false
+        type: "?"
+        description: "Video Length"
       - id: "Time Stamp"
         name: "VideoTimeStamp"
         writable: false
@@ -15517,6 +16855,21 @@ tables:
         writable: false
         type: "?"
         description: "What 3 Words"
+      - id: "Wi-Fi MAC Address"
+        name: "Wi-FiMACAddress"
+        writable: false
+        type: "?"
+        description: "Wi-Fi MAC Address"
+      - id: "Wi-Fi Password"
+        name: "Wi-FiPassword"
+        writable: false
+        type: "?"
+        description: "Wi-Fi Password"
+      - id: "Wi-Fi SSID"
+        name: "Wi-FiSSID"
+        writable: false
+        type: "?"
+        description: "Wi-Fi SSID"
   - name: QuickTime::OtherMeta
     tags:
       - id: "meta"
@@ -15593,6 +16946,11 @@ tables:
         writable: false
         type: "?"
         description: "Preview Image"
+      - id: "ptrh"
+        name: "Ptrh"
+        writable: false
+        type: "?"
+        description: "Ptrh"
       - id: "sttm"
         name: "StartTime"
         writable: false
@@ -15889,7 +17247,7 @@ tables:
       - id: "12"
         name: "AmbisonicChannelMap"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Ambisonic Channel Map"
       - id: "6"
         name: "AmbisonicChannelOrdering"
@@ -15926,7 +17284,7 @@ tables:
       - id: "18"
         name: "BackgroundColor"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Background Color"
       - id: "24"
         name: "FontName"
@@ -15936,7 +17294,7 @@ tables:
       - id: "12"
         name: "TextColor"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Text Color"
       - id: "6"
         name: "TextFace"
@@ -16073,7 +17431,7 @@ tables:
       - id: "7"
         name: "ImageSizeLookahead"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Image Size Lookahead"
       - id: "19"
         name: "ImageWidth"
@@ -17258,7 +18616,7 @@ tables:
       - id: "3"
         name: "OpColor"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Op Color"
   - name: QuickTime::VideoKeys
     tags:
@@ -17292,7 +18650,7 @@ tables:
       - id: "10"
         name: "PixelAspectRatio"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Pixel Aspect Ratio"
       - id: "4"
         name: "VideoAttributes"
@@ -17337,7 +18695,7 @@ tables:
       - id: "9"
         name: "VideoSize"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Video Size"
       - id: "1"
         name: "VideoTrackID"
@@ -17470,6 +18828,48 @@ tables:
         writable: false
         type: "?"
         description: "Padding"
+  - name: QuickTime::eeBox
+    tags:
+      - id: "camm"
+        name: "Camm"
+        writable: false
+        type: "?"
+        description: "Camm"
+      - id: "ctbx"
+        name: "Ctbx"
+        writable: false
+        type: "?"
+        description: "Ctbx"
+      - id: "data"
+        name: "Data"
+        writable: false
+        type: "?"
+        description: "Data"
+      - id: "meta"
+        name: "Meta"
+        writable: false
+        type: "?"
+        description: "Meta"
+      - id: "sbtl"
+        name: "Sbtl"
+        writable: false
+        type: "?"
+        description: "Sbtl"
+      - id: ""
+        name: "Tag"
+        writable: false
+        type: "?"
+        description: "Tag"
+      - id: "text"
+        name: "Text"
+        writable: false
+        type: "?"
+        description: "Text"
+      - id: "vide"
+        name: "Vide"
+        writable: false
+        type: "?"
+        description: "Vide"
   - name: QuickTime::equi
     tags:
       - id: "2"
@@ -17494,6 +18894,11 @@ tables:
         description: "Projection Bounds Top"
   - name: QuickTime::iTunesInfo
     tags:
+      - id: "Actors"
+        name: "Actors"
+        writable: false
+        type: "?"
+        description: "Actors"
       - id: "ARTISTS"
         name: "Artists"
         writable: false
@@ -17569,6 +18974,11 @@ tables:
         writable: false
         type: "?"
         description: "Encoding Params"
+      - id: "IMDB_ID"
+        name: "IMDB_ID"
+        writable: false
+        type: "?"
+        description: "IMDB ID"
       - id: "initialkey"
         name: "InitialKey"
         writable: false
@@ -17669,6 +19079,16 @@ tables:
         writable: false
         type: "?"
         description: "Script"
+      - id: "TIPL"
+        name: "TIPL"
+        writable: false
+        type: "?"
+        description: "TIPL"
+      - id: "TMDB_ID"
+        name: "TMDB_ID"
+        writable: false
+        type: "?"
+        description: "TMDB ID"
       - id: "TRACKNUMBER"
         name: "TrackNumber"
         writable: false
@@ -17822,7 +19242,7 @@ tables:
       - id: "1"
         name: "Unknown"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Unknown"
   - name: Real::AudioV4
     tags:
@@ -18117,6 +19537,11 @@ tables:
         description: "Title Len"
   - name: Real::FileInfo
     tags:
+      - id: "Audiences"
+        name: "Audiences"
+        writable: false
+        type: "?"
+        description: "Audiences"
       - id: "Audio Format"
         name: "AudioFormat"
         writable: false
@@ -18137,11 +19562,26 @@ tables:
         writable: false
         type: "?"
         description: "Create Date"
+      - id: "Description"
+        name: "Description"
+        writable: false
+        type: "?"
+        description: "Description"
       - id: "File ID"
         name: "FileID"
         writable: false
         type: "?"
         description: "File ID"
+      - id: "Indexable"
+        name: "Indexable"
+        writable: false
+        type: "?"
+        description: "Indexable"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
       - id: "Modification Date"
         name: "ModifyDate"
         writable: false
@@ -18167,12 +19607,34 @@ tables:
         writable: false
         type: "?"
         description: "Video Quality"
+  - name: Real::Media
+    tags:
+      - id: "CONT"
+        name: "CONT"
+        writable: false
+        type: "?"
+        description: "CONT"
+      - id: "MDPR"
+        name: "MDPR"
+        writable: false
+        type: "?"
+        description: "MDPR"
+      - id: "PROP"
+        name: "PROP"
+        writable: false
+        type: "?"
+        description: "PROP"
+      - id: "RJMD"
+        name: "RJMD"
+        writable: false
+        type: "?"
+        description: "RJMD"
   - name: Real::MediaProps
     tags:
       - id: "17"
         name: "DataOffsets"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Data Offsets"
       - id: "12"
         name: "FileInfoLen"
@@ -18207,12 +19669,12 @@ tables:
       - id: "19"
         name: "PhysicalStreamNumberMap"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Physical Stream Number Map"
       - id: "16"
         name: "PhysicalStreamNumbers"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Physical Stream Numbers"
       - id: "15"
         name: "PhysicalStreams"
@@ -18400,7 +19862,7 @@ tables:
       - id: "23"
         name: "PixelAspectRatio"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Pixel Aspect Ratio"
       - id: "34"
         name: "PixelFormat"
@@ -18415,7 +19877,7 @@ tables:
       - id: "0"
         name: "TheoraVersion"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Theora Version"
       - id: "13"
         name: "XOffset"
@@ -18591,6 +20053,11 @@ tables:
         writable: false
         type: "?"
         description: "Track Number"
+      - id: "vendor"
+        name: "Vendor"
+        writable: false
+        type: "?"
+        description: "Vendor"
       - id: "VERSION"
         name: "Version"
         writable: false
@@ -18999,6 +20466,11 @@ tables:
         writable: false
         type: "?"
         description: "Subtitle Description"
+      - id: "Title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
       - id: "WM/VideoClosedCaptioning"
         name: "VideoClosedCaptioning"
         writable: false

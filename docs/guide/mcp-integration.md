@@ -30,7 +30,7 @@ the oxidex-mcp README):
 
 Paths are validated (no directory traversal), there is no network access, and
 write operations can be previewed with dry-run before they are applied.
-Explore the 30,039 metadata tags defined in the OxiDex tag database through these tools;
+Explore the 32,271 metadata tags defined in the OxiDex tag database through these tools;
 the [tag coverage report](/reference/tag-coverage-analysis) states how many of
 them are measured as extracted.
 

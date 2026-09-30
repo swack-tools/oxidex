@@ -7,7 +7,7 @@ use oxidex::tag_sync::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -83,6 +83,53 @@ fn verify_dump_source_modules(doc: &Value, source_lib: &Path) -> Result<()> {
     let modules = doc["modules"]
         .as_object()
         .context("table dump lacks modules")?;
+    let claimed_count = doc["modules_ok"]
+        .as_u64()
+        .context("table dump lacks a module count")?;
+    ensure!(
+        modules.len() as u64 == claimed_count,
+        "table dump module count does not match captured modules"
+    );
+    // The full dump independently captures every table hash in its native
+    // write sidecar, including read-only tables. A missing modules.Exif row
+    // must not be hidden by lowering modules_ok while its sidecar survives.
+    let native_tables = doc["native_write_tables"]
+        .as_object()
+        .context("table dump lacks independent native table inventory")?;
+    ensure!(!native_tables.is_empty(), "native table inventory is empty");
+    for (name, module) in modules {
+        let tables = module["tables"]
+            .as_object()
+            .context("captured module lacks tables")?;
+        if !tables.is_empty() {
+            let sidecar = native_tables
+                .get(name)
+                .and_then(|value| value.as_object())
+                .context("captured module lacks independent native table inventory")?;
+            ensure!(
+                tables.keys().collect::<HashSet<_>>() == sidecar.keys().collect::<HashSet<_>>(),
+                "captured table set differs from independent native inventory: {name}"
+            );
+        }
+    }
+    for name in native_tables.keys() {
+        ensure!(
+            modules.contains_key(name),
+            "independently captured source module is missing: {name}"
+        );
+    }
+    // MakerNotes::Main is the source array route and has no HASH table, so
+    // it does not appear in native_write_tables. Require its captured array
+    // whenever its selected source module is present.
+    if selected_root.join("Image/ExifTool/MakerNotes.pm").is_file() {
+        ensure!(
+            modules
+                .get("MakerNotes")
+                .and_then(|value| value["array_count"].as_u64())
+                .is_some_and(|count| count > 0),
+            "selected MakerNotes source array is missing"
+        );
+    }
     for name in modules.keys() {
         ensure!(
             !name.is_empty()

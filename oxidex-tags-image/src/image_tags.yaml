@@ -1,4 +1,26 @@
 tables:
+  - name: BMP::Extra
+    tags:
+      - id: "EmbeddedJPG"
+        name: "EmbeddedJPG"
+        writable: false
+        type: "?"
+        description: "Embedded JPG"
+      - id: "EmbeddedPNG"
+        name: "EmbeddedPNG"
+        writable: false
+        type: "?"
+        description: "Embedded PNG"
+      - id: "ICC_Profile"
+        name: "ICC_Profile"
+        writable: false
+        type: "?"
+        description: "ICC Profile"
+      - id: "LinkedProfileName"
+        name: "LinkedProfileName"
+        writable: false
+        type: "?"
+        description: "Linked Profile Name"
   - name: BMP::Main
     tags:
       - id: "52"
@@ -19,7 +41,7 @@ tables:
       - id: "84"
         name: "BlueEndpoint"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Blue Endpoint"
       - id: "48"
         name: "BlueMask"
@@ -54,7 +76,7 @@ tables:
       - id: "72"
         name: "GreenEndpoint"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Green Endpoint"
       - id: "44"
         name: "GreenMask"
@@ -114,7 +136,7 @@ tables:
       - id: "60"
         name: "RedEndpoint"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Red Endpoint"
       - id: "40"
         name: "RedMask"
@@ -825,7 +847,7 @@ tables:
       - id: "1628"
         name: "AspectRatio"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Aspect Ratio"
       - id: "803"
         name: "BitDepth"
@@ -1140,6 +1162,48 @@ tables:
         writable: false
         type: "?"
         description: "Sequence Number"
+  - name: GIF::Main
+    tags:
+      - id: "Comment"
+        name: "Comment"
+        writable: true
+        type: "2"
+        description: "Comment"
+      - id: "Duration"
+        name: "Duration"
+        writable: false
+        type: "?"
+        description: "Duration"
+      - id: "Extensions"
+        name: "Extensions"
+        writable: false
+        type: "?"
+        description: "Extensions"
+      - id: "FrameCount"
+        name: "FrameCount"
+        writable: false
+        type: "?"
+        description: "Frame Count"
+      - id: "GIFVersion"
+        name: "GIFVersion"
+        writable: false
+        type: "?"
+        description: "GIF Version"
+      - id: "ScreenDescriptor"
+        name: "ScreenDescriptor"
+        writable: false
+        type: "?"
+        description: "Screen Descriptor"
+      - id: "Text"
+        name: "Text"
+        writable: false
+        type: "?"
+        description: "Text"
+      - id: "TransparentColor"
+        name: "TransparentColor"
+        writable: false
+        type: "?"
+        description: "Transparent Color"
   - name: GIF::Screen
     tags:
       - id: "5"
@@ -1308,12 +1372,32 @@ tables:
         writable: false
         type: "?"
         description: "JPEG-HDR Version"
+      - id: "ln0"
+        name: "Ln0"
+        writable: false
+        type: "?"
+        description: "Ln0"
+      - id: "ln1"
+        name: "Ln1"
+        writable: false
+        type: "?"
+        description: "Ln1"
+      - id: "RatioImage"
+        name: "RatioImage"
+        writable: false
+        type: "?"
+        description: "Ratio Image"
+      - id: "s2n"
+        name: "S2n"
+        writable: false
+        type: "?"
+        description: "S2n"
   - name: JPEG::HDRGainInfo
     tags:
       - id: "10"
         name: "HDRGainCurve"
         writable: false
-        type: "int32uRev"
+        type: "?"
         description: "HDR Gain Curve"
       - id: "6"
         name: "HDRGainCurveSize"
@@ -1769,6 +1853,53 @@ tables:
         writable: false
         type: "?"
         description: "XMP"
+  - name: JPEG::MediaJukebox
+    tags:
+      - id: "Album"
+        name: "Album"
+        writable: false
+        type: "?"
+        description: "Album"
+      - id: "Caption"
+        name: "Caption"
+        writable: false
+        type: "?"
+        description: "Caption"
+      - id: "Date"
+        name: "Date"
+        writable: false
+        type: "?"
+        description: "Date"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
+      - id: "Name"
+        name: "Name"
+        writable: false
+        type: "?"
+        description: "Name"
+      - id: "People"
+        name: "People"
+        writable: false
+        type: "?"
+        description: "People"
+      - id: "Places"
+        name: "Places"
+        writable: false
+        type: "?"
+        description: "Places"
+      - id: "Tool_Name"
+        name: "Tool_Name"
+        writable: false
+        type: "?"
+        description: "Tool Name"
+      - id: "Tool_Version"
+        name: "Tool_Version"
+        writable: false
+        type: "?"
+        description: "Tool Version"
   - name: JPEG::NITF
     tags:
       - id: "8"
@@ -1814,7 +1945,7 @@ tables:
       - id: "0"
         name: "NITFVersion"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "NITF Version"
       - id: "11"
         name: "Quality"
@@ -1838,6 +1969,38 @@ tables:
         writable: false
         type: "string"
         description: "Ocad Revision"
+  - name: JPEG::SOF
+    tags:
+      - id: "BitsPerSample"
+        name: "BitsPerSample"
+        writable: false
+        type: "?"
+        description: "Bits Per Sample"
+      - id: "ColorComponents"
+        name: "ColorComponents"
+        writable: false
+        type: "?"
+        description: "Color Components"
+      - id: "EncodingProcess"
+        name: "EncodingProcess"
+        writable: false
+        type: "?"
+        description: "Encoding Process"
+      - id: "ImageHeight"
+        name: "ImageHeight"
+        writable: false
+        type: "?"
+        description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: false
+        type: "?"
+        description: "Image Width"
+      - id: "YCbCrSubSampling"
+        name: "YCbCrSubSampling"
+        writable: false
+        type: "?"
+        description: "Y Cb Cr Sub Sampling"
   - name: JPEG::SPIFF
     tags:
       - id: "15"
@@ -1883,7 +2046,7 @@ tables:
       - id: "0"
         name: "SPIFFVersion"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "SPIFF Version"
       - id: "22"
         name: "XResolution"
@@ -2581,7 +2744,7 @@ tables:
       - id: "0"
         name: "BackgroundColor"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Background Color"
       - id: "7"
         name: "BackgroundImageID"
@@ -2665,7 +2828,7 @@ tables:
       - id: "5"
         name: "ClipBoundary"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Clip Boundary"
       - id: "4"
         name: "DeltaType"
@@ -2702,7 +2865,7 @@ tables:
       - id: "8"
         name: "DeltaXY"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Delta XY"
       - id: "5"
         name: "DoNotShow"
@@ -2724,7 +2887,7 @@ tables:
       - id: "12"
         name: "ClippingBoundary"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Clipping Boundary"
       - id: "3"
         name: "ConcreteFlag"
@@ -2744,19 +2907,19 @@ tables:
       - id: "4"
         name: "XYLocation"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "XY Location"
   - name: MNG::DeltaPNGHeader
     tags:
       - id: "12"
         name: "BlockLocation"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Block Location"
       - id: "4"
         name: "BlockSize"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Block Size"
       - id: "3"
         name: "DeltaType"
@@ -2859,7 +3022,7 @@ tables:
       - id: "6"
         name: "IterationMinMax"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Iteration Min Max"
       - id: "0"
         name: "NestLevel"
@@ -3112,7 +3275,7 @@ tables:
       - id: "5"
         name: "DeltaXY"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Delta XY"
       - id: "0"
         name: "FirstObject"
@@ -3149,7 +3312,7 @@ tables:
       - id: "16"
         name: "OffsetXY"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Offset XY"
       - id: "14"
         name: "Orientation"
@@ -3159,7 +3322,7 @@ tables:
       - id: "25"
         name: "PastClippingBoundary"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Past Clipping Boundary"
       - id: "11"
         name: "SourceID"
@@ -3174,7 +3337,7 @@ tables:
       - id: "3"
         name: "TargetXY"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Target XY"
   - name: MNG::PromoteParent
     tags:
@@ -3234,11 +3397,56 @@ tables:
         description: "Termination Action"
   - name: OpenEXR::Main
     tags:
+      - id: "adoptedNeutral"
+        name: "AdoptedNeutral"
+        writable: false
+        type: "?"
+        description: "Adopted Neutral"
+      - id: "aperture"
+        name: "Aperture"
+        writable: false
+        type: "?"
+        description: "Aperture"
+      - id: "channels"
+        name: "Channels"
+        writable: false
+        type: "?"
+        description: "Channels"
+      - id: "chromaticities"
+        name: "Chromaticities"
+        writable: false
+        type: "?"
+        description: "Chromaticities"
+      - id: "chunkCount"
+        name: "ChunkCount"
+        writable: false
+        type: "?"
+        description: "Chunk Count"
+      - id: "comments"
+        name: "Comments"
+        writable: false
+        type: "?"
+        description: "Comments"
+      - id: "compression"
+        name: "Compression"
+        writable: false
+        type: "?"
+        description: "Compression"
+      - id: "dataWindow"
+        name: "DataWindow"
+        writable: false
+        type: "?"
+        description: "Data Window"
       - id: "capDate"
         name: "DateTimeOriginal"
         writable: false
         type: "?"
         description: "Date/Time Original"
+      - id: "displayWindow"
+        name: "DisplayWindow"
+        writable: false
+        type: "?"
+        description: "Display Window"
       - id: "exif"
         name: "EXIF"
         writable: false
@@ -3259,6 +3467,11 @@ tables:
         writable: false
         type: "?"
         description: "Focus Distance"
+      - id: "framesPerSecond"
+        name: "FramesPerSecond"
+        writable: false
+        type: "?"
+        description: "Frames Per Second"
       - id: "altitude"
         name: "GPSAltitude"
         writable: false
@@ -3279,11 +3492,101 @@ tables:
         writable: false
         type: "?"
         description: "ISO"
+      - id: "keyCode"
+        name: "KeyCode"
+        writable: false
+        type: "?"
+        description: "Key Code"
+      - id: "lineOrder"
+        name: "LineOrder"
+        writable: false
+        type: "?"
+        description: "Line Order"
+      - id: "lookModTransform"
+        name: "LookModTransform"
+        writable: false
+        type: "?"
+        description: "Look Mod Transform"
+      - id: "multiView"
+        name: "MultiView"
+        writable: false
+        type: "?"
+        description: "Multi View"
+      - id: "name"
+        name: "Name"
+        writable: false
+        type: "?"
+        description: "Name"
+      - id: "owner"
+        name: "Owner"
+        writable: false
+        type: "?"
+        description: "Owner"
+      - id: "pixelAspectRatio"
+        name: "PixelAspectRatio"
+        writable: false
+        type: "?"
+        description: "Pixel Aspect Ratio"
+      - id: "preview"
+        name: "Preview"
+        writable: false
+        type: "?"
+        description: "Preview"
+      - id: "renderingTransform"
+        name: "RenderingTransform"
+        writable: false
+        type: "?"
+        description: "Rendering Transform"
+      - id: "screenWindowCenter"
+        name: "ScreenWindowCenter"
+        writable: false
+        type: "?"
+        description: "Screen Window Center"
+      - id: "screenWindowWidth"
+        name: "ScreenWindowWidth"
+        writable: false
+        type: "?"
+        description: "Screen Window Width"
+      - id: "tiles"
+        name: "Tiles"
+        writable: false
+        type: "?"
+        description: "Tiles"
+      - id: "timeCode"
+        name: "TimeCode"
+        writable: false
+        type: "?"
+        description: "Time Code"
       - id: "utcOffset"
         name: "TimeZone"
         writable: false
         type: "?"
         description: "Time Zone"
+      - id: "type"
+        name: "Type"
+        writable: false
+        type: "?"
+        description: "Type"
+      - id: "version"
+        name: "Version"
+        writable: false
+        type: "?"
+        description: "Version"
+      - id: "whiteLuminance"
+        name: "WhiteLuminance"
+        writable: false
+        type: "?"
+        description: "White Luminance"
+      - id: "worldToCamera"
+        name: "WorldToCamera"
+        writable: false
+        type: "?"
+        description: "World To Camera"
+      - id: "worldToNDC"
+        name: "WorldToNDC"
+        writable: false
+        type: "?"
+        description: "World To NDC"
       - id: "wrapmodes"
         name: "WrapModes"
         writable: false
@@ -3381,7 +3684,7 @@ tables:
       - id: "21"
         name: "BackgroundColor"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Background Color"
       - id: "18"
         name: "BitsPerPixel"
@@ -3443,7 +3746,7 @@ tables:
       - id: "2"
         name: "BkPat"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Background Pattern"
       - id: "18"
         name: "BkPixPat"
@@ -3573,7 +3876,7 @@ tables:
       - id: "10"
         name: "FillPat"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Fill Pattern"
       - id: "20"
         name: "FillPixPat"
@@ -3698,12 +4001,12 @@ tables:
       - id: "46"
         name: "GlyphState"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Glyph State"
       - id: "3072"
         name: "HeaderOp"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Header Op"
       - id: "29"
         name: "HiliteColor"
@@ -3788,7 +4091,7 @@ tables:
       - id: "45"
         name: "LineJustify"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Line Justify"
       - id: "161"
         name: "LongComment"
@@ -3913,7 +4216,7 @@ tables:
       - id: "9"
         name: "PnPat"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Pen Pattern"
       - id: "19"
         name: "PnPixPat"
@@ -4018,17 +4321,17 @@ tables:
       - id: "3071"
         name: "Reserved"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Reserved"
       - id: "3073"
         name: "Reserved"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Reserved"
       - id: "32512"
         name: "Reserved"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Reserved"
       - id: "32768"
         name: "Reserved"
@@ -4108,7 +4411,7 @@ tables:
       - id: "35"
         name: "ShortLineFrom"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Short Line From"
       - id: "6"
         name: "SpExtra"
@@ -4313,6 +4616,11 @@ tables:
         writable: false
         type: "?"
         description: "JUMBF"
+      - id: "meTa"
+        name: "MeTa"
+        writable: false
+        type: "?"
+        description: "Me Ta"
       - id: "tIME"
         name: "ModifyDate"
         writable: true
@@ -4513,6 +4821,31 @@ tables:
         writable: true
         type: "?"
         description: "Aesthetic Score"
+      - id: "Artist"
+        name: "Artist"
+        writable: true
+        type: "?"
+        description: "Artist"
+      - id: "Author"
+        name: "Author"
+        writable: true
+        type: "?"
+        description: "Author"
+      - id: "Collection"
+        name: "Collection"
+        writable: true
+        type: "?"
+        description: "Collection"
+      - id: "Comment"
+        name: "Comment"
+        writable: true
+        type: "?"
+        description: "Comment"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: true
+        type: "?"
+        description: "Copyright"
       - id: "create-date"
         name: "CreateDate"
         writable: true
@@ -4523,6 +4856,21 @@ tables:
         writable: true
         type: "?"
         description: "Creation Time"
+      - id: "Description"
+        name: "Description"
+        writable: true
+        type: "?"
+        description: "Description"
+      - id: "Disclaimer"
+        name: "Disclaimer"
+        writable: true
+        type: "?"
+        description: "Disclaimer"
+      - id: "Document"
+        name: "Document"
+        writable: true
+        type: "?"
+        description: "Document"
       - id: "Raw profile type exif"
         name: "EXIF_Profile"
         writable: true
@@ -4543,21 +4891,66 @@ tables:
         writable: true
         type: "?"
         description: "IPTC Profile"
+      - id: "Label"
+        name: "Label"
+        writable: true
+        type: "?"
+        description: "Label"
+      - id: "Make"
+        name: "Make"
+        writable: true
+        type: "?"
+        description: "Make"
       - id: "modify-date"
         name: "ModDate"
         writable: true
         type: "?"
         description: "Mod Date"
+      - id: "Model"
+        name: "Model"
+        writable: true
+        type: "?"
+        description: "Model"
       - id: "Warning"
         name: "PNGWarning"
         writable: true
         type: "?"
         description: "PNG Warning"
+      - id: "parameters"
+        name: "Parameters"
+        writable: true
+        type: "?"
+        description: "Parameters"
       - id: "Raw profile type 8bim"
         name: "Photoshop_Profile"
         writable: true
         type: "?"
         description: "Photoshop Profile"
+      - id: "Software"
+        name: "Software"
+        writable: true
+        type: "?"
+        description: "Software"
+      - id: "Source"
+        name: "Source"
+        writable: true
+        type: "?"
+        description: "Source"
+      - id: "TimeStamp"
+        name: "TimeStamp"
+        writable: true
+        type: "?"
+        description: "Time Stamp"
+      - id: "Title"
+        name: "Title"
+        writable: true
+        type: "?"
+        description: "Title"
+      - id: "URL"
+        name: "URL"
+        writable: true
+        type: "?"
+        description: "URL"
       - id: "XML:com.adobe.xmp"
         name: "XMP"
         writable: true
@@ -4688,6 +5081,11 @@ tables:
         writable: false
         type: "?"
         description: "Extended Info"
+      - id: "FileVersion"
+        name: "FileVersion"
+        writable: false
+        type: "?"
+        description: "File Version"
       - id: "0"
         name: "ImageInfo"
         writable: false
@@ -4999,7 +5397,7 @@ tables:
       - id: "9"
         name: "AuthoringSoftwareRelease"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Authoring Software Release"
       - id: "133"
         name: "CharacterEscapeSequence"
@@ -5044,7 +5442,7 @@ tables:
       - id: "11"
         name: "ImageMagnificationDescriptor"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Image Magnification Descriptor"
       - id: "21"
         name: "ImageMedium"
@@ -5124,10 +5522,10 @@ tables:
       - id: "228"
         name: "SceneBalanceAlgorithmRevision"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Scene Balance Algorithm Revision"
       - id: "7"
         name: "SpecificationVersion"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Specification Version"

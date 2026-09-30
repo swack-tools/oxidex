@@ -347,6 +347,18 @@ fn is_scalar_count(entry: &serde_json::Value) -> bool {
     if !count_says_scalar {
         return false;
     }
+    // A fixed element count may be embedded in Format or Writable instead
+    // of declared through Count. The writer's numeric parsers accept one
+    // scalar only; any bracketed count other than exactly [1] is unsafe.
+    let embedded_count_says_scalar = ["Format", "Writable"].into_iter().all(|key| {
+        entry
+            .get(key)
+            .and_then(|v| v.as_str())
+            .is_none_or(|value| !value.contains('[') || value.ends_with("[1]"))
+    });
+    if !embedded_count_says_scalar {
+        return false;
+    }
     let format_says_unbounded_blob = entry
         .get("Format")
         .and_then(|v| v.as_str())
@@ -404,12 +416,27 @@ fn expand_variants(tag_val: &serde_json::Value) -> Vec<&serde_json::Value> {
     }
 }
 
-fn entry_name(entry: &serde_json::Value) -> Option<String> {
-    entry
+/// ExifTool.pm::SetupTagTable() fills absent names with MakeTagName($tagID).
+/// The raw dump sees these source entries before that display-layer fallback.
+fn entry_name(entry: &serde_json::Value, tag_id: &str) -> String {
+    if let Some(name) = entry
         .get("Name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    {
+        return name.to_string();
+    }
+    let mut name: String = tag_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .collect();
+    if let Some(first) = name.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    if name.len() < 2 || name.starts_with('-') || name.starts_with(|ch: char| ch.is_ascii_digit()) {
+        name.insert_str(0, "Tag");
+    }
+    name
 }
 
 /// The same tag-name shape `tests/tag_registry_invariants.rs` checks the
@@ -538,9 +565,7 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
             if table_symbol == "Composite" {
                 for (tag_key, tag_val) in tags {
                     for entry in expand_variants(tag_val) {
-                        let Some(name) = entry_name(entry) else {
-                            continue;
-                        };
+                        let name = entry_name(entry, tag_key);
                         records.push(TagRecord {
                             table: "Composite".to_string(),
                             id: format!("{module_name}-{tag_key}"),
@@ -585,7 +610,7 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                 .collect();
             let names: Vec<String> = candidates
                 .iter()
-                .filter_map(|(_, entry)| entry_name(entry))
+                .map(|(tag_key, entry)| entry_name(entry, tag_key))
                 .collect();
             if is_probably_a_value_lookup_table(table_meta, &names) {
                 continue;
@@ -643,47 +668,40 @@ pub fn tag_records_from_dump_document(doc: &serde_json::Value) -> Result<Vec<Tag
                     .is_some_and(|keys| keys.iter().any(|k| k.as_str() == Some("WriteGroup")))
             }
 
-            let mut winner_name_for_id: HashMap<&str, Option<&str>> = HashMap::new();
+            let mut winner_name_for_id: HashMap<&str, Option<String>> = HashMap::new();
             for (tag_key, entry) in &candidates {
-                let Some(name) = entry.get("Name").and_then(|v| v.as_str()) else {
-                    continue;
-                };
+                let name = entry_name(entry, tag_key);
                 winner_name_for_id
                     .entry(tag_key.as_str())
                     .and_modify(|winner| {
-                        // A later variant can only become the recorded
-                        // winner if none has been found yet and this one is
-                        // unscoped; an already-found winner (from an earlier
-                        // variant) is never displaced.
+                        // A later unscoped variant may fill an empty winner;
+                        // it never displaces an earlier applicable name.
                         if winner.is_none() && !has_write_group(entry) {
-                            *winner = Some(name);
+                            *winner = Some(name.clone());
                         }
                     })
                     .or_insert_with(|| (!has_write_group(entry)).then_some(name));
             }
-            // A single distinct name always wins outright, `WriteGroup`
-            // or not -- scoping which IFD an already-unambiguous name
-            // writes to is not the same question as which of several names
-            // reads an id.
+            // A single distinct name always wins, even if WriteGroup scopes
+            // its IFD. Name inference must participate in this decision too.
             for (tag_key, entry) in &candidates {
-                if let Some(name) = entry.get("Name").and_then(|v| v.as_str())
-                    && let Some(winner) = winner_name_for_id.get_mut(tag_key.as_str())
-                    && winner.is_none_or(|w| w != name)
+                let name = entry_name(entry, tag_key);
+                if let Some(winner) = winner_name_for_id.get_mut(tag_key.as_str())
+                    && winner.as_deref() != Some(name.as_str())
                     && candidates
                         .iter()
                         .filter(|(k, _)| k.as_str() == tag_key.as_str())
-                        .filter_map(|(_, e)| e.get("Name").and_then(|v| v.as_str()))
-                        .all(|n| n == name)
+                        .all(|(k, e)| entry_name(e, k) == name)
                 {
                     *winner = Some(name);
                 }
             }
 
             for (tag_key, entry) in candidates {
-                let Some(name) = entry_name(entry) else {
-                    continue;
-                };
-                let id = if winner_name_for_id.get(tag_key.as_str()).copied().flatten()
+                let name = entry_name(entry, tag_key);
+                let id = if winner_name_for_id
+                    .get(tag_key.as_str())
+                    .and_then(|winner| winner.as_deref())
                     == Some(name.as_str())
                 {
                     tag_key.clone()
@@ -945,6 +963,14 @@ mod tests {
             "Sony": {"tables": {"sonyLensTypes": {"meta": {}, "tags": {
                 "1": {"Name": "Sony Lens 1"}, "2": {"Name": "Sony Lens 2"}
             }}}},
+            "QuickTime": {"tables": {"Keys": {
+                "full_name": "Image::ExifTool::QuickTime::Keys", "meta": {"WRITABLE": "1"},
+                "tags": {"artist": {}}
+            }}},
+            "Canon": {"tables": {"ColorBalance": {
+                "full_name": "Image::ExifTool::Canon::ColorBalance", "meta": {},
+                "tags": {"123": {"Name": "WB_RGGBBlackLevels", "Format": "int16s[4]"}}
+            }}},
             "Shortcuts": {"tables": {"Main": {"tags": {"1": {"Name": "IFD0:Make"}}}}}
         }});
         let rows = tag_records_from_dump_json(&dump.to_string()).unwrap();
@@ -965,6 +991,15 @@ mod tests {
             "ThumbnailLength"
         ));
         assert!(has("Composite", "Exif-LensID-2", "LensID"));
+        assert!(has("QuickTime::Keys", "artist", "Artist"));
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.name == "WB_RGGBBlackLevels")
+                .unwrap()
+                .type_name
+                .as_deref(),
+            Some("?")
+        );
         assert!(
             !rows
                 .iter()

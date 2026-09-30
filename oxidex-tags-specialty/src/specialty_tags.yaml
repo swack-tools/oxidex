@@ -28348,6 +28348,11 @@ tables:
         description: "Zoom Factor"
   - name: DjVu::Ant
     tags:
+      - id: "metadata"
+        name: "Metadata"
+        writable: false
+        type: "?"
+        description: "Metadata"
       - id: "xmp"
         name: "XMP"
         writable: false
@@ -28365,7 +28370,7 @@ tables:
       - id: "4"
         name: "DjVuVersion"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "DjVu Version"
       - id: "8"
         name: "Gamma"
@@ -28394,11 +28399,26 @@ tables:
         description: "Spatial Resolution"
   - name: DjVu::Main
     tags:
+      - id: "ANTa"
+        name: "ANTa"
+        writable: false
+        type: "?"
+        description: "AN Ta"
       - id: "ANTz"
         name: "CompressedAnnotation"
         writable: false
         type: "?"
         description: "Compressed Annotation"
+      - id: "FORM"
+        name: "FORM"
+        writable: false
+        type: "?"
+        description: "FORM"
+      - id: "INFO"
+        name: "INFO"
+        writable: false
+        type: "?"
+        description: "INFO"
       - id: "INCL"
         name: "IncludedFileID"
         writable: false
@@ -28406,21 +28426,46 @@ tables:
         description: "Included File ID"
   - name: DjVu::Meta
     tags:
+      - id: "address"
+        name: "Address"
+        writable: false
+        type: "?"
+        description: "Address"
       - id: "annote"
         name: "Annotation"
         writable: false
         type: "?"
         description: "Annotation"
+      - id: "Author"
+        name: "Author"
+        writable: false
+        type: "?"
+        description: "Author"
+      - id: "author"
+        name: "Author"
+        writable: false
+        type: "?"
+        description: "Author"
       - id: "booktitle"
         name: "BookTitle"
         writable: false
         type: "?"
         description: "Book Title"
+      - id: "chapter"
+        name: "Chapter"
+        writable: false
+        type: "?"
+        description: "Chapter"
       - id: "CreationDate"
         name: "CreateDate"
         writable: false
         type: "?"
         description: "Create Date"
+      - id: "Creator"
+        name: "Creator"
+        writable: false
+        type: "?"
+        description: "Creator"
       - id: "crossref"
         name: "CrossRef"
         writable: false
@@ -28431,21 +28476,126 @@ tables:
         writable: false
         type: "?"
         description: "E Print"
+      - id: "edition"
+        name: "Edition"
+        writable: false
+        type: "?"
+        description: "Edition"
       - id: "howpublished"
         name: "HowPublished"
         writable: false
         type: "?"
         description: "How Published"
+      - id: "institution"
+        name: "Institution"
+        writable: false
+        type: "?"
+        description: "Institution"
+      - id: "journal"
+        name: "Journal"
+        writable: false
+        type: "?"
+        description: "Journal"
+      - id: "key"
+        name: "Key"
+        writable: false
+        type: "?"
+        description: "Key"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
       - id: "ModDate"
         name: "ModifyDate"
         writable: false
         type: "?"
         description: "Modify Date"
+      - id: "month"
+        name: "Month"
+        writable: false
+        type: "?"
+        description: "Month"
+      - id: "note"
+        name: "Note"
+        writable: false
+        type: "?"
+        description: "Note"
+      - id: "number"
+        name: "Number"
+        writable: false
+        type: "?"
+        description: "Number"
+      - id: "organization"
+        name: "Organization"
+        writable: false
+        type: "?"
+        description: "Organization"
+      - id: "pages"
+        name: "Pages"
+        writable: false
+        type: "?"
+        description: "Pages"
+      - id: "Producer"
+        name: "Producer"
+        writable: false
+        type: "?"
+        description: "Producer"
+      - id: "publisher"
+        name: "Publisher"
+        writable: false
+        type: "?"
+        description: "Publisher"
+      - id: "school"
+        name: "School"
+        writable: false
+        type: "?"
+        description: "School"
+      - id: "series"
+        name: "Series"
+        writable: false
+        type: "?"
+        description: "Series"
+      - id: "Subject"
+        name: "Subject"
+        writable: false
+        type: "?"
+        description: "Subject"
+      - id: "Title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
+      - id: "title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
+      - id: "Trapped"
+        name: "Trapped"
+        writable: false
+        type: "?"
+        description: "Trapped"
+      - id: "type"
+        name: "Type"
+        writable: false
+        type: "?"
+        description: "Type"
       - id: "url"
         name: "URL"
         writable: false
         type: "?"
         description: "URL"
+      - id: "volume"
+        name: "Volume"
+        writable: false
+        type: "?"
+        description: "Volume"
+      - id: "year"
+        name: "Year"
+        writable: false
+        type: "?"
+        description: "Year"
   - name: FITS::Main
     tags:
       - id: "AUTHOR"
@@ -29934,7 +30084,7 @@ tables:
       - id: "7"
         name: "GridSize"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Grid Size"
       - id: "2"
         name: "ImageDepth"
@@ -30029,7 +30179,7 @@ tables:
       - id: "53"
         name: "MachineStamp"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Machine Stamp"
       - id: "55"
         name: "NumberOfLabels"
@@ -30039,7 +30189,7 @@ tables:
       - id: "49"
         name: "Origin"
         writable: false
-        type: "float"
+        type: "?"
         description: "Origin"
       - id: "54"
         name: "RMSDeviation"
@@ -30054,7 +30204,7 @@ tables:
       - id: "4"
         name: "StartPoint"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Start Point"
   - name: Nintendo::CameraInfo
     tags:
@@ -30092,6 +30242,11 @@ tables:
         description: "Camera Info"
   - name: PCAP::Main
     tags:
+      - id: "ByteOrder"
+        name: "ByteOrder"
+        writable: false
+        type: "?"
+        description: "Byte Order"
       - id: "1"
         name: "Comment"
         writable: false
@@ -30162,6 +30317,11 @@ tables:
         writable: false
         type: "?"
         description: "IPv6 Addr"
+      - id: "LinkType"
+        name: "LinkType"
+        writable: false
+        type: "?"
+        description: "Link Type"
       - id: "IDB-6"
         name: "MACAddr"
         writable: false
@@ -30177,6 +30337,11 @@ tables:
         writable: false
         type: "?"
         description: "Operating System"
+      - id: "PCAPVersion"
+        name: "PCAPVersion"
+        writable: false
+        type: "?"
+        description: "PCAP Version"
       - id: "IDB-17"
         name: "RXSpeed"
         writable: false
@@ -30192,6 +30357,11 @@ tables:
         writable: false
         type: "int64u"
         description: "TX Speed"
+      - id: "TimeStamp"
+        name: "TimeStamp"
+        writable: false
+        type: "?"
+        description: "Time Stamp"
       - id: "IDB-14"
         name: "TimeStampOffset"
         writable: false
@@ -30375,21 +30545,86 @@ tables:
         description: "View Type"
   - name: XISF::Main
     tags:
+      - id: "Abstract"
+        name: "Abstract"
+        writable: false
+        type: "?"
+        description: "Abstract"
+      - id: "AccessRights"
+        name: "AccessRights"
+        writable: false
+        type: "?"
+        description: "Access Rights"
+      - id: "Authors"
+        name: "Authors"
+        writable: false
+        type: "?"
+        description: "Authors"
+      - id: "BibliographicReferences"
+        name: "BibliographicReferences"
+        writable: false
+        type: "?"
+        description: "Bibliographic References"
+      - id: "BriefDescription"
+        name: "BriefDescription"
+        writable: false
+        type: "?"
+        description: "Brief Description"
       - id: "ImageColorSpace"
         name: "ColorSpace"
         writable: false
         type: "?"
         description: "Color Space"
+      - id: "CompressionCodecs"
+        name: "CompressionCodecs"
+        writable: false
+        type: "?"
+        description: "Compression Codecs"
+      - id: "CompressionLevel"
+        name: "CompressionLevel"
+        writable: false
+        type: "?"
+        description: "Compression Level"
+      - id: "Contributors"
+        name: "Contributors"
+        writable: false
+        type: "?"
+        description: "Contributors"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: false
+        type: "?"
+        description: "Copyright"
       - id: "CreationTime"
         name: "CreateDate"
         writable: false
         type: "?"
         description: "Create Date"
+      - id: "CreatorApplication"
+        name: "CreatorApplication"
+        writable: false
+        type: "?"
+        description: "Creator Application"
+      - id: "CreatorModule"
+        name: "CreatorModule"
+        writable: false
+        type: "?"
+        description: "Creator Module"
+      - id: "CreatorOS"
+        name: "CreatorOS"
+        writable: false
+        type: "?"
+        description: "Creator OS"
       - id: "OriginalCreationTime"
         name: "DateTimeOriginal"
         writable: false
         type: "?"
         description: "Date/Time Original"
+      - id: "Description"
+        name: "Description"
+        writable: false
+        type: "?"
+        description: "Description"
       - id: "ImageICCProfileLocation"
         name: "ICCProfileLocation"
         writable: false
@@ -30400,31 +30635,86 @@ tables:
         writable: false
         type: "?"
         description: "ICC Profile"
+      - id: "ImageBounds"
+        name: "ImageBounds"
+        writable: false
+        type: "?"
+        description: "Image Bounds"
+      - id: "ImageData"
+        name: "ImageData"
+        writable: false
+        type: "?"
+        description: "Image Data"
+      - id: "ImageGeometry"
+        name: "ImageGeometry"
+        writable: false
+        type: "?"
+        description: "Image Geometry"
       - id: "ImageId"
         name: "ImageID"
         writable: false
         type: "?"
         description: "Image ID"
+      - id: "ImageLocation"
+        name: "ImageLocation"
+        writable: false
+        type: "?"
+        description: "Image Location"
       - id: "ImageOffset"
         name: "ImagePixelOffset"
         writable: false
         type: "?"
         description: "Image Pixel Offset"
+      - id: "ImagePixelStorage"
+        name: "ImagePixelStorage"
+        writable: false
+        type: "?"
+        description: "Image Pixel Storage"
+      - id: "ImageSampleFormat"
+        name: "ImageSampleFormat"
+        writable: false
+        type: "?"
+        description: "Image Sample Format"
       - id: "ImageImageType"
         name: "ImageType"
         writable: false
         type: "?"
         description: "Image Type"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
+      - id: "Languages"
+        name: "Languages"
+        writable: false
+        type: "?"
+        description: "Languages"
+      - id: "License"
+        name: "License"
+        writable: false
+        type: "?"
+        description: "License"
       - id: "ImageOrientation"
         name: "Orientation"
         writable: false
         type: "?"
         description: "Orientation"
+      - id: "RelatedResources"
+        name: "RelatedResources"
+        writable: false
+        type: "?"
+        description: "Related Resources"
       - id: "ImageResolutionUnit"
         name: "ResolutionUnit"
         writable: false
         type: "?"
         description: "Resolution Unit"
+      - id: "Title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
       - id: "ImageUuid"
         name: "UUID"
         writable: false

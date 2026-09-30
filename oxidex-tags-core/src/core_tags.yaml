@@ -1,6 +1,11 @@
 tables:
   - name: AFCP::Main
     tags:
+      - id: "IPTC"
+        name: "IPTC"
+        writable: false
+        type: "?"
+        description: "IPTC"
       - id: "PrVw"
         name: "PreviewImage"
         writable: false
@@ -35,11 +40,26 @@ tables:
         description: "Quality"
   - name: APP12::PictureInfo
     tags:
+      - id: "Aperture"
+        name: "Aperture"
+        writable: false
+        type: "?"
+        description: "Aperture"
       - id: "Type"
         name: "CameraType"
         writable: false
         type: "?"
         description: "Camera Type"
+      - id: "ColorMode"
+        name: "ColorMode"
+        writable: false
+        type: "?"
+        description: "Color Mode"
+      - id: "ContTake"
+        name: "ContTake"
+        writable: false
+        type: "?"
+        description: "Cont Take"
       - id: "TimeDate"
         name: "DateTimeOriginal"
         writable: false
@@ -60,16 +80,81 @@ tables:
         writable: false
         type: "?"
         description: "Exposure Time"
+      - id: "FNumber"
+        name: "FNumber"
+        writable: false
+        type: "?"
+        description: "F Number"
       - id: "FWare"
         name: "FirmwareVersion"
         writable: false
         type: "?"
         description: "Firmware Version"
+      - id: "Flash"
+        name: "Flash"
+        writable: false
+        type: "?"
+        description: "Flash"
+      - id: "FocusMode"
+        name: "FocusMode"
+        writable: false
+        type: "?"
+        description: "Focus Mode"
+      - id: "FocusPos"
+        name: "FocusPos"
+        writable: false
+        type: "?"
+        description: "Focus Pos"
+      - id: "ID"
+        name: "ID"
+        writable: false
+        type: "?"
+        description: "ID"
+      - id: "ImageSize"
+        name: "ImageSize"
+        writable: false
+        type: "?"
+        description: "Image Size"
+      - id: "LightS"
+        name: "LightS"
+        writable: false
+        type: "?"
+        description: "Light S"
+      - id: "Macro"
+        name: "Macro"
+        writable: false
+        type: "?"
+        description: "Macro"
+      - id: "Protect"
+        name: "Protect"
+        writable: false
+        type: "?"
+        description: "Protect"
+      - id: "Quality"
+        name: "Quality"
+        writable: false
+        type: "?"
+        description: "Quality"
+      - id: "Resolution"
+        name: "Resolution"
+        writable: false
+        type: "?"
+        description: "Resolution"
       - id: "Serial#"
         name: "SerialNumber"
         writable: false
         type: "?"
         description: "Serial Number"
+      - id: "StrobeTime"
+        name: "StrobeTime"
+        writable: false
+        type: "?"
+        description: "Strobe Time"
+      - id: "Version"
+        name: "Version"
+        writable: false
+        type: "?"
+        description: "Version"
       - id: "ylevel"
         name: "YLevel"
         writable: false
@@ -80,6 +165,16 @@ tables:
         writable: false
         type: "?"
         description: "Y Target"
+      - id: "Zoom"
+        name: "Zoom"
+        writable: false
+        type: "?"
+        description: "Zoom"
+      - id: "ZoomPos"
+        name: "ZoomPos"
+        writable: false
+        type: "?"
+        description: "Zoom Pos"
   - name: Audible::Main
     tags:
       - id: "author"
@@ -212,11 +307,31 @@ tables:
         writable: false
         type: "?"
         description: "Author Name"
+      - id: "documentID"
+        name: "DocumentID"
+        writable: false
+        type: "?"
+        description: "Document ID"
       - id: "dc:format"
         name: "Format"
         writable: false
         type: "?"
         description: "Format"
+      - id: "instanceID"
+        name: "InstanceID"
+        writable: false
+        type: "?"
+        description: "Instance ID"
+      - id: "relationship"
+        name: "Relationship"
+        writable: false
+        type: "?"
+        description: "Relationship"
+      - id: "thumbnailHash"
+        name: "ThumbnailHash"
+        writable: false
+        type: "?"
+        description: "Thumbnail Hash"
       - id: "thumbnailUrl"
         name: "ThumbnailURL"
         writable: false
@@ -736,7 +851,7 @@ tables:
       - id: "15"
         name: "GammaCurveOutputRange"
         writable: true
-        type: "double"
+        type: "?"
         description: "Gamma Curve Output Range"
       - id: "10"
         name: "GammaHighlight"
@@ -856,22 +971,22 @@ tables:
       - id: "121"
         name: "BlueCurvePoints"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "Blue Curve Points"
       - id: "83"
         name: "GreenCurvePoints"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "Green Curve Points"
       - id: "7"
         name: "RGBCurvePoints"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "RGB Curve Points"
       - id: "45"
         name: "RedCurvePoints"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "Red Curve Points"
       - id: "0"
         name: "ToneCurveColorSpace"
@@ -881,12 +996,12 @@ tables:
       - id: "3"
         name: "ToneCurveInputRange"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "Tone Curve Input Range"
       - id: "5"
         name: "ToneCurveOutputRange"
         writable: true
-        type: "int32u"
+        type: "?"
         description: "Tone Curve Output Range"
       - id: "1"
         name: "ToneCurveShape"
@@ -908,12 +1023,12 @@ tables:
       - id: "510"
         name: "BlueCurveLimits"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Blue Curve Limits"
       - id: "468"
         name: "BlueCurvePoints"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Blue Curve Points"
       - id: "276"
         name: "BrightnessAdj"
@@ -988,32 +1103,32 @@ tables:
       - id: "452"
         name: "GreenCurveLimits"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Green Curve Limits"
       - id: "410"
         name: "GreenCurvePoints"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Green Curve Points"
       - id: "336"
         name: "LuminanceCurveLimits"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Luminance Curve Limits"
       - id: "294"
         name: "LuminanceCurvePoints"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Luminance Curve Points"
       - id: "568"
         name: "RGBCurveLimits"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "RGB Curve Limits"
       - id: "526"
         name: "RGBCurvePoints"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "RGB Curve Points"
       - id: "56"
         name: "RawBrightnessAdj"
@@ -1038,12 +1153,12 @@ tables:
       - id: "394"
         name: "RedCurveLimits"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Red Curve Limits"
       - id: "352"
         name: "RedCurvePoints"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "Red Curve Points"
       - id: "622"
         name: "Rotation"
@@ -1093,7 +1208,7 @@ tables:
       - id: "6"
         name: "WBAdjRGGBLevels"
         writable: true
-        type: "int16u"
+        type: "?"
         description: "WB Adj RGGB Levels"
       - id: "36"
         name: "WBFineTuneActive"
@@ -1887,6 +2002,13 @@ tables:
         writable: true
         type: "?"
         description: "Unsharp Mask"
+  - name: CaptureOne::Main
+    tags:
+      - id: "ColorCorrections"
+        name: "ColorCorrections"
+        writable: false
+        type: "?"
+        description: "Color Corrections"
   - name: Composite
     tags:
       - id: "Panasonic-AdvancedSceneMode"
@@ -1939,6 +2061,11 @@ tables:
         writable: false
         type: "?"
         description: "Circle Of Confusion"
+      - id: "MWG-City"
+        name: "City"
+        writable: true
+        type: "?"
+        description: "City"
       - id: "Canon-ConditionalFEC"
         name: "ConditionalFEC"
         writable: false
@@ -1949,6 +2076,26 @@ tables:
         writable: false
         type: "?"
         description: "Contrast Detect AF"
+      - id: "MWG-Copyright"
+        name: "Copyright"
+        writable: true
+        type: "?"
+        description: "Copyright"
+      - id: "MWG-Country"
+        name: "Country"
+        writable: true
+        type: "?"
+        description: "Country"
+      - id: "MWG-CreateDate"
+        name: "CreateDate"
+        writable: true
+        type: "?"
+        description: "Create Date"
+      - id: "MWG-Creator"
+        name: "Creator"
+        writable: false
+        type: "?"
+        description: "Creator"
       - id: "Exif-DOF"
         name: "DOF"
         writable: false
@@ -1974,11 +2121,21 @@ tables:
         writable: false
         type: "?"
         description: "Date/Time Original"
+      - id: "MWG-DateTimeOriginal"
+        name: "DateTimeOriginal"
+        writable: true
+        type: "?"
+        description: "Date/Time Original"
       - id: "Samsung-DepthMapTiff"
         name: "DepthMapTiff"
         writable: false
         type: "?"
         description: "Depth Map Tiff"
+      - id: "MWG-Description"
+        name: "Description"
+        writable: true
+        type: "?"
+        description: "Description"
       - id: "IPTC-DigitalCreationDateTime"
         name: "DigitalCreationDateTime"
         writable: false
@@ -2234,6 +2391,11 @@ tables:
         writable: true
         type: "?"
         description: "Jpg From Raw"
+      - id: "MWG-Keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
       - id: "Canon-Lens"
         name: "Lens"
         writable: false
@@ -2284,6 +2446,11 @@ tables:
         writable: false
         type: "?"
         description: "Light Value"
+      - id: "MWG-Location"
+        name: "Location"
+        writable: true
+        type: "?"
+        description: "Location"
       - id: "MPF-MPImage"
         name: "MPImage"
         writable: false
@@ -2294,6 +2461,16 @@ tables:
         writable: false
         type: "?"
         description: "Megapixels"
+      - id: "MWG-ModifyDate"
+        name: "ModifyDate"
+        writable: true
+        type: "?"
+        description: "Modify Date"
+      - id: "MWG-Orientation"
+        name: "Orientation"
+        writable: true
+        type: "?"
+        description: "Orientation"
       - id: "Canon-OriginalDecisionData"
         name: "OriginalDecisionData"
         writable: true
@@ -2334,6 +2511,11 @@ tables:
         writable: false
         type: "?"
         description: "Preview JXL"
+      - id: "MWG-Rating"
+        name: "Rating"
+        writable: true
+        type: "?"
+        description: "Rating"
       - id: "Exif-RedBalance"
         name: "RedBalance"
         writable: false
@@ -2389,6 +2571,11 @@ tables:
         writable: false
         type: "?"
         description: "Single Shot Depth Map Tiff"
+      - id: "MWG-State"
+        name: "State"
+        writable: true
+        type: "?"
+        description: "State"
       - id: "Exif-SubSecCreateDate"
         name: "SubSecCreateDate"
         writable: true
@@ -2444,6 +2631,73 @@ tables:
         writable: false
         type: "?"
         description: "Zoomed Preview Image"
+  - name: DV::Main
+    tags:
+      - id: "AspectRatio"
+        name: "AspectRatio"
+        writable: false
+        type: "?"
+        description: "Aspect Ratio"
+      - id: "AudioBitsPerSample"
+        name: "AudioBitsPerSample"
+        writable: false
+        type: "?"
+        description: "Audio Bits Per Sample"
+      - id: "AudioChannels"
+        name: "AudioChannels"
+        writable: false
+        type: "?"
+        description: "Audio Channels"
+      - id: "AudioSampleRate"
+        name: "AudioSampleRate"
+        writable: false
+        type: "?"
+        description: "Audio Sample Rate"
+      - id: "Colorimetry"
+        name: "Colorimetry"
+        writable: false
+        type: "?"
+        description: "Colorimetry"
+      - id: "DateTimeOriginal"
+        name: "DateTimeOriginal"
+        writable: false
+        type: "?"
+        description: "Date/Time Original"
+      - id: "Duration"
+        name: "Duration"
+        writable: false
+        type: "?"
+        description: "Duration"
+      - id: "FrameRate"
+        name: "FrameRate"
+        writable: false
+        type: "?"
+        description: "Frame Rate"
+      - id: "ImageHeight"
+        name: "ImageHeight"
+        writable: false
+        type: "?"
+        description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: false
+        type: "?"
+        description: "Image Width"
+      - id: "TotalBitrate"
+        name: "TotalBitrate"
+        writable: false
+        type: "?"
+        description: "Total Bitrate"
+      - id: "VideoFormat"
+        name: "VideoFormat"
+        writable: false
+        type: "?"
+        description: "Video Format"
+      - id: "VideoScanType"
+        name: "VideoScanType"
+        writable: false
+        type: "?"
+        description: "Video Scan Type"
   - name: DarwinCore::Main
     tags:
       - id: "Event"
@@ -2476,6 +2730,16 @@ tables:
         writable: true
         type: "?"
         description: "Event Time"
+      - id: "FossilSpecimen"
+        name: "FossilSpecimen"
+        writable: true
+        type: "?"
+        description: "Fossil Specimen"
+      - id: "GeologicalContext"
+        name: "GeologicalContext"
+        writable: true
+        type: "?"
+        description: "Geological Context"
       - id: "GeologicalContextBed"
         name: "GeologicalContextBed"
         writable: true
@@ -2496,11 +2760,46 @@ tables:
         writable: true
         type: "?"
         description: "Geological Context Member"
+      - id: "HumanObservation"
+        name: "HumanObservation"
+        writable: true
+        type: "?"
+        description: "Human Observation"
+      - id: "Identification"
+        name: "Identification"
+        writable: true
+        type: "?"
+        description: "Identification"
+      - id: "LivingSpecimen"
+        name: "LivingSpecimen"
+        writable: true
+        type: "?"
+        description: "Living Specimen"
+      - id: "MachineObservation"
+        name: "MachineObservation"
+        writable: true
+        type: "?"
+        description: "Machine Observation"
+      - id: "MaterialSample"
+        name: "MaterialSample"
+        writable: true
+        type: "?"
+        description: "Material Sample"
       - id: "MaterialSampleMaterialSampleID"
         name: "MaterialSampleID"
         writable: true
         type: "?"
         description: "Material Sample ID"
+      - id: "MeasurementOrFact"
+        name: "MeasurementOrFact"
+        writable: true
+        type: "?"
+        description: "Measurement Or Fact"
+      - id: "Occurrence"
+        name: "Occurrence"
+        writable: true
+        type: "?"
+        description: "Occurrence"
       - id: "OccurrenceOccurrenceDetails"
         name: "OccurrenceDetails"
         writable: true
@@ -2521,6 +2820,11 @@ tables:
         writable: true
         type: "?"
         description: "Occurrence Status"
+      - id: "Organism"
+        name: "Organism"
+        writable: true
+        type: "?"
+        description: "Organism"
       - id: "OrganismOrganismID"
         name: "OrganismID"
         writable: true
@@ -2541,6 +2845,26 @@ tables:
         writable: true
         type: "?"
         description: "Organism Scope"
+      - id: "PreservedSpecimen"
+        name: "PreservedSpecimen"
+        writable: true
+        type: "?"
+        description: "Preserved Specimen"
+      - id: "Record"
+        name: "Record"
+        writable: true
+        type: "?"
+        description: "Record"
+      - id: "ResourceRelationship"
+        name: "ResourceRelationship"
+        writable: true
+        type: "?"
+        description: "Resource Relationship"
+      - id: "Taxon"
+        name: "Taxon"
+        writable: true
+        type: "?"
+        description: "Taxon"
       - id: "TaxonTaxonConceptID"
         name: "TaxonConceptID"
         writable: true
@@ -6198,6 +6522,13 @@ tables:
         writable: false
         type: "?"
         description: "ZIF Metadata"
+  - name: Exif::printParameter
+    tags:
+      - id: "PrintConv"
+        name: "PrintConv"
+        writable: false
+        type: "?"
+        description: "Print Conv"
   - name: FlashPix::CompObj
     tags:
       - id: "1"
@@ -6336,6 +6667,43 @@ tables:
         writable: false
         type: "?"
         description: "Using Transforms"
+  - name: FlashPix::DocTable
+    tags:
+      - id: "CommentBy"
+        name: "CommentBy"
+        writable: false
+        type: "?"
+        description: "Comment By"
+      - id: "CommentByBlock"
+        name: "CommentByBlock"
+        writable: false
+        type: "?"
+        description: "Comment By Block"
+      - id: "DOP"
+        name: "DOP"
+        writable: false
+        type: "?"
+        description: "DOP"
+      - id: "LastSavedBy"
+        name: "LastSavedBy"
+        writable: false
+        type: "?"
+        description: "Last Saved By"
+      - id: "LastSavedByBlock"
+        name: "LastSavedByBlock"
+        writable: false
+        type: "?"
+        description: "Last Saved By Block"
+      - id: "ModifyDate"
+        name: "ModifyDate"
+        writable: false
+        type: "int64u"
+        description: "Modify Date"
+      - id: "TableOffsets"
+        name: "TableOffsets"
+        writable: false
+        type: "?"
+        description: "Table Offsets"
   - name: FlashPix::DocumentInfo
     tags:
       - id: "23"
@@ -17787,7 +18155,7 @@ tables:
       - id: "44"
         name: "Colorant1Coordinates"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Colorant 1 Coordinates"
       - id: "12"
         name: "Colorant1Name"
@@ -17797,7 +18165,7 @@ tables:
       - id: "82"
         name: "Colorant2Coordinates"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Colorant 2 Coordinates"
       - id: "50"
         name: "Colorant2Name"
@@ -17807,7 +18175,7 @@ tables:
       - id: "120"
         name: "Colorant3Coordinates"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Colorant 3 Coordinates"
       - id: "88"
         name: "Colorant3Name"
@@ -17839,7 +18207,7 @@ tables:
       - id: "56"
         name: "DeviceAttributes"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Device Attributes"
       - id: "48"
         name: "DeviceManufacturer"
@@ -17879,7 +18247,7 @@ tables:
       - id: "24"
         name: "ProfileDateTime"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Profile Date Time"
       - id: "36"
         name: "ProfileFileSignature"
@@ -17889,7 +18257,7 @@ tables:
       - id: "84"
         name: "ProfileID"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Profile ID"
       - id: "8"
         name: "ProfileVersion"
@@ -18720,6 +19088,28 @@ tables:
         writable: false
         type: "int32u"
         description: "Measurement Observer"
+  - name: ICC_Profile::Metadata
+    tags:
+      - id: "CreatorApp"
+        name: "CreatorApp"
+        writable: false
+        type: "?"
+        description: "Creator App"
+      - id: "ManufacturerName"
+        name: "ManufacturerName"
+        writable: false
+        type: "?"
+        description: "Manufacturer Name"
+      - id: "MediaColor"
+        name: "MediaColor"
+        writable: false
+        type: "?"
+        description: "Media Color"
+      - id: "MediaWeight"
+        name: "MediaWeight"
+        writable: false
+        type: "?"
+        description: "Media Weight"
   - name: ICC_Profile::ViewingConditions
     tags:
       - id: "8"
@@ -19373,12 +19763,52 @@ tables:
         writable: false
         type: "?"
         description: "Adjustments Settings Statistics Light Map"
+      - id: "ON1_SettingsData"
+        name: "ON1_SettingsData"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Data"
+      - id: "ON1_SettingsMetadataCreated"
+        name: "ON1_SettingsMetadataCreated"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Created"
+      - id: "ON1_SettingsMetadataModified"
+        name: "ON1_SettingsMetadataModified"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Modified"
+      - id: "ON1_SettingsMetadataName"
+        name: "ON1_SettingsMetadataName"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Name"
+      - id: "ON1_SettingsMetadataPluginID"
+        name: "ON1_SettingsMetadataPluginID"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Plugin ID"
+      - id: "ON1_SettingsMetadataTimestamp"
+        name: "ON1_SettingsMetadataTimestamp"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Timestamp"
+      - id: "ON1_SettingsMetadataUsage"
+        name: "ON1_SettingsMetadataUsage"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Usage"
+      - id: "ON1_SettingsMetadataVisibleToUser"
+        name: "ON1_SettingsMetadataVisibleToUser"
+        writable: false
+        type: "?"
+        description: "ON1 Settings Metadata Visible To User"
   - name: Kandao::FrameISP
     tags:
       - id: "4"
         name: "FrameISP_4"
         writable: false
-        type: "float"
+        type: "?"
         description: "Frame ISP 4"
       - id: "0"
         name: "TimeStamp"
@@ -19439,12 +19869,12 @@ tables:
       - id: "14"
         name: "Accelerometer"
         writable: false
-        type: "int16s"
+        type: "?"
         description: "Accelerometer"
       - id: "8"
         name: "Gyroscope"
         writable: false
-        type: "int16s"
+        type: "?"
         description: "Gyroscope"
       - id: "0"
         name: "TimeStamp"
@@ -19543,6 +19973,11 @@ tables:
         writable: false
         type: "?"
         description: "FOV"
+      - id: "FRAME_ISP"
+        name: "FRAME_ISP"
+        writable: false
+        type: "?"
+        description: "FRAME ISP"
       - id: "FAN_LEVEL"
         name: "FanLevel"
         writable: false
@@ -19553,11 +19988,26 @@ tables:
         writable: false
         type: "?"
         description: "Fan Mode"
+      - id: "GPS"
+        name: "GPS"
+        writable: false
+        type: "?"
+        description: "GPS"
+      - id: "GPS"
+        name: "GPS"
+        writable: false
+        type: "?"
+        description: "GPS"
       - id: "GPS_CAPTIME"
         name: "GPSCaptureTime"
         writable: false
         type: "?"
         description: "GPS Capture Time"
+      - id: "GPSX"
+        name: "GPSX"
+        writable: false
+        type: "?"
+        description: "GPSX"
       - id: "GAINMAP0"
         name: "GainMap0"
         writable: false
@@ -19578,6 +20028,11 @@ tables:
         writable: false
         type: "?"
         description: "Hardware Version"
+      - id: "IMU"
+        name: "IMU"
+        writable: false
+        type: "?"
+        description: "IMU"
       - id: "ISO"
         name: "ISO"
         writable: false
@@ -19748,6 +20203,13 @@ tables:
         writable: false
         type: "?"
         description: "Yaw"
+  - name: LIF::Main
+    tags:
+      - id: "TimeStampList"
+        name: "TimeStampList"
+        writable: false
+        type: "?"
+        description: "Time Stamp List"
   - name: Leaf::CameraProfile
     tags:
       - id: "CamProf_back_type"
@@ -20508,6 +20970,11 @@ tables:
         writable: false
         type: "?"
         description: "Date/Time Original"
+      - id: "EmbeddedImage"
+        name: "EmbeddedImage"
+        writable: false
+        type: "?"
+        description: "Embedded Image"
       - id: "DevicesShutterPixelExposureDuration"
         name: "ExposureTime"
         writable: false
@@ -20543,6 +21010,21 @@ tables:
         writable: false
         type: "?"
         description: "ISO"
+      - id: "ImageLimitExposureBias"
+        name: "ImageLimitExposureBias"
+        writable: false
+        type: "?"
+        description: "Image Limit Exposure Bias"
+      - id: "ImageModulationExposureBias"
+        name: "ImageModulationExposureBias"
+        writable: false
+        type: "?"
+        description: "Image Modulation Exposure Bias"
+      - id: "JSONMetadata"
+        name: "JSONMetadata"
+        writable: false
+        type: "?"
+        description: "JSON Metadata"
       - id: "DevicesLensTemperature"
         name: "LensTemperature"
         writable: false
@@ -20585,6 +21067,16 @@ tables:
         writable: true
         type: "?"
         description: "Audio Compression"
+      - id: "Channels"
+        name: "Channels"
+        writable: true
+        type: "int8u"
+        description: "Channels"
+      - id: "Duration"
+        name: "Duration"
+        writable: true
+        type: "rational64u"
+        description: "Duration"
       - id: "data"
         name: "RelatedAudioFile"
         writable: true
@@ -20600,13 +21092,153 @@ tables:
         writable: true
         type: "?"
         description: "Related Audio File Type"
+      - id: "SampleBits"
+        name: "SampleBits"
+        writable: true
+        type: "int16u"
+        description: "Sample Bits"
+      - id: "SampleRate"
+        name: "SampleRate"
+        writable: true
+        type: "int32u"
+        description: "Sample Rate"
   - name: MIE::Camera
     tags:
+      - id: "Brightness"
+        name: "Brightness"
+        writable: true
+        type: "int8s"
+        description: "Brightness"
+      - id: "ColorBalance"
+        name: "ColorBalance"
+        writable: true
+        type: "?"
+        description: "Color Balance"
+      - id: "ColorTemperature"
+        name: "ColorTemperature"
+        writable: true
+        type: "int32u"
+        description: "Color Temperature"
+      - id: "Contrast"
+        name: "Contrast"
+        writable: true
+        type: "int8s"
+        description: "Contrast"
+      - id: "DigitalZoom"
+        name: "DigitalZoom"
+        writable: true
+        type: "rational64u"
+        description: "Digital Zoom"
       - id: "ExposureComp"
         name: "ExposureCompensation"
         writable: true
         type: "rational64s"
         description: "Exposure Compensation"
+      - id: "ExposureMode"
+        name: "ExposureMode"
+        writable: true
+        type: "?"
+        description: "Exposure Mode"
+      - id: "ExposureTime"
+        name: "ExposureTime"
+        writable: true
+        type: "rational64u"
+        description: "Exposure Time"
+      - id: "FirmwareVersion"
+        name: "FirmwareVersion"
+        writable: true
+        type: "?"
+        description: "Firmware Version"
+      - id: "Flash"
+        name: "Flash"
+        writable: true
+        type: "?"
+        description: "Flash"
+      - id: "FocusMode"
+        name: "FocusMode"
+        writable: true
+        type: "?"
+        description: "Focus Mode"
+      - id: "ISO"
+        name: "ISO"
+        writable: true
+        type: "int16u"
+        description: "ISO"
+      - id: "ISOSetting"
+        name: "ISOSetting"
+        writable: true
+        type: "int16u"
+        description: "ISO Setting"
+      - id: "ImageNumber"
+        name: "ImageNumber"
+        writable: true
+        type: "int32u"
+        description: "Image Number"
+      - id: "ImageQuality"
+        name: "ImageQuality"
+        writable: true
+        type: "?"
+        description: "Image Quality"
+      - id: "ImageStabilization"
+        name: "ImageStabilization"
+        writable: true
+        type: "int8u"
+        description: "Image Stabilization"
+      - id: "Lens"
+        name: "Lens"
+        writable: true
+        type: "?"
+        description: "Lens"
+      - id: "Make"
+        name: "Make"
+        writable: true
+        type: "?"
+        description: "Make"
+      - id: "MeasuredEV"
+        name: "MeasuredEV"
+        writable: true
+        type: "rational64s"
+        description: "Measured EV"
+      - id: "Model"
+        name: "Model"
+        writable: true
+        type: "?"
+        description: "Model"
+      - id: "Orientation"
+        name: "Orientation"
+        writable: true
+        type: "?"
+        description: "Orientation"
+      - id: "OwnerName"
+        name: "OwnerName"
+        writable: true
+        type: "?"
+        description: "Owner Name"
+      - id: "Saturation"
+        name: "Saturation"
+        writable: true
+        type: "int8s"
+        description: "Saturation"
+      - id: "SensorSize"
+        name: "SensorSize"
+        writable: true
+        type: "?"
+        description: "Sensor Size"
+      - id: "SerialNumber"
+        name: "SerialNumber"
+        writable: true
+        type: "?"
+        description: "Serial Number"
+      - id: "Sharpness"
+        name: "Sharpness"
+        writable: true
+        type: "int8s"
+        description: "Sharpness"
+      - id: "ShootingMode"
+        name: "ShootingMode"
+        writable: true
+        type: "?"
+        description: "Shooting Mode"
   - name: MIE::Canon
     tags:
       - id: "VRD"
@@ -20616,6 +21248,31 @@ tables:
         description: "Canon VRD"
   - name: MIE::Doc
     tags:
+      - id: "Author"
+        name: "Author"
+        writable: true
+        type: "?"
+        description: "Author"
+      - id: "Comment"
+        name: "Comment"
+        writable: true
+        type: "?"
+        description: "Comment"
+      - id: "Contributors"
+        name: "Contributors"
+        writable: true
+        type: "?"
+        description: "Contributors"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: true
+        type: "?"
+        description: "Copyright"
+      - id: "CreateDate"
+        name: "CreateDate"
+        writable: true
+        type: "?"
+        description: "Create Date"
       - id: "OriginalDate"
         name: "DateTimeOriginal"
         writable: true
@@ -20626,11 +21283,41 @@ tables:
         writable: true
         type: "?"
         description: "Email"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: true
+        type: "?"
+        description: "Keywords"
+      - id: "ModifyDate"
+        name: "ModifyDate"
+        writable: true
+        type: "?"
+        description: "Modify Date"
       - id: "Phone"
         name: "PhoneNumber"
         writable: true
         type: "?"
         description: "Phone Number"
+      - id: "References"
+        name: "References"
+        writable: true
+        type: "?"
+        description: "References"
+      - id: "Software"
+        name: "Software"
+        writable: true
+        type: "?"
+        description: "Software"
+      - id: "Title"
+        name: "Title"
+        writable: true
+        type: "?"
+        description: "Title"
+      - id: "URL"
+        name: "URL"
+        writable: true
+        type: "?"
+        description: "URL"
   - name: MIE::Extender
     tags:
       - id: "Magnification"
@@ -20757,6 +21444,43 @@ tables:
         writable: true
         type: "rational64s"
         description: "GPS Track"
+  - name: MIE::Geo
+    tags:
+      - id: "Address"
+        name: "Address"
+        writable: true
+        type: "?"
+        description: "Address"
+      - id: "City"
+        name: "City"
+        writable: true
+        type: "?"
+        description: "City"
+      - id: "Country"
+        name: "Country"
+        writable: true
+        type: "?"
+        description: "Country"
+      - id: "GPS"
+        name: "GPS"
+        writable: true
+        type: "?"
+        description: "GPS"
+      - id: "PostalCode"
+        name: "PostalCode"
+        writable: true
+        type: "?"
+        description: "Postal Code"
+      - id: "State"
+        name: "State"
+        writable: true
+        type: "?"
+        description: "State"
+      - id: "UTM"
+        name: "UTM"
+        writable: true
+        type: "?"
+        description: "UTM"
   - name: MIE::Image
     tags:
       - id: "BitDepth"
@@ -20764,6 +21488,11 @@ tables:
         writable: true
         type: "int16u"
         description: "Bit Depth"
+      - id: "ColorSpace"
+        name: "ColorSpace"
+        writable: true
+        type: "?"
+        description: "Color Space"
       - id: "Components"
         name: "ComponentsConfiguration"
         writable: true
@@ -20789,8 +21518,43 @@ tables:
         writable: true
         type: "?"
         description: "Full Size Image Type"
+      - id: "ImageSize"
+        name: "ImageSize"
+        writable: true
+        type: "?"
+        description: "Image Size"
+      - id: "OriginalImageSize"
+        name: "OriginalImageSize"
+        writable: true
+        type: "?"
+        description: "Original Image Size"
+      - id: "Resolution"
+        name: "Resolution"
+        writable: true
+        type: "?"
+        description: "Resolution"
   - name: MIE::Lens
     tags:
+      - id: "Extender"
+        name: "Extender"
+        writable: true
+        type: "?"
+        description: "Extender"
+      - id: "FNumber"
+        name: "FNumber"
+        writable: true
+        type: "rational64u"
+        description: "F Number"
+      - id: "FocalLength"
+        name: "FocalLength"
+        writable: true
+        type: "rational64u"
+        description: "Focal Length"
+      - id: "FocusDistance"
+        name: "FocusDistance"
+        writable: true
+        type: "rational64u"
+        description: "Focus Distance"
       - id: "Make"
         name: "LensMake"
         writable: true
@@ -20806,6 +21570,36 @@ tables:
         writable: true
         type: "?"
         description: "Lens Serial Number"
+      - id: "MaxAperture"
+        name: "MaxAperture"
+        writable: true
+        type: "rational64u"
+        description: "Max Aperture"
+      - id: "MaxApertureAtMaxFocal"
+        name: "MaxApertureAtMaxFocal"
+        writable: true
+        type: "rational64u"
+        description: "Max Aperture At Max Focal"
+      - id: "MaxFocalLength"
+        name: "MaxFocalLength"
+        writable: true
+        type: "rational64u"
+        description: "Max Focal Length"
+      - id: "MinAperture"
+        name: "MinAperture"
+        writable: true
+        type: "rational64u"
+        description: "Min Aperture"
+      - id: "MinFocalLength"
+        name: "MinFocalLength"
+        writable: true
+        type: "rational64u"
+        description: "Min Focal Length"
+      - id: "OpticalZoom"
+        name: "OpticalZoom"
+        writable: true
+        type: "rational64u"
+        description: "Optical Zoom"
   - name: MIE::Main
     tags:
       - id: "zmd5"
@@ -20818,6 +21612,11 @@ tables:
         writable: true
         type: "?"
         description: "MIE Version"
+      - id: "Meta"
+        name: "Meta"
+        writable: true
+        type: "?"
+        description: "Meta"
       - id: "data"
         name: "SubfileData"
         writable: true
@@ -20853,13 +21652,167 @@ tables:
         writable: true
         type: "undef"
         description: "Trailer Signature"
+  - name: MIE::MakerNotes
+    tags:
+      - id: "Canon"
+        name: "Canon"
+        writable: true
+        type: "?"
+        description: "Canon"
+      - id: "Casio"
+        name: "Casio"
+        writable: true
+        type: "?"
+        description: "Casio"
+      - id: "FujiFilm"
+        name: "FujiFilm"
+        writable: true
+        type: "?"
+        description: "Fuji Film"
+      - id: "Kodak"
+        name: "Kodak"
+        writable: true
+        type: "?"
+        description: "Kodak"
+      - id: "KonicaMinolta"
+        name: "KonicaMinolta"
+        writable: true
+        type: "?"
+        description: "Konica Minolta"
+      - id: "Nikon"
+        name: "Nikon"
+        writable: true
+        type: "?"
+        description: "Nikon"
+      - id: "Olympus"
+        name: "Olympus"
+        writable: true
+        type: "?"
+        description: "Olympus"
+      - id: "Panasonic"
+        name: "Panasonic"
+        writable: true
+        type: "?"
+        description: "Panasonic"
+      - id: "Pentax"
+        name: "Pentax"
+        writable: true
+        type: "?"
+        description: "Pentax"
+      - id: "Ricoh"
+        name: "Ricoh"
+        writable: true
+        type: "?"
+        description: "Ricoh"
+      - id: "Sigma"
+        name: "Sigma"
+        writable: true
+        type: "?"
+        description: "Sigma"
+      - id: "Sony"
+        name: "Sony"
+        writable: true
+        type: "?"
+        description: "Sony"
   - name: MIE::Meta
     tags:
+      - id: "Audio"
+        name: "Audio"
+        writable: true
+        type: "?"
+        description: "Audio"
+      - id: "Camera"
+        name: "Camera"
+        writable: true
+        type: "?"
+        description: "Camera"
+      - id: "Document"
+        name: "Document"
+        writable: true
+        type: "?"
+        description: "Document"
+      - id: "EXIF"
+        name: "EXIF"
+        writable: true
+        type: "?"
+        description: "EXIF"
+      - id: "Geo"
+        name: "Geo"
+        writable: true
+        type: "?"
+        description: "Geo"
       - id: "ICCProfile"
         name: "ICC_Profile"
         writable: true
         type: "?"
         description: "ICC Profile"
+      - id: "ID3"
+        name: "ID3"
+        writable: true
+        type: "?"
+        description: "ID3"
+      - id: "IPTC"
+        name: "IPTC"
+        writable: true
+        type: "?"
+        description: "IPTC"
+      - id: "Image"
+        name: "Image"
+        writable: true
+        type: "?"
+        description: "Image"
+      - id: "MakerNotes"
+        name: "MakerNotes"
+        writable: true
+        type: "?"
+        description: "Maker Notes"
+      - id: "Preview"
+        name: "Preview"
+        writable: true
+        type: "?"
+        description: "Preview"
+      - id: "Thumbnail"
+        name: "Thumbnail"
+        writable: true
+        type: "?"
+        description: "Thumbnail"
+      - id: "Video"
+        name: "Video"
+        writable: true
+        type: "?"
+        description: "Video"
+      - id: "XMP"
+        name: "XMP"
+        writable: true
+        type: "?"
+        description: "XMP"
+  - name: MIE::Orient
+    tags:
+      - id: "Azimuth"
+        name: "Azimuth"
+        writable: true
+        type: "rational64s"
+        description: "Azimuth"
+      - id: "Declination"
+        name: "Declination"
+        writable: true
+        type: "rational64s"
+        description: "Declination"
+      - id: "Elevation"
+        name: "Elevation"
+        writable: true
+        type: "rational64s"
+        description: "Elevation"
+      - id: "RightAscension"
+        name: "RightAscension"
+        writable: true
+        type: "rational64s"
+        description: "Right Ascension"
+      - id: "Rotation"
+        name: "Rotation"
+        writable: true
+        type: "rational64s"
+        description: "Rotation"
   - name: MIE::Preview
     tags:
       - id: "data"
@@ -20928,6 +21881,16 @@ tables:
         description: "UTM Zone"
   - name: MIE::Video
     tags:
+      - id: "Codec"
+        name: "Codec"
+        writable: true
+        type: "?"
+        description: "Codec"
+      - id: "Duration"
+        name: "Duration"
+        writable: true
+        type: "rational64u"
+        description: "Duration"
       - id: "data"
         name: "RelatedVideoFile"
         writable: true
@@ -21114,6 +22077,13 @@ tables:
         writable: false
         type: "?"
         description: "Yaw Angle"
+  - name: MWG::Collections
+    tags:
+      - id: "Collections"
+        name: "Collections"
+        writable: true
+        type: "?"
+        description: "Collections"
   - name: MWG::Keywords
     tags:
       - id: "KeywordsHierarchy"
@@ -21225,39 +22195,678 @@ tables:
         description: "Region List"
   - name: OOXML::Main
     tags:
+      - id: "AppVersion"
+        name: "AppVersion"
+        writable: false
+        type: "?"
+        description: "App Version"
+      - id: "Application"
+        name: "Application"
+        writable: false
+        type: "?"
+        description: "Application"
+      - id: "category"
+        name: "Category"
+        writable: false
+        type: "?"
+        description: "Category"
+      - id: "Characters"
+        name: "Characters"
+        writable: false
+        type: "?"
+        description: "Characters"
+      - id: "CharactersWithSpaces"
+        name: "CharactersWithSpaces"
+        writable: false
+        type: "?"
+        description: "Characters With Spaces"
+      - id: "CheckedBy"
+        name: "CheckedBy"
+        writable: false
+        type: "?"
+        description: "Checked By"
+      - id: "Client"
+        name: "Client"
+        writable: false
+        type: "?"
+        description: "Client"
+      - id: "Company"
+        name: "Company"
+        writable: false
+        type: "?"
+        description: "Company"
       - id: "created"
         name: "CreateDate"
         writable: false
         type: "date"
         description: "Create Date"
+      - id: "createdType"
+        name: "CreatedType"
+        writable: false
+        type: "?"
+        description: "Created Type"
+      - id: "DateCompleted"
+        name: "DateCompleted"
+        writable: false
+        type: "date"
+        description: "Date Completed"
+      - id: "Department"
+        name: "Department"
+        writable: false
+        type: "?"
+        description: "Department"
+      - id: "Destination"
+        name: "Destination"
+        writable: false
+        type: "?"
+        description: "Destination"
+      - id: "Disposition"
+        name: "Disposition"
+        writable: false
+        type: "?"
+        description: "Disposition"
+      - id: "Division"
+        name: "Division"
+        writable: false
+        type: "?"
+        description: "Division"
+      - id: "DocSecurity"
+        name: "DocSecurity"
+        writable: false
+        type: "?"
+        description: "Doc Security"
+      - id: "DocumentNumber"
+        name: "DocumentNumber"
+        writable: false
+        type: "?"
+        description: "Document Number"
+      - id: "Editor"
+        name: "Editor"
+        writable: false
+        type: "?"
+        description: "Editor"
+      - id: "ForwardTo"
+        name: "ForwardTo"
+        writable: false
+        type: "?"
+        description: "Forward To"
+      - id: "Group"
+        name: "Group"
+        writable: false
+        type: "?"
+        description: "Group"
+      - id: "HeadingPairs"
+        name: "HeadingPairs"
+        writable: false
+        type: "?"
+        description: "Heading Pairs"
+      - id: "HiddenSlides"
+        name: "HiddenSlides"
+        writable: false
+        type: "?"
+        description: "Hidden Slides"
+      - id: "HyperlinkBase"
+        name: "HyperlinkBase"
+        writable: false
+        type: "?"
+        description: "Hyperlink Base"
+      - id: "HyperlinksChanged"
+        name: "HyperlinksChanged"
+        writable: false
+        type: "?"
+        description: "Hyperlinks Changed"
+      - id: "keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
+      - id: "Language"
+        name: "Language"
+        writable: false
+        type: "?"
+        description: "Language"
+      - id: "lastModifiedBy"
+        name: "LastModifiedBy"
+        writable: false
+        type: "?"
+        description: "Last Modified By"
+      - id: "lastPrinted"
+        name: "LastPrinted"
+        writable: false
+        type: "date"
+        description: "Last Printed"
+      - id: "Lines"
+        name: "Lines"
+        writable: false
+        type: "?"
+        description: "Lines"
+      - id: "LinksUpToDate"
+        name: "LinksUpToDate"
+        writable: false
+        type: "?"
+        description: "Links Up To Date"
+      - id: "MMClips"
+        name: "MMClips"
+        writable: false
+        type: "?"
+        description: "MM Clips"
+      - id: "Mailstop"
+        name: "Mailstop"
+        writable: false
+        type: "?"
+        description: "Mailstop"
+      - id: "Manager"
+        name: "Manager"
+        writable: false
+        type: "?"
+        description: "Manager"
+      - id: "Matter"
+        name: "Matter"
+        writable: false
+        type: "?"
+        description: "Matter"
+      - id: "modifiedType"
+        name: "ModifiedType"
+        writable: false
+        type: "?"
+        description: "Modified Type"
       - id: "modified"
         name: "ModifyDate"
         writable: false
         type: "date"
         description: "Modify Date"
+      - id: "Notes"
+        name: "Notes"
+        writable: false
+        type: "?"
+        description: "Notes"
+      - id: "Office"
+        name: "Office"
+        writable: false
+        type: "?"
+        description: "Office"
+      - id: "Owner"
+        name: "Owner"
+        writable: false
+        type: "?"
+        description: "Owner"
+      - id: "Pages"
+        name: "Pages"
+        writable: false
+        type: "?"
+        description: "Pages"
+      - id: "Paragraphs"
+        name: "Paragraphs"
+        writable: false
+        type: "?"
+        description: "Paragraphs"
+      - id: "PresentationFormat"
+        name: "PresentationFormat"
+        writable: false
+        type: "?"
+        description: "Presentation Format"
+      - id: "Project"
+        name: "Project"
+        writable: false
+        type: "?"
+        description: "Project"
+      - id: "Publisher"
+        name: "Publisher"
+        writable: false
+        type: "?"
+        description: "Publisher"
+      - id: "Purpose"
+        name: "Purpose"
+        writable: false
+        type: "?"
+        description: "Purpose"
+      - id: "ReceivedFrom"
+        name: "ReceivedFrom"
+        writable: false
+        type: "?"
+        description: "Received From"
+      - id: "RecordedBy"
+        name: "RecordedBy"
+        writable: false
+        type: "?"
+        description: "Recorded By"
+      - id: "RecordedDate"
+        name: "RecordedDate"
+        writable: false
+        type: "date"
+        description: "Recorded Date"
+      - id: "Reference"
+        name: "Reference"
+        writable: false
+        type: "?"
+        description: "Reference"
       - id: "revision"
         name: "RevisionNumber"
         writable: false
         type: "?"
         description: "Revision Number"
+      - id: "ScaleCrop"
+        name: "ScaleCrop"
+        writable: false
+        type: "?"
+        description: "Scale Crop"
+      - id: "SharedDoc"
+        name: "SharedDoc"
+        writable: false
+        type: "?"
+        description: "Shared Doc"
+      - id: "Slides"
+        name: "Slides"
+        writable: false
+        type: "?"
+        description: "Slides"
+      - id: "Source"
+        name: "Source"
+        writable: false
+        type: "?"
+        description: "Source"
+      - id: "Status"
+        name: "Status"
+        writable: false
+        type: "?"
+        description: "Status"
+      - id: "TelephoneNumber"
+        name: "TelephoneNumber"
+        writable: false
+        type: "?"
+        description: "Telephone Number"
+      - id: "Template"
+        name: "Template"
+        writable: false
+        type: "?"
+        description: "Template"
+      - id: "TitlesOfParts"
+        name: "TitlesOfParts"
+        writable: false
+        type: "?"
+        description: "Titles Of Parts"
       - id: "TotalTime"
         name: "TotalEditTime"
         writable: false
         type: "?"
         description: "Total Edit Time"
+      - id: "Typist"
+        name: "Typist"
+        writable: false
+        type: "?"
+        description: "Typist"
+      - id: "Words"
+        name: "Words"
+        writable: false
+        type: "?"
+        description: "Words"
+  - name: Ogg::Main
+    tags:
+      - id: "FLAC"
+        name: "FLAC"
+        writable: false
+        type: "?"
+        description: "FLAC"
+      - id: "ID3"
+        name: "ID3"
+        writable: false
+        type: "?"
+        description: "ID3"
+      - id: "Opus"
+        name: "Opus"
+        writable: false
+        type: "?"
+        description: "Opus"
+      - id: "theora"
+        name: "Theora"
+        writable: false
+        type: "?"
+        description: "Theora"
+      - id: "vorbis"
+        name: "Vorbis"
+        writable: false
+        type: "?"
+        description: "Vorbis"
+  - name: Other::PFM
+    tags:
+      - id: "ByteOrder"
+        name: "ByteOrder"
+        writable: false
+        type: "?"
+        description: "Byte Order"
+      - id: "ColorSpace"
+        name: "ColorSpace"
+        writable: false
+        type: "?"
+        description: "Color Space"
+      - id: "ImageHeight"
+        name: "ImageHeight"
+        writable: false
+        type: "?"
+        description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: false
+        type: "?"
+        description: "Image Width"
   - name: PLUS::XMP
     tags:
+      - id: "AdultContentWarning"
+        name: "AdultContentWarning"
+        writable: true
+        type: "?"
+        description: "Adult Content Warning"
+      - id: "CopyrightOwner"
+        name: "CopyrightOwner"
+        writable: true
+        type: "?"
+        description: "Copyright Owner"
+      - id: "CopyrightOwnerImageID"
+        name: "CopyrightOwnerImageID"
+        writable: true
+        type: "?"
+        description: "Copyright Owner Image ID"
+      - id: "CopyrightRegistrationNumber"
+        name: "CopyrightRegistrationNumber"
+        writable: true
+        type: "?"
+        description: "Copyright Registration Number"
+      - id: "CopyrightStatus"
+        name: "CopyrightStatus"
+        writable: true
+        type: "?"
+        description: "Copyright Status"
+      - id: "CreditLineRequired"
+        name: "CreditLineRequired"
+        writable: true
+        type: "?"
+        description: "Credit Line Required"
+      - id: "Custom1"
+        name: "Custom1"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 1"
+      - id: "Custom10"
+        name: "Custom10"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 10"
+      - id: "Custom2"
+        name: "Custom2"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 2"
+      - id: "Custom3"
+        name: "Custom3"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 3"
+      - id: "Custom4"
+        name: "Custom4"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 4"
+      - id: "Custom5"
+        name: "Custom5"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 5"
+      - id: "Custom6"
+        name: "Custom6"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 6"
+      - id: "Custom7"
+        name: "Custom7"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 7"
+      - id: "Custom8"
+        name: "Custom8"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 8"
+      - id: "Custom9"
+        name: "Custom9"
+        writable: true
+        type: "lang-alt"
+        description: "Custom 9"
+      - id: "DataMining"
+        name: "DataMining"
+        writable: true
+        type: "?"
+        description: "Data Mining"
+      - id: "EndUser"
+        name: "EndUser"
+        writable: true
+        type: "?"
+        description: "End User"
+      - id: "FileNameAsDelivered"
+        name: "FileNameAsDelivered"
+        writable: true
+        type: "?"
+        description: "File Name As Delivered"
+      - id: "FirstPublicationDate"
+        name: "FirstPublicationDate"
+        writable: true
+        type: "date"
+        description: "First Publication Date"
+      - id: "ImageAlterationConstraints"
+        name: "ImageAlterationConstraints"
+        writable: true
+        type: "?"
+        description: "Image Alteration Constraints"
+      - id: "ImageCreator"
+        name: "ImageCreator"
+        writable: true
+        type: "?"
+        description: "Image Creator"
+      - id: "ImageCreatorImageID"
+        name: "ImageCreatorImageID"
+        writable: true
+        type: "?"
+        description: "Image Creator Image ID"
+      - id: "ImageDuplicationConstraints"
+        name: "ImageDuplicationConstraints"
+        writable: true
+        type: "?"
+        description: "Image Duplication Constraints"
+      - id: "ImageFileConstraints"
+        name: "ImageFileConstraints"
+        writable: true
+        type: "?"
+        description: "Image File Constraints"
+      - id: "ImageFileFormatAsDelivered"
+        name: "ImageFileFormatAsDelivered"
+        writable: true
+        type: "?"
+        description: "Image File Format As Delivered"
+      - id: "ImageFileSizeAsDelivered"
+        name: "ImageFileSizeAsDelivered"
+        writable: true
+        type: "?"
+        description: "Image File Size As Delivered"
+      - id: "ImageSupplier"
+        name: "ImageSupplier"
+        writable: true
+        type: "?"
+        description: "Image Supplier"
+      - id: "ImageSupplierImageID"
+        name: "ImageSupplierImageID"
+        writable: true
+        type: "?"
+        description: "Image Supplier Image ID"
+      - id: "ImageType"
+        name: "ImageType"
+        writable: true
+        type: "?"
+        description: "Image Type"
+      - id: "LicenseEndDate"
+        name: "LicenseEndDate"
+        writable: true
+        type: "date"
+        description: "License End Date"
+      - id: "LicenseID"
+        name: "LicenseID"
+        writable: true
+        type: "?"
+        description: "License ID"
+      - id: "LicenseStartDate"
+        name: "LicenseStartDate"
+        writable: true
+        type: "date"
+        description: "License Start Date"
+      - id: "LicenseTransactionDate"
+        name: "LicenseTransactionDate"
+        writable: true
+        type: "date"
+        description: "License Transaction Date"
+      - id: "Licensee"
+        name: "Licensee"
+        writable: true
+        type: "?"
+        description: "Licensee"
+      - id: "LicenseeImageID"
+        name: "LicenseeImageID"
+        writable: true
+        type: "?"
+        description: "Licensee Image ID"
+      - id: "LicenseeImageNotes"
+        name: "LicenseeImageNotes"
+        writable: true
+        type: "lang-alt"
+        description: "Licensee Image Notes"
+      - id: "LicenseeProjectReference"
+        name: "LicenseeProjectReference"
+        writable: true
+        type: "?"
+        description: "Licensee Project Reference"
+      - id: "LicenseeTransactionID"
+        name: "LicenseeTransactionID"
+        writable: true
+        type: "?"
+        description: "Licensee Transaction ID"
+      - id: "Licensor"
+        name: "Licensor"
+        writable: true
+        type: "?"
+        description: "Licensor"
+      - id: "LicensorImageID"
+        name: "LicensorImageID"
+        writable: true
+        type: "?"
+        description: "Licensor Image ID"
+      - id: "LicensorNotes"
+        name: "LicensorNotes"
+        writable: true
+        type: "lang-alt"
+        description: "Licensor Notes"
+      - id: "LicensorTransactionID"
+        name: "LicensorTransactionID"
+        writable: true
+        type: "?"
+        description: "Licensor Transaction ID"
+      - id: "MediaConstraints"
+        name: "MediaConstraints"
+        writable: true
+        type: "lang-alt"
+        description: "Media Constraints"
+      - id: "MediaSummaryCode"
+        name: "MediaSummaryCode"
+        writable: true
+        type: "?"
+        description: "Media Summary Code"
+      - id: "MinorModelAgeDisclosure"
+        name: "MinorModelAgeDisclosure"
+        writable: true
+        type: "?"
+        description: "Minor Model Age Disclosure"
+      - id: "ModelReleaseID"
+        name: "ModelReleaseID"
+        writable: true
+        type: "?"
+        description: "Model Release ID"
+      - id: "ModelReleaseStatus"
+        name: "ModelReleaseStatus"
+        writable: true
+        type: "?"
+        description: "Model Release Status"
+      - id: "OtherConditions"
+        name: "OtherConditions"
+        writable: true
+        type: "lang-alt"
+        description: "Other Conditions"
+      - id: "OtherConstraints"
+        name: "OtherConstraints"
+        writable: true
+        type: "lang-alt"
+        description: "Other Constraints"
+      - id: "OtherImageInfo"
+        name: "OtherImageInfo"
+        writable: true
+        type: "lang-alt"
+        description: "Other Image Info"
+      - id: "OtherLicenseDocuments"
+        name: "OtherLicenseDocuments"
+        writable: true
+        type: "?"
+        description: "Other License Documents"
+      - id: "OtherLicenseInfo"
+        name: "OtherLicenseInfo"
+        writable: true
+        type: "lang-alt"
+        description: "Other License Info"
+      - id: "OtherLicenseRequirements"
+        name: "OtherLicenseRequirements"
+        writable: true
+        type: "lang-alt"
+        description: "Other License Requirements"
       - id: "Version"
         name: "PLUSVersion"
         writable: true
         type: "?"
         description: "PLUS Version"
+      - id: "ProductOrServiceConstraints"
+        name: "ProductOrServiceConstraints"
+        writable: true
+        type: "lang-alt"
+        description: "Product Or Service Constraints"
+      - id: "PropertyReleaseID"
+        name: "PropertyReleaseID"
+        writable: true
+        type: "?"
+        description: "Property Release ID"
+      - id: "PropertyReleaseStatus"
+        name: "PropertyReleaseStatus"
+        writable: true
+        type: "?"
+        description: "Property Release Status"
+      - id: "RegionConstraints"
+        name: "RegionConstraints"
+        writable: true
+        type: "lang-alt"
+        description: "Region Constraints"
+      - id: "Reuse"
+        name: "Reuse"
+        writable: true
+        type: "?"
+        description: "Reuse"
+      - id: "TermsAndConditionsText"
+        name: "TermsAndConditionsText"
+        writable: true
+        type: "lang-alt"
+        description: "Terms And Conditions Text"
+      - id: "TermsAndConditionsURL"
+        name: "TermsAndConditionsURL"
+        writable: true
+        type: "?"
+        description: "Terms And Conditions URL"
   - name: Photoshop::ChannelOptions
     tags:
       - id: "2"
         name: "ChannelColorData"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Channel Color Data"
       - id: "12"
         name: "ChannelColorIndicates"
@@ -21808,7 +23417,7 @@ tables:
       - id: "2"
         name: "PrintPosition"
         writable: false
-        type: "float"
+        type: "?"
         description: "Print Position"
       - id: "10"
         name: "PrintScale"
@@ -21871,6 +23480,13 @@ tables:
         writable: false
         type: "var_ustr32"
         description: "Writer Name"
+  - name: PrintIM::Main
+    tags:
+      - id: "PrintIMVersion"
+        name: "PrintIMVersion"
+        writable: false
+        type: "?"
+        description: "PrintIM Version"
   - name: Qualcomm::DualCamera
     tags:
       - id: "AF ROI height"
@@ -28057,7 +29673,7 @@ tables:
       - id: "0"
         name: "BackgroundColor"
         writable: false
-        type: "int8u"
+        type: "?"
         description: "Background Color"
   - name: RIFF::ANMF
     tags:
@@ -28113,7 +29729,7 @@ tables:
       - id: "16"
         name: "Meter"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Meter"
       - id: "4"
         name: "RootNote"
@@ -28192,7 +29808,7 @@ tables:
       - id: "338"
         name: "TimeReference"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "Time Reference"
   - name: RIFF::CSET
     tags:
@@ -28795,11 +30411,21 @@ tables:
         writable: false
         type: "?"
         description: "ANMF"
+      - id: "aXML"
+        name: "AXML"
+        writable: false
+        type: "?"
+        description: "AXML"
       - id: "acid"
         name: "Acidizer"
         writable: false
         type: "?"
         description: "Acidizer"
+      - id: "afsp"
+        name: "Afsp"
+        writable: false
+        type: "?"
+        description: "Afsp"
       - id: "LIST_adtl"
         name: "AssociatedDataList"
         writable: false
@@ -28910,6 +30536,11 @@ tables:
         writable: false
         type: "?"
         description: "ID3-2"
+      - id: "iXML"
+        name: "IXML"
+        writable: false
+        type: "?"
+        description: "IXML"
       - id: "LIST_INF0"
         name: "Info"
         writable: false
@@ -29240,7 +30871,7 @@ tables:
       - id: "40"
         name: "Accelerometer"
         writable: false
-        type: "float"
+        type: "?"
         description: "Accelerometer"
       - id: "28"
         name: "GPSAltitude"
@@ -29330,11 +30961,21 @@ tables:
         description: "WebP Flags"
   - name: RTF::Main
     tags:
+      - id: "author"
+        name: "Author"
+        writable: false
+        type: "?"
+        description: "Author"
       - id: "buptim"
         name: "BackupTime"
         writable: false
         type: "date"
         description: "Backup Time"
+      - id: "category"
+        name: "Category"
+        writable: false
+        type: "?"
+        description: "Category"
       - id: "nofchars"
         name: "Characters"
         writable: false
@@ -29345,11 +30986,26 @@ tables:
         writable: false
         type: "?"
         description: "Characters With Spaces"
+      - id: "comment"
+        name: "Comment"
+        writable: false
+        type: "?"
+        description: "Comment"
       - id: "doccomm"
         name: "Comments"
         writable: false
         type: "?"
         description: "Comments"
+      - id: "company"
+        name: "Company"
+        writable: false
+        type: "?"
+        description: "Company"
+      - id: "copyright"
+        name: "Copyright"
+        writable: false
+        type: "?"
+        description: "Copyright"
       - id: "creatim"
         name: "CreateDate"
         writable: false
@@ -29370,6 +31026,11 @@ tables:
         writable: false
         type: "?"
         description: "Internal Version Number"
+      - id: "keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
       - id: "operator"
         name: "LastModifiedBy"
         writable: false
@@ -29380,6 +31041,11 @@ tables:
         writable: false
         type: "date"
         description: "Last Printed"
+      - id: "manager"
+        name: "Manager"
+        writable: false
+        type: "?"
+        description: "Manager"
       - id: "revtim"
         name: "ModifyDate"
         writable: false
@@ -29395,6 +31061,16 @@ tables:
         writable: false
         type: "?"
         description: "Revision Number"
+      - id: "subject"
+        name: "Subject"
+        writable: false
+        type: "?"
+        description: "Subject"
+      - id: "title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"
       - id: "edmins"
         name: "TotalEditTime"
         writable: false
@@ -29447,6 +31123,33 @@ tables:
         writable: false
         type: "?"
         description: "View"
+  - name: Rawzor::Main
+    tags:
+      - id: "CompressionFactor"
+        name: "CompressionFactor"
+        writable: false
+        type: "?"
+        description: "Compression Factor"
+      - id: "OriginalFileSize"
+        name: "OriginalFileSize"
+        writable: false
+        type: "?"
+        description: "Original File Size"
+      - id: "OriginalFileType"
+        name: "OriginalFileType"
+        writable: false
+        type: "?"
+        description: "Original File Type"
+      - id: "RawzorCreatorVersion"
+        name: "RawzorCreatorVersion"
+        writable: false
+        type: "?"
+        description: "Rawzor Creator Version"
+      - id: "RawzorRequiredVersion"
+        name: "RawzorRequiredVersion"
+        writable: false
+        type: "?"
+        description: "Rawzor Required Version"
   - name: Red::Main
     tags:
       - id: "4150"
@@ -29691,7 +31394,7 @@ tables:
       - id: "86"
         name: "FrameRate"
         writable: false
-        type: "int16u"
+        type: "?"
         description: "Frame Rate"
       - id: "80"
         name: "ImageHeight"
@@ -29730,6 +31433,60 @@ tables:
         writable: false
         type: "?"
         description: "Preview Quality"
+  - name: TagInfoXML::allTables
+    tags:
+      - id: "Image::ExifTool::Composite"
+        name: "ImageExifToolComposite"
+        writable: false
+        type: "?"
+        description: "Image Exif Tool Composite"
+  - name: Text::Main
+    tags:
+      - id: "ByteOrderMark"
+        name: "ByteOrderMark"
+        writable: false
+        type: "?"
+        description: "Byte Order Mark"
+      - id: "ColumnCount"
+        name: "ColumnCount"
+        writable: false
+        type: "?"
+        description: "Column Count"
+      - id: "Delimiter"
+        name: "Delimiter"
+        writable: false
+        type: "?"
+        description: "Delimiter"
+      - id: "LineCount"
+        name: "LineCount"
+        writable: false
+        type: "?"
+        description: "Line Count"
+      - id: "MIMEEncoding"
+        name: "MIMEEncoding"
+        writable: false
+        type: "?"
+        description: "MIME Encoding"
+      - id: "Newlines"
+        name: "Newlines"
+        writable: false
+        type: "?"
+        description: "Newlines"
+      - id: "Quoting"
+        name: "Quoting"
+        writable: false
+        type: "?"
+        description: "Quoting"
+      - id: "RowCount"
+        name: "RowCount"
+        writable: false
+        type: "?"
+        description: "Row Count"
+      - id: "WordCount"
+        name: "WordCount"
+        writable: false
+        type: "?"
+        description: "Word Count"
   - name: Trailer::Google
     tags:
       - id: "Confidence"
@@ -29769,11 +31526,33 @@ tables:
         writable: false
         type: "string"
         description: "Device"
+      - id: "JSONInfo"
+        name: "JSONInfo"
+        writable: false
+        type: "?"
+        description: "JSON Info"
       - id: "private.emptyspace"
         name: "OnePlusTrailerLen"
         writable: false
         type: "?"
         description: "One Plus Trailer Len"
+  - name: Trailer::Vivo
+    tags:
+      - id: "HDRImage"
+        name: "HDRImage"
+        writable: false
+        type: "?"
+        description: "HDR Image"
+      - id: "HiddenData"
+        name: "HiddenData"
+        writable: false
+        type: "?"
+        description: "Hidden Data"
+      - id: "JSONInfo"
+        name: "JSONInfo"
+        writable: false
+        type: "?"
+        description: "JSON Info"
   - name: Unknown::Main
     tags:
       - id: "3584"
@@ -29781,6 +31560,74 @@ tables:
         writable: false
         type: "?"
         description: "Print Image Matching"
+  - name: WPG::Main
+    tags:
+      - id: "ImageHeightInches"
+        name: "ImageHeightInches"
+        writable: false
+        type: "?"
+        description: "Image Height Inches"
+      - id: "ImageWidthInches"
+        name: "ImageWidthInches"
+        writable: false
+        type: "?"
+        description: "Image Width Inches"
+      - id: "Records"
+        name: "Records"
+        writable: false
+        type: "?"
+        description: "Records"
+      - id: "RecordsV2"
+        name: "RecordsV2"
+        writable: false
+        type: "?"
+        description: "Records V2"
+      - id: "WPGVersion"
+        name: "WPGVersion"
+        writable: false
+        type: "?"
+        description: "WPG Version"
+  - name: XMP::Album
+    tags:
+      - id: "Notes"
+        name: "Notes"
+        writable: true
+        type: "?"
+        description: "Notes"
+  - name: XMP::ExifTool
+    tags:
+      - id: "OriginalImageHash"
+        name: "OriginalImageHash"
+        writable: true
+        type: "?"
+        description: "Original Image Hash"
+      - id: "OriginalImageHashType"
+        name: "OriginalImageHashType"
+        writable: true
+        type: "?"
+        description: "Original Image Hash Type"
+      - id: "OriginalImageMD5"
+        name: "OriginalImageMD5"
+        writable: true
+        type: "?"
+        description: "Original Image MD5"
+  - name: XMP::Lightroom
+    tags:
+      - id: "hierarchicalSubject"
+        name: "HierarchicalSubject"
+        writable: true
+        type: "?"
+        description: "Hierarchical Subject"
+      - id: "privateRTKInfo"
+        name: "PrivateRTKInfo"
+        writable: true
+        type: "?"
+        description: "Private RTK Info"
+      - id: "weightedFlatSubject"
+        name: "WeightedFlatSubject"
+        writable: true
+        type: "?"
+        description: "Weighted Flat Subject"
   - name: XMP::Main
     tags:
       - id: "DICOM"
@@ -29858,6 +31705,11 @@ tables:
         writable: false
         type: "?"
         description: "MP1"
+      - id: "PixelLive"
+        name: "PixelLive"
+        writable: false
+        type: "?"
+        description: "Pixel Live"
       - id: "aas"
         name: "aas"
         writable: false
@@ -30175,13 +32027,245 @@ tables:
         description: "Xmp T Pg"
   - name: XMP::XML
     tags:
+      - id: "lastUpdate"
+        name: "LastUpdate"
+        writable: false
+        type: "?"
+        description: "Last Update"
       - id: "dc"
         name: "dc"
         writable: false
         type: "?"
         description: "Dc"
+  - name: XMP::aux
+    tags:
+      - id: "ApproximateFocusDistance"
+        name: "ApproximateFocusDistance"
+        writable: true
+        type: "rational"
+        description: "Approximate Focus Distance"
+      - id: "DistortionCorrectionAlreadyApplied"
+        name: "DistortionCorrectionAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Distortion Correction Already Applied"
+      - id: "EnhanceDenoiseAlreadyApplied"
+        name: "EnhanceDenoiseAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Enhance Denoise Already Applied"
+      - id: "EnhanceDenoiseLumaAmount"
+        name: "EnhanceDenoiseLumaAmount"
+        writable: true
+        type: "?"
+        description: "Enhance Denoise Luma Amount"
+      - id: "EnhanceDenoiseVersion"
+        name: "EnhanceDenoiseVersion"
+        writable: true
+        type: "?"
+        description: "Enhance Denoise Version"
+      - id: "EnhanceDetailsAlreadyApplied"
+        name: "EnhanceDetailsAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Enhance Details Already Applied"
+      - id: "EnhanceDetailsVersion"
+        name: "EnhanceDetailsVersion"
+        writable: true
+        type: "?"
+        description: "Enhance Details Version"
+      - id: "EnhanceSuperResolutionAlreadyApplied"
+        name: "EnhanceSuperResolutionAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Enhance Super Resolution Already Applied"
+      - id: "EnhanceSuperResolutionScale"
+        name: "EnhanceSuperResolutionScale"
+        writable: true
+        type: "rational"
+        description: "Enhance Super Resolution Scale"
+      - id: "EnhanceSuperResolutionVersion"
+        name: "EnhanceSuperResolutionVersion"
+        writable: true
+        type: "?"
+        description: "Enhance Super Resolution Version"
+      - id: "Firmware"
+        name: "Firmware"
+        writable: true
+        type: "?"
+        description: "Firmware"
+      - id: "FlashCompensation"
+        name: "FlashCompensation"
+        writable: true
+        type: "rational"
+        description: "Flash Compensation"
+      - id: "FujiRatingAlreadyApplied"
+        name: "FujiRatingAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Fuji Rating Already Applied"
+      - id: "ImageNumber"
+        name: "ImageNumber"
+        writable: true
+        type: "?"
+        description: "Image Number"
+      - id: "IsMergedHDR"
+        name: "IsMergedHDR"
+        writable: true
+        type: "boolean"
+        description: "Is Merged HDR"
+      - id: "IsMergedPanorama"
+        name: "IsMergedPanorama"
+        writable: true
+        type: "boolean"
+        description: "Is Merged Panorama"
+      - id: "LateralChromaticAberrationCorrectionAlreadyApplied"
+        name: "LateralChromaticAberrationCorrectionAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Lateral Chromatic Aberration Correction Already Applied"
+      - id: "Lens"
+        name: "Lens"
+        writable: true
+        type: "?"
+        description: "Lens"
+      - id: "LensDistortInfo"
+        name: "LensDistortInfo"
+        writable: true
+        type: "?"
+        description: "Lens Distort Info"
+      - id: "LensID"
+        name: "LensID"
+        writable: true
+        type: "?"
+        description: "Lens ID"
+      - id: "LensInfo"
+        name: "LensInfo"
+        writable: true
+        type: "?"
+        description: "Lens Info"
+      - id: "LensSerialNumber"
+        name: "LensSerialNumber"
+        writable: true
+        type: "?"
+        description: "Lens Serial Number"
+      - id: "NeutralDensityFactor"
+        name: "NeutralDensityFactor"
+        writable: true
+        type: "?"
+        description: "Neutral Density Factor"
+      - id: "OwnerName"
+        name: "OwnerName"
+        writable: true
+        type: "?"
+        description: "Owner Name"
+      - id: "SerialNumber"
+        name: "SerialNumber"
+        writable: true
+        type: "?"
+        description: "Serial Number"
+      - id: "VignetteCorrectionAlreadyApplied"
+        name: "VignetteCorrectionAlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Vignette Correction Already Applied"
   - name: XMP::crs
     tags:
+      - id: "AlreadyApplied"
+        name: "AlreadyApplied"
+        writable: true
+        type: "boolean"
+        description: "Already Applied"
+      - id: "AutoBrightness"
+        name: "AutoBrightness"
+        writable: true
+        type: "boolean"
+        description: "Auto Brightness"
+      - id: "AutoContrast"
+        name: "AutoContrast"
+        writable: true
+        type: "boolean"
+        description: "Auto Contrast"
+      - id: "AutoExposure"
+        name: "AutoExposure"
+        writable: true
+        type: "boolean"
+        description: "Auto Exposure"
+      - id: "AutoLateralCA"
+        name: "AutoLateralCA"
+        writable: true
+        type: "integer"
+        description: "Auto Lateral CA"
+      - id: "AutoShadows"
+        name: "AutoShadows"
+        writable: true
+        type: "boolean"
+        description: "Auto Shadows"
+      - id: "AutoTone"
+        name: "AutoTone"
+        writable: true
+        type: "boolean"
+        description: "Auto Tone"
+      - id: "AutoToneDigest"
+        name: "AutoToneDigest"
+        writable: true
+        type: "?"
+        description: "Auto Tone Digest"
+      - id: "AutoToneDigestNoSat"
+        name: "AutoToneDigestNoSat"
+        writable: true
+        type: "?"
+        description: "Auto Tone Digest No Sat"
+      - id: "AutoWhiteVersion"
+        name: "AutoWhiteVersion"
+        writable: true
+        type: "integer"
+        description: "Auto White Version"
+      - id: "Blacks2012"
+        name: "Blacks2012"
+        writable: true
+        type: "integer"
+        description: "Blacks 2012"
+      - id: "BlueHue"
+        name: "BlueHue"
+        writable: true
+        type: "integer"
+        description: "Blue Hue"
+      - id: "BlueSaturation"
+        name: "BlueSaturation"
+        writable: true
+        type: "integer"
+        description: "Blue Saturation"
+      - id: "Brightness"
+        name: "Brightness"
+        writable: true
+        type: "integer"
+        description: "Brightness"
+      - id: "CameraModelRestriction"
+        name: "CameraModelRestriction"
+        writable: true
+        type: "?"
+        description: "Camera Model Restriction"
+      - id: "CameraProfile"
+        name: "CameraProfile"
+        writable: true
+        type: "?"
+        description: "Camera Profile"
+      - id: "CameraProfileDigest"
+        name: "CameraProfileDigest"
+        writable: true
+        type: "?"
+        description: "Camera Profile Digest"
+      - id: "ChromaticAberrationB"
+        name: "ChromaticAberrationB"
+        writable: true
+        type: "integer"
+        description: "Chromatic Aberration B"
+      - id: "ChromaticAberrationR"
+        name: "ChromaticAberrationR"
+        writable: true
+        type: "integer"
+        description: "Chromatic Aberration R"
       - id: "CircularGradientBasedCorrectionsCorrectionMasksDabs"
         name: "CircGradBasedCorrMaskDabs"
         writable: true
@@ -30192,11 +32276,291 @@ tables:
         writable: true
         type: "?"
         description: "Circ Grad Based Corr Masks"
+      - id: "CircularGradientBasedCorrections"
+        name: "CircularGradientBasedCorrections"
+        writable: true
+        type: "?"
+        description: "Circular Gradient Based Corrections"
+      - id: "Clarity"
+        name: "Clarity"
+        writable: true
+        type: "integer"
+        description: "Clarity"
+      - id: "Clarity2012"
+        name: "Clarity2012"
+        writable: true
+        type: "integer"
+        description: "Clarity 2012"
+      - id: "ClipboardAspectRatio"
+        name: "ClipboardAspectRatio"
+        writable: true
+        type: "integer"
+        description: "Clipboard Aspect Ratio"
+      - id: "ClipboardOrientation"
+        name: "ClipboardOrientation"
+        writable: true
+        type: "integer"
+        description: "Clipboard Orientation"
+      - id: "Cluster"
+        name: "Cluster"
+        writable: true
+        type: "?"
+        description: "Cluster"
+      - id: "ColorGradeBlending"
+        name: "ColorGradeBlending"
+        writable: true
+        type: "integer"
+        description: "Color Grade Blending"
+      - id: "ColorGradeGlobalHue"
+        name: "ColorGradeGlobalHue"
+        writable: true
+        type: "integer"
+        description: "Color Grade Global Hue"
+      - id: "ColorGradeGlobalLum"
+        name: "ColorGradeGlobalLum"
+        writable: true
+        type: "integer"
+        description: "Color Grade Global Lum"
+      - id: "ColorGradeGlobalSat"
+        name: "ColorGradeGlobalSat"
+        writable: true
+        type: "integer"
+        description: "Color Grade Global Sat"
+      - id: "ColorGradeHighlightLum"
+        name: "ColorGradeHighlightLum"
+        writable: true
+        type: "integer"
+        description: "Color Grade Highlight Lum"
+      - id: "ColorGradeMidtoneHue"
+        name: "ColorGradeMidtoneHue"
+        writable: true
+        type: "integer"
+        description: "Color Grade Midtone Hue"
+      - id: "ColorGradeMidtoneLum"
+        name: "ColorGradeMidtoneLum"
+        writable: true
+        type: "integer"
+        description: "Color Grade Midtone Lum"
+      - id: "ColorGradeMidtoneSat"
+        name: "ColorGradeMidtoneSat"
+        writable: true
+        type: "integer"
+        description: "Color Grade Midtone Sat"
+      - id: "ColorGradeShadowLum"
+        name: "ColorGradeShadowLum"
+        writable: true
+        type: "integer"
+        description: "Color Grade Shadow Lum"
+      - id: "ColorNoiseReduction"
+        name: "ColorNoiseReduction"
+        writable: true
+        type: "integer"
+        description: "Color Noise Reduction"
+      - id: "ColorNoiseReductionDetail"
+        name: "ColorNoiseReductionDetail"
+        writable: true
+        type: "integer"
+        description: "Color Noise Reduction Detail"
+      - id: "ColorNoiseReductionSmoothness"
+        name: "ColorNoiseReductionSmoothness"
+        writable: true
+        type: "integer"
+        description: "Color Noise Reduction Smoothness"
       - id: "Temperature"
         name: "ColorTemperature"
         writable: true
         type: "integer"
         description: "Color Temperature"
+      - id: "ColorVariance"
+        name: "ColorVariance"
+        writable: true
+        type: "real"
+        description: "Color Variance"
+      - id: "CompatibleVersion"
+        name: "CompatibleVersion"
+        writable: true
+        type: "?"
+        description: "Compatible Version"
+      - id: "ContactInfo"
+        name: "ContactInfo"
+        writable: true
+        type: "?"
+        description: "Contact Info"
+      - id: "Contrast"
+        name: "Contrast"
+        writable: true
+        type: "integer"
+        description: "Contrast"
+      - id: "Contrast2012"
+        name: "Contrast2012"
+        writable: true
+        type: "integer"
+        description: "Contrast 2012"
+      - id: "ConvertToGrayscale"
+        name: "ConvertToGrayscale"
+        writable: true
+        type: "boolean"
+        description: "Convert To Grayscale"
+      - id: "Converter"
+        name: "Converter"
+        writable: true
+        type: "?"
+        description: "Converter"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: true
+        type: "?"
+        description: "Copyright"
+      - id: "CropAngle"
+        name: "CropAngle"
+        writable: true
+        type: "real"
+        description: "Crop Angle"
+      - id: "CropBottom"
+        name: "CropBottom"
+        writable: true
+        type: "real"
+        description: "Crop Bottom"
+      - id: "CropConstrainToUnitSquare"
+        name: "CropConstrainToUnitSquare"
+        writable: true
+        type: "integer"
+        description: "Crop Constrain To Unit Square"
+      - id: "CropConstrainToWarp"
+        name: "CropConstrainToWarp"
+        writable: true
+        type: "integer"
+        description: "Crop Constrain To Warp"
+      - id: "CropHeight"
+        name: "CropHeight"
+        writable: true
+        type: "real"
+        description: "Crop Height"
+      - id: "CropLeft"
+        name: "CropLeft"
+        writable: true
+        type: "real"
+        description: "Crop Left"
+      - id: "CropRight"
+        name: "CropRight"
+        writable: true
+        type: "real"
+        description: "Crop Right"
+      - id: "CropTop"
+        name: "CropTop"
+        writable: true
+        type: "real"
+        description: "Crop Top"
+      - id: "CropUnit"
+        name: "CropUnit"
+        writable: true
+        type: "integer"
+        description: "Crop Unit"
+      - id: "CropUnits"
+        name: "CropUnits"
+        writable: true
+        type: "integer"
+        description: "Crop Units"
+      - id: "CropWidth"
+        name: "CropWidth"
+        writable: true
+        type: "real"
+        description: "Crop Width"
+      - id: "DNGIgnoreSidecars"
+        name: "DNGIgnoreSidecars"
+        writable: true
+        type: "boolean"
+        description: "DNG Ignore Sidecars"
+      - id: "DefaultAutoGray"
+        name: "DefaultAutoGray"
+        writable: true
+        type: "boolean"
+        description: "Default Auto Gray"
+      - id: "DefaultAutoTone"
+        name: "DefaultAutoTone"
+        writable: true
+        type: "boolean"
+        description: "Default Auto Tone"
+      - id: "DefaultsSpecificToISO"
+        name: "DefaultsSpecificToISO"
+        writable: true
+        type: "boolean"
+        description: "Defaults Specific To ISO"
+      - id: "DefaultsSpecificToSerial"
+        name: "DefaultsSpecificToSerial"
+        writable: true
+        type: "boolean"
+        description: "Defaults Specific To Serial"
+      - id: "Defringe"
+        name: "Defringe"
+        writable: true
+        type: "integer"
+        description: "Defringe"
+      - id: "DefringeGreenAmount"
+        name: "DefringeGreenAmount"
+        writable: true
+        type: "integer"
+        description: "Defringe Green Amount"
+      - id: "DefringeGreenHueHi"
+        name: "DefringeGreenHueHi"
+        writable: true
+        type: "integer"
+        description: "Defringe Green Hue Hi"
+      - id: "DefringeGreenHueLo"
+        name: "DefringeGreenHueLo"
+        writable: true
+        type: "integer"
+        description: "Defringe Green Hue Lo"
+      - id: "DefringePurpleAmount"
+        name: "DefringePurpleAmount"
+        writable: true
+        type: "integer"
+        description: "Defringe Purple Amount"
+      - id: "DefringePurpleHueHi"
+        name: "DefringePurpleHueHi"
+        writable: true
+        type: "integer"
+        description: "Defringe Purple Hue Hi"
+      - id: "DefringePurpleHueLo"
+        name: "DefringePurpleHueLo"
+        writable: true
+        type: "integer"
+        description: "Defringe Purple Hue Lo"
+      - id: "Dehaze"
+        name: "Dehaze"
+        writable: true
+        type: "real"
+        description: "Dehaze"
+      - id: "DepthBasedCorrections"
+        name: "DepthBasedCorrections"
+        writable: true
+        type: "?"
+        description: "Depth Based Corrections"
+      - id: "DepthMapInfo"
+        name: "DepthMapInfo"
+        writable: true
+        type: "?"
+        description: "Depth Map Info"
+      - id: "Description"
+        name: "Description"
+        writable: true
+        type: "lang-alt"
+        description: "Description"
+      - id: "Exposure"
+        name: "Exposure"
+        writable: true
+        type: "real"
+        description: "Exposure"
+      - id: "Exposure2012"
+        name: "Exposure2012"
+        writable: true
+        type: "real"
+        description: "Exposure 2012"
+      - id: "FillLight"
+        name: "FillLight"
+        writable: true
+        type: "integer"
+        description: "Fill Light"
       - id: "GradientBasedCorrectionsCorrectionMasksDabs"
         name: "GradientBasedCorrMaskDabs"
         writable: true
@@ -30207,21 +32571,531 @@ tables:
         writable: true
         type: "?"
         description: "Gradient Based Corr Masks"
+      - id: "GradientBasedCorrections"
+        name: "GradientBasedCorrections"
+        writable: true
+        type: "?"
+        description: "Gradient Based Corrections"
+      - id: "GrainAmount"
+        name: "GrainAmount"
+        writable: true
+        type: "integer"
+        description: "Grain Amount"
+      - id: "GrainFrequency"
+        name: "GrainFrequency"
+        writable: true
+        type: "integer"
+        description: "Grain Frequency"
+      - id: "GrainSeed"
+        name: "GrainSeed"
+        writable: true
+        type: "integer"
+        description: "Grain Seed"
+      - id: "GrainSize"
+        name: "GrainSize"
+        writable: true
+        type: "integer"
+        description: "Grain Size"
+      - id: "GrayMixerAqua"
+        name: "GrayMixerAqua"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Aqua"
+      - id: "GrayMixerBlue"
+        name: "GrayMixerBlue"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Blue"
+      - id: "GrayMixerGreen"
+        name: "GrayMixerGreen"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Green"
+      - id: "GrayMixerMagenta"
+        name: "GrayMixerMagenta"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Magenta"
+      - id: "GrayMixerOrange"
+        name: "GrayMixerOrange"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Orange"
+      - id: "GrayMixerPurple"
+        name: "GrayMixerPurple"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Purple"
+      - id: "GrayMixerRed"
+        name: "GrayMixerRed"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Red"
+      - id: "GrayMixerYellow"
+        name: "GrayMixerYellow"
+        writable: true
+        type: "integer"
+        description: "Gray Mixer Yellow"
+      - id: "GreenHue"
+        name: "GreenHue"
+        writable: true
+        type: "integer"
+        description: "Green Hue"
+      - id: "GreenSaturation"
+        name: "GreenSaturation"
+        writable: true
+        type: "integer"
+        description: "Green Saturation"
+      - id: "Group"
+        name: "Group"
+        writable: true
+        type: "lang-alt"
+        description: "Group"
+      - id: "HDREditMode"
+        name: "HDREditMode"
+        writable: true
+        type: "integer"
+        description: "HDR Edit Mode"
+      - id: "HDRMaxValue"
+        name: "HDRMaxValue"
+        writable: true
+        type: "real"
+        description: "HDR Max Value"
+      - id: "HasCrop"
+        name: "HasCrop"
+        writable: true
+        type: "boolean"
+        description: "Has Crop"
+      - id: "HasSettings"
+        name: "HasSettings"
+        writable: true
+        type: "boolean"
+        description: "Has Settings"
+      - id: "Highlight2012"
+        name: "Highlight2012"
+        writable: true
+        type: "integer"
+        description: "Highlight 2012"
+      - id: "HighlightRecovery"
+        name: "HighlightRecovery"
+        writable: true
+        type: "integer"
+        description: "Highlight Recovery"
+      - id: "Highlights2012"
+        name: "Highlights2012"
+        writable: true
+        type: "integer"
+        description: "Highlights 2012"
+      - id: "HueAdjustmentAqua"
+        name: "HueAdjustmentAqua"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Aqua"
+      - id: "HueAdjustmentBlue"
+        name: "HueAdjustmentBlue"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Blue"
+      - id: "HueAdjustmentGreen"
+        name: "HueAdjustmentGreen"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Green"
+      - id: "HueAdjustmentMagenta"
+        name: "HueAdjustmentMagenta"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Magenta"
+      - id: "HueAdjustmentOrange"
+        name: "HueAdjustmentOrange"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Orange"
+      - id: "HueAdjustmentPurple"
+        name: "HueAdjustmentPurple"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Purple"
+      - id: "HueAdjustmentRed"
+        name: "HueAdjustmentRed"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Red"
+      - id: "HueAdjustmentYellow"
+        name: "HueAdjustmentYellow"
+        writable: true
+        type: "integer"
+        description: "Hue Adjustment Yellow"
+      - id: "IncrementalTemperature"
+        name: "IncrementalTemperature"
+        writable: true
+        type: "integer"
+        description: "Incremental Temperature"
+      - id: "IncrementalTint"
+        name: "IncrementalTint"
+        writable: true
+        type: "integer"
+        description: "Incremental Tint"
+      - id: "JPEGHandling"
+        name: "JPEGHandling"
+        writable: true
+        type: "?"
+        description: "JPEG Handling"
+      - id: "LensBlur"
+        name: "LensBlur"
+        writable: true
+        type: "?"
+        description: "Lens Blur"
+      - id: "LensManualDistortionAmount"
+        name: "LensManualDistortionAmount"
+        writable: true
+        type: "integer"
+        description: "Lens Manual Distortion Amount"
+      - id: "LensProfileChromaticAberrationScale"
+        name: "LensProfileChromaticAberrationScale"
+        writable: true
+        type: "integer"
+        description: "Lens Profile Chromatic Aberration Scale"
+      - id: "LensProfileDigest"
+        name: "LensProfileDigest"
+        writable: true
+        type: "?"
+        description: "Lens Profile Digest"
+      - id: "LensProfileDistortionScale"
+        name: "LensProfileDistortionScale"
+        writable: true
+        type: "integer"
+        description: "Lens Profile Distortion Scale"
+      - id: "LensProfileEnable"
+        name: "LensProfileEnable"
+        writable: true
+        type: "integer"
+        description: "Lens Profile Enable"
+      - id: "LensProfileFilename"
+        name: "LensProfileFilename"
+        writable: true
+        type: "?"
+        description: "Lens Profile Filename"
+      - id: "LensProfileIsEmbedded"
+        name: "LensProfileIsEmbedded"
+        writable: true
+        type: "boolean"
+        description: "Lens Profile Is Embedded"
+      - id: "LensProfileMatchKeyCameraModelName"
+        name: "LensProfileMatchKeyCameraModelName"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Camera Model Name"
+      - id: "LensProfileMatchKeyExifMake"
+        name: "LensProfileMatchKeyExifMake"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Exif Make"
+      - id: "LensProfileMatchKeyExifModel"
+        name: "LensProfileMatchKeyExifModel"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Exif Model"
+      - id: "LensProfileMatchKeyIsRaw"
+        name: "LensProfileMatchKeyIsRaw"
+        writable: true
+        type: "boolean"
+        description: "Lens Profile Match Key Is Raw"
+      - id: "LensProfileMatchKeyLensID"
+        name: "LensProfileMatchKeyLensID"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Lens ID"
+      - id: "LensProfileMatchKeyLensInfo"
+        name: "LensProfileMatchKeyLensInfo"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Lens Info"
+      - id: "LensProfileMatchKeyLensName"
+        name: "LensProfileMatchKeyLensName"
+        writable: true
+        type: "?"
+        description: "Lens Profile Match Key Lens Name"
+      - id: "LensProfileMatchKeySensorFormatFactor"
+        name: "LensProfileMatchKeySensorFormatFactor"
+        writable: true
+        type: "real"
+        description: "Lens Profile Match Key Sensor Format Factor"
+      - id: "LensProfileName"
+        name: "LensProfileName"
+        writable: true
+        type: "?"
+        description: "Lens Profile Name"
+      - id: "LensProfileSetup"
+        name: "LensProfileSetup"
+        writable: true
+        type: "?"
+        description: "Lens Profile Setup"
+      - id: "LensProfileVignettingScale"
+        name: "LensProfileVignettingScale"
+        writable: true
+        type: "integer"
+        description: "Lens Profile Vignetting Scale"
+      - id: "Look"
+        name: "Look"
+        writable: true
+        type: "?"
+        description: "Look"
+      - id: "LookName"
+        name: "LookName"
+        writable: true
+        type: "?"
+        description: "Look Name"
+      - id: "LuminanceAdjustmentAqua"
+        name: "LuminanceAdjustmentAqua"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Aqua"
+      - id: "LuminanceAdjustmentBlue"
+        name: "LuminanceAdjustmentBlue"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Blue"
+      - id: "LuminanceAdjustmentGreen"
+        name: "LuminanceAdjustmentGreen"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Green"
+      - id: "LuminanceAdjustmentMagenta"
+        name: "LuminanceAdjustmentMagenta"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Magenta"
+      - id: "LuminanceAdjustmentOrange"
+        name: "LuminanceAdjustmentOrange"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Orange"
+      - id: "LuminanceAdjustmentPurple"
+        name: "LuminanceAdjustmentPurple"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Purple"
+      - id: "LuminanceAdjustmentRed"
+        name: "LuminanceAdjustmentRed"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Red"
+      - id: "LuminanceAdjustmentYellow"
+        name: "LuminanceAdjustmentYellow"
+        writable: true
+        type: "integer"
+        description: "Luminance Adjustment Yellow"
+      - id: "LuminanceNoiseReductionContrast"
+        name: "LuminanceNoiseReductionContrast"
+        writable: true
+        type: "integer"
+        description: "Luminance Noise Reduction Contrast"
+      - id: "LuminanceNoiseReductionDetail"
+        name: "LuminanceNoiseReductionDetail"
+        writable: true
+        type: "integer"
+        description: "Luminance Noise Reduction Detail"
+      - id: "LuminanceSmoothing"
+        name: "LuminanceSmoothing"
+        writable: true
+        type: "integer"
+        description: "Luminance Smoothing"
+      - id: "MaskGroupBasedCorrections"
+        name: "MaskGroupBasedCorrections"
+        writable: true
+        type: "?"
+        description: "Mask Group Based Corrections"
+      - id: "MoireFilter"
+        name: "MoireFilter"
+        writable: true
+        type: "?"
+        description: "Moire Filter"
+      - id: "Name"
+        name: "Name"
+        writable: true
+        type: "lang-alt"
+        description: "Name"
+      - id: "NegativeCacheLargePreviewSize"
+        name: "NegativeCacheLargePreviewSize"
+        writable: true
+        type: "integer"
+        description: "Negative Cache Large Preview Size"
+      - id: "NegativeCacheMaximumSize"
+        name: "NegativeCacheMaximumSize"
+        writable: true
+        type: "real"
+        description: "Negative Cache Maximum Size"
+      - id: "NegativeCachePath"
+        name: "NegativeCachePath"
+        writable: true
+        type: "?"
+        description: "Negative Cache Path"
+      - id: "OverrideLookVignette"
+        name: "OverrideLookVignette"
+        writable: true
+        type: "boolean"
+        description: "Override Look Vignette"
       - id: "PaintBasedCorrectionsCorrectionMasks"
         name: "PaintBasedCorrectionMasks"
         writable: true
         type: "?"
         description: "Paint Based Correction Masks"
+      - id: "PaintBasedCorrections"
+        name: "PaintBasedCorrections"
+        writable: true
+        type: "?"
+        description: "Paint Based Corrections"
       - id: "PaintBasedCorrectionsCorrectionMasksDabs"
         name: "PaintCorrectionMaskDabs"
         writable: true
         type: "?"
         description: "Paint Correction Mask Dabs"
+      - id: "ParametricDarks"
+        name: "ParametricDarks"
+        writable: true
+        type: "integer"
+        description: "Parametric Darks"
+      - id: "ParametricHighlightSplit"
+        name: "ParametricHighlightSplit"
+        writable: true
+        type: "integer"
+        description: "Parametric Highlight Split"
+      - id: "ParametricHighlights"
+        name: "ParametricHighlights"
+        writable: true
+        type: "integer"
+        description: "Parametric Highlights"
+      - id: "ParametricLights"
+        name: "ParametricLights"
+        writable: true
+        type: "integer"
+        description: "Parametric Lights"
+      - id: "ParametricMidtoneSplit"
+        name: "ParametricMidtoneSplit"
+        writable: true
+        type: "integer"
+        description: "Parametric Midtone Split"
+      - id: "ParametricShadowSplit"
+        name: "ParametricShadowSplit"
+        writable: true
+        type: "integer"
+        description: "Parametric Shadow Split"
+      - id: "ParametricShadows"
+        name: "ParametricShadows"
+        writable: true
+        type: "integer"
+        description: "Parametric Shadows"
+      - id: "PerspectiveAspect"
+        name: "PerspectiveAspect"
+        writable: true
+        type: "integer"
+        description: "Perspective Aspect"
+      - id: "PerspectiveHorizontal"
+        name: "PerspectiveHorizontal"
+        writable: true
+        type: "integer"
+        description: "Perspective Horizontal"
+      - id: "PerspectiveRotate"
+        name: "PerspectiveRotate"
+        writable: true
+        type: "real"
+        description: "Perspective Rotate"
+      - id: "PerspectiveScale"
+        name: "PerspectiveScale"
+        writable: true
+        type: "integer"
+        description: "Perspective Scale"
+      - id: "PerspectiveUpright"
+        name: "PerspectiveUpright"
+        writable: true
+        type: "integer"
+        description: "Perspective Upright"
+      - id: "PerspectiveVertical"
+        name: "PerspectiveVertical"
+        writable: true
+        type: "integer"
+        description: "Perspective Vertical"
+      - id: "PerspectiveX"
+        name: "PerspectiveX"
+        writable: true
+        type: "real"
+        description: "Perspective X"
+      - id: "PerspectiveY"
+        name: "PerspectiveY"
+        writable: true
+        type: "real"
+        description: "Perspective Y"
+      - id: "PointColors"
+        name: "PointColors"
+        writable: true
+        type: "?"
+        description: "Point Colors"
+      - id: "PostCropVignetteAmount"
+        name: "PostCropVignetteAmount"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Amount"
+      - id: "PostCropVignetteFeather"
+        name: "PostCropVignetteFeather"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Feather"
+      - id: "PostCropVignetteHighlightContrast"
+        name: "PostCropVignetteHighlightContrast"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Highlight Contrast"
+      - id: "PostCropVignetteMidpoint"
+        name: "PostCropVignetteMidpoint"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Midpoint"
+      - id: "PostCropVignetteRoundness"
+        name: "PostCropVignetteRoundness"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Roundness"
+      - id: "PostCropVignetteStyle"
+        name: "PostCropVignetteStyle"
+        writable: true
+        type: "integer"
+        description: "Post Crop Vignette Style"
+      - id: "PresetType"
+        name: "PresetType"
+        writable: true
+        type: "?"
+        description: "Preset Type"
+      - id: "ProcessVersion"
+        name: "ProcessVersion"
+        writable: true
+        type: "?"
+        description: "Process Version"
       - id: "RangeMaskMapInfo"
         name: "RangeMask"
         writable: true
         type: "?"
         description: "Range Mask"
+      - id: "RawFileName"
+        name: "RawFileName"
+        writable: true
+        type: "?"
+        description: "Raw File Name"
+      - id: "RedEyeInfo"
+        name: "RedEyeInfo"
+        writable: true
+        type: "?"
+        description: "Red Eye Info"
+      - id: "RedHue"
+        name: "RedHue"
+        writable: true
+        type: "integer"
+        description: "Red Hue"
+      - id: "RedSaturation"
+        name: "RedSaturation"
+        writable: true
+        type: "integer"
+        description: "Red Saturation"
       - id: "RetouchAreasMasksDabs"
         name: "RetouchAreaMaskDabs"
         writable: true
@@ -30232,8 +33106,565 @@ tables:
         writable: true
         type: "?"
         description: "Retouch Area Masks"
+      - id: "RetouchAreas"
+        name: "RetouchAreas"
+        writable: true
+        type: "?"
+        description: "Retouch Areas"
+      - id: "RetouchInfo"
+        name: "RetouchInfo"
+        writable: true
+        type: "?"
+        description: "Retouch Info"
+      - id: "SDRBlend"
+        name: "SDRBlend"
+        writable: true
+        type: "real"
+        description: "SDR Blend"
+      - id: "SDRBrightness"
+        name: "SDRBrightness"
+        writable: true
+        type: "real"
+        description: "SDR Brightness"
+      - id: "SDRContrast"
+        name: "SDRContrast"
+        writable: true
+        type: "real"
+        description: "SDR Contrast"
+      - id: "SDRHighlights"
+        name: "SDRHighlights"
+        writable: true
+        type: "real"
+        description: "SDR Highlights"
+      - id: "SDRShadows"
+        name: "SDRShadows"
+        writable: true
+        type: "real"
+        description: "SDR Shadows"
+      - id: "SDRWhites"
+        name: "SDRWhites"
+        writable: true
+        type: "real"
+        description: "SDR Whites"
+      - id: "Saturation"
+        name: "Saturation"
+        writable: true
+        type: "integer"
+        description: "Saturation"
+      - id: "SaturationAdjustmentAqua"
+        name: "SaturationAdjustmentAqua"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Aqua"
+      - id: "SaturationAdjustmentBlue"
+        name: "SaturationAdjustmentBlue"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Blue"
+      - id: "SaturationAdjustmentGreen"
+        name: "SaturationAdjustmentGreen"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Green"
+      - id: "SaturationAdjustmentMagenta"
+        name: "SaturationAdjustmentMagenta"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Magenta"
+      - id: "SaturationAdjustmentOrange"
+        name: "SaturationAdjustmentOrange"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Orange"
+      - id: "SaturationAdjustmentPurple"
+        name: "SaturationAdjustmentPurple"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Purple"
+      - id: "SaturationAdjustmentRed"
+        name: "SaturationAdjustmentRed"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Red"
+      - id: "SaturationAdjustmentYellow"
+        name: "SaturationAdjustmentYellow"
+        writable: true
+        type: "integer"
+        description: "Saturation Adjustment Yellow"
+      - id: "ShadowTint"
+        name: "ShadowTint"
+        writable: true
+        type: "integer"
+        description: "Shadow Tint"
+      - id: "Shadows"
+        name: "Shadows"
+        writable: true
+        type: "integer"
+        description: "Shadows"
+      - id: "Shadows2012"
+        name: "Shadows2012"
+        writable: true
+        type: "integer"
+        description: "Shadows 2012"
+      - id: "SharpenDetail"
+        name: "SharpenDetail"
+        writable: true
+        type: "integer"
+        description: "Sharpen Detail"
+      - id: "SharpenEdgeMasking"
+        name: "SharpenEdgeMasking"
+        writable: true
+        type: "integer"
+        description: "Sharpen Edge Masking"
+      - id: "SharpenRadius"
+        name: "SharpenRadius"
+        writable: true
+        type: "real"
+        description: "Sharpen Radius"
+      - id: "Sharpness"
+        name: "Sharpness"
+        writable: true
+        type: "integer"
+        description: "Sharpness"
+      - id: "ShortName"
+        name: "ShortName"
+        writable: true
+        type: "lang-alt"
+        description: "Short Name"
+      - id: "Smoothness"
+        name: "Smoothness"
+        writable: true
+        type: "integer"
+        description: "Smoothness"
+      - id: "SortName"
+        name: "SortName"
+        writable: true
+        type: "lang-alt"
+        description: "Sort Name"
+      - id: "SplitToningBalance"
+        name: "SplitToningBalance"
+        writable: true
+        type: "integer"
+        description: "Split Toning Balance"
+      - id: "SplitToningHighlightHue"
+        name: "SplitToningHighlightHue"
+        writable: true
+        type: "integer"
+        description: "Split Toning Highlight Hue"
+      - id: "SplitToningHighlightSaturation"
+        name: "SplitToningHighlightSaturation"
+        writable: true
+        type: "integer"
+        description: "Split Toning Highlight Saturation"
+      - id: "SplitToningShadowHue"
+        name: "SplitToningShadowHue"
+        writable: true
+        type: "integer"
+        description: "Split Toning Shadow Hue"
+      - id: "SplitToningShadowSaturation"
+        name: "SplitToningShadowSaturation"
+        writable: true
+        type: "integer"
+        description: "Split Toning Shadow Saturation"
+      - id: "SupportsAmount"
+        name: "SupportsAmount"
+        writable: true
+        type: "boolean"
+        description: "Supports Amount"
+      - id: "SupportsColor"
+        name: "SupportsColor"
+        writable: true
+        type: "boolean"
+        description: "Supports Color"
+      - id: "SupportsHighDynamicRange"
+        name: "SupportsHighDynamicRange"
+        writable: true
+        type: "boolean"
+        description: "Supports High Dynamic Range"
+      - id: "SupportsMonochrome"
+        name: "SupportsMonochrome"
+        writable: true
+        type: "boolean"
+        description: "Supports Monochrome"
+      - id: "SupportsNormalDynamicRange"
+        name: "SupportsNormalDynamicRange"
+        writable: true
+        type: "boolean"
+        description: "Supports Normal Dynamic Range"
+      - id: "SupportsOutputReferred"
+        name: "SupportsOutputReferred"
+        writable: true
+        type: "boolean"
+        description: "Supports Output Referred"
+      - id: "SupportsSceneReferred"
+        name: "SupportsSceneReferred"
+        writable: true
+        type: "boolean"
+        description: "Supports Scene Referred"
+      - id: "TIFFHandling"
+        name: "TIFFHandling"
+        writable: true
+        type: "?"
+        description: "TIFF Handling"
+      - id: "Texture"
+        name: "Texture"
+        writable: true
+        type: "integer"
+        description: "Texture"
+      - id: "Tint"
+        name: "Tint"
+        writable: true
+        type: "integer"
+        description: "Tint"
+      - id: "ToggleStyleAmount"
+        name: "ToggleStyleAmount"
+        writable: true
+        type: "integer"
+        description: "Toggle Style Amount"
+      - id: "ToggleStyleDigest"
+        name: "ToggleStyleDigest"
+        writable: true
+        type: "?"
+        description: "Toggle Style Digest"
+      - id: "ToneCurve"
+        name: "ToneCurve"
+        writable: true
+        type: "?"
+        description: "Tone Curve"
+      - id: "ToneCurveBlue"
+        name: "ToneCurveBlue"
+        writable: true
+        type: "?"
+        description: "Tone Curve Blue"
+      - id: "ToneCurveGreen"
+        name: "ToneCurveGreen"
+        writable: true
+        type: "?"
+        description: "Tone Curve Green"
+      - id: "ToneCurveName"
+        name: "ToneCurveName"
+        writable: true
+        type: "?"
+        description: "Tone Curve Name"
+      - id: "ToneCurveName2012"
+        name: "ToneCurveName2012"
+        writable: true
+        type: "?"
+        description: "Tone Curve Name 2012"
+      - id: "ToneCurvePV2012"
+        name: "ToneCurvePV2012"
+        writable: true
+        type: "?"
+        description: "Tone Curve PV2012"
+      - id: "ToneCurvePV2012Blue"
+        name: "ToneCurvePV2012Blue"
+        writable: true
+        type: "?"
+        description: "Tone Curve PV2012 Blue"
+      - id: "ToneCurvePV2012Green"
+        name: "ToneCurvePV2012Green"
+        writable: true
+        type: "?"
+        description: "Tone Curve PV2012 Green"
+      - id: "ToneCurvePV2012Red"
+        name: "ToneCurvePV2012Red"
+        writable: true
+        type: "?"
+        description: "Tone Curve PV2012 Red"
+      - id: "ToneCurveRed"
+        name: "ToneCurveRed"
+        writable: true
+        type: "?"
+        description: "Tone Curve Red"
+      - id: "ToneMapStrength"
+        name: "ToneMapStrength"
+        writable: true
+        type: "real"
+        description: "Tone Map Strength"
+      - id: "UUID"
+        name: "UUID"
+        writable: true
+        type: "?"
+        description: "UUID"
+      - id: "UprightCenterMode"
+        name: "UprightCenterMode"
+        writable: true
+        type: "integer"
+        description: "Upright Center Mode"
+      - id: "UprightCenterNormX"
+        name: "UprightCenterNormX"
+        writable: true
+        type: "real"
+        description: "Upright Center Norm X"
+      - id: "UprightCenterNormY"
+        name: "UprightCenterNormY"
+        writable: true
+        type: "real"
+        description: "Upright Center Norm Y"
+      - id: "UprightDependentDigest"
+        name: "UprightDependentDigest"
+        writable: true
+        type: "?"
+        description: "Upright Dependent Digest"
+      - id: "UprightFocalLength35mm"
+        name: "UprightFocalLength35mm"
+        writable: true
+        type: "real"
+        description: "Upright Focal Length 35mm"
+      - id: "UprightFocalMode"
+        name: "UprightFocalMode"
+        writable: true
+        type: "integer"
+        description: "Upright Focal Mode"
+      - id: "UprightFourSegmentsCount"
+        name: "UprightFourSegmentsCount"
+        writable: true
+        type: "integer"
+        description: "Upright Four Segments Count"
+      - id: "UprightFourSegments_0"
+        name: "UprightFourSegments_0"
+        writable: true
+        type: "?"
+        description: "Upright Four Segments 0"
+      - id: "UprightFourSegments_1"
+        name: "UprightFourSegments_1"
+        writable: true
+        type: "?"
+        description: "Upright Four Segments 1"
+      - id: "UprightFourSegments_2"
+        name: "UprightFourSegments_2"
+        writable: true
+        type: "?"
+        description: "Upright Four Segments 2"
+      - id: "UprightFourSegments_3"
+        name: "UprightFourSegments_3"
+        writable: true
+        type: "?"
+        description: "Upright Four Segments 3"
+      - id: "UprightGuidedDependentDigest"
+        name: "UprightGuidedDependentDigest"
+        writable: true
+        type: "?"
+        description: "Upright Guided Dependent Digest"
+      - id: "UprightPreview"
+        name: "UprightPreview"
+        writable: true
+        type: "boolean"
+        description: "Upright Preview"
+      - id: "UprightTransformCount"
+        name: "UprightTransformCount"
+        writable: true
+        type: "integer"
+        description: "Upright Transform Count"
+      - id: "UprightTransform_0"
+        name: "UprightTransform_0"
+        writable: true
+        type: "?"
+        description: "Upright Transform 0"
+      - id: "UprightTransform_1"
+        name: "UprightTransform_1"
+        writable: true
+        type: "?"
+        description: "Upright Transform 1"
+      - id: "UprightTransform_2"
+        name: "UprightTransform_2"
+        writable: true
+        type: "?"
+        description: "Upright Transform 2"
+      - id: "UprightTransform_3"
+        name: "UprightTransform_3"
+        writable: true
+        type: "?"
+        description: "Upright Transform 3"
+      - id: "UprightTransform_4"
+        name: "UprightTransform_4"
+        writable: true
+        type: "?"
+        description: "Upright Transform 4"
+      - id: "UprightTransform_5"
+        name: "UprightTransform_5"
+        writable: true
+        type: "?"
+        description: "Upright Transform 5"
+      - id: "UprightVersion"
+        name: "UprightVersion"
+        writable: true
+        type: "integer"
+        description: "Upright Version"
+      - id: "Version"
+        name: "Version"
+        writable: true
+        type: "?"
+        description: "Version"
+      - id: "Vibrance"
+        name: "Vibrance"
+        writable: true
+        type: "integer"
+        description: "Vibrance"
+      - id: "VignetteAmount"
+        name: "VignetteAmount"
+        writable: true
+        type: "integer"
+        description: "Vignette Amount"
+      - id: "VignetteMidpoint"
+        name: "VignetteMidpoint"
+        writable: true
+        type: "integer"
+        description: "Vignette Midpoint"
+      - id: "What"
+        name: "What"
+        writable: true
+        type: "?"
+        description: "What"
+      - id: "WhiteBalance"
+        name: "WhiteBalance"
+        writable: true
+        type: "?"
+        description: "White Balance"
+      - id: "Whites2012"
+        name: "Whites2012"
+        writable: true
+        type: "integer"
+        description: "Whites 2012"
+  - name: XMP::dc
+    tags:
+      - id: "contributor"
+        name: "Contributor"
+        writable: true
+        type: "?"
+        description: "Contributor"
+      - id: "coverage"
+        name: "Coverage"
+        writable: true
+        type: "?"
+        description: "Coverage"
+      - id: "creator"
+        name: "Creator"
+        writable: true
+        type: "?"
+        description: "Creator"
+      - id: "date"
+        name: "Date"
+        writable: true
+        type: "date"
+        description: "Date"
+      - id: "description"
+        name: "Description"
+        writable: true
+        type: "lang-alt"
+        description: "Description"
+      - id: "format"
+        name: "Format"
+        writable: true
+        type: "?"
+        description: "Format"
+      - id: "identifier"
+        name: "Identifier"
+        writable: true
+        type: "?"
+        description: "Identifier"
+      - id: "language"
+        name: "Language"
+        writable: true
+        type: "?"
+        description: "Language"
+      - id: "publisher"
+        name: "Publisher"
+        writable: true
+        type: "?"
+        description: "Publisher"
+      - id: "relation"
+        name: "Relation"
+        writable: true
+        type: "?"
+        description: "Relation"
+      - id: "rights"
+        name: "Rights"
+        writable: true
+        type: "lang-alt"
+        description: "Rights"
+      - id: "source"
+        name: "Source"
+        writable: true
+        type: "?"
+        description: "Source"
+      - id: "subject"
+        name: "Subject"
+        writable: true
+        type: "?"
+        description: "Subject"
+      - id: "title"
+        name: "Title"
+        writable: true
+        type: "lang-alt"
+        description: "Title"
+      - id: "type"
+        name: "Type"
+        writable: true
+        type: "?"
+        description: "Type"
   - name: XMP::exif
     tags:
+      - id: "ApertureValue"
+        name: "ApertureValue"
+        writable: true
+        type: "rational"
+        description: "Aperture Value"
+      - id: "BrightnessValue"
+        name: "BrightnessValue"
+        writable: true
+        type: "rational"
+        description: "Brightness Value"
+      - id: "CFAPattern"
+        name: "CFAPattern"
+        writable: true
+        type: "?"
+        description: "CFA Pattern"
+      - id: "ColorSpace"
+        name: "ColorSpace"
+        writable: true
+        type: "integer"
+        description: "Color Space"
+      - id: "ComponentsConfiguration"
+        name: "ComponentsConfiguration"
+        writable: true
+        type: "integer"
+        description: "Components Configuration"
+      - id: "CompressedBitsPerPixel"
+        name: "CompressedBitsPerPixel"
+        writable: true
+        type: "rational"
+        description: "Compressed Bits Per Pixel"
+      - id: "Contrast"
+        name: "Contrast"
+        writable: true
+        type: "integer"
+        description: "Contrast"
+      - id: "CustomRendered"
+        name: "CustomRendered"
+        writable: true
+        type: "integer"
+        description: "Custom Rendered"
+      - id: "DateTimeDigitized"
+        name: "DateTimeDigitized"
+        writable: true
+        type: "date"
+        description: "Date/Time Digitized"
+      - id: "DateTimeOriginal"
+        name: "DateTimeOriginal"
+        writable: true
+        type: "date"
+        description: "Date/Time Original"
+      - id: "DeviceSettingDescription"
+        name: "DeviceSettingDescription"
+        writable: true
+        type: "?"
+        description: "Device Setting Description"
+      - id: "DigitalZoomRatio"
+        name: "DigitalZoomRatio"
+        writable: true
+        type: "rational"
+        description: "Digital Zoom Ratio"
       - id: "PixelYDimension"
         name: "ExifImageHeight"
         writable: true
@@ -30244,38 +33675,423 @@ tables:
         writable: true
         type: "integer"
         description: "Exif Image Width"
+      - id: "ExifVersion"
+        name: "ExifVersion"
+        writable: true
+        type: "?"
+        description: "Exif Version"
       - id: "ExposureBiasValue"
         name: "ExposureCompensation"
         writable: true
         type: "rational"
         description: "Exposure Compensation"
+      - id: "ExposureIndex"
+        name: "ExposureIndex"
+        writable: true
+        type: "rational"
+        description: "Exposure Index"
+      - id: "ExposureMode"
+        name: "ExposureMode"
+        writable: true
+        type: "integer"
+        description: "Exposure Mode"
+      - id: "ExposureProgram"
+        name: "ExposureProgram"
+        writable: true
+        type: "integer"
+        description: "Exposure Program"
+      - id: "ExposureTime"
+        name: "ExposureTime"
+        writable: true
+        type: "rational"
+        description: "Exposure Time"
+      - id: "FNumber"
+        name: "FNumber"
+        writable: true
+        type: "rational"
+        description: "F Number"
+      - id: "FileSource"
+        name: "FileSource"
+        writable: true
+        type: "integer"
+        description: "File Source"
+      - id: "Flash"
+        name: "Flash"
+        writable: true
+        type: "?"
+        description: "Flash"
+      - id: "FlashEnergy"
+        name: "FlashEnergy"
+        writable: true
+        type: "rational"
+        description: "Flash Energy"
+      - id: "FlashpixVersion"
+        name: "FlashpixVersion"
+        writable: true
+        type: "?"
+        description: "Flashpix Version"
+      - id: "FocalLength"
+        name: "FocalLength"
+        writable: true
+        type: "rational"
+        description: "Focal Length"
       - id: "FocalLengthIn35mmFilm"
         name: "FocalLengthIn35mmFormat"
         writable: true
         type: "integer"
         description: "Focal Length In 35mm Format"
+      - id: "FocalPlaneResolutionUnit"
+        name: "FocalPlaneResolutionUnit"
+        writable: true
+        type: "integer"
+        description: "Focal Plane Resolution Unit"
+      - id: "FocalPlaneXResolution"
+        name: "FocalPlaneXResolution"
+        writable: true
+        type: "rational"
+        description: "Focal Plane X Resolution"
+      - id: "FocalPlaneYResolution"
+        name: "FocalPlaneYResolution"
+        writable: true
+        type: "rational"
+        description: "Focal Plane Y Resolution"
+      - id: "GPSAltitude"
+        name: "GPSAltitude"
+        writable: true
+        type: "rational"
+        description: "GPS Altitude"
+      - id: "GPSAltitudeRef"
+        name: "GPSAltitudeRef"
+        writable: true
+        type: "integer"
+        description: "GPS Altitude Ref"
+      - id: "GPSAreaInformation"
+        name: "GPSAreaInformation"
+        writable: true
+        type: "?"
+        description: "GPS Area Information"
+      - id: "GPSDOP"
+        name: "GPSDOP"
+        writable: true
+        type: "rational"
+        description: "GPSDOP"
       - id: "GPSTimeStamp"
         name: "GPSDateTime"
         writable: true
         type: "date"
         description: "GPS Date/Time"
+      - id: "GPSDestBearing"
+        name: "GPSDestBearing"
+        writable: true
+        type: "rational"
+        description: "GPS Dest Bearing"
+      - id: "GPSDestBearingRef"
+        name: "GPSDestBearingRef"
+        writable: true
+        type: "?"
+        description: "GPS Dest Bearing Ref"
+      - id: "GPSDestDistance"
+        name: "GPSDestDistance"
+        writable: true
+        type: "rational"
+        description: "GPS Dest Distance"
+      - id: "GPSDestDistanceRef"
+        name: "GPSDestDistanceRef"
+        writable: true
+        type: "?"
+        description: "GPS Dest Distance Ref"
+      - id: "GPSDestLatitude"
+        name: "GPSDestLatitude"
+        writable: true
+        type: "?"
+        description: "GPS Dest Latitude"
+      - id: "GPSDestLongitude"
+        name: "GPSDestLongitude"
+        writable: true
+        type: "?"
+        description: "GPS Dest Longitude"
+      - id: "GPSDifferential"
+        name: "GPSDifferential"
+        writable: true
+        type: "integer"
+        description: "GPS Differential"
+      - id: "GPSHPositioningError"
+        name: "GPSHPositioningError"
+        writable: true
+        type: "rational"
+        description: "GPS Horizontal Positioning Error"
+      - id: "GPSImgDirection"
+        name: "GPSImgDirection"
+        writable: true
+        type: "rational"
+        description: "GPS Img Direction"
+      - id: "GPSImgDirectionRef"
+        name: "GPSImgDirectionRef"
+        writable: true
+        type: "?"
+        description: "GPS Img Direction Ref"
+      - id: "GPSLatitude"
+        name: "GPSLatitude"
+        writable: true
+        type: "?"
+        description: "GPS Latitude"
+      - id: "GPSLongitude"
+        name: "GPSLongitude"
+        writable: true
+        type: "?"
+        description: "GPS Longitude"
+      - id: "GPSMapDatum"
+        name: "GPSMapDatum"
+        writable: true
+        type: "?"
+        description: "GPS Map Datum"
+      - id: "GPSMeasureMode"
+        name: "GPSMeasureMode"
+        writable: true
+        type: "integer"
+        description: "GPS Measure Mode"
+      - id: "GPSProcessingMethod"
+        name: "GPSProcessingMethod"
+        writable: true
+        type: "?"
+        description: "GPS Processing Method"
+      - id: "GPSSatellites"
+        name: "GPSSatellites"
+        writable: true
+        type: "?"
+        description: "GPS Satellites"
+      - id: "GPSSpeed"
+        name: "GPSSpeed"
+        writable: true
+        type: "rational"
+        description: "GPS Speed"
+      - id: "GPSSpeedRef"
+        name: "GPSSpeedRef"
+        writable: true
+        type: "?"
+        description: "GPS Speed Ref"
+      - id: "GPSStatus"
+        name: "GPSStatus"
+        writable: true
+        type: "?"
+        description: "GPS Status"
+      - id: "GPSTrack"
+        name: "GPSTrack"
+        writable: true
+        type: "rational"
+        description: "GPS Track"
+      - id: "GPSTrackRef"
+        name: "GPSTrackRef"
+        writable: true
+        type: "?"
+        description: "GPS Track Ref"
+      - id: "GPSVersionID"
+        name: "GPSVersionID"
+        writable: true
+        type: "?"
+        description: "GPS Version ID"
+      - id: "GainControl"
+        name: "GainControl"
+        writable: true
+        type: "integer"
+        description: "Gain Control"
       - id: "ISOSpeedRatings"
         name: "ISO"
         writable: true
         type: "integer"
         description: "ISO"
+      - id: "ImageUniqueID"
+        name: "ImageUniqueID"
+        writable: true
+        type: "?"
+        description: "Image Unique ID"
+      - id: "LightSource"
+        name: "LightSource"
+        writable: true
+        type: "?"
+        description: "Light Source"
+      - id: "MakerNote"
+        name: "MakerNote"
+        writable: true
+        type: "?"
+        description: "Maker Note"
+      - id: "MaxApertureValue"
+        name: "MaxApertureValue"
+        writable: true
+        type: "rational"
+        description: "Max Aperture Value"
+      - id: "MeteringMode"
+        name: "MeteringMode"
+        writable: true
+        type: "integer"
+        description: "Metering Mode"
+      - id: "NativeDigest"
+        name: "NativeDigest"
+        writable: true
+        type: "?"
+        description: "Native Digest"
       - id: "OECF"
         name: "Opto-ElectricConvFactor"
         writable: true
         type: "?"
         description: "Opto-Electric Conv Factor"
+      - id: "RelatedSoundFile"
+        name: "RelatedSoundFile"
+        writable: true
+        type: "?"
+        description: "Related Sound File"
+      - id: "Saturation"
+        name: "Saturation"
+        writable: true
+        type: "integer"
+        description: "Saturation"
+      - id: "SceneCaptureType"
+        name: "SceneCaptureType"
+        writable: true
+        type: "integer"
+        description: "Scene Capture Type"
+      - id: "SceneType"
+        name: "SceneType"
+        writable: true
+        type: "integer"
+        description: "Scene Type"
+      - id: "SensingMethod"
+        name: "SensingMethod"
+        writable: true
+        type: "integer"
+        description: "Sensing Method"
+      - id: "Sharpness"
+        name: "Sharpness"
+        writable: true
+        type: "integer"
+        description: "Sharpness"
+      - id: "ShutterSpeedValue"
+        name: "ShutterSpeedValue"
+        writable: true
+        type: "rational"
+        description: "Shutter Speed Value"
+      - id: "SpatialFrequencyResponse"
+        name: "SpatialFrequencyResponse"
+        writable: true
+        type: "?"
+        description: "Spatial Frequency Response"
+      - id: "SpectralSensitivity"
+        name: "SpectralSensitivity"
+        writable: true
+        type: "?"
+        description: "Spectral Sensitivity"
+      - id: "SubjectArea"
+        name: "SubjectArea"
+        writable: true
+        type: "integer"
+        description: "Subject Area"
+      - id: "SubjectDistance"
+        name: "SubjectDistance"
+        writable: true
+        type: "rational"
+        description: "Subject Distance"
+      - id: "SubjectDistanceRange"
+        name: "SubjectDistanceRange"
+        writable: true
+        type: "integer"
+        description: "Subject Distance Range"
+      - id: "SubjectLocation"
+        name: "SubjectLocation"
+        writable: true
+        type: "integer"
+        description: "Subject Location"
+      - id: "UserComment"
+        name: "UserComment"
+        writable: true
+        type: "lang-alt"
+        description: "User Comment"
+      - id: "WhiteBalance"
+        name: "WhiteBalance"
+        writable: true
+        type: "integer"
+        description: "White Balance"
   - name: XMP::exifEX
     tags:
+      - id: "Acceleration"
+        name: "Acceleration"
+        writable: true
+        type: "rational"
+        description: "Acceleration"
       - id: "Temperature"
         name: "AmbientTemperature"
         writable: true
         type: "rational"
         description: "Ambient Temperature"
+      - id: "CameraElevationAngle"
+        name: "CameraElevationAngle"
+        writable: true
+        type: "rational"
+        description: "Camera Elevation Angle"
+      - id: "CameraFirmware"
+        name: "CameraFirmware"
+        writable: true
+        type: "?"
+        description: "Camera Firmware"
+      - id: "CompositeImage"
+        name: "CompositeImage"
+        writable: true
+        type: "integer"
+        description: "Composite Image"
+      - id: "CompositeImageCount"
+        name: "CompositeImageCount"
+        writable: true
+        type: "integer"
+        description: "Composite Image Count"
+      - id: "CompositeImageExposureTimes"
+        name: "CompositeImageExposureTimes"
+        writable: true
+        type: "?"
+        description: "Composite Image Exposure Times"
+      - id: "Gamma"
+        name: "Gamma"
+        writable: true
+        type: "rational"
+        description: "Gamma"
+      - id: "Humidity"
+        name: "Humidity"
+        writable: true
+        type: "rational"
+        description: "Humidity"
+      - id: "ISOSpeed"
+        name: "ISOSpeed"
+        writable: true
+        type: "integer"
+        description: "ISO Speed"
+      - id: "ISOSpeedLatitudeyyy"
+        name: "ISOSpeedLatitudeyyy"
+        writable: true
+        type: "integer"
+        description: "ISO Speed Latitude yyy"
+      - id: "ISOSpeedLatitudezzz"
+        name: "ISOSpeedLatitudezzz"
+        writable: true
+        type: "integer"
+        description: "ISO Speed Latitude zzz"
+      - id: "ImageEditingSoftware"
+        name: "ImageEditingSoftware"
+        writable: true
+        type: "?"
+        description: "Image Editing Software"
+      - id: "ImageEditor"
+        name: "ImageEditor"
+        writable: true
+        type: "?"
+        description: "Image Editor"
+      - id: "ImageTitle"
+        name: "ImageTitle"
+        writable: true
+        type: "?"
+        description: "Image Title"
+      - id: "ImageUniqueID"
+        name: "ImageUniqueID"
+        writable: true
+        type: "?"
+        description: "Image Unique ID"
       - id: "InteroperabilityIndex"
         name: "InteropIndex"
         writable: true
@@ -30286,18 +34102,88 @@ tables:
         writable: true
         type: "rational"
         description: "Lens Info"
+      - id: "LensMake"
+        name: "LensMake"
+        writable: true
+        type: "?"
+        description: "Lens Make"
+      - id: "LensModel"
+        name: "LensModel"
+        writable: true
+        type: "?"
+        description: "Lens Model"
+      - id: "LensSerialNumber"
+        name: "LensSerialNumber"
+        writable: true
+        type: "?"
+        description: "Lens Serial Number"
+      - id: "MetadataEditingSoftware"
+        name: "MetadataEditingSoftware"
+        writable: true
+        type: "?"
+        description: "Metadata Editing Software"
       - id: "CameraOwnerName"
         name: "OwnerName"
         writable: true
         type: "?"
         description: "Owner Name"
+      - id: "Photographer"
+        name: "Photographer"
+        writable: true
+        type: "?"
+        description: "Photographer"
+      - id: "PhotographicSensitivity"
+        name: "PhotographicSensitivity"
+        writable: true
+        type: "integer"
+        description: "Photographic Sensitivity"
+      - id: "Pressure"
+        name: "Pressure"
+        writable: true
+        type: "rational"
+        description: "Pressure"
+      - id: "RAWDevelopingSoftware"
+        name: "RAWDevelopingSoftware"
+        writable: true
+        type: "?"
+        description: "RAW Developing Software"
+      - id: "RecommendedExposureIndex"
+        name: "RecommendedExposureIndex"
+        writable: true
+        type: "integer"
+        description: "Recommended Exposure Index"
+      - id: "SensitivityType"
+        name: "SensitivityType"
+        writable: true
+        type: "integer"
+        description: "Sensitivity Type"
       - id: "BodySerialNumber"
         name: "SerialNumber"
         writable: true
         type: "?"
         description: "Serial Number"
+      - id: "StandardOutputSensitivity"
+        name: "StandardOutputSensitivity"
+        writable: true
+        type: "integer"
+        description: "Standard Output Sensitivity"
+      - id: "WaterDepth"
+        name: "WaterDepth"
+        writable: true
+        type: "rational"
+        description: "Water Depth"
   - name: XMP::iptcCore
     tags:
+      - id: "AltTextAccessibility"
+        name: "AltTextAccessibility"
+        writable: true
+        type: "lang-alt"
+        description: "Alt Text Accessibility"
+      - id: "CountryCode"
+        name: "CountryCode"
+        writable: true
+        type: "?"
+        description: "Country Code"
       - id: "CreatorContactInfoCiAdrExtadr"
         name: "CreatorAddress"
         writable: true
@@ -30308,6 +34194,11 @@ tables:
         writable: true
         type: "?"
         description: "Creator City"
+      - id: "CreatorContactInfo"
+        name: "CreatorContactInfo"
+        writable: true
+        type: "?"
+        description: "Creator Contact Info"
       - id: "CreatorContactInfoCiAdrCtry"
         name: "CreatorCountry"
         writable: true
@@ -30338,6 +34229,93 @@ tables:
         writable: true
         type: "?"
         description: "Creator Work URL"
+      - id: "ExtDescrAccessibility"
+        name: "ExtDescrAccessibility"
+        writable: true
+        type: "lang-alt"
+        description: "Ext Descr Accessibility"
+      - id: "IntellectualGenre"
+        name: "IntellectualGenre"
+        writable: true
+        type: "?"
+        description: "Intellectual Genre"
+      - id: "Location"
+        name: "Location"
+        writable: true
+        type: "?"
+        description: "Location"
+      - id: "Scene"
+        name: "Scene"
+        writable: true
+        type: "?"
+        description: "Scene"
+      - id: "SubjectCode"
+        name: "SubjectCode"
+        writable: true
+        type: "?"
+        description: "Subject Code"
+  - name: XMP::pdf
+    tags:
+      - id: "Author"
+        name: "Author"
+        writable: true
+        type: "?"
+        description: "Author"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: true
+        type: "?"
+        description: "Copyright"
+      - id: "CreationDate"
+        name: "CreationDate"
+        writable: true
+        type: "date"
+        description: "Creation Date"
+      - id: "Creator"
+        name: "Creator"
+        writable: true
+        type: "?"
+        description: "Creator"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: true
+        type: "?"
+        description: "Keywords"
+      - id: "Marked"
+        name: "Marked"
+        writable: true
+        type: "boolean"
+        description: "Marked"
+      - id: "ModDate"
+        name: "ModDate"
+        writable: true
+        type: "date"
+        description: "Mod Date"
+      - id: "PDFVersion"
+        name: "PDFVersion"
+        writable: true
+        type: "?"
+        description: "PDF Version"
+      - id: "Producer"
+        name: "Producer"
+        writable: true
+        type: "?"
+        description: "Producer"
+      - id: "Subject"
+        name: "Subject"
+        writable: true
+        type: "?"
+        description: "Subject"
+      - id: "Title"
+        name: "Title"
+        writable: true
+        type: "?"
+        description: "Title"
+      - id: "Trapped"
+        name: "Trapped"
+        writable: true
+        type: "?"
+        description: "Trapped"
   - name: XMP::pdfx
     tags:
       - id: "SourceModified"
@@ -30347,6 +34325,16 @@ tables:
         description: "Source Modified"
   - name: XMP::photoshop
     tags:
+      - id: "AuthorsPosition"
+        name: "AuthorsPosition"
+        writable: true
+        type: "?"
+        description: "Authors Position"
+      - id: "CameraProfiles"
+        name: "CameraProfiles"
+        writable: true
+        type: "?"
+        description: "Camera Profiles"
       - id: "CameraProfilesPerspectiveModelVignetteModelVignetteModelParam1"
         name: "CameraProfilesPerspectiveModelVignetteModelParam1"
         writable: true
@@ -30357,11 +34345,123 @@ tables:
         writable: true
         type: "?"
         description: "Camera Profiles Perspective Model Vignette Model Piecewise Param"
+      - id: "CaptionWriter"
+        name: "CaptionWriter"
+        writable: true
+        type: "?"
+        description: "Caption Writer"
+      - id: "Category"
+        name: "Category"
+        writable: true
+        type: "?"
+        description: "Category"
+      - id: "City"
+        name: "City"
+        writable: true
+        type: "?"
+        description: "City"
+      - id: "ColorMode"
+        name: "ColorMode"
+        writable: true
+        type: "integer"
+        description: "Color Mode"
+      - id: "Country"
+        name: "Country"
+        writable: true
+        type: "?"
+        description: "Country"
+      - id: "Credit"
+        name: "Credit"
+        writable: true
+        type: "?"
+        description: "Credit"
+      - id: "DateCreated"
+        name: "DateCreated"
+        writable: true
+        type: "date"
+        description: "Date Created"
+      - id: "DocumentAncestors"
+        name: "DocumentAncestors"
+        writable: true
+        type: "?"
+        description: "Document Ancestors"
+      - id: "EmbeddedXMPDigest"
+        name: "EmbeddedXMPDigest"
+        writable: true
+        type: "?"
+        description: "Embedded XMP Digest"
+      - id: "Headline"
+        name: "Headline"
+        writable: true
+        type: "?"
+        description: "Headline"
+      - id: "History"
+        name: "History"
+        writable: true
+        type: "?"
+        description: "History"
       - id: "ICCProfile"
         name: "ICCProfileName"
         writable: true
         type: "?"
         description: "ICC Profile Name"
+      - id: "Instructions"
+        name: "Instructions"
+        writable: true
+        type: "?"
+        description: "Instructions"
+      - id: "LabelColor"
+        name: "LabelColor"
+        writable: true
+        type: "?"
+        description: "Label Color"
+      - id: "LegacyIPTCDigest"
+        name: "LegacyIPTCDigest"
+        writable: true
+        type: "?"
+        description: "Legacy IPTC Digest"
+      - id: "SidecarForExtension"
+        name: "SidecarForExtension"
+        writable: true
+        type: "?"
+        description: "Sidecar For Extension"
+      - id: "Source"
+        name: "Source"
+        writable: true
+        type: "?"
+        description: "Source"
+      - id: "State"
+        name: "State"
+        writable: true
+        type: "?"
+        description: "State"
+      - id: "SupplementalCategories"
+        name: "SupplementalCategories"
+        writable: true
+        type: "?"
+        description: "Supplemental Categories"
+      - id: "TextLayers"
+        name: "TextLayers"
+        writable: true
+        type: "?"
+        description: "Text Layers"
+      - id: "TransmissionReference"
+        name: "TransmissionReference"
+        writable: true
+        type: "?"
+        description: "Transmission Reference"
+      - id: "Urgency"
+        name: "Urgency"
+        writable: true
+        type: "integer"
+        description: "Urgency"
+  - name: XMP::rdf
+    tags:
+      - id: "about"
+        name: "About"
+        writable: true
+        type: "?"
+        description: "About"
   - name: XMP::sArea
     tags:
       - id: "STRUCT_NAME"
@@ -30369,13 +34469,118 @@ tables:
         writable: false
         type: "?"
         description: "Area"
+      - id: "d"
+        name: "TagD"
+        writable: true
+        type: "real"
+        description: "Tag D"
+      - id: "h"
+        name: "TagH"
+        writable: true
+        type: "real"
+        description: "Tag H"
+      - id: "w"
+        name: "TagW"
+        writable: true
+        type: "real"
+        description: "Tag W"
+      - id: "x"
+        name: "TagX"
+        writable: true
+        type: "real"
+        description: "Tag X"
+      - id: "y"
+        name: "TagY"
+        writable: true
+        type: "real"
+        description: "Tag Y"
+      - id: "unit"
+        name: "Unit"
+        writable: false
+        type: "?"
+        description: "Unit"
   - name: XMP::sColorant
     tags:
+      - id: "black"
+        name: "Black"
+        writable: true
+        type: "real"
+        description: "Black"
+      - id: "blue"
+        name: "Blue"
+        writable: true
+        type: "integer"
+        description: "Blue"
       - id: "STRUCT_NAME"
         name: "Colorant"
         writable: false
         type: "?"
         description: "Colorant"
+      - id: "cyan"
+        name: "Cyan"
+        writable: true
+        type: "real"
+        description: "Cyan"
+      - id: "gray"
+        name: "Gray"
+        writable: true
+        type: "integer"
+        description: "Gray"
+      - id: "green"
+        name: "Green"
+        writable: true
+        type: "integer"
+        description: "Green"
+      - id: "magenta"
+        name: "Magenta"
+        writable: true
+        type: "real"
+        description: "Magenta"
+      - id: "mode"
+        name: "Mode"
+        writable: false
+        type: "?"
+        description: "Mode"
+      - id: "red"
+        name: "Red"
+        writable: true
+        type: "integer"
+        description: "Red"
+      - id: "swatchName"
+        name: "SwatchName"
+        writable: false
+        type: "?"
+        description: "Swatch Name"
+      - id: "A"
+        name: "TagA"
+        writable: true
+        type: "integer"
+        description: "Tag A"
+      - id: "B"
+        name: "TagB"
+        writable: true
+        type: "integer"
+        description: "Tag B"
+      - id: "L"
+        name: "TagL"
+        writable: true
+        type: "real"
+        description: "Tag L"
+      - id: "tint"
+        name: "Tint"
+        writable: true
+        type: "integer"
+        description: "Tint"
+      - id: "type"
+        name: "Type"
+        writable: false
+        type: "?"
+        description: "Type"
+      - id: "yellow"
+        name: "Yellow"
+        writable: true
+        type: "real"
+        description: "Yellow"
   - name: XMP::sDimensions
     tags:
       - id: "STRUCT_NAME"
@@ -30383,6 +34588,21 @@ tables:
         writable: false
         type: "?"
         description: "Dimensions"
+      - id: "h"
+        name: "TagH"
+        writable: true
+        type: "real"
+        description: "Tag H"
+      - id: "w"
+        name: "TagW"
+        writable: true
+        type: "real"
+        description: "Tag W"
+      - id: "unit"
+        name: "Unit"
+        writable: false
+        type: "?"
+        description: "Unit"
   - name: XMP::specialStruct
     tags:
       - id: "SORT_ORDER"
@@ -30402,11 +34622,136 @@ tables:
         description: "1"
   - name: XMP::tiff
     tags:
+      - id: "Artist"
+        name: "Artist"
+        writable: true
+        type: "?"
+        description: "Artist"
+      - id: "BitsPerSample"
+        name: "BitsPerSample"
+        writable: true
+        type: "integer"
+        description: "Bits Per Sample"
+      - id: "Compression"
+        name: "Compression"
+        writable: true
+        type: "integer"
+        description: "Compression"
+      - id: "Copyright"
+        name: "Copyright"
+        writable: true
+        type: "lang-alt"
+        description: "Copyright"
+      - id: "DateTime"
+        name: "DateTime"
+        writable: true
+        type: "date"
+        description: "Date/Time Modified"
+      - id: "ImageDescription"
+        name: "ImageDescription"
+        writable: true
+        type: "lang-alt"
+        description: "Image Description"
       - id: "ImageLength"
         name: "ImageHeight"
         writable: true
         type: "integer"
         description: "Image Height"
+      - id: "ImageWidth"
+        name: "ImageWidth"
+        writable: true
+        type: "integer"
+        description: "Image Width"
+      - id: "Make"
+        name: "Make"
+        writable: true
+        type: "?"
+        description: "Make"
+      - id: "Model"
+        name: "Model"
+        writable: true
+        type: "?"
+        description: "Camera Model Name"
+      - id: "NativeDigest"
+        name: "NativeDigest"
+        writable: true
+        type: "?"
+        description: "Native Digest"
+      - id: "Orientation"
+        name: "Orientation"
+        writable: true
+        type: "integer"
+        description: "Orientation"
+      - id: "PhotometricInterpretation"
+        name: "PhotometricInterpretation"
+        writable: true
+        type: "integer"
+        description: "Photometric Interpretation"
+      - id: "PlanarConfiguration"
+        name: "PlanarConfiguration"
+        writable: true
+        type: "integer"
+        description: "Planar Configuration"
+      - id: "PrimaryChromaticities"
+        name: "PrimaryChromaticities"
+        writable: true
+        type: "rational"
+        description: "Primary Chromaticities"
+      - id: "ReferenceBlackWhite"
+        name: "ReferenceBlackWhite"
+        writable: true
+        type: "rational"
+        description: "Reference Black White"
+      - id: "ResolutionUnit"
+        name: "ResolutionUnit"
+        writable: true
+        type: "integer"
+        description: "Resolution Unit"
+      - id: "SamplesPerPixel"
+        name: "SamplesPerPixel"
+        writable: true
+        type: "integer"
+        description: "Samples Per Pixel"
+      - id: "Software"
+        name: "Software"
+        writable: true
+        type: "?"
+        description: "Software"
+      - id: "TransferFunction"
+        name: "TransferFunction"
+        writable: true
+        type: "integer"
+        description: "Transfer Function"
+      - id: "WhitePoint"
+        name: "WhitePoint"
+        writable: true
+        type: "rational"
+        description: "White Point"
+      - id: "XResolution"
+        name: "XResolution"
+        writable: true
+        type: "rational"
+        description: "X Resolution"
+      - id: "YCbCrCoefficients"
+        name: "YCbCrCoefficients"
+        writable: true
+        type: "rational"
+        description: "Y Cb Cr Coefficients"
+      - id: "YCbCrPositioning"
+        name: "YCbCrPositioning"
+        writable: true
+        type: "integer"
+        description: "Y Cb Cr Positioning"
+      - id: "YCbCrSubSampling"
+        name: "YCbCrSubSampling"
+        writable: true
+        type: "integer"
+        description: "Y Cb Cr Sub Sampling"
+      - id: "YResolution"
+        name: "YResolution"
+        writable: true
+        type: "rational"
+        description: "Y Resolution"
   - name: XMP::x
     tags:
       - id: "xmptk"
@@ -30416,13 +34761,261 @@ tables:
         description: "XMP Toolkit"
   - name: XMP::xmp
     tags:
+      - id: "Advisory"
+        name: "Advisory"
+        writable: true
+        type: "?"
+        description: "Advisory"
+      - id: "Author"
+        name: "Author"
+        writable: true
+        type: "?"
+        description: "Author"
+      - id: "BaseURL"
+        name: "BaseURL"
+        writable: true
+        type: "?"
+        description: "Base URL"
+      - id: "CreateDate"
+        name: "CreateDate"
+        writable: true
+        type: "date"
+        description: "Create Date"
+      - id: "CreatorTool"
+        name: "CreatorTool"
+        writable: true
+        type: "?"
+        description: "Creator Tool"
+      - id: "Description"
+        name: "Description"
+        writable: true
+        type: "lang-alt"
+        description: "Description"
+      - id: "Format"
+        name: "Format"
+        writable: true
+        type: "?"
+        description: "Format"
+      - id: "Identifier"
+        name: "Identifier"
+        writable: true
+        type: "?"
+        description: "Identifier"
+      - id: "Keywords"
+        name: "Keywords"
+        writable: true
+        type: "?"
+        description: "Keywords"
+      - id: "Label"
+        name: "Label"
+        writable: true
+        type: "?"
+        description: "Label"
+      - id: "MetadataDate"
+        name: "MetadataDate"
+        writable: true
+        type: "date"
+        description: "Metadata Date"
+      - id: "ModifyDate"
+        name: "ModifyDate"
+        writable: true
+        type: "date"
+        description: "Modify Date"
+      - id: "Nickname"
+        name: "Nickname"
+        writable: true
+        type: "?"
+        description: "Nickname"
       - id: "PageInfoImage"
         name: "PageImage"
         writable: true
         type: "?"
         description: "Page Image"
+      - id: "PageInfo"
+        name: "PageInfo"
+        writable: true
+        type: "?"
+        description: "Page Info"
+      - id: "Rating"
+        name: "Rating"
+        writable: true
+        type: "real"
+        description: "Rating"
+      - id: "RatingPercent"
+        name: "RatingPercent"
+        writable: true
+        type: "real"
+        description: "Rating Percent"
+      - id: "Thumbnails"
+        name: "Thumbnails"
+        writable: true
+        type: "?"
+        description: "Thumbnails"
+      - id: "Title"
+        name: "Title"
+        writable: true
+        type: "lang-alt"
+        description: "Title"
+  - name: XMP::xmpBJ
+    tags:
+      - id: "JobRef"
+        name: "JobRef"
+        writable: true
+        type: "?"
+        description: "Job Ref"
+  - name: XMP::xmpMM
+    tags:
+      - id: "DerivedFrom"
+        name: "DerivedFrom"
+        writable: true
+        type: "?"
+        description: "Derived From"
+      - id: "DocumentID"
+        name: "DocumentID"
+        writable: true
+        type: "?"
+        description: "Document ID"
+      - id: "History"
+        name: "History"
+        writable: true
+        type: "?"
+        description: "History"
+      - id: "Ingredients"
+        name: "Ingredients"
+        writable: true
+        type: "?"
+        description: "Ingredients"
+      - id: "InstanceID"
+        name: "InstanceID"
+        writable: true
+        type: "?"
+        description: "Instance ID"
+      - id: "LastURL"
+        name: "LastURL"
+        writable: true
+        type: "?"
+        description: "Last URL"
+      - id: "ManageTo"
+        name: "ManageTo"
+        writable: true
+        type: "?"
+        description: "Manage To"
+      - id: "ManageUI"
+        name: "ManageUI"
+        writable: true
+        type: "?"
+        description: "Manage UI"
+      - id: "ManagedFrom"
+        name: "ManagedFrom"
+        writable: true
+        type: "?"
+        description: "Managed From"
+      - id: "Manager"
+        name: "Manager"
+        writable: true
+        type: "?"
+        description: "Manager"
+      - id: "ManagerVariant"
+        name: "ManagerVariant"
+        writable: true
+        type: "?"
+        description: "Manager Variant"
+      - id: "Manifest"
+        name: "Manifest"
+        writable: true
+        type: "?"
+        description: "Manifest"
+      - id: "OriginalDocumentID"
+        name: "OriginalDocumentID"
+        writable: true
+        type: "?"
+        description: "Original Document ID"
+      - id: "Pantry"
+        name: "Pantry"
+        writable: true
+        type: "?"
+        description: "Pantry"
+      - id: "PreservedFileName"
+        name: "PreservedFileName"
+        writable: true
+        type: "?"
+        description: "Preserved File Name"
+      - id: "RenditionClass"
+        name: "RenditionClass"
+        writable: true
+        type: "?"
+        description: "Rendition Class"
+      - id: "RenditionOf"
+        name: "RenditionOf"
+        writable: true
+        type: "?"
+        description: "Rendition Of"
+      - id: "RenditionParams"
+        name: "RenditionParams"
+        writable: true
+        type: "?"
+        description: "Rendition Params"
+      - id: "SaveID"
+        name: "SaveID"
+        writable: true
+        type: "integer"
+        description: "Save ID"
+      - id: "subject"
+        name: "Subject"
+        writable: true
+        type: "?"
+        description: "Subject"
+      - id: "VersionID"
+        name: "VersionID"
+        writable: true
+        type: "?"
+        description: "Version ID"
+      - id: "Versions"
+        name: "Versions"
+        writable: true
+        type: "?"
+        description: "Versions"
+  - name: XMP::xmpNote
+    tags:
+      - id: "HasExtendedXMP"
+        name: "HasExtendedXMP"
+        writable: true
+        type: "?"
+        description: "Has Extended XMP"
+  - name: XMP::xmpRights
+    tags:
+      - id: "Certificate"
+        name: "Certificate"
+        writable: true
+        type: "?"
+        description: "Certificate"
+      - id: "Marked"
+        name: "Marked"
+        writable: true
+        type: "boolean"
+        description: "Marked"
+      - id: "Owner"
+        name: "Owner"
+        writable: true
+        type: "?"
+        description: "Owner"
+      - id: "UsageTerms"
+        name: "UsageTerms"
+        writable: true
+        type: "lang-alt"
+        description: "Usage Terms"
+      - id: "WebStatement"
+        name: "WebStatement"
+        writable: true
+        type: "?"
+        description: "Web Statement"
   - name: XMP::xmpTPg
     tags:
+      - id: "Colorants"
+        name: "Colorants"
+        writable: true
+        type: "?"
+        description: "Colorants"
       - id: "FontsComposite"
         name: "FontComposite"
         writable: true
@@ -30433,6 +35026,36 @@ tables:
         writable: true
         type: "?"
         description: "Font Version"
+      - id: "Fonts"
+        name: "Fonts"
+        writable: true
+        type: "?"
+        description: "Fonts"
+      - id: "HasVisibleOverprint"
+        name: "HasVisibleOverprint"
+        writable: true
+        type: "boolean"
+        description: "Has Visible Overprint"
+      - id: "HasVisibleTransparency"
+        name: "HasVisibleTransparency"
+        writable: true
+        type: "boolean"
+        description: "Has Visible Transparency"
+      - id: "MaxPageSize"
+        name: "MaxPageSize"
+        writable: true
+        type: "?"
+        description: "Max Page Size"
+      - id: "NPages"
+        name: "NPages"
+        writable: true
+        type: "integer"
+        description: "N Pages"
+      - id: "PlateNames"
+        name: "PlateNames"
+        writable: true
+        type: "?"
+        description: "Plate Names"
       - id: "SwatchGroupsGroupName"
         name: "SwatchGroupName"
         writable: true
@@ -30443,6 +35066,11 @@ tables:
         writable: true
         type: "?"
         description: "Swatch Group Type"
+      - id: "SwatchGroups"
+        name: "SwatchGroups"
+        writable: true
+        type: "?"
+        description: "Swatch Groups"
       - id: "SwatchGroupsColorants"
         name: "SwatchGroupsColorants"
         writable: true
@@ -30463,7 +35091,7 @@ tables:
       - id: "32"
         name: "ZISRAWVersion"
         writable: false
-        type: "int32u"
+        type: "?"
         description: "ZISRAW Version"
   - name: iWork::Main
     tags:
@@ -30472,3 +35100,28 @@ tables:
         writable: false
         type: "?"
         description: "Author"
+      - id: "comment"
+        name: "Comment"
+        writable: false
+        type: "?"
+        description: "Comment"
+      - id: "copyright"
+        name: "Copyright"
+        writable: false
+        type: "?"
+        description: "Copyright"
+      - id: "keywords"
+        name: "Keywords"
+        writable: false
+        type: "?"
+        description: "Keywords"
+      - id: "projects"
+        name: "Projects"
+        writable: false
+        type: "?"
+        description: "Projects"
+      - id: "title"
+        name: "Title"
+        writable: false
+        type: "?"
+        description: "Title"

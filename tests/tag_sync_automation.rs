@@ -156,3 +156,73 @@ fn generator_rejects_stale_module_before_replacing_any_domain() {
         "refusal must leave all six registries untouched"
     );
 }
+
+#[test]
+fn generator_rejects_omitted_source_module_even_when_count_is_lowered() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("lib/Image/ExifTool");
+    fs::create_dir_all(&source).unwrap();
+    let core = b"selected ExifTool.pm";
+    let exif = b"selected Exif.pm";
+    let quicktime = b"selected QuickTime.pm";
+    fs::write(scratch.path().join("lib/Image/ExifTool.pm"), core).unwrap();
+    fs::write(source.join("Exif.pm"), exif).unwrap();
+    fs::write(source.join("QuickTime.pm"), quicktime).unwrap();
+    let mut doc = serde_json::json!({
+        "exiftool_version": repo_file(".exiftool-version").trim(),
+        "modules_ok": 2,
+        "modules_failed": 0,
+        "source_provenance": {
+            "library_relative_path": "Image/ExifTool.pm", "sha256": sha256(core)
+        },
+        "native_capture_context": {"loaded_closure": {"modules": [
+            {"inc": "Image/ExifTool.pm", "source_file": "Image/ExifTool.pm", "source_sha256": sha256(core)},
+            {"inc": "Image/ExifTool/Exif.pm", "source_file": "Image/ExifTool/Exif.pm", "source_sha256": sha256(exif)},
+            {"inc": "Image/ExifTool/QuickTime.pm", "source_file": "Image/ExifTool/QuickTime.pm", "source_sha256": sha256(quicktime)}
+        ]}},
+        "native_write_tables": {"Exif": {"Main": {}}, "QuickTime": {"Keys": {}}},
+        "modules": {"Exif": {"tables": {"Main": {
+            "full_name": "Image::ExifTool::Exif::Main", "meta": {},
+            "tags": {"1": {"Name": "Make"}}
+        }}}}
+    });
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let paths: Vec<_> = ["core", "camera", "media", "image", "document", "specialty"]
+        .into_iter()
+        .map(|domain| root.join(format!("oxidex-tags-{domain}/src/{domain}_tags.yaml")))
+        .collect();
+    let before: Vec<_> = paths
+        .iter()
+        .map(|path| sha256(&fs::read(path).unwrap()))
+        .collect();
+    let dump = scratch.path().join("tables.json");
+    for (claimed_count, expected_reason) in [
+        (2, "table dump module count does not match captured modules"),
+        (
+            1,
+            "independently captured source module is missing: QuickTime",
+        ),
+    ] {
+        doc["modules_ok"] = claimed_count.into();
+        fs::write(&dump, doc.to_string()).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_gen_tag_registry"))
+            .arg(&dump)
+            .arg(scratch.path().join("lib"))
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(expected_reason),
+            "unexpected refusal: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let after: Vec<_> = paths
+            .iter()
+            .map(|path| sha256(&fs::read(path).unwrap()))
+            .collect();
+        assert_eq!(
+            before, after,
+            "refusal must leave all six registries untouched"
+        );
+    }
+}

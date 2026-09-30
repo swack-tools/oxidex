@@ -307,3 +307,21 @@ fn registry_tag_ids_are_not_print_conv_keys_in_disguise() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn inferred_quicktime_key_name_is_kept_under_its_source_id() {
+    assert!(entries("media").iter().any(|entry| {
+        entry.table == "QuickTime::Keys" && entry.id == "artist" && entry.name == "Artist"
+    }));
+}
+
+#[test]
+fn embedded_numeric_array_count_does_not_force_scalar_cli_parse() {
+    use oxidex::cli::value_parser::parse_cli_tag_value;
+    use oxidex::core::tag_value::TagValue;
+
+    assert_eq!(
+        parse_cli_tag_value("Canon:WB_RGGBBlackLevels", "1 2 3 4").unwrap(),
+        TagValue::String("1 2 3 4".to_string())
+    );
+}
