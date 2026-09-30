@@ -165,7 +165,7 @@ fn extract_header_metadata(header: &MachHeader, metadata: &mut MetadataMap) {
     // CPU type
     metadata.insert(
         "EXE:CPUType".to_string(),
-        TagValue::String(exiftool_cpu_type(header).to_string()),
+        TagValue::String(exiftool_cpu_type(header)),
     );
 
     // CPU type raw value
@@ -739,16 +739,44 @@ fn extract_fat_metadata(info: &MachOInfo, metadata: &mut MetadataMap) {
 // Helper: Populate MachOInfo from Load Commands
 // =============================================================================
 
-/// ExifTool's `CPUType` display value for the architecture exercised by the
-/// Mach-O dylib corpus sample (EXE.pm, `EXE::MachO` tag 2).
+/// ExifTool 13.59 `EXE::MachO` tag 3 `CPUType` PrintConv.
 ///
-/// Other architectures retain the existing names until their exact ExifTool
-/// PrintConv strings are verified.
-fn exiftool_cpu_type(header: &MachHeader) -> &'static str {
-    match header.cputype {
-        super::structures::cpu_type::CPU_TYPE_X86_64 => "x86 64-bit",
-        _ => header.cpu_type_name(),
+/// The generated IFD table marks this Perl conversion as omitted. Keep its
+/// complete direct table here, then apply its OTHER rule to ABI64 values.
+fn exiftool_cpu_type(header: &MachHeader) -> String {
+    const ABI64: i32 = 0x0100_0000;
+
+    let name = |code| match code {
+        -1 => Some("Any"),
+        1 => Some("VAX"),
+        2 => Some("ROMP"),
+        4 => Some("NS32032"),
+        5 => Some("NS32332"),
+        6 => Some("MC680x0"),
+        7 => Some("x86"),
+        8 => Some("MIPS"),
+        9 => Some("NS32532"),
+        10 => Some("MC98000"),
+        11 => Some("HPPA"),
+        12 => Some("ARM"),
+        13 => Some("MC88000"),
+        14 => Some("SPARC"),
+        15 => Some("i860 big endian"),
+        16 => Some("i860 little endian"),
+        17 => Some("RS6000"),
+        18 => Some("PowerPC"),
+        255 => Some("VEO"),
+        _ => None,
+    };
+
+    let code = header.cputype;
+    if let Some(direct) = name(code) {
+        return direct.to_string();
     }
+    if let Some(base) = name(code & !ABI64) {
+        return format!("{base} 64-bit");
+    }
+    format!("Unknown ({code})")
 }
 
 /// ExifTool's `CPUSubtype` naming (EXE.pm, `EXE::MachO` tag 4).
@@ -793,7 +821,7 @@ fn exiftool_cpu_subtype(cputype: i32, cpusubtype: i32) -> String {
 ///
 /// Distinct from `file_type_name`, which uses oxidex's own shorter wording:
 /// ExifTool calls filetype 2 "Demand paged executable" where oxidex says
-/// "Executable", and the comparison is byte-for-byte.
+/// "Executable." The comparison is byte-for-byte.
 fn exiftool_object_file_type(filetype: u32) -> &'static str {
     match filetype as i32 {
         -1 => "Static library",
@@ -993,7 +1021,7 @@ mod tests {
 
         extract_header_metadata(&header, &mut metadata);
 
-        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM64");
+        assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "ARM 64-bit");
         assert_eq!(metadata.get_string("EXE:FileType").unwrap(), "Executable");
         assert_eq!(metadata.get_integer("EXE:Is64Bit").unwrap(), 1);
         assert_eq!(metadata.get_integer("EXE:IsPIE").unwrap(), 1);
@@ -1009,6 +1037,50 @@ mod tests {
         extract_header_metadata(&header, &mut metadata);
 
         assert_eq!(metadata.get_string("EXE:CPUType").unwrap(), "x86 64-bit");
+    }
+
+    #[test]
+    fn macho_cpu_type_follows_exiftool_table_and_abi64_conversion() {
+        // EXE.pm 13.59, EXE::MachO tag 3: direct table entries, then OTHER
+        // masks 0x01000000 and appends the 64-bit suffix for a known base code.
+        for (code, expected) in [
+            (-1, "Any"),
+            (1, "VAX"),
+            (2, "ROMP"),
+            (4, "NS32032"),
+            (5, "NS32332"),
+            (6, "MC680x0"),
+            (cpu_type::CPU_TYPE_I386, "x86"),
+            (8, "MIPS"),
+            (9, "NS32532"),
+            (10, "MC98000"),
+            (11, "HPPA"),
+            (13, "MC88000"),
+            (14, "SPARC"),
+            (15, "i860 big endian"),
+            (16, "i860 little endian"),
+            (17, "RS6000"),
+            (cpu_type::CPU_TYPE_POWERPC, "PowerPC"),
+            (255, "VEO"),
+            (cpu_type::CPU_TYPE_X86_64, "x86 64-bit"),
+            (cpu_type::CPU_TYPE_ARM, "ARM"),
+            (cpu_type::CPU_TYPE_ARM64, "ARM 64-bit"),
+            (cpu_type::CPU_TYPE_POWERPC64, "PowerPC 64-bit"),
+            (0, "Unknown (0)"),
+            (0x0100_0003, "Unknown (16777219)"),
+            (cpu_type::CPU_TYPE_ARM64_32, "Unknown (33554444)"),
+            (-2, "Unknown (-2)"),
+        ] {
+            let mut header = create_test_header();
+            header.cputype = code;
+            let mut metadata = MetadataMap::new();
+            extract_header_metadata(&header, &mut metadata);
+            assert_eq!(
+                metadata.get_string("EXE:CPUType"),
+                Some(expected),
+                "code {code}"
+            );
+        }
     }
 
     #[test]
