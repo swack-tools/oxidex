@@ -2,3 +2,6 @@
 # All test fixtures migrated to regular git storage (total size: ~1.2MB)
 # PDF xref records require a trailing byte after the in-use marker.
 tests/fixtures/xmp_priority/history_native/*.pdf binary
+# EPS newline controls contain literal CR and CRLF bytes that define the test.
+tests/fixtures/iptc_carrier/eps-binary-*-skip*.eps binary
+tests/fixtures/iptc_carrier/eps-primary-cr-crlf-binary.eps binary

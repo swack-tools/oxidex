@@ -247,10 +247,10 @@
     "artifacts": {
       "by_tier": {
         "1": 250,
-        "2": 32
+        "2": 33
       },
-      "rust": 247,
-      "total": 282
+      "rust": 248,
+      "total": 283
     },
     "expressions": {
       "helper_subs": 157,

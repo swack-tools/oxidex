@@ -385,6 +385,7 @@ fn parse_ifd_chain_with_optional_options(
     let mut ifd_offset = first_offset;
     let mut ifd_index = 0;
     let mut visited_ifds = HashSet::new();
+    let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
     let mut session = Session::new();
     session
         .set_member("FILE_TYPE", MemberVal::Str("TIFF".into()))
@@ -508,6 +509,7 @@ fn parse_ifd_chain_with_optional_options(
                 engine.as_mut(),
                 metadata,
                 Some(&mut read_subdir),
+                &mut iptc_blocks,
             );
             if let Some(engine) = engine {
                 engine.finish(metadata, |name| format!("{ifd_name}:{name}"), |_, _| true);
@@ -696,14 +698,36 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
+    let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
+    process_tiff_ifd_tags_with_iptc_blocks(
+        tags,
+        ifd_name,
+        byte_order,
+        engine.as_deref_mut(),
+        metadata,
+        &mut iptc_blocks,
+    )
+}
+
+/// Processes an IFD while retaining the physical IPTC block count supplied
+/// by its enclosing directory chain (ordinary TIFF or BigTIFF).
+pub(crate) fn process_tiff_ifd_tags_with_iptc_blocks<'a>(
+    tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    ifd_name: &str,
+    byte_order: ByteOrder,
+    engine: Option<&mut exif_dir_engine::DirEngineRows>,
+    metadata: &mut MetadataMap,
+    iptc_blocks: &mut crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks,
+) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     process_tiff_ifd_tags_indexed(
         tags,
         None,
         ifd_name,
         byte_order,
-        engine.as_deref_mut(),
+        engine,
         metadata,
         None,
+        iptc_blocks,
     )
 }
 
@@ -715,6 +739,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
     mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
     mut read_subdir: Option<&mut ReadSubdir<'_>>,
+    iptc_blocks: &mut crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
@@ -854,76 +879,10 @@ fn process_tiff_ifd_tags_indexed<'a>(
             // Don't continue - still add the raw ICC_Profile tag
         }
 
-        // Check for IPTC-NAA tag (0x83BB = 33723)
-        // Contains IPTC IIM (Information Interchange Model) metadata
+        // Each IPTC-NAA IFD entry is one physical IIM directory. Keep its
+        // repeatable datasets inside that directory, including record 1.
         if *tag_id == 0x83BB && !bytes.is_empty() {
-            use crate::core::value_formatter::{format_iptc_date, format_iptc_time};
-            use crate::parsers::jpeg::iptc_parser::{
-                dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
-            };
-
-            match parse_all_iptc_records(bytes) {
-                Ok(records) => {
-                    // Track keywords for aggregation (ExifTool combines them)
-                    let mut keywords: Vec<String> = Vec::new();
-
-                    for record in records {
-                        // Only handle Record 2 (Application Record)
-                        if record.record_number != 2 {
-                            continue;
-                        }
-
-                        let tag_name =
-                            dataset_to_tag_name(record.record_number, record.dataset_number);
-                        let mut value = decode_iptc_string(&record.data);
-
-                        // Apply formatting for specific dataset types
-                        match record.dataset_number {
-                            0 => {
-                                // ApplicationRecordVersion (dataset 0) is a numeric value
-                                // It's stored as 2 bytes big-endian
-                                if record.data.len() >= 2 {
-                                    let version =
-                                        u16::from_be_bytes([record.data[0], record.data[1]]);
-                                    metadata.insert(
-                                        "IPTC:ApplicationRecordVersion".to_string(),
-                                        TagValue::Integer(version as i64),
-                                    );
-                                }
-                                continue;
-                            }
-                            25 => {
-                                // Keywords (dataset 25) - collect for aggregation
-                                keywords.push(value);
-                                continue;
-                            }
-                            55 => {
-                                // DateCreated: YYYYMMDD -> YYYY:MM:DD
-                                value = format_iptc_date(&value);
-                            }
-                            60 => {
-                                // TimeCreated: HHMMSS±HHMM -> HH:MM:SS±HH:MM
-                                value = format_iptc_time(&value);
-                            }
-                            _ => {}
-                        }
-
-                        metadata.insert(tag_name, TagValue::String(value));
-                    }
-
-                    // Add aggregated keywords if any
-                    if !keywords.is_empty() {
-                        metadata.insert(
-                            "IPTC:Keywords".to_string(),
-                            TagValue::Array(keywords.into_iter().map(TagValue::String).collect()),
-                        );
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse IPTC metadata in TIFF: {}", e);
-                }
-            }
-            // Skip adding the raw IPTC tag since we've parsed it
+            iptc_blocks.insert(bytes, metadata);
             continue;
         }
 

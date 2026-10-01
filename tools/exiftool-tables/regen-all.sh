@@ -278,6 +278,8 @@ python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path xmp-lens-maps)"
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path plus-media-matrix)"
+python3 "$HERE/gen_iptc_dataset_facts.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --out "$(artifact_path iptc-dataset-facts)"
 
 echo ">> capturing XMP read priorities from the selected native source"
 XMP_PRIORITY_CAPTURE="$CACHE/xmp-priorities-$PIN.json"
@@ -329,6 +331,8 @@ python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)"
 python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --check
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --check
+python3 "$HERE/gen_iptc_dataset_facts.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --check
 python3 "$HERE/verify_nikon_settings.py" --input "$(artifact_path nikon-settings)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"

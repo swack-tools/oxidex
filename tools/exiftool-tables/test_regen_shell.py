@@ -271,6 +271,16 @@ else:
         else:
             assert flag('--out')==path
             output(path,name)
+    elif name=='gen_iptc_dataset_facts.py':
+        assert flag('--exiftool-dir')==lib.parent
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        path=artifact_path('iptc-dataset-facts')
+        if '--check' in args:
+            assert '--out' not in args
+            assert path.read_text()=='generated explicit-A '+name+'\n'
+        else:
+            assert flag('--out')==path
+            output(path,name)
     elif name=='tag_exists_codegen.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -416,7 +426,8 @@ class RegenerationShellTests(unittest.TestCase):
                 'xmp_priority_specs.py', 'capture_font_languages.pl',
                 'font_language_specs.py', 'gen_xmp_lens_maps.py',
                 'gen_xmp_lens_maps.py:check', 'gen_plus_media_matrix.py',
-                'gen_plus_media_matrix.py:check', 'verify_geotiff.py',
+                'gen_plus_media_matrix.py:check', 'gen_iptc_dataset_facts.py',
+                'gen_iptc_dataset_facts.py:check', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
                 'gen_nikon_encrypted_tables.py',
@@ -512,6 +523,11 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 self.assertLess(names.index('gen_xmp_lens_maps.py'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 self.assertGreater(names.index('gen_xmp_lens_maps.py:check'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
+                self.assertLess(names.index('gen_iptc_dataset_facts.py'), names.index('gen_iptc_dataset_facts.py:check'))
+                self.assertEqual(
+                    (self.root / next(a.path for a in self.manifest.select() if a.key == 'iptc-dataset-facts')).read_text(),
+                    'generated explicit-A gen_iptc_dataset_facts.py\n',
+                )
                 dump_cache = self.cache / f'tables-reader-{self.pin}.json'
                 self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
                 self.assertIs(json.loads(dump_cache.read_text())['reader_only'], True)

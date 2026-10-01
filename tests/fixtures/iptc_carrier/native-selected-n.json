@@ -1,0 +1,181 @@
+{
+  "converted-within-block.eps": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.pdf": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.psd": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.tif": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "tiff-linked-two-blocks.tif": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
+  },
+  "leading-zero-within-block.eps": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.pdf": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.psd": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.tif": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "eps-raw-and-hex-same.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-raw-only.eps": {},
+  "eps-two-hex-same.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Alice"
+  },
+  "eps-one-hex-sort.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob",
+    "IPTC2:ObjectName": "Second"
+  },
+  "eps-interleaved-list.eps": {
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ],
+    "IPTC:ObjectName": "Between"
+  },
+  "eps-false-second-marker.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-embedded-second-block.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-single-percent-mixed-case.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-mismatched-document-end.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-nested-document.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-dos-preview-document.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-dos-invalid-offset.eps": {},
+  "eps-dos-overlong-section.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-icc-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-xml-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-binary-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-hex-odd-line.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-stray-xpacket-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-binary-mixed-newline-buffered.eps": {
+    "IPTC:By-line": "Hidden",
+    "IPTC2:Copy1:By-line": "Visible"
+  },
+  "eps-binary-mixed-last-segment.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "bigtiff-linked-two-blocks.btf": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Carol"
+  },
+  "eps-primary-cr-crlf-binary.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-lf-skip1.eps": {},
+  "eps-binary-lf-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-cr-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-crlf-skip1.eps": {},
+  "eps-binary-cr-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-lf-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-cr-skip1.eps": {},
+  "eps-binary-cr-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-crlf-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-lf-skip1.eps": {},
+  "eps-binary-crlf-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-cr-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-crlf-skip1.eps": {}
+}
