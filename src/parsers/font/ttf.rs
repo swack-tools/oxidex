@@ -529,18 +529,28 @@ impl TTFParser {
     ) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
         let offset = table.offset as u64;
-
-        if offset + 6 > reader.size() {
+        let table_size = u64::from(table.length).min(reader.size().saturating_sub(offset));
+        if table_size < 8 {
             return Ok(metadata);
         }
 
         let header = reader.read(offset, 6)?;
         let r = EndianReader::big_endian(header);
+        let records_end = 6 + u64::from(r.u16_at(2).unwrap_or(0)) * 12;
         let string_offset = r.u16_at(4).unwrap_or(0);
+        let string_start = u64::from(string_offset);
+        if records_end > table_size || string_start < records_end || string_start > table_size {
+            return Ok(metadata);
+        }
         let records = Self::parse_name_table(reader, table)?;
         let format_one_tags = Self::format_one_language_tags(reader, table)?;
 
         for record in &records {
+            // Font.pm checks the string against the name table's own size
+            // before it decodes or replaces any tag from this record.
+            if string_start + u64::from(record.offset) + u64::from(record.length) > table_size {
+                continue;
+            }
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
@@ -559,20 +569,22 @@ impl TTFParser {
                 metadata.remove(&key);
                 continue;
             };
-            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
-                && !value.is_empty()
+            let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
+            else {
+                metadata.remove(&key);
+                continue;
+            };
+            // UTF-16BE combines surrogate pairs, but Font.pm's UCS2 decoder
+            // does not. Empty or undecodable in-bounds records also replace
+            // an earlier primary value; omit it instead of leaving a stale one.
+            if value.is_empty()
+                || (matches!(charset, FontValueCharset::Ucs2BmpOnly)
+                    && value.chars().any(|ch| ch.len_utf16() == 2))
             {
-                // UTF-16BE combines surrogate pairs, but Font.pm's UCS2
-                // decoder does not. Refuse that wrong value; ordinary BMP
-                // text and Unicode encoding 4 (UTF16) remain readable.
-                if matches!(charset, FontValueCharset::Ucs2BmpOnly)
-                    && value.chars().any(|ch| ch.len_utf16() == 2)
-                {
-                    metadata.remove(&key);
-                    continue;
-                }
-                metadata.insert(key, TagValue::String(value));
+                metadata.remove(&key);
+                continue;
             }
+            metadata.insert(key, TagValue::String(value));
         }
 
         Ok(metadata)
@@ -1531,6 +1543,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn font_name_record_bounds_precede_duplicate_refusal() {
+        // Native Font.pm skips out-of-table records before HandleTag, but an
+        // in-bounds empty or malformed value replaces the earlier primary.
+        let tags = |encoding: u16,
+                    length: u16,
+                    offset: u16,
+                    payload: &[u8],
+                    declared_size: Option<u32>,
+                    string_start: u16| {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&2u16.to_be_bytes()); // two records
+            data.extend_from_slice(&string_start.to_be_bytes());
+            for (enc, len, off) in [(1u16, 2u16, 0u16), (encoding, length, offset)] {
+                for field in [PLATFORM_WINDOWS, enc, 0x0409, NAME_FONT_FAMILY, len, off] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+            }
+            data.extend_from_slice(&[0, b'A']);
+            data.extend_from_slice(payload);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: declared_size.unwrap_or(data.len() as u32),
+            };
+            TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+        };
+        let key = "Font:FontFamily-en-US";
+        let earlier_value = TagValue::String("A".to_string());
+        let earlier = Some(&earlier_value);
+        let out_of_bounds = tags(2, 2, 100, &[], None, 30);
+        assert_eq!(out_of_bounds.get(key), earlier);
+        let past_declared_table = tags(2, 2, 2, &[0x82, 0xa0], Some(32), 30);
+        assert_eq!(past_declared_table.get(key), earlier);
+        for (encoding, length, payload) in [
+            (2, 0, &[][..]),
+            (1, 0, &[][..]),
+            (1, 1, &[0][..]),
+            (1, 2, &[0xd8, 0][..]),
+        ] {
+            let refused = tags(encoding, length, 2, payload, None, 30);
+            assert!(
+                !refused.contains_key(key),
+                "encoding {encoding}, length {length}"
+            );
+        }
+        for (declared_size, string_start) in [(20, 30), (34, 18), (34, 40)] {
+            let invalid_header = tags(1, 2, 2, &[0, b'B'], Some(declared_size), string_start);
+            assert!(!invalid_header.contains_key(key));
+        }
+    }
+
     /// End-to-end check that a Macintosh CJK record reaches the right tag
     /// with the right text: the encoding ID has to pick the charset, the
     /// language ID has to pick the suffix, and the two are different numbers.
@@ -1575,7 +1640,7 @@ mod tests {
             b'n', b'a', b'm', b'e', // table tag
             0x00, 0x00, 0x00, 0x00, // checksum
             0x00, 0x00, 0x00, 0x1c, // table offset = 28
-            0x00, 0x00, 0x00, 0x00, // table length (unused by the parser)
+            0x00, 0x00, 0x00, 0x00, // table length filled after strings
         ];
         header.extend_from_slice(&0u16.to_be_bytes()); // name table format
         header.extend_from_slice(&count.to_be_bytes());
@@ -1592,6 +1657,8 @@ mod tests {
             strings.extend_from_slice(bytes);
         }
         header.extend_from_slice(&strings);
+        let table_length = (header.len() - 28) as u32;
+        header[24..28].copy_from_slice(&table_length.to_be_bytes());
 
         let metadata = TTFParser.parse(&TestReader::new(header)).unwrap();
         for (_, _, _, suffix, expected) in records {
