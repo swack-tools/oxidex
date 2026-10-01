@@ -139,12 +139,14 @@ DEFAULT_ROOT = Path.home() / ".keel" / "journal"
 
 #: Bumped whenever the meaning of an existing field changes or a new
 #: EVENT is added. Version 2 permits another run after an exit in the same
-#: file; version 1 readers consider any exit final. A record whose `v` is
+#: file; version 1 readers consider any exit final. Version 3 records a
+#: kernel birth token with each new spawn so an exec cannot be mistaken for
+#: recycled PGID. A record whose `v` is
 #: greater than this makes its file unreadable rather than partially
 #: understood -- an older runner rolled
 #: back onto a host a newer one journaled must fail closed, not quietly
 #: skip the records it does not recognize.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 OFFER = "offer"
 CLAIM = "claim"
@@ -205,6 +207,7 @@ class JobState:
     pid: Optional[int] = None
     pgid: Optional[int] = None
     scope_token: Optional[str] = None
+    leader_birth: Optional[str] = None
     gate_version: str = ""
     # The toolchain ids the CLAIM was written with. Restored rather than
     # recomputed: they were measured under the GATE's PATH, not the
@@ -609,6 +612,7 @@ def _parse_records(raw: bytes) -> List[dict]:
 _FOLD_FIELDS = (
     "kind", "work_key", "tag", "workdir", "claim_ref", "claim_sha",
     "holder_host", "started_at", "expires_at", "pid", "pgid", "scope_token",
+    "leader_birth",
     "gate_version", "rustc_id", "platform_id", "outcome", "rc",
 )
 
@@ -645,6 +649,8 @@ def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
     for name in ("pid", "pgid", "rc"):
         if name in values and not isinstance(values[name], int):
             values.pop(name)
+    if "leader_birth" in values and not isinstance(values["leader_birth"], str):
+        values.pop("leader_birth")
     kwargs = {k: v for k, v in values.items() if k in _FOLD_FIELDS}
     return JobState(
         job_key=str(job_key),
@@ -775,6 +781,7 @@ def rebuild_claim(job: JobState, *, host: str, hub, ttl: Optional[float] = None,
         # its pgid).
         pid=job.pid if job.pid is not None else job.pgid,
         pgid=job.pgid,
+        leader_birth=job.leader_birth,
         ttl=ttl,
         renew_interval=renew_interval,
     )
@@ -980,17 +987,13 @@ def adopt_from_journal(
             )
             continue
         if not job.spawned:
-            # `offer`/`claim` only: the runner died between taking the
-            # lease and spawning, so no process exists. The claim (if it
-            # was taken at all) has no pgid and is owed a release, which
-            # is what `fleetd.adopt_workers` does with the same shape.
-            reason = f"never spawned (pgid={job.pgid!r})"
-            if job.claim_ref:
-                res.to_release.append(
-                    OwedRelease(job.job_key, job.claim_ref, job.started_at,
-                                reason, job.prior_runs))
-            else:
-                res.refused.append((job.job_key, reason))
+            # An acquired claim without a spawn record is ambiguous: the
+            # daemon may have died before Popen, or the post-Popen append
+            # may have failed. A missing local PGID cannot prove absence.
+            res.refused.append((
+                job.job_key,
+                "claim has no durable spawn record; process absence unproved"
+                if job.started_at else "offer never acquired a claim"))
             continue
         pgid = int(job.pgid)  # type: ignore[arg-type]
         if own_pgid is not None and pgid == own_pgid:
@@ -1037,27 +1040,30 @@ def adopt_from_journal(
             res.refused_wholesale = (
                 f"process identity listing unavailable ({exc}); releasing nothing")
             return res
-        if member is None:
+        if job.spawned:
             from keel.runner import _journal_group_identity
             try:
-                group_identity = _journal_group_identity(pgid, scope_token, markers)
+                group_identity = _journal_group_identity(
+                    pgid, scope_token, markers, expected_birth=job.leader_birth,
+                    require_birth=True)
             except ProcessListingUnavailable as exc:
                 res.to_release.clear()
                 res.refused_wholesale = (
                     f"process identity listing unavailable ({exc}); releasing nothing")
                 return res
-            if group_identity != "other":
+            if group_identity == "missing":
                 # A missing ps row is inconclusive whichever listing omitted
                 # it. Only a positively different group can retire this run.
                 res.refused.append((job.job_key,
                                     f"pgid {pgid} exists but different identity is unproved"))
                 continue
-            res.to_release.append(
-                OwedRelease(job.job_key, job.claim_ref, job.started_at,
-                            f"recorded pgid {pgid} is not a scoped fleet worker "
-                            f"(recycled, or pre-scope)", job.prior_runs)
-            )
-            continue
+            if group_identity == "other":
+                res.to_release.append(
+                    OwedRelease(job.job_key, job.claim_ref, job.started_at,
+                                f"recorded pgid {pgid} has different birth",
+                                job.prior_runs))
+                continue
+            member = "verified by birth identity"
         rebuilt = rebuild_claim(job, host=host, hub=hub, ttl=ttl,
                                 renew_interval=renew_interval, now=now,
                                 start_renewer=renew_claims)
@@ -1205,6 +1211,7 @@ class StartupAdoption:
     suppressed_kills: List[int] = field(default_factory=list)
     local_conflict_unresolved: bool = False
     unresolved_orphan_pgids: set = field(default_factory=set)
+    unresolved_orphan_births: dict = field(default_factory=dict)
 
     @property
     def offline(self) -> bool:
@@ -1291,6 +1298,14 @@ def adopt_at_startup(
 
     res = StartupAdoption(mode="store", scan=scan)
     kwargs = {}
+    recorded_births = {
+        job.claim_ref: (job.started_at, job.pgid, job.leader_birth)
+        for job in scan.open_jobs
+        if (job.claim_ref and job.started_at and job.spawned and
+            job.holder_host == host)
+    }
+    if recorded_births:
+        kwargs["recorded_births"] = recorded_births
     if markers is not None:
         kwargs["markers"] = markers
     if scope_token is not None:
@@ -1325,6 +1340,10 @@ def adopt_at_startup(
             pgid for pgid, _outcome in res.hub_result.orphans_killed
             if _pgid_alive(pgid)
         }
+        res.unresolved_orphan_births = {
+            pgid: birth for pgid, birth in res.hub_result.orphan_births.items()
+            if pgid in res.unresolved_orphan_pgids
+        }
         if scan.open_jobs:
             # Every durable local run is an obligation, including one with
             # no current store claim. The same classifier runs at initial
@@ -1337,6 +1356,24 @@ def adopt_at_startup(
             claimed_by_ref = res.hub_result.claim_pgids_by_ref
             claimed_pgids = set(claimed_by_ref.values())
             local_scope = scope_token or fleet_scope_token(hub.url)
+            for job in scan.open_jobs:
+                if job.spawned or not job.started_at:
+                    continue
+                current = store_by_ref.get(job.claim_ref)
+                if (current is None or current.claim._started_at is None or
+                        claim_mod._iso(current.claim._started_at) != job.started_at or
+                        not scan.sweep_armed):
+                    res.local_conflict_unresolved = True
+                    continue
+                # A verified, exact store-adopted worker can restore the
+                # missing post-Popen record. If that append still fails,
+                # keep starts disabled rather than losing this obligation.
+                try:
+                    journal.spawn(job_key=job.job_key, pid=current.pgid,
+                                  pgid=current.pgid, scope_token=local_scope,
+                                  leader_birth=current.claim.leader_birth)
+                except JournalError:
+                    res.local_conflict_unresolved = True
             obligations = [
                 job for job in scan.open_jobs
                 if job.spawned and isinstance(job.pgid, int) and job.pgid > 1
@@ -1378,11 +1415,17 @@ def adopt_at_startup(
                             kill_process_group(job.pgid)
                         if _pgid_alive(job.pgid):
                             res.unresolved_orphan_pgids.add(job.pgid)
+                            if job.leader_birth:
+                                res.unresolved_orphan_births.setdefault(
+                                    job.pgid, job.leader_birth)
                 elif job.job_key not in released and _pgid_alive(job.pgid):
                     if current is not None:
                         res.local_conflict_unresolved = True
                     else:
                         res.unresolved_orphan_pgids.add(job.pgid)
+                        if job.leader_birth:
+                            res.unresolved_orphan_births.setdefault(
+                                job.pgid, job.leader_birth)
     except HubError as exc:
         res.store_workers = list(workers)
         # The store pass is unavailable or incomplete. Use local evidence

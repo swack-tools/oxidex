@@ -123,6 +123,7 @@ from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 from keel.fallbackhub import FallbackHub  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
 from keel import runner_toml  # noqa: E402
+from keel.process_birth import leader_birth, valid_birth_token  # noqa: E402
 
 # --------------------------------------------------------------------- #
 # Constants (moved from fleetd.py; FLEET_PLAN.md "Shared contracts" is
@@ -470,12 +471,15 @@ def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
 
 
 def _journal_group_identity(pgid: int, scope_token: str,
-                            markers: Optional[Sequence[str]] = None) -> str:
-    """Return scoped, other, or missing from one same-uid process listing.
+                            markers: Optional[Sequence[str]] = None,
+                            expected_birth: Optional[str] = None,
+                            require_birth: bool = False) -> str:
+    """Return scoped, other, or missing from checked local identity evidence.
 
     A kernel-live group omitted by ps is `missing`, not proof of a
-    recycled group. Only a live, unscoped group leader proves `other`;
-    a zombie leader with unmarked children may be the original worker.
+    recycled group. An unmarked live leader may be the original after exec.
+    Only a different kernel birth proves `other`; an unreadable birth or a
+    zombie leader with unmarked children leaves identity unknown.
     """
     lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,stat=,command="], env=_ps_env())
     try:
@@ -483,6 +487,10 @@ def _journal_group_identity(pgid: int, scope_token: str,
     except AttributeError:
         uid = None
     leader_present = False
+    scoped = False
+    if expected_birth is not None and not valid_birth_token(expected_birth):
+        expected_birth = None
+        require_birth = True
     markers = worker_markers() if markers is None else markers
     for line in lines:
         fields = line.split(None, 4)
@@ -502,11 +510,18 @@ def _journal_group_identity(pgid: int, scope_token: str,
         if pid == pgid:
             leader_present = True
         if scope_token in command and any(marker in command for marker in markers):
-            return "scoped"
+            scoped = True
     # A cargo/rustc child without the gate leader can be the old worker
-    # whose marker row ps omitted. Only the leader itself proves a
-    # different process now occupies the group number.
-    return "other" if leader_present else "missing"
+    # whose marker row ps omitted. A visible leader needs birth evidence;
+    # its command marker can vanish on exec without changing its identity.
+    if leader_present and expected_birth:
+        observed = leader_birth(pgid)
+        if observed is None:
+            return "missing"
+        return "scoped" if observed == expected_birth else "other"
+    if require_birth or expected_birth:
+        return "missing"
+    return "scoped" if scoped else "missing"
 
 
 def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
@@ -837,7 +852,30 @@ def stop_lost_workers(workers: list, journal, host: str,
     """
     killed = []
     for worker in list(workers):
-        if (not worker.claim.lost and not worker.cleanup_pending) or worker.superseded_same_group:
+        if worker.superseded_same_group:
+            # This handle must never signal the shared physical group. Once
+            # its renewer has stopped, another tracked handle can own it;
+            # without that peer, require kernel absence before retirement.
+            if worker.claim.renewer_running():
+                continue
+            peer = any(other is not worker and other.pgid == worker.pgid and
+                       other.claim.ref == worker.claim.ref for other in workers)
+            if not peer and _pgid_alive(worker.pgid):
+                continue
+            workers.remove(worker)
+            if not peer:
+                try:
+                    worker.claim.release()
+                except HubError:
+                    pass
+                if _journal_run_matches_worker(journal, worker):
+                    try:
+                        journal.exit(job_key=worker.job_key, rc=None,
+                                     outcome="superseded-group-gone")
+                    except journal_mod.JournalError:
+                        pass
+            continue
+        if not worker.claim.lost and not worker.cleanup_pending:
             continue
         reason = (worker.claim.lost_reason or "renewal failed (no reason recorded)"
                   if worker.claim.lost else "spawn record failed; cleanup pending")
@@ -850,7 +888,9 @@ def stop_lost_workers(workers: list, journal, host: str,
         if not child_live and group_live:
             try:
                 identity = _journal_group_identity(
-                    worker.pgid, fleet_scope_token(worker.claim.hub.url))
+                    worker.pgid, fleet_scope_token(worker.claim.hub.url),
+                    expected_birth=worker.claim.leader_birth,
+                    require_birth=True)
             except ProcessListingUnavailable:
                 identity = "missing"
         if identity == "missing" and group_live:
@@ -861,12 +901,13 @@ def stop_lost_workers(workers: list, journal, host: str,
         outcome = ("positive replacement; signal skipped" if identity == "other"
                    else "kernel group absent; signal skipped" if not group_live
                    else killer(worker))
-        if identity != "other" and _pgid_alive(worker.pgid):
+        still_live = _pgid_alive(worker.pgid)
+        if identity != "other" and still_live:
             print(f"fleetd[{host}] LOST LEASE {worker.claim.ref} pgid={worker.pgid}: "
                   f"termination unconfirmed ({outcome}); retaining run for retry",
                   file=sys.stderr, flush=True)
             continue
-        if identity == "other" or not group_live:
+        if identity == "other" or not still_live:
             try:
                 worker.claim.release()
             except HubError:
@@ -935,7 +976,8 @@ def stop_superseded_workers(workers: list, store_workers: list,
 
 
 def resolve_known_orphans(pgids: set[int], scope_token: str,
-                          markers: Optional[Sequence[str]] = None) -> bool:
+                          markers: Optional[Sequence[str]] = None,
+                          births: Optional[dict] = None) -> bool:
     """Retain an unclaimed group until kernel absence or replacement is proved.
 
     Store adoption retries the actual orphan signal after reading current
@@ -945,13 +987,22 @@ def resolve_known_orphans(pgids: set[int], scope_token: str,
     for pgid in list(pgids):
         if not _pgid_alive(pgid):
             pgids.remove(pgid)
+            if births is not None:
+                births.pop(pgid, None)
+            continue
+        expected_birth = (births or {}).get(pgid)
+        if not expected_birth:
             continue
         try:
-            identity = _journal_group_identity(pgid, scope_token, markers)
+            identity = _journal_group_identity(
+                pgid, scope_token, markers, expected_birth=expected_birth,
+                require_birth=True)
         except ProcessListingUnavailable:
             continue
         if identity == "other":
             pgids.remove(pgid)
+            if births is not None:
+                births.pop(pgid, None)
     return not pgids
 
 
@@ -1126,11 +1177,25 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
                 w.claim.ref == job.claim_ref and
                 w.claim._started_at is not None and
                 claim_mod._iso(w.claim._started_at) == job.started_at and
-                w.pgid == job.pgid for w in workers) or
+                (w.pgid == job.pgid or w.cleanup_pending) for w in workers) or
                 job.torn or job.holder_host not in (None, host)):
             continue
         if job.scope_token is not None and job.scope_token != scope_token:
             continue
+        if not job.spawned and job.started_at:
+            # A failed post-Popen append has the same on-disk prefix as a
+            # crash immediately before Popen. The journal alone cannot
+            # prove no child exists. The exact claim may carry its PGID;
+            # only kernel absence for that group permits release.
+            payload = hub.read(job.claim_ref) if job.claim_ref else None
+            if (payload is None or payload.get("holder_host") != host or
+                    payload.get("started_at") != job.started_at):
+                continue
+            pending_pgid = payload.get("pgid")
+            if not isinstance(pending_pgid, int) or pending_pgid <= 1:
+                continue
+            if _pgid_alive(pending_pgid):
+                continue
         if job.spawned:
             try:
                 os.killpg(job.pgid, 0)
@@ -1155,7 +1220,9 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
                 if job.scope_token is None:
                     continue
                 try:
-                    identity = _journal_group_identity(job.pgid, scope_token)
+                    identity = _journal_group_identity(
+                        job.pgid, scope_token,
+                        expected_birth=job.leader_birth, require_birth=True)
                 except ProcessListingUnavailable:
                     continue
                 if identity != "other":
@@ -1283,8 +1350,10 @@ def start_gate(
     finally:
         log.close()
     try:
+        c.leader_birth = leader_birth(popen.pid)
         jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
-                 scope_token=fleet_scope_token(hub.url), argv0=str(gate_command[0]))
+                 scope_token=fleet_scope_token(hub.url), argv0=str(gate_command[0]),
+                 leader_birth=c.leader_birth)
     except journal_mod.JournalError as exc:
         # A process exists that this runner cannot write down. Compare the
         # two directions of being wrong, the way the lost-lease kill does:
@@ -1377,8 +1446,10 @@ def start_agent(
     finally:
         log.close()
     try:
+        c.leader_birth = leader_birth(popen.pid)
         jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
-                 scope_token=fleet_scope_token(hub.url), argv0=sys.executable)
+                 scope_token=fleet_scope_token(hub.url), argv0=sys.executable,
+                 leader_birth=c.leader_birth)
     except journal_mod.JournalError as exc:
         _failed_spawn_record(
             jn, job_key,
@@ -1694,6 +1765,7 @@ class AdoptionResult:
     adopted: list = field(default_factory=list)  # (kind, key, pgid)
     released: list = field(default_factory=list)  # (ref, reason)
     orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
+    orphan_births: dict = field(default_factory=dict)  # verified before signal
     claim_pgids_by_ref: dict = field(default_factory=dict)  # every readable claim
     # Marker-matched, claim-less groups that do NOT carry this daemon's
     # scope token: a fixture daemon's view of the real fleet, or a human's
@@ -1737,6 +1809,7 @@ def adopt_workers(
     markers: Optional[Sequence[str]] = None,
     scope_token: Optional[str] = None,
     session_probe: Callable[[int], Optional[int]] = session_of,
+    recorded_births: Optional[dict] = None,
 ) -> AdoptionResult:
     """Rebuild `workers` from this host's live claims + process groups
     (ARCH-FIX-SPEC.md R6). Appends adopted workers to `workers` in place.
@@ -1861,14 +1934,15 @@ def adopt_workers(
                 continue
 
             if pgid is None or pgid <= 1 or (own_pgid is not None and pgid == own_pgid):
-                # No usable process group: either the claim was taken and
-                # the daemon died before `start_gate` could write the real
-                # pgid (so this is the dead daemon's own group), or the
-                # payload is malformed. Either way there is no work to
-                # adopt.
-                reason = f"no adoptable process group (pgid={payload.get('pgid')!r})"
-                res.released.append((ref, reason))
-                _release_claim_ref(hub, ref, sha, host, reason, res)
+                # Claim-before-Popen leaves this exact payload both when
+                # launch never happened and when Popen succeeded but its
+                # first journal/claim update failed. No record can prove
+                # that a child does not exist; retain until exact evidence
+                # or the ordinary claim TTL/reaper resolves it.
+                reason = (f"no durable worker PGID in claim "
+                          f"({payload.get('pgid')!r}); process absence unproved")
+                res.skipped.append((ref, reason))
+                res.unreadable.append((ref, reason))
                 continue
 
             if pgid not in live:
@@ -1886,35 +1960,46 @@ def adopt_workers(
                 except OSError:
                     pass  # uncertain or EPERM: keep the claim for identity check
 
+            journal_birth = (recorded_births or {}).get(ref)
+            if (journal_birth is not None and
+                    (journal_birth[0] != payload.get("started_at") or
+                     journal_birth[1] != pgid)):
+                journal_birth = None
+            expected_birth = (journal_birth[2] if journal_birth is not None
+                              else payload.get("leader_birth"))
+            # A legacy claim with no birth is unknown even when its current
+            # argv has our marker: a recycled worker can reuse that marker.
+            require_birth = True
+            if (journal_birth is not None and expected_birth and
+                    payload.get("leader_birth") and
+                    payload["leader_birth"] != expected_birth):
+                reason = "journal and store disagree on process birth"
+                res.skipped.append((ref, reason))
+                res.unreadable.append((ref, reason))
+                continue
+
             # IDENTITY, not just liveness. A pgid is a name that gets
-            # recycled; between this claim's write and this daemon's start
-            # (a reboot, a long outage) the number can come to mean an
-            # unrelated same-uid process. Adopting it would hand that
-            # process to the lost-lease kill with no further checks --
-            # `fleetd_marker_in_group` refuses exactly this trust for the
-            # singleton's pgid, and adoption gets the same rule: some live,
-            # same-uid member of the group must carry a worker marker AND
-            # this daemon's scope token. Anything else is released (the
-            # work goes back to the queue) and NEVER killed -- if it is a
-            # recycled bystander it was never ours; if it is a pre-scope
-            # worker across the upgrade boundary it finishes unsupervised,
-            # which the drained-fleet deployment makes moot.
-            member = _scoped_worker_in_group(pgid, markers, scope_token)
-            if member is None:
-                try:
-                    identity = _journal_group_identity(pgid, scope_token, markers)
-                except ProcessListingUnavailable as exc:
-                    identity = "missing"
-                    res.skipped.append((ref, f"identity listing unavailable: {exc}"))
-                if identity == "missing":
-                    reason = (f"recorded pgid {pgid} is kernel-live but worker "
-                              "identity is inconclusive")
-                    res.skipped.append((ref, reason))
-                    res.unreadable.append((ref, reason))
-                    continue
-                if identity == "scoped":
-                    member = "verified by second identity listing"
-            if member is None:
+            # recycled; a live process at the same numeric PGID can be
+            # unrelated. A recorded kernel birth is compared even when a
+            # marker is present, since a new worker could reuse the marker.
+            # Conversely, exec can erase the original worker's marker
+            # without changing its birth. Missing evidence leaves the
+            # claim held and starts disabled; only a different birth
+            # permits release of the old claim.
+            try:
+                identity = _journal_group_identity(
+                    pgid, scope_token, markers, expected_birth=expected_birth,
+                    require_birth=require_birth)
+            except ProcessListingUnavailable as exc:
+                identity = "missing"
+                res.skipped.append((ref, f"identity listing unavailable: {exc}"))
+            if identity == "missing":
+                reason = (f"recorded pgid {pgid} is kernel-live but worker "
+                          "identity is inconclusive")
+                res.skipped.append((ref, reason))
+                res.unreadable.append((ref, reason))
+                continue
+            if identity == "other":
                 reason = (f"recorded pgid {pgid} is not a scoped fleet "
                           f"worker (recycled, or pre-scope)")
                 res.released.append((ref, reason))
@@ -1922,7 +2007,10 @@ def adopt_workers(
                 claimed_pgids.discard(pgid)
                 continue
 
-            c = claim_mod.Claim.adopt(hub, ref, expected_host=host)
+            c = claim_mod.Claim.adopt(
+                hub, ref, expected_host=host,
+                expected_started_at=payload.get("started_at"),
+                expected_leader_birth=expected_birth)
             if c is None:
                 # The lease is no longer ours (reaped and re-taken between
                 # our read and our renewal). Deliberately NOT released --
@@ -2003,11 +2091,19 @@ def adopt_workers(
         # SIGKILL a corpse (EPERM). `live_pgids()` filters `Z` state, which
         # is exactly why `kill_process_group`'s own docstring names the ps
         # listing as the instrument for verifying a kill.
-        outcome = killer(pgid, alive_probe=lambda p: p in pgid_probe())
+        birth_before = leader_birth(pgid)
+        member_now = _scoped_worker_in_group(pgid, markers, scope_token)
+        birth_after = leader_birth(pgid)
+        if (not birth_before or birth_before != birth_after or
+                member_now is None):
+            outcome = "identity inconclusive; signal skipped"
+        else:
+            res.orphan_births[pgid] = birth_before
+            outcome = killer(pgid, alive_probe=lambda p: p in pgid_probe())
         res.orphans_killed.append((pgid, outcome))
         print(
             f"fleetd[{host}] ORPHAN process group {pgid} ({command[:80]}) has no "
-            f"live claim -- killed: {outcome}",
+            f"live claim -- stop attempt: {outcome}",
             file=sys.stderr,
             flush=True,
         )
@@ -2654,8 +2750,10 @@ def _run_daemon_locked(
             hub, host, workers, journal=jn,
             allow_store_adoption=singleton_owned)
         known_orphans = set(adoption.unresolved_orphan_pgids)
+        known_orphan_births = dict(adoption.unresolved_orphan_births)
         orphans_cleared = resolve_known_orphans(
-            known_orphans, fleet_scope_token(hub.url))
+            known_orphans, fleet_scope_token(hub.url),
+            births=known_orphan_births)
         adoption.unresolved_orphan_pgids = set(known_orphans)
         supersession_cleared = stop_superseded_workers(
             workers, adoption.store_workers, jn, host)
@@ -2747,7 +2845,9 @@ def _run_daemon_locked(
             # Local safety is independent of host-lease or journal-store
             # reads. An already-lost worker is signalled first.
             pre_killed = stop_lost_workers(workers, jn, host)
-            if not resolve_known_orphans(known_orphans, reg_scope_token):
+            if not resolve_known_orphans(
+                    known_orphans, reg_scope_token,
+                    births=known_orphan_births):
                 spawn_allowed = False
             # A hub failure degrades THIS ITERATION, never the daemon --
             # bounded by RECONCILE_HUB_FAILURE_LIMIT, see its comment. Only
@@ -2867,8 +2967,13 @@ def _run_daemon_locked(
                             jn, host)
                         if current is not None:
                             known_orphans.update(current.unresolved_orphan_pgids)
+                            for pgid, birth in current.unresolved_orphan_births.items():
+                                if (pgid not in known_orphan_births or
+                                        pgid in current.hub_result.orphan_births):
+                                    known_orphan_births[pgid] = birth
                             orphans_cleared = resolve_known_orphans(
-                                known_orphans, reg_scope_token)
+                                known_orphans, reg_scope_token,
+                                births=known_orphan_births)
                             current.unresolved_orphan_pgids = set(known_orphans)
                         else:
                             orphans_cleared = not known_orphans

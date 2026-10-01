@@ -1076,6 +1076,7 @@ class TestJournalWiring(RunnerFixture):
         payload["expires_at"] = claim_mod._iso(
             claim_mod._utcnow() + claim_mod.timedelta(seconds=600))
         payload["pid"] = payload["pgid"] = new.pid
+        payload["leader_birth"] = runner.leader_birth(new.pid)
         self.assertTrue(self.hub.update(old.claim.ref, payload,
                                         expect_sha=self.hub.sha(old.claim.ref)))
         real_adopt = fleetd.adopt_workers
@@ -1157,6 +1158,7 @@ class TestJournalWiring(RunnerFixture):
         payload["expires_at"] = claim_mod._iso(
             claim_mod._utcnow() + claim_mod.timedelta(seconds=600))
         payload["pid"] = payload["pgid"] = new.pid
+        payload["leader_birth"] = runner.leader_birth(new.pid)
         self.assertTrue(self.hub.update(old.claim.ref, payload,
                                         expect_sha=self.hub.sha(old.claim.ref)))
         real_list = claim_mod.list_claims
@@ -1355,6 +1357,108 @@ class TestJournalWiring(RunnerFixture):
         self.assertTrue(j.read_job(pending.job_key).open)
         self.assertIn("spawn-cleanup-pending", [code for code, _ in result.refused])
         self.assertEqual(len(self.hub.list("refs/fleet/claims/gate/")), 1)
+
+    def test_pending_spawn_survives_reconcile_and_recovers_on_restart(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        j = journal_mod.Journal(self.tmp / "journal-pending-restart")
+        with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
+                mock.patch.object(runner, "kill_process_group",
+                                  return_value="injected signal refusal"):
+            with self.assertRaises(runner.SpawnCleanupPending) as caught:
+                runner.start_gate(self.hub, "staging/one", "pending", [str(self.stub)],
+                                  self.host, self.log_dir, journal=j)
+        pending = caught.exception.worker
+        self.workers.append(pending)
+        self.assertFalse(j.read_job(pending.job_key).spawned)
+        runner.reconcile_journal_runs(j, self.hub, self.host, [pending])
+        runner.reconcile_journal_runs(j, self.hub, self.host, [])
+        self.assertTrue(j.read_job(pending.job_key).open)
+        self.assertIsNotNone(self.hub.sha(pending.claim.ref))
+        pending.claim.stop_renewer(timeout=2)
+
+        refused_workers = []
+        with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("still full")):
+            refused = journal_mod.adopt_at_startup(
+                self.hub, self.host, refused_workers, journal=j,
+                markers=[str(self.stub)])
+        self.assertFalse(refused.spawn_allowed)
+        self.assertTrue(j.read_job(pending.job_key).open)
+        self.assertIsNotNone(self.hub.sha(pending.claim.ref))
+        for worker in refused_workers:
+            worker.claim.stop_renewer(timeout=2)
+
+        recovered_workers = []
+        recovered = journal_mod.adopt_at_startup(
+            self.hub, self.host, recovered_workers, journal=j,
+            markers=[str(self.stub)])
+        self.assertEqual(recovered.mode, "store")
+        self.assertTrue(recovered.spawn_allowed)
+        self.assertTrue(j.read_job(pending.job_key).spawned)
+        self.assertEqual([w.pgid for w in recovered_workers], [pending.pgid])
+        for worker in recovered_workers:
+            worker.claim.stop_renewer(timeout=2)
+
+    def test_pending_spawn_without_claim_pgid_cannot_release_on_restart(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        j = journal_mod.Journal(self.tmp / "journal-pending-no-pgid")
+        with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
+                mock.patch.object(runner, "kill_process_group",
+                                  return_value="injected signal refusal"):
+            with self.assertRaises(runner.SpawnCleanupPending) as caught:
+                runner.start_gate(self.hub, "staging/one", "pending", [str(self.stub)],
+                                  self.host, self.log_dir, journal=j)
+        pending = caught.exception.worker
+        self.workers.append(pending)
+        pending.claim.stop_renewer(timeout=2)
+        payload = self.hub.read(pending.claim.ref)
+        payload["pid"] = payload["pgid"] = None
+        self.assertTrue(self.hub.update(
+            pending.claim.ref, payload,
+            expect_sha=self.hub.sha(pending.claim.ref)))
+        recovered_workers = []
+        result = journal_mod.adopt_at_startup(
+            self.hub, self.host, recovered_workers, journal=j,
+            markers=[str(self.stub)])
+        self.assertFalse(result.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(pending.claim.ref))
+        self.assertTrue(j.read_job(pending.job_key).open)
+        self.assertIsNone(pending.popen.poll())
+
+    def test_cleanup_final_absence_releases_still_renewing_claim(self):
+        claim = mock.Mock()
+        claim.lost = False
+        claim.ref = "refs/fleet/claims/gate/example"
+        claim.hub = self.hub
+        worker = runner.Worker("staging/one", "pending", 424242, claim,
+                               popen=mock.Mock(), job_key="gate-example",
+                               cleanup_pending=True)
+        worker.popen.poll.return_value = None
+        tracked = [worker]
+        with mock.patch.object(runner, "_pgid_alive", side_effect=[True, False]), \
+                mock.patch.object(runner, "_journal_run_matches_worker",
+                                  return_value=False):
+            runner.stop_lost_workers(tracked, journal_mod.Journal(), self.host,
+                                     killer=lambda _w: "signal sent")
+        self.assertEqual(tracked, [])
+        claim.release.assert_called_once()
+
+    def test_quarantined_handle_retires_after_peer_and_group_are_gone(self):
+        claim = mock.Mock()
+        claim.ref = "refs/fleet/claims/gate/example"
+        claim.renewer_running.return_value = False
+        worker = runner.Worker("staging/one", "old", 424242, claim,
+                               superseded_same_group=True)
+        tracked = [worker]
+        with mock.patch.object(runner, "_pgid_alive", side_effect=[True, False]), \
+                mock.patch.object(runner, "_journal_run_matches_worker",
+                                  return_value=False), \
+                mock.patch.object(runner, "kill_worker") as killer:
+            runner.stop_lost_workers(tracked, journal_mod.Journal(), self.host)
+            self.assertEqual(tracked, [worker])
+            runner.stop_lost_workers(tracked, journal_mod.Journal(), self.host)
+            killer.assert_not_called()
+        self.assertEqual(tracked, [])
+        claim.release.assert_called_once()
 
 
 # --------------------------------------------------------------------- #

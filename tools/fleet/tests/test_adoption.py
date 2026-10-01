@@ -52,6 +52,7 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
+from keel.process_birth import leader_birth  # noqa: E402
 from claim import Claim  # noqa: E402
 from fleetlib import Hub, HubError  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
@@ -445,11 +446,15 @@ class TestAdoptWorkers(HermeticCase):
         return p
 
     def make_claim_on_hub(self, kind: str, key: str, *, host: str, pgid: int,
-                          work_key: str = "staging/one") -> str:
+                          work_key: str = "staging/one",
+                          recorded_birth: str = "auto") -> str:
         ref = claim_mod.claim_ref(kind, key)
         now = datetime.now(timezone.utc)
+        if recorded_birth == "auto":
+            recorded_birth = leader_birth(pgid)
         self.assertTrue(self.hub.create(ref, {
             "holder_host": host, "pid": pgid, "pgid": pgid,
+            "leader_birth": recorded_birth,
             "work_kind": kind, "work_key": work_key,
             "started_at": now.isoformat(),
             "expires_at": (now + timedelta(seconds=300)).isoformat(),
@@ -486,8 +491,31 @@ class TestAdoptWorkers(HermeticCase):
         self.assertTrue(w.alive(), "the adopted worker must read as alive")
         self.assertTrue(w.claim.renewer_running(), "adoption must resume renewal")
         self.assertIsNotNone(self.hub.sha(ref), "the claim must still be held")
+        self.assertEqual(self.hub.read(ref)["leader_birth"], leader_birth(p.pid))
         self.assertEqual(killed, [], "an adopted worker must never be swept")
         self.assertEqual([(k, key) for k, key, _ in res.adopted], [("gate", "staging-one")])
+
+    def test_legacy_claim_without_birth_keeps_live_group_and_disarms_sweep(self):
+        p = self.spawn_stub_worker()
+        ref = self.make_claim_on_hub("gate", "staging-one", host=HOST,
+                                     pgid=p.pid, recorded_birth=None)
+        res, killed = self.adopt()
+        self.assertEqual(self.workers, [])
+        self.assertEqual(killed, [])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIn(ref, [r for r, _ in res.unreadable])
+        self.assertIsNone(p.poll())
+
+    def test_malformed_birth_cannot_prove_recycled_live_claim(self):
+        p = self.spawn_stub_worker()
+        ref = self.make_claim_on_hub("gate", "staging-one", host=HOST,
+                                     pgid=p.pid, recorded_birth="not-a-birth-token")
+        res, killed = self.adopt()
+        self.assertEqual(self.workers, [])
+        self.assertEqual(killed, [])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIn(ref, [r for r, _ in res.unreadable])
+        self.assertIsNone(p.poll())
 
     def test_dead_claim_of_ours_is_released(self):
         p = self.spawn_stub_worker()
@@ -557,15 +585,16 @@ class TestAdoptWorkers(HermeticCase):
             self.skipTest("no process groups on this platform")
         killed: list = []
         tok = fleetd.fleet_scope_token(self.hub.url)
+        orphan = self.spawn_stub_worker()
         res = fleetd.adopt_workers(
             self.hub, HOST, self.workers,
             worker_probe=lambda _m: {own: f"fleetd itself {tok}",
-                                     424242: f"a real orphan {tok}"},
+                                     orphan.pid: f"a real orphan {tok}"},
             killer=lambda pgid, **kw: killed.append(pgid) or "fake",
             markers=[self.marker],
         )
         self.assertNotIn(own, killed, "fleetd must never sweep its own group")
-        self.assertEqual(res.orphans_killed, [(424242, "fake")],
+        self.assertEqual(res.orphans_killed, [(orphan.pid, "fake")],
                          "everything except our own group is still swept")
 
     def test_unscoped_worker_shaped_group_is_reported_never_killed(self):
@@ -665,7 +694,8 @@ class TestAdoptWorkers(HermeticCase):
         while time.time() < deadline and bystander.pid not in fleetd.live_pgids():
             time.sleep(0.1)
         ref = self.make_claim_on_hub("gate", "staging-recycled", host=HOST,
-                                     pgid=bystander.pid)
+                                     pgid=bystander.pid,
+                                     recorded_birth="darwin:1:0")
         res, killed = self.adopt()
         self.assertEqual(self.workers, [], "a bystander must not be adopted")
         self.assertEqual(killed, [], f"a bystander was killed: {res}")
@@ -687,7 +717,7 @@ class TestAdoptWorkers(HermeticCase):
         self.assertIn(foreign.pid, [pg for pg, _ in res.unscoped])
         self.assertIsNone(foreign.poll())
 
-    def test_claim_without_a_usable_pgid_is_released(self):
+    def test_claim_without_a_usable_pgid_cannot_prove_no_child(self):
         ref = claim_mod.claim_ref("agent", "staging-one")
         now = datetime.now(timezone.utc)
         self.assertTrue(self.hub.create(ref, {
@@ -696,8 +726,9 @@ class TestAdoptWorkers(HermeticCase):
             "expires_at": (now + timedelta(seconds=300)).isoformat(),
         }))
         res, _killed = self.adopt()
-        self.assertIsNone(self.hub.sha(ref))
-        self.assertIn(ref, [r for r, _ in res.released])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIn(ref, [r for r, _ in res.unreadable])
+        self.assertIsNotNone(res.sweep_skipped)
 
     def test_the_host_singleton_is_not_treated_as_a_worker(self):
         """`adopt_workers` lists only gate/agent kinds. Adopting or

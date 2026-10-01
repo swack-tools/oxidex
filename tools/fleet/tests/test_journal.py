@@ -155,7 +155,7 @@ class JournalCase(HermeticCase):
     def journal_job(self, job_key, *, pgid=None, holder_host=HOST,
                     claim_ref=None, claim_sha="0" * 40, started_at=None,
                     expires_at=None, work_key=None, kind="gate",
-                    scope_token=None, closed=False):
+                    scope_token=None, closed=False, leader_birth="auto"):
         """Write a complete offer/claim/spawn history for one job."""
         started = started_at or iso(datetime.now(timezone.utc) - timedelta(seconds=30))
         ref = claim_ref or claim_mod.claim_ref(kind, job_key)
@@ -168,17 +168,23 @@ class JournalCase(HermeticCase):
                      gate_version="8", rustc_id="rustc-from-the-gates-path",
                      platform_id="platform-from-the-gates-path")
         if pgid is not None:
+            if leader_birth == "auto":
+                leader_birth = runner_mod.leader_birth(pgid)
             self.j.spawn(job_key=job_key, pid=pgid, pgid=pgid,
-                         scope_token=scope_token or getattr(self, "token", None))
+                         scope_token=scope_token or getattr(self, "token", None),
+                         leader_birth=leader_birth)
         if closed:
             self.j.exit(job_key=job_key, rc=0, outcome="PASS")
         return ref
 
     def seed_claim_on_hub(self, hub, ref, *, host, pgid, started_at,
-                          expires_in=TTL):
+                          expires_in=TTL, leader_birth="auto"):
         now = datetime.now(timezone.utc)
+        if leader_birth == "auto":
+            leader_birth = runner_mod.leader_birth(pgid)
         self.assertTrue(hub.create(ref, {
             "holder_host": host, "pid": pgid, "pgid": pgid,
+            "leader_birth": leader_birth,
             "work_kind": "gate", "work_key": "staging/one",
             "started_at": started_at,
             "expires_at": iso(now + timedelta(seconds=expires_in)),
@@ -409,7 +415,8 @@ class TestJournalScan(JournalCase):
         self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
                      tag="second")
         written = json.loads(path.read_text().splitlines()[-1])
-        self.assertEqual(written["v"], 2)
+        self.assertEqual(written["v"], jr.SCHEMA_VERSION)
+        self.assertGreater(written["v"], 1)
         job = self.j.read_job("staging-one")
         self.assertTrue(job.open)
         self.assertEqual(job.prior_runs, 1)
@@ -566,6 +573,7 @@ class TestRebuildClaim(JournalCase):
         super().setUp()
         self.hub = self.make_hub_for()
         self.token = fleetd.fleet_scope_token(self.hub.url)
+        os.environ["FLEET_WORKER_MARKERS"] = self.marker
 
     def rebuild(self, job, **kw):
         out = jr.rebuild_claim(job, host=HOST, hub=self.hub, ttl=TTL,
@@ -780,7 +788,8 @@ class TestAdoptFromJournal(JournalCase):
         kill with no further checks."""
         bystander = self.spawn_stub(scoped=False, marked=False)
         ref = self.journal_job("staging-one", pgid=bystander.pid,
-                               scope_token=self.token)
+                               scope_token=self.token,
+                               leader_birth="darwin:1:0")
 
         res = self.adopt()
 
@@ -788,7 +797,7 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(self.workers, [])
         self.assertEqual([(o.job_key, o.claim_ref) for o in res.to_release],
                          [("staging-one", ref)])
-        self.assertIn("recycled", res.to_release[0].reason)
+        self.assertIn("different birth", res.to_release[0].reason)
         self.assertIsNone(bystander.poll(),
                           "and it must certainly not be killed")
 
@@ -880,16 +889,15 @@ class TestAdoptFromJournal(JournalCase):
                          "a dead process does not make another host's claim ours")
         self.assertEqual([k for k, _ in res.refused], ["staging-one"])
 
-    def test_a_job_that_never_reached_spawn_is_released(self):
-        """The runner died between taking the lease and `Popen`. No
-        process exists; the claim is owed a release, the same disposition
-        `fleetd.adopt_workers` gives a claim with no usable pgid."""
+    def test_claim_without_spawn_record_cannot_prove_no_child_exists(self):
+        """A failed post-Popen append has the same journal prefix as a
+        crash before Popen, so the claim cannot be released from this file."""
         ref = self.journal_job("staging-one", pgid=None)
         res = self.adopt()
         self.assertEqual(res.adopted, [])
-        self.assertEqual([(o.job_key, o.claim_ref) for o in res.to_release],
-                         [("staging-one", ref)])
-        self.assertIn("never spawned", res.to_release[0].reason)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual([k for k, _ in res.refused], ["staging-one"])
+        self.assertIsNotNone(ref)
 
     def test_a_closed_job_is_never_looked_at_again(self):
         p = self.spawn_stub()
@@ -1024,10 +1032,11 @@ class TestReleasePending(JournalCase):
             self.j, HOST, self.workers, hub=self.hub,
             markers=[self.marker], scope_token=fleetd.fleet_scope_token(self.hub.url),
             ttl=TTL, renew_interval=RENEW)
-        self.assertEqual([o.started_at for o in res.to_release], [None])
+        self.assertEqual(res.to_release, [])
         out = jr.release_pending(self.hub, HOST, res, journal=self.j)
         self.assertIsNotNone(self.hub.sha(ref), "tokenless journal must not delete")
-        self.assertIn("no ownership token", out[0][1])
+        self.assertEqual(out, [])
+        self.assertIn("offer never acquired", res.refused[0][1])
 
     def test_old_owed_release_does_not_close_or_delete_new_run(self):
         ref, res = self.owed()
@@ -1383,13 +1392,85 @@ class TestAdoptAtStartup(JournalCase):
         bystander = self.spawn_stub(scoped=False, marked=False)
         started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
         ref = self.journal_job("staging-one", pgid=bystander.pid,
-                               started_at=started)
+                               started_at=started, leader_birth="darwin:1:0")
         self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=bystander.pid,
-                               started_at=started)
+                               started_at=started, leader_birth="darwin:1:0")
         res = self.startup()
         self.assertEqual(res.mode, "store")
         self.assertIsNone(self.hub.sha(ref))
         self.assertIsNone(bystander.poll())
+
+    def test_exec_keeps_birth_and_store_adopts_without_command_marker(self):
+        script = self.tmp / f"{self.marker}-exec.sh"
+        script.write_text("#!/bin/bash\nexec sleep 120\n")
+        script.chmod(0o755)
+        p = subprocess.Popen([str(script), self.token], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if (runner_mod.leader_birth(p.pid) and
+                    runner_mod._scoped_worker_in_group(
+                        p.pid, (self.marker,), self.token) is None):
+                break
+            time.sleep(0.05)
+        self.assertIsNone(runner_mod._scoped_worker_in_group(
+            p.pid, (self.marker,), self.token))
+        birth = runner_mod.leader_birth(p.pid)
+        self.assertIsNotNone(birth)
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=p.pid, started_at=started,
+                               leader_birth=birth)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=p.pid,
+                               started_at=started, leader_birth=birth)
+        res = self.startup()
+        self.assertEqual(res.mode, "store")
+        self.assertEqual([w.pgid for w in self.workers], [p.pid])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertEqual(self.hub.read(ref)["leader_birth"], birth,
+                         "adoption's first renewal must persist birth proof")
+        self.assertIsNone(p.poll())
+
+    def test_legacy_birthless_unmarked_leader_refuses_release_and_start(self):
+        p = self.spawn_stub(scoped=False, marked=False)
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=p.pid, started_at=started,
+                               leader_birth=None)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=p.pid,
+                               started_at=started, leader_birth=None)
+        res = self.startup()
+        self.assertFalse(res.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIsNone(p.poll())
+
+    def test_orphan_retry_keeps_original_leader_after_exec(self):
+        p = self.spawn_stub(scoped=False, marked=False)
+        birth = runner_mod.leader_birth(p.pid)
+        self.assertIsNotNone(birth)
+        pending = {p.pid}
+        births = {p.pid: birth}
+        self.assertFalse(runner_mod.resolve_known_orphans(
+            pending, self.token, [self.marker], births=births))
+        self.assertEqual(pending, {p.pid})
+        self.assertEqual(births, {p.pid: birth})
+        self.assertIsNone(p.poll())
+
+    def test_orphan_retry_clears_only_different_birth(self):
+        p = self.spawn_stub(scoped=False, marked=False)
+        pending = {p.pid}
+        births = {p.pid: "darwin:1:0"}
+        self.assertTrue(runner_mod.resolve_known_orphans(
+            pending, self.token, [self.marker], births=births))
+        self.assertEqual(pending, set())
+        self.assertEqual(births, {})
+        self.assertIsNone(p.poll())
+
+    def test_reused_marker_and_scope_do_not_override_different_birth(self):
+        p = self.spawn_stub()
+        self.assertEqual(runner_mod._journal_group_identity(
+            p.pid, self.token, [self.marker],
+            expected_birth="darwin:1:0", require_birth=True), "other")
+        self.assertIsNone(p.poll())
 
     def test_complete_store_pass_keeps_failed_orphan_sweep_for_stop_retry(self):
         old = self.spawn_stub()
@@ -1408,6 +1489,10 @@ class TestAdoptAtStartup(JournalCase):
 
         res = self.startup(hub_adopt=failed_orphan_sweep)
         self.assertEqual(res.mode, "store")
+        self.assertEqual(res.hub_result.orphan_births.get(old.pid),
+                         runner_mod.leader_birth(old.pid))
+        self.assertEqual(res.unresolved_orphan_births.get(old.pid),
+                         runner_mod.leader_birth(old.pid))
         self.assertEqual([w.pgid for w in res.store_workers], [new.pid])
         self.assertEqual({w.pgid for w in self.workers}, {old.pid, new.pid})
         with mock.patch("keel.runner.kill_process_group",
@@ -1442,7 +1527,7 @@ class TestAdoptAtStartup(JournalCase):
                 return None
             return real_identity(pgid, markers, scope_token)
 
-        def group_identity(pgid, *_args):
+        def group_identity(pgid, *_args, **_kwargs):
             return "missing" if pgid == old.pid else "scoped"
 
         with mock.patch("keel.runner._scoped_worker_in_group",
@@ -1513,7 +1598,8 @@ class TestAdoptAtStartup(JournalCase):
 
     def test_successful_orphan_kill_clears_local_start_gate(self):
         orphan = self.spawn_stub()
-        self.journal_job("unrelated", pgid=None)
+        # No open, acquired claim is present: that separate ambiguity would
+        # correctly keep starts disabled even after this orphan is gone.
         res = self.startup()
         self.assertIn(orphan.pid, [pgid for pgid, _ in res.hub_result.orphans_killed])
         orphan.wait(timeout=10)
@@ -1565,7 +1651,8 @@ class TestAdoptAtStartup(JournalCase):
 
     def test_journaled_unclaimed_replacement_leader_does_not_block(self):
         bystander = self.spawn_stub(scoped=False, marked=False)
-        self.journal_job("staging-one", pgid=bystander.pid)
+        self.journal_job("staging-one", pgid=bystander.pid,
+                         leader_birth="darwin:1:0")
         res = self.startup()
         self.assertEqual(res.unresolved_orphan_pgids, set())
         self.assertTrue(res.spawn_allowed)

@@ -305,6 +305,7 @@ class Claim:
         holder_host: Optional[str] = None,
         pid: Optional[int] = None,
         pgid: Optional[int] = None,
+        leader_birth: Optional[str] = None,
         ttl: Optional[float] = None,
         renew_interval: Optional[float] = None,
     ):
@@ -320,6 +321,7 @@ class Claim:
         self.workdir = workdir
         self.holder_host = holder_host or socket.gethostname()
         self.pid = pid if pid is not None else os.getpid()
+        self.leader_birth = leader_birth if isinstance(leader_birth, str) else None
         try:
             self.pgid = pgid if pgid is not None else os.getpgrp()
         except (AttributeError, OSError):
@@ -371,6 +373,7 @@ class Claim:
             "holder_host": self.holder_host,
             "pid": self.pid,
             "pgid": self.pgid,
+            "leader_birth": self.leader_birth,
             "work_kind": self.work_kind,
             "work_key": self.work_key,
             "started_at": _iso(started),
@@ -499,6 +502,7 @@ class Claim:
         *,
         expected_host: Optional[str] = None,
         expected_started_at: Optional[str] = None,
+        expected_leader_birth: Optional[str] = None,
         ttl: Optional[float] = None,
         renew_interval: Optional[float] = None,
     ) -> Optional["Claim"]:
@@ -565,6 +569,9 @@ class Claim:
             # about -- the single most important thing this method does NOT
             # do.
             return None
+        if (expected_leader_birth is not None and
+                payload.get("leader_birth") not in (None, expected_leader_birth)):
+            return None
 
         raw_started = payload.get("started_at")
         if not raw_started:
@@ -596,6 +603,7 @@ class Claim:
             holder_host=host,
             pid=payload.get("pid"),
             pgid=payload.get("pgid"),
+            leader_birth=expected_leader_birth or payload.get("leader_birth"),
             ttl=ttl,
             renew_interval=renew_interval,
         )
