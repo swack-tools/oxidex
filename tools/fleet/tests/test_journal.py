@@ -346,6 +346,16 @@ class TestJournalScan(JournalCase):
         self.assertEqual(scan.open_jobs, ())
         self.assertTrue(scan.job("staging-one").closed)
 
+    def test_delayed_verdict_does_not_reopen_exited_run(self):
+        self.journal_job("staging-one", pgid=1234, closed=True)
+        self.j.verdict(job_key="staging-one", outcome="PASS", tree="t" * 40)
+        scan = self.j.scan()
+        self.assertEqual(scan.open_jobs, ())
+        self.assertTrue(scan.job("staging-one").closed)
+        self.assertEqual(scan.job("staging-one").prior_runs, 0)
+        later = datetime.now(timezone.utc) + timedelta(days=30)
+        self.assertEqual(self.j.prune(retention_s=3600, now=later), ["staging-one"])
+
     def test_second_run_is_open_with_only_current_run_fields(self):
         self.journal_job("staging-one", pgid=111, closed=True)
         current = iso(datetime.now(timezone.utc))

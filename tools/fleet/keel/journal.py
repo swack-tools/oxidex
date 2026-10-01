@@ -594,14 +594,18 @@ _FOLD_FIELDS = (
 
 
 def _runs(records: Sequence[dict]) -> List[List[dict]]:
-    """Split an append-only job file at each completed run's exit record."""
+    """Start a new run only when an offer follows a completed run."""
     runs: List[List[dict]] = []
     current: List[dict] = []
+    closed = False
     for record in records:
-        current.append(record)
-        if record.get("event") == EXIT:
+        if closed and record.get("event") == OFFER:
             runs.append(current)
             current = []
+            closed = False
+        current.append(record)
+        if record.get("event") == EXIT:
+            closed = True
     if current:
         runs.append(current)
     return runs
@@ -625,7 +629,7 @@ def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
     return JobState(
         job_key=str(job_key),
         path=str(path),
-        closed=current[-1].get("event") == EXIT,
+        closed=any(rec.get("event") == EXIT for rec in current),
         events=tuple(events),
         first_ts=current[0].get("ts"),
         last_ts=current[-1].get("ts"),
