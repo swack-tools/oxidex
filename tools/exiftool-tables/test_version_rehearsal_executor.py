@@ -885,6 +885,34 @@ class ExecutorTests(unittest.TestCase):
                 if state == "S":
                     self.assertEqual((rows[0]["ppid"], rows[0]["start_ticks"]), (7, 1234))
 
+    def test_procfs_readers_preserve_identity_with_non_utf8_comm(self):
+        # Linux truncates comm by bytes, including inside a multibyte character.
+        raw = b"42 (name)\xc3) S 7 9 " + b"0 " * 16 + b"12345 0\n"
+        path = self.root / "proc-stat"
+        path.write_bytes(raw)
+        self.assertEqual(executor._procfs_process_row(path), ("S", 7, 9, 12345))
+        self.assertEqual(executor._procfs_stat(path), ("S", 9))
+
+    def test_supervisor_procfs_fallback_handles_non_utf8_comm(self):
+        raw = b"42 (name)\xc3) S 7 9 " + b"0 " * 16 + b"12345 0\n"
+        source = ast.parse(executor._LINUX_LINEAGE_SUPERVISOR)
+        bodies = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                  and node.name in {"children", "snapshot", "start_time"}]
+        def proc_open(path, **kwargs):
+            if path.endswith("/children"):
+                raise FileNotFoundError(path)
+            return io.TextIOWrapper(io.BytesIO(raw), encoding=kwargs.get("encoding", "utf-8"),
+                                    errors=kwargs.get("errors", "strict"))
+        fake_os = SimpleNamespace(path=os.path, getpid=lambda: 7,
+                                  listdir=lambda path: ["7"] if path.endswith("/task") else ["42"],
+                                  readlink=lambda path: "/safe/worker")
+        namespace = {"os": fake_os, "open": proc_open}
+        exec(compile(ast.Module(body=bodies, type_ignores=[]), "<actual supervisor>", "exec"), namespace)
+        self.assertEqual(namespace["children"](), {42})
+        self.assertEqual(namespace["start_time"](42), 12345)
+        self.assertEqual(namespace["snapshot"](42),
+                         {"pid": 42, "state": "S", "ppid": 7, "start_ticks": 12345, "exe": "worker"})
+
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "the lineage supervisor is Linux-only")
     def test_supervisor_diagnostics_are_bounded(self):

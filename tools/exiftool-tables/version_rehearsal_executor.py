@@ -676,8 +676,9 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
 
 
 def _procfs_process_row(path: Path) -> tuple[str, int, int, int] | None:
+    # comm is arbitrary bytes; only the ASCII fields after its final ) are parsed.
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8", errors="surrogateescape")
     except OSError:
         return None
     close = raw.rfind(")")
@@ -1182,7 +1183,7 @@ def _text_output(value: str | bytes | None) -> str:
 
 def _procfs_stat(path: Path) -> tuple[str, int] | None:
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8", errors="surrogateescape")
     except OSError:
         return None
     close = raw.rfind(")")
@@ -1769,7 +1770,7 @@ def children():
         if not name.isdigit():
             continue
         try:
-            with open(f"/proc/{name}/stat", encoding="utf-8") as stat:
+            with open(f"/proc/{name}/stat", encoding="utf-8", errors="surrogateescape") as stat:
                 raw = stat.read()
         except FileNotFoundError:
             continue
@@ -1785,7 +1786,7 @@ def snapshot(pid):
     # executable path in a report: those can contain credentials.
     row = {"pid": pid, "state": "?", "ppid": None, "start_ticks": None, "exe": None}
     try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="surrogateescape") as stat:
             raw = stat.read()
         fields = raw[raw.rfind(")") + 2:].split()
         row.update(state=fields[0], ppid=int(fields[1]), start_ticks=int(fields[19]))
@@ -1800,7 +1801,7 @@ def snapshot(pid):
 def start_time(pid):
     # The kernel start time (clock ticks) from /proc/<pid>/stat field 22.
     try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="surrogateescape") as stat:
             raw = stat.read()
         return int(raw[raw.rfind(")") + 2:].split()[19])
     except (OSError, IndexError, ValueError):
