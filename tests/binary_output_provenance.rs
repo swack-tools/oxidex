@@ -163,3 +163,16 @@ fn png_palette_extracts_chunk_payload_instead_of_display_summary() {
         include_bytes!("fixtures/png/palette_sample.bin")
     );
 }
+
+#[test]
+fn png_short_palette_extracts_source_value_conversion() {
+    // PNG.pm's PLTE ValueConv emits decimal components for up to three
+    // source bytes; pinned ExifTool 13.59 outputs "255 0 0" under -b.
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/png/palette_one_red.png"
+    ));
+    let output = run(&["-b", "-Palette"], path);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"255 0 0");
+}

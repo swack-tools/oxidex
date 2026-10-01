@@ -313,9 +313,19 @@ pub fn parse_png_metadata_with_diagnostics(
                 }
 
                 b"PLTE" => {
-                    // PLTE's bytes are the Palette value. Keep the source
-                    // payload alongside ExifTool's ordinary binary summary.
-                    metadata.insert_available_binary_with_display("PNG:Palette", chunk.data);
+                    // PNG.pm's PLTE ValueConv renders up to three bytes as
+                    // decimal components; longer palettes remain binary.
+                    if chunk.data.len() <= 3 {
+                        let components = chunk
+                            .data
+                            .iter()
+                            .map(u8::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        metadata.insert("PNG:Palette", TagValue::new_string(components));
+                    } else {
+                        metadata.insert_available_binary_with_display("PNG:Palette", chunk.data);
+                    }
                 }
 
                 b"tEXt" | b"zTXt" | b"iTXt" => {
