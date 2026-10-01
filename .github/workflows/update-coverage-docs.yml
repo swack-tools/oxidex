@@ -102,8 +102,9 @@ jobs:
       # Same path and same key as jpeg-tag-matrix.yml, deliberately: both
       # shallow-clone the same tag to /tmp/exiftool, so sharing the entry is
       # correct and halves the download. The `exiftool-clone-` prefix is what
-      # keeps it distinct from ci.yml's `exiftool-src-` tarball at
-      # /tmp/exiftool-src -- caches are scoped to the repo, not the workflow,
+      # keeps it distinct from ci.yml's `exiftool-src-archive-v1-` tarball
+      # at .ci-cache/exiftool-source.tar.gz -- caches are scoped to the repo,
+      # not the workflow,
       # so one shared key across two different paths would hand a cache hit to
       # a job whose path nothing had populated. No restore-keys: the key IS
       # the pinned version, so any prefix match would serve a different
