@@ -152,6 +152,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     kill_process_group,
     kill_worker,
     live_pgids,
+    live_workers_payload,
     owning_user,
     reap_dead_same_host_singleton,
     session_of,
@@ -162,6 +163,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     write_heartbeat,
 )
 import keel.runner as keel_runner  # noqa: E402
+from keel.fallbackhub import FallbackHub  # noqa: E402
 
 # --------------------------------------------------------------------- #
 # Constants (FLEET_PLAN.md "Shared contracts" is the authority)
@@ -199,6 +201,9 @@ class ReconcileResult:
     awaiting_train: list = field(default_factory=list)  # PASS -- ARCH-FIX R4
     needs_author: list = field(default_factory=list)  # FAIL -- ARCH-FIX R4
     heartbeat_written: bool = False
+    # Observed during this step; registration reuses these values without
+    # re-running potentially slow optional local capability probes.
+    heartbeat_capabilities: Optional[dict] = None
     tip_generation: Optional[int] = None
     # T3: DURABLE host conditions, unlike `refused` above which is this
     # loop's scheduling answer. Re-derived every reconcile by
@@ -1143,8 +1148,21 @@ def reconcile_once(
         # never spawned (`train.real_gate`, a hand-run `gate.sh`) surface
         # here too -- they surfaced NOWHERE before.
         "warnings": res.warnings,
+        "live_workers": live_workers_payload(workers),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    res.heartbeat_capabilities = {
+        "owning_user": hb["owning_user"],
+        "platform_id": hb["platform_id"],
+        "rustc_id": hb["rustc_id"],
+        "cores": os.cpu_count(),
+        "free_disk_gb": hb["free_gb"],
+        "free_mem_gb": hb["free_mem_gb"] if hb["free_mem_gb"] >= 0 else None,
+        "oracle_ok": hb["oracle_ok"],
+        "gate_version": hb["gate_version"],
+    }
+    if isinstance(hub, FallbackHub):
+        hb["fallback"] = hub.status()
     if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):
         # The transport is already known to be down. `write_heartbeat`'s
         # ladder would spend PUSH_RETRIES * PUSH_BACKOFF_S (~24s) finding
@@ -1156,6 +1174,14 @@ def reconcile_once(
         res.heartbeat_written = False
     else:
         res.heartbeat_written = write_heartbeat(hub, host, hb)
+        if res.heartbeat_written and isinstance(hub, FallbackHub):
+            # The heartbeat's own CAS can be the call that switches routes.
+            # Correct the durable route once, while the fallback is sticky;
+            # do not report an accurate heartbeat if correction fails.
+            current = hub.status()
+            if current["route"] != hb["fallback"]["route"]:
+                hb["fallback"] = current
+                res.heartbeat_written = write_heartbeat(hub, host, hb)
 
     if hub_failures:
         # The step did every local thing it could -- reaped, killed lost
