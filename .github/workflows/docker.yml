@@ -28,7 +28,7 @@ jobs:
     name: Verify tag is reachable from main
     # A full-depth clone and one `git merge-base` call; this job gates the
     # whole workflow.
-    runs-on: docker
+    runs-on: ubuntu-24.04
     outputs:
       allowed: ${{ steps.ancestry.outputs.allowed }}
     steps:
@@ -65,16 +65,15 @@ jobs:
     name: Build ${{ matrix.arch }}
     needs: [verify-tag-on-main]
     if: needs.verify-tag-on-main.result == 'success' && needs.verify-tag-on-main.outputs.allowed == 'true'
-    # Pin the architecture-specific build to matching self-hosted hardware.
-    # In particular, the M4 Docker runners advertise ARM64 and must never
-    # receive the amd64 build.
-    runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}", docker]
+    # Standard GitHub-hosted runners are free for this public repository.
+    # Build each image natively on its matching architecture.
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner_arch":"X64"},{"arch":"arm64","platform":"linux/arm64","runner_arch":"ARM64"}]') }}
+          ${{ fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-24.04"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,7 +120,7 @@ jobs:
 
       # Runs on the native runner for this architecture, so each image is
       # exercised on the hardware it targets. This cannot live in the merge
-      # job: that runs on ubuntu-latest and could not execute the arm64 image
+      # job: that runs on x86-64 Ubuntu and could not execute the arm64 image
       # without the emulation this design avoids.
       - name: Smoke test
         if: github.event_name != 'workflow_dispatch'
@@ -172,7 +171,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' && needs.verify-tag-on-main.outputs.allowed == 'true' && needs.build.result == 'success'
     # No image build happens here -- this downloads two digest stubs and
     # calls `buildx imagetools create`, which is registry I/O end to end.
-    runs-on: docker
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Download digests
