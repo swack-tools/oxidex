@@ -37,6 +37,9 @@ Thumbs.db
 *~
 
 
+# Per-job CI archive staging (the remote cache key is versioned separately)
+/.ci-cache/
+
 # Rust build artifacts
 /target/
 
