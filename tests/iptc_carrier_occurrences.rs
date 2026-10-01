@@ -82,6 +82,116 @@ fn copy_family_is_projected_from_physical_directory_number() {
     assert_eq!(default.len(), 1);
 }
 
+#[test]
+fn one_resource_keeps_duplicate_scalar_copies_without_changing_list_or_block_boundaries() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/iptc_carrier");
+    let scalar = root.join("duplicate-scalar.psd");
+    // Pinned ExifTool 13.59: the second ObjectName wins the unqualified
+    // value, but -a -G4 still exposes the earlier physical record as Copy1.
+    for numeric in [false, true] {
+        let mut flags = vec!["-j", "-a", "-s", "-G1:4"];
+        if numeric {
+            flags.push("--no-print-conv");
+        }
+        let fields = json_fields(&scalar, &flags, "ObjectName");
+        assert_eq!(
+            fields.get("IPTC:Copy1:ObjectName"),
+            Some(&Value::from("First"))
+        );
+        assert_eq!(fields.get("IPTC:ObjectName"), Some(&Value::from("Second")));
+        assert_eq!(fields.len(), 2);
+    }
+    let g4 = json_fields(&scalar, &["-j", "-a", "-s", "-G4"], "ObjectName");
+    assert_eq!(g4.get("Copy1:ObjectName"), Some(&Value::from("First")));
+    assert_eq!(g4.get(":ObjectName"), Some(&Value::from("Second")));
+    let g1 = json_fields(&scalar, &["-j", "-a", "-s", "-G1"], "ObjectName");
+    assert_eq!(g1.get("IPTC:ObjectName"), Some(&Value::from("Second")));
+    assert_eq!(g1.len(), 1);
+    let default = json_fields(&scalar, &["-j", "-s"], "ObjectName");
+    // OxiDex's existing default JSON convention retains the IPTC prefix;
+    // pinned ExifTool omits it. The winning value must remain unchanged.
+    assert_eq!(default.get("IPTC:ObjectName"), Some(&Value::from("Second")));
+    assert_eq!(default.len(), 1);
+
+    // List members stay inside one resource; separate resources still receive
+    // distinct IPTC/IPTC2 directories rather than joining that list.
+    let within = json_fields(
+        &root.join("repeatable-byline.psd"),
+        &["-j", "-a", "-G1:4", "-s"],
+        "By-line",
+    );
+    assert_eq!(
+        within.get("IPTC:By-line"),
+        Some(&serde_json::json!(["Alice", "Bob"]))
+    );
+    let separate = json_fields(
+        &root.join("two-iptc-resources.psd"),
+        &["-j", "-a", "-G1:4", "-s"],
+        "By-line",
+    );
+    assert_eq!(separate.get("IPTC:By-line"), Some(&Value::from("Alice")));
+    assert_eq!(
+        separate.get("IPTC2:Copy1:By-line"),
+        Some(&Value::from("Bob"))
+    );
+}
+
+#[test]
+fn scalar_copies_follow_record_order_across_one_and_two_resources() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/iptc_carrier");
+    // Native 13.59 controls are saved in the IPTC recovery evidence's
+    // root-scalar-boundary-controls/native-expectations.json.
+    let three = json_fields(
+        &root.join("three-scalars.psd"),
+        &["-j", "-a", "-G1:4", "-s"],
+        "ObjectName",
+    );
+    assert_eq!(
+        three.get("IPTC:Copy1:ObjectName"),
+        Some(&Value::from("First"))
+    );
+    assert_eq!(
+        three.get("IPTC:Copy2:ObjectName"),
+        Some(&Value::from("Second"))
+    );
+    assert_eq!(three.get("IPTC:ObjectName"), Some(&Value::from("Third")));
+    assert_eq!(three.len(), 3);
+
+    let mixed_file = root.join("mixed-list-scalars.psd");
+    let mixed = json_fields(&mixed_file, &["-j", "-a", "-G1:4", "-s"], "ObjectName");
+    assert_eq!(
+        mixed.get("IPTC:Copy1:ObjectName"),
+        Some(&Value::from("First"))
+    );
+    assert_eq!(mixed.get("IPTC:ObjectName"), Some(&Value::from("Second")));
+    let byline = json_fields(&mixed_file, &["-j", "-a", "-G1:4", "-s"], "By-line");
+    assert_eq!(
+        byline.get("IPTC:By-line"),
+        Some(&serde_json::json!(["Alice", "Bob"]))
+    );
+    assert_eq!(byline.len(), 1);
+
+    let two = json_fields(
+        &root.join("two-block-scalars.psd"),
+        &["-j", "-a", "-G1:4", "-s"],
+        "ObjectName",
+    );
+    assert_eq!(
+        two.get("IPTC:Copy1:ObjectName"),
+        Some(&Value::from("First"))
+    );
+    assert_eq!(two.get("IPTC:ObjectName"), Some(&Value::from("Second")));
+    assert_eq!(
+        two.get("IPTC2:Copy2:ObjectName"),
+        Some(&Value::from("Third"))
+    );
+    assert_eq!(
+        two.get("IPTC2:Copy3:ObjectName"),
+        Some(&Value::from("Fourth"))
+    );
+    assert_eq!(two.len(), 4);
+}
+
 fn eps_grouped_text_order(group: &str, fixture: &str) -> Vec<String> {
     let file = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/iptc_carrier")

@@ -647,9 +647,17 @@ fn collapse_iptc_typed_entries_with_placement(
             }
             continue;
         }
-        match out.iter_mut().find(|(tag, _)| *tag == name) {
-            Some(entry) => entry.1 = value,
-            None => out.push((name, value)),
+        if placement == IptcListPlacement::FirstSeen {
+            // Every scalar record in a physical carrier directory is a
+            // separate arrival. The occurrence sink assigns Copy identities
+            // and keeps the last one as the unqualified winner.
+            out.push((name, value));
+        } else {
+            // Preserve the JPEG aggregator's established last-wins behavior.
+            match out.iter_mut().find(|(tag, _)| *tag == name) {
+                Some(entry) => entry.1 = value,
+                None => out.push((name, value)),
+            }
         }
     }
     for (name, mut values, first_index) in lists {
