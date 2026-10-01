@@ -351,56 +351,213 @@ impl EPSParser {
     /// digits per line (each line commented out with a leading `%`). This
     /// mirrors ExifTool's `PostScript.pm` handling of the same block.
     fn extract_photoshop_blocks(data: &[u8]) -> Vec<Vec<u8>> {
-        // PostScript.pm enters a Photoshop data mode only for a DSC token at
-        // the beginning of a line: one or two '%', case-insensitive. The
-        // corresponding End token must have the same percent prefix. The
-        // default reader skips embedded %%BeginDocument sections.
+        // PostScript.pm (13.59:557-635) admits DSC modes only at the start
+        // of a line, keeps a mode active until its matching end token, and
+        // skips embedded documents unless -ee was requested. A substring
+        // search would invent extra physical IPTC directories inside another
+        // mode or a comment containing "BeginPhotoshop".
         fn dsc_prefix(line: &[u8], token: &[u8]) -> Option<usize> {
-            let percent_count = if line.starts_with(b"%%") {
+            let count = if line.starts_with(b"%%") {
                 2
             } else if line.starts_with(b"%") {
                 1
             } else {
                 return None;
             };
-            line[percent_count..]
+            line[count..]
                 .get(..token.len())
                 .filter(|value| value.eq_ignore_ascii_case(token))
-                .map(|_| percent_count)
+                .map(|_| count)
         }
 
+        fn stray_xpacket_begin(line: &[u8]) -> bool {
+            let Some(rest) = line.strip_prefix(b"<?xpacket begin=") else {
+                return false;
+            };
+            const XMP_ID: &[u8] = b"W5M0MpCehiHzreSzNTczkc9d";
+            (7..=13)
+                .any(|prefix_len| rest.get(prefix_len..prefix_len + XMP_ID.len()) == Some(XMP_ID))
+        }
+
+        fn xpacket_end(line: &[u8]) -> bool {
+            // PostScript.pm accepts an unanchored end instruction with one
+            // character on either side of w/r, followed by the line end.
+            const MARKER: &[u8] = b"<?xpacket end=";
+            line.windows(MARKER.len()).enumerate().any(|(at, window)| {
+                if window != MARKER {
+                    return false;
+                }
+                let tail = &line[at + MARKER.len()..];
+                tail.len() == 5 && matches!(tail[1], b'w' | b'r') && tail[3..] == *b"?>"
+            })
+        }
+
+        enum Mode {
+            Photoshop {
+                prefix: usize,
+                bytes: Vec<u8>,
+            },
+            Document {
+                prefix: usize,
+                begin_token: Vec<u8>,
+                depth: u32,
+            },
+            Other {
+                prefix: usize,
+                end_token: &'static [u8],
+            },
+            XPacket,
+        }
+
+        // GetInputRecordSeparator probes the first 256 bytes. ProcessPS then
+        // reads on CR only for a bare-CR first separator; otherwise it reads
+        // on LF and buffers segments split at the alternate newline.
+        let probe = &data[..data.len().min(256)];
+        let first_cr = probe.iter().position(|byte| *byte == b'\r');
+        let first_lf = probe.iter().position(|byte| *byte == b'\n');
+        let primary_newline = match (first_cr, first_lf) {
+            (Some(cr), Some(lf)) if cr < lf && lf != cr + 1 => b'\r',
+            (Some(_), None) => b'\r',
+            _ => b'\n',
+        };
+        let alternate_newline = if primary_newline == b'\r' {
+            b'\n'
+        } else {
+            b'\r'
+        };
+
         let mut blocks = Vec::new();
-        let mut document_depth = 0u32;
-        let mut active: Option<(usize, String)> = None;
-        for line in data.split(|byte| *byte == b'\r' || *byte == b'\n') {
-            if let Some((begin_prefix, hex_chars)) = active.as_mut() {
-                if dsc_prefix(line, b"EndPhotoshop") == Some(*begin_prefix) {
-                    if let Ok(decoded) = hex::decode(hex_chars) {
-                        blocks.push(decoded);
+        let mut mode: Option<Mode> = None;
+        let mut pos = 0usize;
+        let mut primary_chunk_start = 0usize;
+        while pos < data.len() {
+            let line_start = pos;
+            let chunk_start = primary_chunk_start;
+            while pos < data.len() && !matches!(data[pos], b'\r' | b'\n') {
+                pos += 1;
+            }
+            let line = &data[line_start..pos];
+            if pos < data.len() {
+                let newline = data[pos];
+                pos += 1;
+                if newline == b'\r' && data.get(pos) == Some(&b'\n') {
+                    pos += 1;
+                }
+                if newline == primary_newline || data.get(pos - 1) == Some(&primary_newline) {
+                    primary_chunk_start = pos;
+                }
+            }
+
+            if let Some(current) = mode.as_mut() {
+                let mut finished = false;
+                match current {
+                    Mode::Photoshop { prefix, bytes } => {
+                        if dsc_prefix(line, b"EndPhotoshop") == Some(*prefix) {
+                            blocks.push(std::mem::take(bytes));
+                            finished = true;
+                        } else {
+                            // PostScript.pm strips non-hex characters and
+                            // calls pack('H*') on *each line*. An odd last
+                            // nibble is padded with zero before the next
+                            // line is decoded, not joined to its first nibble.
+                            let mut digits: Vec<u8> =
+                                line.iter().copied().filter(u8::is_ascii_hexdigit).collect();
+                            if digits.len() % 2 != 0 {
+                                digits.push(b'0');
+                            }
+                            if let Ok(decoded) = hex::decode(digits) {
+                                bytes.extend(decoded);
+                            }
+                        }
                     }
-                    active = None;
-                } else {
-                    hex_chars.extend(
-                        line.iter()
-                            .copied()
-                            .filter(u8::is_ascii_hexdigit)
-                            .map(char::from),
-                    );
+                    Mode::Document {
+                        prefix,
+                        begin_token,
+                        depth,
+                    } => {
+                        if dsc_prefix(line, b"EndDocument") == Some(*prefix) {
+                            *depth -= 1;
+                            finished = *depth == 0;
+                        } else if line.starts_with(begin_token) {
+                            // PostScript.pm tests nested begins against the
+                            // actual opening token (without /i), not every
+                            // arbitrary one/two-percent BeginDocument.
+                            *depth = depth.saturating_add(1);
+                        }
+                    }
+                    Mode::Other { prefix, end_token } => {
+                        finished = dsc_prefix(line, end_token) == Some(*prefix);
+                    }
+                    Mode::XPacket => {
+                        finished = xpacket_end(line);
+                    }
+                }
+                if finished {
+                    mode = None;
                 }
                 continue;
             }
-            if dsc_prefix(line, b"BeginDocument").is_some() {
-                document_depth = document_depth.saturating_add(1);
-                continue;
-            }
-            if dsc_prefix(line, b"EndDocument").is_some() {
-                document_depth = document_depth.saturating_sub(1);
-                continue;
-            }
-            if document_depth == 0
-                && let Some(prefix) = dsc_prefix(line, b"BeginPhotoshop")
-            {
-                active = Some((prefix, String::new()));
+
+            if let Some(prefix) = dsc_prefix(line, b"BeginPhotoshop") {
+                mode = Some(Mode::Photoshop {
+                    prefix,
+                    bytes: Vec::new(),
+                });
+            } else if let Some(prefix) = dsc_prefix(line, b"BeginDocument") {
+                mode = Some(Mode::Document {
+                    prefix,
+                    begin_token: line[..prefix + b"BeginDocument".len()].to_vec(),
+                    depth: 1,
+                });
+            } else if let Some(prefix) = dsc_prefix(line, b"BeginICCProfile") {
+                mode = Some(Mode::Other {
+                    prefix,
+                    end_token: b"EndICCProfile",
+                });
+            } else if let Some(prefix) = dsc_prefix(line, b"Begin_xml_packet") {
+                mode = Some(Mode::Other {
+                    prefix,
+                    end_token: b"End_xml_packet",
+                });
+            } else if let Some(prefix) = dsc_prefix(line, b"BeginBinary") {
+                // On an unbuffered line, the pinned reader seeks over the
+                // declared byte count. A buffered alternate-newline segment
+                // leaves those bytes in the DSC stream instead.
+                let rest = &line[prefix + b"BeginBinary".len()..];
+                if let Some(rest) = rest.strip_prefix(b":") {
+                    let digits: Vec<u8> = rest
+                        .iter()
+                        .copied()
+                        .skip_while(u8::is_ascii_whitespace)
+                        .take_while(u8::is_ascii_digit)
+                        .collect();
+                    if let Ok(count) = std::str::from_utf8(&digits).unwrap_or("").parse::<usize>() {
+                        let chunk_end = data[line_start..]
+                            .iter()
+                            .position(|byte| *byte == primary_newline)
+                            .map_or(data.len(), |offset| line_start + offset);
+                        let alternate_count = data[line_start..chunk_end]
+                            .iter()
+                            .filter(|byte| **byte == alternate_newline)
+                            .count();
+                        // PostScript.pm seeks only when its alternate-newline
+                        // queue is empty. A terminal CRLF pair is collapsed
+                        // back to one line and does not populate that queue.
+                        let terminal_pair = line_start == chunk_start
+                            && alternate_count == 1
+                            && chunk_end > line_start
+                            && data[chunk_end - 1] == alternate_newline;
+                        if alternate_count == 0 || terminal_pair {
+                            pos = pos.saturating_add(count).min(data.len());
+                            primary_chunk_start = pos;
+                        }
+                    }
+                }
+            } else if stray_xpacket_begin(line) && !xpacket_end(line) {
+                // A stray XMP processing instruction enters the same XMP
+                // mode as an explicit Begin_xml_packet DSC block. Photoshop
+                // looking comments inside it are packet content, not blocks.
+                mode = Some(Mode::XPacket);
             }
         }
         blocks
@@ -547,10 +704,19 @@ impl FormatParser for EPSParser {
                 let ps_start = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
                 let ps_length = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
 
-                if ps_start < data.len() && ps_start + ps_length <= data.len() {
-                    &data[ps_start..ps_start + ps_length]
+                // PostScript.pm seeks to the DOS header's PostScript offset
+                // and requires a %!PS header there. PSEnd may exceed EOF;
+                // its reader then naturally stops at EOF. An invalid offset
+                // must not fall back to scanning the preview as PostScript.
+                let ps_end = ps_start.saturating_add(ps_length).min(data.len());
+                if ps_end > ps_start
+                    && data
+                        .get(ps_start..)
+                        .is_some_and(|section| section.starts_with(b"%!PS"))
+                {
+                    &data[ps_start..ps_end]
                 } else {
-                    data
+                    &data[0..0]
                 }
             } else {
                 data
@@ -575,7 +741,7 @@ impl FormatParser for EPSParser {
             // deduplicate by payload: two separate DSC blocks may contain
             // equal IPTC bytes and still be distinct physical occurrences.
             let mut iptc_blocks = CarrierIptcBlocks::default();
-            for photoshop_data in Self::extract_photoshop_blocks(data) {
+            for photoshop_data in Self::extract_photoshop_blocks(ps_data) {
                 Self::extract_iptc(&photoshop_data, &mut metadata, &mut iptc_blocks);
             }
 

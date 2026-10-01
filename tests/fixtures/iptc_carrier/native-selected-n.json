@@ -91,5 +91,40 @@
   },
   "eps-single-percent-mixed-case.eps": {
     "IPTC:By-line": "Alice"
+  },
+  "eps-mismatched-document-end.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-nested-document.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-dos-preview-document.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-dos-invalid-offset.eps": {},
+  "eps-dos-overlong-section.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-icc-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-xml-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-binary-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-hex-odd-line.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-stray-xpacket-mode-hidden.eps": {
+    "IPTC:By-line": "Visible"
+  },
+  "eps-binary-mixed-newline-buffered.eps": {
+    "IPTC:By-line": "Hidden",
+    "IPTC2:Copy1:By-line": "Visible"
+  },
+  "eps-binary-mixed-last-segment.eps": {
+    "IPTC:By-line": "Visible"
   }
 }
