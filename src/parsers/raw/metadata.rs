@@ -469,6 +469,72 @@ fn record_raw_ifd_row(
     }
 }
 
+/// Keep NEF's legacy lookup key and winner ordering while recording the IFD
+/// that physically supplied each Exif::Main row. The generated table owns the
+/// Priority => 0 facts; the full-resolution directory promotes those rows.
+#[allow(clippy::too_many_arguments)]
+fn record_nef_ifd_row(
+    metadata: &mut MetadataMap,
+    key: String,
+    display: TagValue,
+    tag_id: u16,
+    field_type: u16,
+    count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    directory: &str,
+    is_priority_dir: bool,
+) {
+    let table = crate::exiftool_tables::find_ifd_table("Exif", "Main");
+    let low_priority = table
+        .is_some_and(|table| crate::core::exif_dir_engine::tag_priority_is_zero(table, tag_id));
+    let mut occurrence = TagOccurrence::from_insert_shim(&key, display, 0);
+    occurrence.group1 = intern(directory);
+    occurrence.priority = i16::from(!low_priority || is_priority_dir);
+    if table.is_some_and(|table| table.tag(tag_id).is_some()) {
+        occurrence.origin.module = Some("Exif");
+        occurrence.origin.table = Some("Main");
+    }
+
+    // Exif.pm's 0xfe/0xff PrintConv labels the same scalar that its RawConv
+    // returns. Keep that scalar for -n without changing the displayed winner.
+    let subfile_scalar = if count == 1 && matches!(tag_id, 0x00fe | 0x00ff) {
+        match field_type {
+            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+            4 => read_tiff_u32(bytes, byte_order),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(scalar) = subfile_scalar {
+        occurrence.print = Some(crate::core::exiftool_compat::format_tag_value_rules(
+            &occurrence.lookup_key(),
+            &occurrence.raw,
+        ));
+        occurrence.value = Some(TagValue::new_integer(i64::from(scalar)));
+        occurrence.stored = occurrence.value.clone();
+    }
+    // Exif.pm 0x9216's PrintConv only replaces spaces with dots. The
+    // pre-PrintConv BYTE-array text is the numeric output, e.g. "1 0 0 0".
+    if tag_id == 0x9216
+        && field_type == 1
+        && let Ok(count) = usize::try_from(count)
+        && let Some(components) = bytes.get(..count)
+        && !components.is_empty()
+    {
+        occurrence.print = Some(occurrence.raw.clone());
+        occurrence.value = Some(TagValue::new_string(
+            components
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+    }
+    metadata.record_occurrence(key, occurrence);
+}
+
 /// Whether a directory is a full-resolution image: SubfileType (0xfe) 0 or
 /// OldSubfileType (0xff) 1, the values whose `RawConv` calls
 /// `SetPriorityDir` (Exif.pm 13.59:450-472).
@@ -1108,6 +1174,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             tag_name,
                             tag_value,
                         );
+                    } else if format == RawFormat::NikonNEF {
+                        // `ifd_name` retains the legacy lookup fallback for
+                        // IFD2+, but the occurrence records the actual chain.
+                        let physical_ifd_name = format!("IFD{ifd_index}");
+                        record_nef_ifd_row(
+                            &mut metadata,
+                            tag_name,
+                            tag_value,
+                            *tag_id,
+                            *field_type,
+                            *value_count,
+                            bytes,
+                            byte_order,
+                            &physical_ifd_name,
+                            chain_is_priority_dir,
+                        );
                     } else {
                         record_raw_ifd_row(
                             &mut metadata,
@@ -1427,6 +1509,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         eprintln!("Warning: Found SubIFD{} which is unusual", sub_index);
                     }
                     let sub_ifd_name = "SubIFD0";
+                    let nef_directory = if sub_index == 0 {
+                        "SubIFD".to_string()
+                    } else {
+                        format!("SubIFD{sub_index}")
+                    };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let sub_is_priority_dir = !priority_dir_set
@@ -1441,6 +1528,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 &sub_tags,
                                 byte_order,
                                 &mut metadata,
+                                (format == RawFormat::NikonNEF).then_some(nef_directory.as_str()),
                             );
                         }
 
@@ -1453,10 +1541,24 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 && let Some(dim) =
                                     format_cfa_repeat_pattern_dim(raw_bytes.as_ref(), byte_order)
                             {
-                                metadata.insert(
-                                    "EXIF:CFARepeatPatternDim".to_string(),
-                                    TagValue::new_string(dim),
-                                );
+                                let key = "EXIF:CFARepeatPatternDim".to_string();
+                                let value = TagValue::new_string(dim);
+                                if format == RawFormat::NikonNEF {
+                                    record_nef_ifd_row(
+                                        &mut metadata,
+                                        key,
+                                        value,
+                                        tag_id,
+                                        field_type,
+                                        value_count,
+                                        raw_bytes.as_ref(),
+                                        byte_order,
+                                        &nef_directory,
+                                        sub_is_priority_dir,
+                                    );
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                                 continue;
                             }
 
@@ -1470,7 +1572,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     raw_bytes.as_ref(),
                                     byte_order,
                                 ) {
-                                    metadata.insert(tag_name, tag_value);
+                                    if format == RawFormat::NikonNEF {
+                                        record_nef_ifd_row(
+                                            &mut metadata,
+                                            tag_name,
+                                            tag_value,
+                                            tag_id,
+                                            field_type,
+                                            value_count,
+                                            raw_bytes.as_ref(),
+                                            byte_order,
+                                            &nef_directory,
+                                            sub_is_priority_dir,
+                                        );
+                                    } else {
+                                        metadata.insert(tag_name, tag_value);
+                                    }
                                     continue;
                                 }
                                 // Tags not handled specially fall through to the
@@ -1506,19 +1623,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // missing EXIF:CFAPattern2 plus a spurious extra
                             // tag in every comparison report.
                             if tag_id == 0x828E {
-                                metadata.insert(
-                                    format!(
-                                        "EXIF:{}",
-                                        lookup_tag_name(tag_id, sub_ifd_name)
-                                            .rsplit(':')
-                                            .next()
-                                            .unwrap_or("CFAPattern2")
-                                    ),
-                                    TagValue::new_string(format_cfa_pattern2(
-                                        raw_bytes.as_ref(),
-                                        value_count,
-                                    )),
+                                let key = format!(
+                                    "EXIF:{}",
+                                    lookup_tag_name(tag_id, sub_ifd_name)
+                                        .rsplit(':')
+                                        .next()
+                                        .unwrap_or("CFAPattern2")
                                 );
+                                let value = TagValue::new_string(format_cfa_pattern2(
+                                    raw_bytes.as_ref(),
+                                    value_count,
+                                ));
+                                if format == RawFormat::NikonNEF {
+                                    record_nef_ifd_row(
+                                        &mut metadata,
+                                        key,
+                                        value,
+                                        tag_id,
+                                        field_type,
+                                        value_count,
+                                        raw_bytes.as_ref(),
+                                        byte_order,
+                                        &nef_directory,
+                                        sub_is_priority_dir,
+                                    );
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                                 continue;
                             }
 
@@ -1553,13 +1684,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            record_raw_ifd_row(
-                                &mut metadata,
-                                tag_name,
-                                tag_value,
-                                tag_id,
-                                !sub_is_priority_dir,
-                            );
+                            if format == RawFormat::NikonNEF {
+                                record_nef_ifd_row(
+                                    &mut metadata,
+                                    tag_name,
+                                    tag_value,
+                                    tag_id,
+                                    field_type,
+                                    value_count,
+                                    bytes,
+                                    byte_order,
+                                    &nef_directory,
+                                    sub_is_priority_dir,
+                                );
+                            } else {
+                                record_raw_ifd_row(
+                                    &mut metadata,
+                                    tag_name,
+                                    tag_value,
+                                    tag_id,
+                                    !sub_is_priority_dir,
+                                );
+                            }
                         }
                     }
                 }
@@ -4636,6 +4782,50 @@ mod dng_thumbnail_tiff_tests {
             .into_iter()
             .chain([(0x0100, width), (0x0101, height)])
             .collect()
+    }
+
+    #[test]
+    fn nef_retains_physical_ifd_occurrences_and_full_image_winner() {
+        for big_endian in [false, true] {
+            let data = synthetic_dng(
+                &[
+                    dimensions(Some((0xFE, 1)), 160, 120),
+                    dimensions(Some((0xFE, 0)), 4000, 3000),
+                    dimensions(Some((0xFE, 1)), 640, 480),
+                ],
+                big_endian,
+            );
+            let mut metadata = parse_raw_metadata(&data, RawFormat::NikonNEF).unwrap();
+            let widths: Vec<_> = metadata
+                .occurrences()
+                .filter(|o| o.name.as_ref() == "ImageWidth")
+                .map(|o| {
+                    (
+                        crate::cli::tag_resolution::family0_label(o).to_string(),
+                        o.group1.to_string(),
+                        o.raw.as_integer(),
+                        o.priority,
+                    )
+                })
+                .collect();
+            assert_eq!(
+                widths,
+                vec![
+                    ("EXIF".into(), "IFD0".into(), Some(160), 0),
+                    ("EXIF".into(), "SubIFD".into(), Some(4000), 1),
+                    ("EXIF".into(), "SubIFD1".into(), Some(640), 0),
+                ]
+            );
+            let winner =
+                crate::cli::tag_resolution::resolve_requested_tag(&metadata, "ImageWidth").unwrap();
+            assert_eq!(winner.group1.as_ref(), "SubIFD");
+            assert_eq!(winner.raw.as_integer(), Some(4000));
+            crate::composite::apply(&mut metadata);
+            assert_eq!(
+                metadata.get_string("Composite:ImageSize"),
+                Some("4000x3000")
+            );
+        }
     }
 
     fn assert_dng_size(data: &[u8], expected: &str) -> MetadataMap {
@@ -9763,6 +9953,7 @@ fn extract_nef_subifd_jpg_from_raw(
     sub_tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
+    directory: Option<&str>,
 ) {
     let mut offset = None;
     let mut length = None;
@@ -9794,7 +9985,11 @@ fn extract_nef_subifd_jpg_from_raw(
             length
         )),
     };
-    metadata.insert("EXIF:JpgFromRaw".to_string(), image);
+    if let Some(directory) = directory {
+        metadata.insert_with_group1("EXIF:JpgFromRaw".to_string(), image, directory);
+    } else {
+        metadata.insert("EXIF:JpgFromRaw".to_string(), image);
+    }
 }
 
 /// Format TIFF/EP tag 0x9216 (TIFF-EPStandardID).
