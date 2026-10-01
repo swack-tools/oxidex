@@ -6,7 +6,7 @@
     "residual": 62,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "67d2f17a937b8cdf29d0584fddc42ec2efd65c209d560294a6f0a85a5cf1a6f4",
+  "fragment_inputs_sha256": "85d28b0038bea9c9d6e06950c5297705fd8fb80280bf64f34c7a41544e54051d",
   "rows": [
     {
       "field": {
@@ -244,7 +244,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -259,7 +259,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -274,7 +274,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -289,7 +289,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -304,7 +304,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -319,7 +319,7 @@
       "refusal": null,
       "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
@@ -334,7 +334,7 @@
       "refusal": null,
       "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
@@ -349,7 +349,7 @@
       "refusal": null,
       "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
@@ -364,7 +364,7 @@
       "refusal": null,
       "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
@@ -379,7 +379,7 @@
       "refusal": null,
       "residual_disposition": "fallback-on-decline",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
       "table": "Main"
     },
@@ -394,7 +394,7 @@
       "refusal": null,
       "residual_disposition": "hand-kept",
       "source_release": "13.59",
-      "source_sha256": "d48ff059696a1c4afb4a6d5a55853b77817d786aa5e52d1d20b0849b70b616e2",
+      "source_sha256": "1569918e7f871ea9cd1dd3f28d022de14e1e9a846fb7769814f52abe68e4a7e9",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },

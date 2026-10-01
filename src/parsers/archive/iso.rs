@@ -7,13 +7,16 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{Dir, cond::Ctx, find_table, process_binary_data};
+use crate::io::ByteOrder;
 use crate::io::EndianReader;
+use std::collections::HashMap;
 
-/// ISO 9660 signature at offset 32769: "CD001"
+/// ISO 9660 volume descriptor signature: "CD001"
 const ISO_SIGNATURE: &[u8] = b"CD001";
-const ISO_SIGNATURE_OFFSET: u64 = 32769;
-/// Primary Volume Descriptor starts at sector 16 (offset 32768)
-const PVD_OFFSET: u64 = 32768;
+/// Volume descriptors begin at sector 16 (offset 32768). The primary
+/// descriptor can follow a boot record or another descriptor.
+const DESCRIPTOR_START: u64 = 32768;
 
 /// Size of one ISO 9660 volume descriptor.
 const DESCRIPTOR_SIZE: u64 = 2048;
@@ -30,21 +33,24 @@ pub struct ISOParser;
 impl ISOParser {
     /// Verifies ISO 9660 signature at offset 32769
     pub fn verify_signature(reader: &dyn FileReader) -> Result<bool> {
-        if reader.size() < ISO_SIGNATURE_OFFSET + 5 {
+        // Native ProcessISO does not accept a partial descriptor, even if
+        // its CD001 header and some table fields fit in the available bytes.
+        if reader.size() < DESCRIPTOR_START + DESCRIPTOR_SIZE {
             return Ok(false);
         }
 
-        let signature = reader.read(ISO_SIGNATURE_OFFSET, 5)?;
-        Ok(signature == ISO_SIGNATURE)
+        let header = reader.read(DESCRIPTOR_START, 6)?;
+        Ok(matches!(header[0], 0..=3 | DESCRIPTOR_TERMINATOR)
+            && header.get(1..6) == Some(ISO_SIGNATURE))
     }
 
     /// Reads volume descriptor type (byte at offset 32768)
     pub fn read_descriptor_type(reader: &dyn FileReader) -> Result<u8> {
-        if reader.size() < ISO_SIGNATURE_OFFSET {
+        if reader.size() <= DESCRIPTOR_START {
             return Ok(0);
         }
 
-        let descriptor = reader.read(PVD_OFFSET, 1)?;
+        let descriptor = reader.read(DESCRIPTOR_START, 1)?;
         Ok(descriptor[0])
     }
 
@@ -165,7 +171,43 @@ impl ISOParser {
         Ok(())
     }
 
-    /// Reads `BootSystem` from the boot record, if the image has one.
+    /// Walks complete descriptors as `ProcessISO` does in pinned ISO.pm.
+    /// Visits primary descriptor offsets in file order. Pinned `ProcessISO`
+    /// processes each one; later defined fields can replace earlier values.
+    fn visit_primary_descriptors(
+        reader: &dyn FileReader,
+        mut visit: impl FnMut(u64) -> Result<()>,
+    ) -> Result<()> {
+        let mut offset = DESCRIPTOR_START;
+        while offset
+            .checked_add(DESCRIPTOR_SIZE)
+            .is_some_and(|end| end <= reader.size())
+        {
+            let head = reader.read(offset, 6)?;
+            if head.get(1..6) != Some(ISO_SIGNATURE) {
+                break;
+            }
+            match head[0] {
+                1 => visit(offset)?,
+                DESCRIPTOR_TERMINATOR => break,
+                0 | 2 | 3 => {}
+                _ => break,
+            }
+            offset += DESCRIPTOR_SIZE;
+        }
+        Ok(())
+    }
+
+    // Keep only the latest value for each field, ordered by its last occurrence.
+    // A missing field in a later descriptor leaves its earlier value intact.
+    fn replace_primary_winners(values: &mut Vec<(String, TagValue)>, descriptor: &MetadataMap) {
+        for (key, occurrence) in descriptor.winners_in_file_order() {
+            values.retain(|(prior, _)| prior != key);
+            values.push((key.clone(), occurrence.raw.clone()));
+        }
+    }
+
+    /// Reads `BootSystem` from the source-described boot record, if present.
     ///
     /// The descriptors form a chain of 2048-byte sectors from 32768, each
     /// tagged by a leading type byte, and the boot record is NOT first --
@@ -173,8 +215,18 @@ impl ISOParser {
     /// 34816. Reading a fixed offset finds only whichever descriptor happens
     /// to lead, which is why BootSystem was the one tag #184 left behind.
     fn extract_boot_record(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
-        let mut offset = PVD_OFFSET;
-        while offset + DESCRIPTOR_SIZE <= reader.size() {
+        let Some(table) = find_table("ISO", "BootRecord").filter(|table| table.enabled()) else {
+            return Ok(());
+        };
+        let mut offset = DESCRIPTOR_START;
+        // Earlier descriptors belong to ExifTool's Copy1 group. This map
+        // cannot represent that family-4 identity, so retain only the final
+        // ISO-group winner instead of reporting an earlier copy as ISO.
+        let mut boot_system = None;
+        while offset
+            .checked_add(DESCRIPTOR_SIZE)
+            .is_some_and(|end| end <= reader.size())
+        {
             let head = reader.read(offset, 6)?;
             if head.get(1..6) != Some(ISO_SIGNATURE) {
                 break;
@@ -182,47 +234,62 @@ impl ISOParser {
             match head[0] {
                 DESCRIPTOR_TERMINATOR => break,
                 DESCRIPTOR_BOOT_RECORD => {
-                    // ExifTool extracts BootSystem even when empty, as the
-                    // indication that the image is bootable.
-                    let raw = reader.read(offset + 7, 32)?;
-                    let value = String::from_utf8_lossy(raw)
-                        .trim_end_matches(|c: char| c == '\0' || c == ' ')
-                        .to_string();
-                    metadata.insert("ISO:BootSystem", TagValue::String(value));
-                    return Ok(());
+                    let descriptor = reader.read(offset, DESCRIPTOR_SIZE as usize)?;
+                    let mut members = HashMap::new();
+                    let mut ctx = Ctx::new(&mut members);
+                    let mut emitted = Vec::new();
+                    process_binary_data(
+                        table,
+                        Dir::whole(descriptor, ByteOrder::Little),
+                        &mut ctx,
+                        &mut emitted,
+                    );
+                    for tag in emitted {
+                        if tag.name == "BootSystem" {
+                            boot_system = Some(tag.value);
+                        }
+                    }
                 }
-                _ => {}
+                1 | 2 | 3 => {}
+                _ => break,
             }
             offset += DESCRIPTOR_SIZE;
+        }
+        if let Some(value) = boot_system {
+            metadata.insert("ISO:BootSystem", value);
         }
         Ok(())
     }
 
     /// Extracts metadata from Primary Volume Descriptor
-    fn extract_pvd_metadata(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Result<()> {
+    fn extract_pvd_metadata(
+        reader: &dyn FileReader,
+        metadata: &mut MetadataMap,
+        pvd_offset: u64,
+    ) -> Result<()> {
         // Offsets and names are ExifTool's `ISO::PrimaryVolume` table verbatim,
         // and the names matter as much as the offsets: this parser previously
         // read every field from the right place and then filed it under a name
         // of its own invention (VolumeID, PublisherID, ApplicationID), so not
         // one of the 14 tags ExifTool reports could ever match.
-        Self::insert_pvd_string(reader, metadata, "ISO:System", PVD_OFFSET + 8, 32)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:VolumeName", PVD_OFFSET + 40, 32)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:VolumeSetName", PVD_OFFSET + 190, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:Publisher", PVD_OFFSET + 318, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:DataPreparer", PVD_OFFSET + 446, 128)?;
-        Self::insert_pvd_string(reader, metadata, "ISO:Software", PVD_OFFSET + 574, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:System", pvd_offset + 8, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeName", pvd_offset + 40, 32)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:VolumeSetName", pvd_offset + 190, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Publisher", pvd_offset + 318, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:DataPreparer", pvd_offset + 446, 128)?;
+        Self::insert_pvd_string(reader, metadata, "ISO:Software", pvd_offset + 574, 128)?;
         Self::insert_pvd_string(
             reader,
             metadata,
             "ISO:CopyrightFileName",
-            PVD_OFFSET + 702,
+            pvd_offset + 702,
             38,
         )?;
         Self::insert_pvd_string(
             reader,
             metadata,
             "ISO:AbstractFileName",
-            PVD_OFFSET + 740,
+            pvd_offset + 740,
             36,
         )?;
         Self::insert_pvd_string(
@@ -231,7 +298,7 @@ impl ISOParser {
             // ExifTool's spelling, typo included -- a "corrected" name is a
             // name that does not match.
             "ISO:BibligraphicFileName",
-            PVD_OFFSET + 776,
+            pvd_offset + 776,
             37,
         )?;
 
@@ -241,8 +308,8 @@ impl ISOParser {
         // where the pinned oracle puts it under `Composite:`, and left
         // `ISO::VolumeSize` in codegen_composite.py's "never fire" list
         // because nothing computed it. `composite::compute` computes it now.
-        let block_count = Self::read_u32_both(reader, PVD_OFFSET + 80)?;
-        let block_size = Self::read_u16_both(reader, PVD_OFFSET + 128)?;
+        let block_count = Self::read_u32_both(reader, pvd_offset + 80)?;
+        let block_size = Self::read_u16_both(reader, pvd_offset + 128)?;
         metadata.insert(
             "ISO:VolumeBlockCount".to_string(),
             TagValue::String(block_count.to_string()),
@@ -255,21 +322,21 @@ impl ISOParser {
             reader,
             metadata,
             "ISO:RootDirectoryCreateDate",
-            PVD_OFFSET + 174,
+            pvd_offset + 174,
         )?;
-        Self::insert_iso_date(reader, metadata, "ISO:VolumeCreateDate", PVD_OFFSET + 813)?;
-        Self::insert_iso_date(reader, metadata, "ISO:VolumeModifyDate", PVD_OFFSET + 830)?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeCreateDate", pvd_offset + 813)?;
+        Self::insert_iso_date(reader, metadata, "ISO:VolumeModifyDate", pvd_offset + 830)?;
         Self::insert_iso_date(
             reader,
             metadata,
             "ISO:VolumeExpirationDate",
-            PVD_OFFSET + 847,
+            pvd_offset + 847,
         )?;
         Self::insert_iso_date(
             reader,
             metadata,
             "ISO:VolumeEffectiveDate",
-            PVD_OFFSET + 864,
+            pvd_offset + 864,
         )?;
 
         Ok(())
@@ -297,8 +364,20 @@ impl FormatParser for ISOParser {
                 TagValue::String(descriptor_type.to_string()),
             );
 
-            // Extract Primary Volume Descriptor metadata
-            Self::extract_pvd_metadata(reader, &mut metadata)?;
+            // Process every primary descriptor: a later defined field replaces
+            // its predecessor, while an absent field leaves the earlier value.
+            // Publish only the ISO-group winners; earlier physical copies have
+            // a Copy1 family-4 identity this map cannot represent.
+            let mut primary_values: Vec<(String, TagValue)> = Vec::new();
+            Self::visit_primary_descriptors(reader, |pvd_offset| {
+                let mut descriptor = MetadataMap::new();
+                Self::extract_pvd_metadata(reader, &mut descriptor, pvd_offset)?;
+                Self::replace_primary_winners(&mut primary_values, &descriptor);
+                Ok(())
+            })?;
+            for (key, value) in primary_values {
+                metadata.insert(key, value);
+            }
 
             // The boot record lives in a later descriptor sector, if at all.
             Self::extract_boot_record(reader, &mut metadata)?;
@@ -345,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_iso_signature() {
-        let mut data = vec![0u8; 32774];
+        let mut data = vec![0u8; (DESCRIPTOR_START + DESCRIPTOR_SIZE) as usize];
         data[32768] = 0x01; // Primary volume descriptor
         data[32769..32774].copy_from_slice(b"CD001");
         let reader = TestReader::new(data);
@@ -377,8 +456,8 @@ mod tests {
 
     #[test]
     fn test_pvd_metadata_extraction() {
-        // Create minimal ISO structure with PVD (need at least 33649 bytes for effective date)
-        let mut data = vec![0u8; 33700];
+        // ProcessISO requires a complete 2048-byte descriptor sector.
+        let mut data = vec![0u8; (DESCRIPTOR_START + DESCRIPTOR_SIZE) as usize];
 
         // PVD header
         data[32768] = 0x01; // Primary volume descriptor
@@ -449,6 +528,171 @@ mod tests {
         assert_eq!(
             metadata.get("ISO:VolumeCreateDate").unwrap(),
             &TagValue::String("2024:03:15 14:30:45.00+00:00".to_string())
+        );
+    }
+
+    fn descriptor_image(types: &[u8]) -> Vec<u8> {
+        let mut data = vec![0; DESCRIPTOR_START as usize + types.len() * DESCRIPTOR_SIZE as usize];
+        for (index, &kind) in types.iter().enumerate() {
+            let offset = DESCRIPTOR_START as usize + index * DESCRIPTOR_SIZE as usize;
+            data[offset] = kind;
+            data[offset + 1..offset + 6].copy_from_slice(ISO_SIGNATURE);
+            data[offset + 6] = 1;
+        }
+        data
+    }
+
+    #[test]
+    fn boot_before_primary_uses_primary_relative_offsets() {
+        // The pinned native comparison in descriptor-order-probe.json reports
+        // the PVD values from sector 17, after a boot record at sector 16.
+        let mut data = descriptor_image(&[0, 1, 2, DESCRIPTOR_TERMINATOR]);
+        let boot = DESCRIPTOR_START as usize;
+        data[boot + 7..boot + 11].copy_from_slice(b"BOOT");
+        let primary = boot + DESCRIPTOR_SIZE as usize;
+        data[primary + 40..primary + 44].copy_from_slice(b"DISC");
+        data[primary + 80..primary + 84].copy_from_slice(&1234u32.to_le_bytes());
+        data[primary + 128..primary + 130].copy_from_slice(&2048u16.to_le_bytes());
+
+        let metadata = ISOParser.parse(&TestReader::new(data)).unwrap();
+        assert_eq!(
+            metadata.get("ISO:BootSystem"),
+            Some(&TagValue::String("BOOT".into()))
+        );
+        assert_eq!(
+            metadata.get("ISO:VolumeName"),
+            Some(&TagValue::String("DISC".into()))
+        );
+        assert_eq!(
+            metadata.get("ISO:VolumeBlockCount"),
+            Some(&TagValue::String("1234".into()))
+        );
+        assert_eq!(
+            metadata.get("ISO:VolumeBlockSize"),
+            Some(&TagValue::String("2048".into()))
+        );
+    }
+
+    #[test]
+    fn boot_system_stops_at_embedded_nul() {
+        // boot-record-probe.json: native ISO:BootSystem is "EL TORITO";
+        // the current parser incorrectly appends "GARBAGE" after the NUL.
+        let mut data = descriptor_image(&[1, 0, DESCRIPTOR_TERMINATOR]);
+        let boot = DESCRIPTOR_START as usize + DESCRIPTOR_SIZE as usize;
+        data[boot + 7..boot + 24].copy_from_slice(b"EL TORITO\0GARBAGE");
+        let metadata = ISOParser.parse(&TestReader::new(data)).unwrap();
+        assert_eq!(
+            metadata.get("ISO:BootSystem"),
+            Some(&TagValue::String("EL TORITO".into()))
+        );
+    }
+
+    #[test]
+    fn boot_system_preserves_empty_and_perl_final_newline() {
+        let empty = descriptor_image(&[1, 0, DESCRIPTOR_TERMINATOR]);
+        let metadata = ISOParser.parse(&TestReader::new(empty.clone())).unwrap();
+        assert_eq!(
+            metadata.get("ISO:BootSystem"),
+            Some(&TagValue::String(String::new()))
+        );
+
+        let mut newline = empty;
+        let boot = DESCRIPTOR_START as usize + DESCRIPTOR_SIZE as usize;
+        newline[boot + 7..boot + 13].copy_from_slice(b"ABC  \n");
+        let metadata = ISOParser.parse(&TestReader::new(newline)).unwrap();
+        assert_eq!(
+            metadata.get("ISO:BootSystem"),
+            Some(&TagValue::String("ABC\n".into()))
+        );
+    }
+
+    #[test]
+    fn truncated_boot_sector_does_not_emit_boot_system() {
+        // `ProcessISO` reads the full 2048-byte sector before dispatching.
+        let mut data = descriptor_image(&[1, 0]);
+        let boot = DESCRIPTOR_START as usize + DESCRIPTOR_SIZE as usize;
+        data[boot + 7..boot + 11].copy_from_slice(b"BOOT");
+        data.truncate(boot + 7 + 32);
+        let metadata = ISOParser.parse(&TestReader::new(data)).unwrap();
+        assert!(!metadata.contains_key("ISO:BootSystem"));
+    }
+
+    #[test]
+    fn first_descriptor_requires_complete_sector_and_known_type() {
+        let mut partial = descriptor_image(&[1]);
+        partial.truncate(DESCRIPTOR_START as usize + 900);
+        assert!(!ISOParser::verify_signature(&TestReader::new(partial)).unwrap());
+
+        let unknown = descriptor_image(&[4, 1, DESCRIPTOR_TERMINATOR]);
+        assert!(!ISOParser::verify_signature(&TestReader::new(unknown)).unwrap());
+    }
+
+    #[test]
+    fn later_primary_descriptor_replaces_earlier_value() {
+        // Pinned ISO.pm processes every PVD in order. A native probe of
+        // repeated-primary.iso reports "SECOND PRIMARY" from the later one.
+        let mut data = descriptor_image(&[1, 1, DESCRIPTOR_TERMINATOR]);
+        let first = DESCRIPTOR_START as usize;
+        let second = first + DESCRIPTOR_SIZE as usize;
+        data[first + 40..first + 45].copy_from_slice(b"FIRST");
+        data[second + 40..second + 46].copy_from_slice(b"SECOND");
+        let metadata = ISOParser.parse(&TestReader::new(data)).unwrap();
+        assert_eq!(
+            metadata.get("ISO:VolumeName"),
+            Some(&TagValue::String("SECOND".into()))
+        );
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "VolumeName")
+                .count(),
+            1,
+            "earlier descriptor is a Copy1 group, not another ISO occurrence"
+        );
+    }
+
+    #[test]
+    fn primary_winners_stay_bounded_and_preserve_absent_fields() {
+        let mut winners = Vec::new();
+        let mut first = MetadataMap::new();
+        first.insert(
+            "ISO:Publisher".to_string(),
+            TagValue::String("retained".into()),
+        );
+        ISOParser::replace_primary_winners(&mut winners, &first);
+        for index in 0..4096 {
+            let mut descriptor = MetadataMap::new();
+            descriptor.insert(
+                "ISO:VolumeName".to_string(),
+                TagValue::String(index.to_string()),
+            );
+            ISOParser::replace_primary_winners(&mut winners, &descriptor);
+            assert_eq!(winners.len(), 2);
+        }
+        assert_eq!(winners[0].1, TagValue::String("retained".into()));
+        assert_eq!(winners[1].1, TagValue::String("4095".into()));
+    }
+
+    #[test]
+    fn later_boot_descriptor_replaces_earlier_value() {
+        // native-additional-probes.json reports the later BootSystem value.
+        let mut data = descriptor_image(&[1, 0, 0, DESCRIPTOR_TERMINATOR]);
+        let first = DESCRIPTOR_START as usize + DESCRIPTOR_SIZE as usize;
+        let second = first + DESCRIPTOR_SIZE as usize;
+        data[first + 7..first + 12].copy_from_slice(b"FIRST");
+        data[second + 7..second + 13].copy_from_slice(b"SECOND");
+        let metadata = ISOParser.parse(&TestReader::new(data)).unwrap();
+        assert_eq!(
+            metadata.get("ISO:BootSystem"),
+            Some(&TagValue::String("SECOND".into()))
+        );
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "BootSystem")
+                .count(),
+            1,
+            "earlier descriptor is a Copy1 group, not another ISO occurrence"
         );
     }
 }

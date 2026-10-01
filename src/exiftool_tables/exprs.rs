@@ -392,6 +392,21 @@ pub fn trim_trailing_ws_bytes(val: &[u8]) -> Vec<u8> {
     val[..end].to_vec()
 }
 
+/// `$val =~ s/ +$//; $val` on a Perl byte scalar. Unlike `\s+$`, only
+/// spaces are removed; a final newline remains after spaces before it are
+/// removed. ExifTool's ISO::BootRecord uses this exact ValueConv.
+#[must_use]
+pub fn trim_trailing_spaces(val: &str) -> String {
+    String::from_utf8(trim_trailing_spaces_bytes(val.as_bytes()))
+        .expect("removing ASCII spaces preserves UTF-8")
+}
+
+/// Byte-preserving form for generated `string[N]` ValueConv execution.
+#[must_use]
+pub fn trim_trailing_spaces_bytes(val: &[u8]) -> Vec<u8> {
+    crate::exiftool_tables::helpers::trim_spaces_before_dollar(val)
+}
+
 /// `Image::ExifTool::CanonCustom::ConvertPfn($val)`.
 ///
 /// ExifTool (`CanonCustom.pm:2624-2628`, pinned 13.59):
@@ -1151,6 +1166,17 @@ mod tests {
         assert_eq!(trim_trailing_ws_bytes(b"\xe9ABC \t\n"), b"\xe9ABC");
         assert_eq!(trim_trailing_ws_bytes(b" \t\n"), b"");
         assert_eq!(trim_trailing_ws_bytes(b"\xc3\xa9\x85 "), b"\xc3\xa9\x85");
+    }
+
+    #[test]
+    fn trim_trailing_spaces_preserves_perl_dollar_newline_behavior() {
+        assert_eq!(trim_trailing_spaces_bytes(b"ABC  \n"), b"ABC\n");
+        assert_eq!(trim_trailing_spaces_bytes(b"ABC\t "), b"ABC\t");
+        assert_eq!(trim_trailing_spaces_bytes(b"ABC \t"), b"ABC \t");
+        assert_eq!(trim_trailing_spaces_bytes(b"ABC\0 "), b"ABC\0");
+        assert_eq!(trim_trailing_spaces_bytes(b"\xe9  "), b"\xe9");
+        assert_eq!(trim_trailing_spaces_bytes(b"   "), b"");
+        assert_eq!(trim_trailing_spaces("ABC  \n"), "ABC\n");
     }
 
     #[test]
