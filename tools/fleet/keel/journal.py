@@ -183,10 +183,10 @@ class JournalWriteError(JournalError):
 
 @dataclass(frozen=True)
 class JobState:
-    """One job, folded from its file's records in order.
+    """The latest run of one job, folded from its file's records.
 
-    Every field is "what the last record that mentioned it said". A job
-    is OPEN until an `exit` record closes it.
+    Every field belongs to this run. Earlier runs remain in the append-only
+    file but cannot supply ownership, process, or result fields to this one.
     """
 
     job_key: str
@@ -220,6 +220,7 @@ class JobState:
     #: The file's final line was incomplete (no terminating newline) and
     #: was dropped. Tolerated, but it disarms the sweep -- see `JournalScan`.
     torn: bool = False
+    prior_runs: int = 0
 
     @property
     def open(self) -> bool:
@@ -592,11 +593,27 @@ _FOLD_FIELDS = (
 )
 
 
+def _runs(records: Sequence[dict]) -> List[List[dict]]:
+    """Split an append-only job file at each completed run's exit record."""
+    runs: List[List[dict]] = []
+    current: List[dict] = []
+    for record in records:
+        current.append(record)
+        if record.get("event") == EXIT:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
 def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
+    runs = _runs(records)
+    current = runs[-1]
     values: Dict[str, object] = {}
     events: List[str] = []
-    job_key = records[-1].get("job_key") or path.stem
-    for rec in records:
+    job_key = current[-1].get("job_key") or path.stem
+    for rec in current:
         events.append(str(rec.get("event")))
         for name in _FOLD_FIELDS:
             if name in rec and rec[name] is not None:
@@ -608,11 +625,12 @@ def _fold(records: Sequence[dict], *, path: Path, torn: bool) -> JobState:
     return JobState(
         job_key=str(job_key),
         path=str(path),
-        closed=EXIT in events,
+        closed=current[-1].get("event") == EXIT,
         events=tuple(events),
-        first_ts=records[0].get("ts"),
-        last_ts=records[-1].get("ts"),
+        first_ts=current[0].get("ts"),
+        last_ts=current[-1].get("ts"),
         torn=torn,
+        prior_runs=len(runs) - 1,
         **kwargs,  # type: ignore[arg-type]
     )
 
@@ -781,6 +799,7 @@ class OwedRelease(NamedTuple):
     claim_ref: Optional[str]
     started_at: Optional[str]
     reason: str
+    run_index: int = 0
 
 
 @dataclass
@@ -931,7 +950,8 @@ def adopt_from_journal(
             reason = f"never spawned (pgid={job.pgid!r})"
             if job.claim_ref:
                 res.to_release.append(
-                    OwedRelease(job.job_key, job.claim_ref, job.started_at, reason))
+                    OwedRelease(job.job_key, job.claim_ref, job.started_at,
+                                reason, job.prior_runs))
             else:
                 res.refused.append((job.job_key, reason))
             continue
@@ -942,7 +962,7 @@ def adopt_from_journal(
         if pgid not in live:
             res.to_release.append(
                 OwedRelease(job.job_key, job.claim_ref, job.started_at,
-                            f"process group {pgid} is gone"))
+                            f"process group {pgid} is gone", job.prior_runs))
             continue
         if job.scope_token is not None and job.scope_token != scope_token:
             # The token is derived from the HUB URL (`fleet_scope_token`),
@@ -974,7 +994,7 @@ def adopt_from_journal(
             res.to_release.append(
                 OwedRelease(job.job_key, job.claim_ref, job.started_at,
                             f"recorded pgid {pgid} is not a scoped fleet worker "
-                            f"(recycled, or pre-scope)")
+                            f"(recycled, or pre-scope)", job.prior_runs)
             )
             continue
         rebuilt = rebuild_claim(job, host=host, hub=hub, ttl=ttl,
@@ -1007,10 +1027,24 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
     done: List[Tuple[str, str]] = []
     still_owed: List[OwedRelease] = []
     for owed in adoption.to_release:
-        job_key, ref, started_at, reason = owed
+        job_key, ref, started_at, reason = (
+            owed.job_key, owed.claim_ref, owed.started_at, owed.reason)
         if not ref:
             done.append((job_key, "no claim ref to release"))
             continue
+        if journal is not None:
+            try:
+                current = journal.read_job(job_key)
+            except JournalError as exc:
+                still_owed.append(owed)
+                done.append((ref, f"journal unreadable: {exc}; left alone"))
+                continue
+            if (current is None or current.closed or
+                    current.prior_runs != owed.run_index or
+                    current.claim_ref != ref or current.started_at != started_at):
+                done.append((ref, "journal describes a newer run or different "
+                                  "ownership; left alone"))
+                continue
         try:
             sha = hub.sha(ref)
             if sha is None:
@@ -1028,7 +1062,12 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             if journal is not None:
                 _close(journal, job_key, "claim is another host's now")
             continue
-        if started_at is not None and payload.get("started_at") != started_at:
+        if not started_at:
+            done.append((ref, "no ownership token was journaled; left alone"))
+            if journal is not None:
+                _close(journal, job_key, "no ownership token to prove the claim is ours")
+            continue
+        if payload.get("started_at") != started_at:
             # OUR host, but not OUR acquisition -- this host took the
             # branch again in the interval (our own next runner reaping
             # it, an `autonomous_when_serverless` gate). Deleting it
@@ -1046,8 +1085,11 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             done.append((ref, f"delete failed: {exc}"))
             continue
         done.append((ref, "released" if ok else "CAS lost; left alone"))
-        if journal is not None:
-            _close(journal, job_key, reason if ok else "claim moved under us")
+        if ok:
+            if journal is not None:
+                _close(journal, job_key, reason)
+        else:
+            still_owed.append(owed)
     adoption.to_release = still_owed
     return done
 

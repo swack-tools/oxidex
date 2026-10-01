@@ -44,6 +44,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -343,6 +344,39 @@ class TestJournalScan(JournalCase):
         self.journal_job("staging-one", pgid=1234, closed=True)
         scan = self.j.scan()
         self.assertEqual(scan.open_jobs, ())
+        self.assertTrue(scan.job("staging-one").closed)
+
+    def test_second_run_is_open_with_only_current_run_fields(self):
+        self.journal_job("staging-one", pgid=111, closed=True)
+        current = iso(datetime.now(timezone.utc))
+        self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
+                     tag="second")
+        offered = self.j.scan().job("staging-one")
+        self.assertTrue(offered.open)
+        for name in ("claim_ref", "claim_sha", "holder_host", "started_at",
+                     "expires_at", "pid", "pgid", "scope_token", "outcome", "rc"):
+            self.assertIsNone(getattr(offered, name), name)
+        self.assertEqual(offered.prior_runs, 1)
+        self.journal_job("staging-one", pgid=222, started_at=current)
+        job = self.j.scan().job("staging-one")
+        self.assertTrue(job.open)
+        self.assertEqual(job.pgid, 222)
+        self.assertEqual(job.started_at, current)
+        self.assertIsNone(job.outcome)
+        self.assertIsNone(job.rc)
+        self.assertEqual(job.prior_runs, 1)
+        self.assertEqual(len(self.j.path_for("staging-one").read_text().splitlines()), 8)
+        self.j.exit(job_key="staging-one", rc=1, outcome="FAIL")
+        self.assertTrue(self.j.read_job("staging-one").closed)
+        self.assertEqual(self.j.scan().open_jobs, ())
+
+    def test_torn_second_offer_keeps_closed_run_and_disarms_sweep(self):
+        self.journal_job("staging-one", pgid=111, closed=True)
+        with self.j.path_for("staging-one").open("ab") as fh:
+            fh.write(b'{"event":"offer"')
+        scan = self.j.scan()
+        self.assertTrue(scan.readable)
+        self.assertFalse(scan.sweep_armed)
         self.assertTrue(scan.job("staging-one").closed)
 
     def test_an_absent_journal_is_readable_and_armed(self):
@@ -762,6 +796,15 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(res.to_release, [])
         self.assertEqual(res.refused, [])
 
+    def test_live_second_run_is_adopted_offline(self):
+        self.journal_job("staging-one", pgid=999999, closed=True)
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid,
+                         started_at=iso(datetime.now(timezone.utc)))
+        res = self.adopt()
+        self.assertEqual(res.adopted, [("staging-one", p.pid)], res.summary())
+        self.assertEqual(res.to_release, [])
+
     def test_an_unreadable_journal_adopts_nothing(self):
         """The task statement's fail-closed rule: adopt nothing, sweep
         nothing. Note the live, adoptable worker that is deliberately NOT
@@ -866,6 +909,43 @@ class TestReleasePending(JournalCase):
 
         self.assertIsNotNone(self.hub.sha(ref), "a live re-acquisition must survive")
         self.assertIn("re-acquired", out[0][1])
+
+    def test_offer_without_claim_token_cannot_release_later_acquisition(self):
+        ref = claim_mod.claim_ref("gate", "staging-one")
+        self.seed_claim_on_hub(
+            self.hub, ref, host=HOST, pgid=999999,
+            started_at=iso(datetime.now(timezone.utc)))
+        self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
+                     tag="offer-only", claim_ref=ref)
+        res = jr.adopt_from_journal(
+            self.j, HOST, self.workers, hub=self.hub,
+            markers=[self.marker], scope_token=fleetd.fleet_scope_token(self.hub.url),
+            ttl=TTL, renew_interval=RENEW)
+        self.assertEqual([o.started_at for o in res.to_release], [None])
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIsNotNone(self.hub.sha(ref), "tokenless journal must not delete")
+        self.assertIn("no ownership token", out[0][1])
+
+    def test_old_owed_release_does_not_close_or_delete_new_run(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="old run ended")
+        current = iso(datetime.now(timezone.utc))
+        self.journal_job("staging-one", pgid=4242, started_at=current)
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIn("newer run", out[0][1])
+        self.assertIsNotNone(self.hub.sha(ref))
+        job = self.j.read_job("staging-one")
+        self.assertTrue(job.open)
+        self.assertEqual(job.started_at, current)
+
+    def test_cas_failure_keeps_release_owed_and_run_open(self):
+        ref, res = self.owed()
+        with mock.patch.object(self.hub, "delete", return_value=False):
+            out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIn("CAS lost", out[0][1])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertEqual([o.claim_ref for o in res.to_release], [ref])
+        self.assertTrue(self.j.read_job("staging-one").open)
 
     def test_a_store_still_away_leaves_the_debt_owed(self):
         ref, res = self.owed()
