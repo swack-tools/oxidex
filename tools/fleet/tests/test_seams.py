@@ -134,6 +134,7 @@ from _env import HermeticCase, scrub_env  # noqa: E402
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 FLEETD_PY = FLEET_DIR / "fleetd.py"
+RUNNER_PY = FLEET_DIR / "keel" / "runner.py"
 VERDICT_PY = FLEET_DIR / "verdict.py"
 INSTALL_HOOK = FLEET_DIR / "rollout" / "install_hook.sh"
 
@@ -695,8 +696,8 @@ class SubprocessFleetd:
 
 
 class SupervisedFleetd:
-    """fleetd under its REAL supervisor: `tools/fleet/units/fleetd-wrapper.sh`
-    (R8), which runs `fleetd.py "$@"` in a loop and restarts it after
+    """keel-runner under its REAL supervisor: `tools/fleet/units/fleetd-wrapper.sh`
+    (R8), which runs `keel/runner.py "$@"` in a loop and restarts it after
     `FLEETD_WRAPPER_RETRY_S` on any non-zero exit.
 
     Seam 4 needs this rather than a hand-started successor because
@@ -760,10 +761,9 @@ class SupervisedFleetd:
         return self
 
     def fleetd_pid(self):
-        """The wrapper's current fleetd child, by parent pid from the `ps`
-        listing -- never `pgrep -f fleetd`, which matches this test's own
-        command line too (the self-match class of bug that over-reported
-        gate counts on this fleet all day on 2026-08-14)."""
+        """The wrapper's current runner child, identified by parent pid and
+        the exact script argument. Never use `pgrep -f`: it can match this
+        test's own command line rather than the supervised process."""
         if self.popen is None:
             return None
         out = subprocess.run(
@@ -776,7 +776,7 @@ class SupervisedFleetd:
             pid, ppid, command = parts
             if not pid.isdigit() or not ppid.isdigit():
                 continue
-            if int(ppid) == self.popen.pid and "fleetd.py" in command:
+            if int(ppid) == self.popen.pid and str(RUNNER_PY) in command.split():
                 return int(pid)
         return None
 

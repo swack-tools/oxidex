@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'CHANGELOG.md'
       - 'benches/**'
       - 'src/parsers/**'
       - 'src/bin/tag-comparison/**'
