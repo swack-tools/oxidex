@@ -757,6 +757,33 @@ class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
     def _reasons(self, entries):
         return [r[0] for r in entries]
 
+    def test_replacement_gate_gets_new_identity_with_frozen_clock(self):
+        """A reaped gate's stop file and failure marker belong to that run.
+
+        Two starts within one wall-clock second used to share a tag, so the
+        replacement immediately consumed the first gate's stop file and its
+        marker was misreported as the replacement's failure.
+        """
+        self.set_desired(gates=1)
+        with mock.patch.object(fleetd.time, "time", return_value=1_000_000.25):
+            first = self.reconcile()
+        self.assertEqual(len(first.started), 1, first)
+        old_tag = first.started[0]
+        old_marker = self._marker(old_tag)
+        self.finish_worker(old_tag)
+
+        with mock.patch.object(fleetd.time, "time", return_value=1_000_000.25):
+            replacement = self.reconcile()
+        self.assertIn(old_tag, replacement.finished)
+        self.assertEqual(len(replacement.started), 1, replacement)
+        new_tag = replacement.started[0]
+        self.assertNotEqual(new_tag, old_tag)
+        self.assertTrue(old_marker.exists())
+        self.assertFalse((self.tmp / f"stop-{new_tag}").exists())
+        self.assertFalse(fleetd._verdict_store_failed_marker(self.tmp / "logs", new_tag).exists())
+        self.assertTrue(any(w.tag == new_tag and w.alive() for w in self.workers),
+                        self.worker_states())
+
     def test_a_marker_from_a_gate_fleetd_never_spawned_becomes_a_warning(self):
         """No worker, no claim, no reap -- the shape `train.real_gate` and
         a hand-run `gate.sh` leave behind, and the shape the reap-time

@@ -84,6 +84,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -186,6 +187,16 @@ TIP_SIGNAL_REF = "refs/fleet/signals/tip"
 # --------------------------------------------------------------------- #
 # The reconcile step
 # --------------------------------------------------------------------- #
+
+
+def _worker_tag(host: str, slug: str) -> str:
+    """Give each physical run its own log, marker, and stop-file identity.
+
+    Wall-clock seconds repeat across rapid replacements and daemon restarts;
+    a fresh UUID also prevents an old run's artifacts being reused after
+    the process that created them is gone.
+    """
+    return f"{host}-{slug}-{uuid.uuid4().hex}"
 
 
 @dataclass
@@ -683,7 +694,7 @@ def dispatch_agents(
             res.refused.append((f"agent-{code}", f"{branch}: {detail}"))
             continue
 
-        tag = f"{host}-a-{branch.split('/')[-1].removeprefix(dispatch_mod.INTENT_PREFIX)}-{int(time.time()) % 100000}"
+        tag = _worker_tag(host, f"a-{branch.split('/')[-1].removeprefix(dispatch_mod.INTENT_PREFIX)}")
         # Count the purchase BEFORE making it. A crash between here and the
         # spawn costs this key one retry; the other order costs unbounded
         # money (see dispatch.py's "counting direction").
@@ -1063,7 +1074,7 @@ def reconcile_once(
 
                     for slug in candidates[:deficit]:
                         branch = _branch(q[slug])
-                        tag = f"{host}-{slug}-{int(time.time()) % 100000}"
+                        tag = _worker_tag(host, slug)
                         try:
                             w = start_gate(hub, branch, tag, gate_command, host, log_dir)
                         except OSError as e:
