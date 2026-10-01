@@ -46,6 +46,22 @@ const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
 const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
+// Dutch, Japanese, Korean, Norwegian — Mac IDs from ExifTool's %ttLang table in
+// Font.pm (11, 23, 4, 9).  Windows LCIDs from the standard table.
+const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
+const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
+const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
+
+/// Macintosh encoding IDs for name-table records.
+const MAC_ENCODING_ROMAN: u16 = 0;
+const MAC_ENCODING_JAPANESE: u16 = 1;
+const MAC_ENCODING_KOREAN: u16 = 3;
+const MAC_ENCODING_HEBREW: u16 = 5;
 
 /// Name IDs for name table records
 const NAME_COPYRIGHT: u16 = 0;
@@ -193,6 +209,45 @@ impl TTFParser {
             .collect()
     }
 
+    /// Decodes a byte slice using the Mac OS Hebrew encoding.
+    ///
+    /// Mac OS Hebrew places Hebrew letters in the range 0xE0–0xFA, mapping
+    /// linearly to Unicode U+05D0–U+05EA.  Other high bytes are mapped to
+    /// their Mac OS Hebrew equivalents; bytes that differ from the Mac Roman
+    /// table are listed explicitly below.
+    fn decode_mac_hebrew(data: &[u8]) -> String {
+        const MAC_HEBREW_HIGH: [char; 128] = [
+            // 0x80
+            'Ä', '†', 'Ç', 'É', 'Ñ', 'Ö', 'Ü', 'á', 'à', 'â', 'ä', 'ã', 'å', 'ç', 'é', 'è',
+            // 0x90
+            'ê', 'ë', 'í', 'ì', 'î', 'ï', 'ñ', 'ó', 'ò', 'ô', 'ö', 'õ', 'ú', 'ù', 'û', 'ü',
+            // 0xA0
+            '°', '¢', '£', '§', '•', '¶', 'ß', '®', '©', '™', '´', '¨', '≠', 'Æ', 'Ø', '∞',
+            // 0xB0
+            '±', '≤', '≥', '¥', 'µ', '∂', '∑', '∏', 'π', '∫', 'ª', 'º', 'Ω', 'æ', 'ø', '¿',
+            // 0xC0
+            '¡', '¬', '√', 'ƒ', '≈', '∆', '«', '»', '…', '\u{a0}', 'À', 'Ã', 'Õ', 'Œ', 'œ', '–',
+            // 0xD0
+            '—', '“', '”', '‘', '’', '÷', '◊', 'ÿ', 'Ÿ', '⁄', '€', '‹', '›', 'ﬁ', 'ﬂ', '‡',
+            // 0xE0
+            'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'ך', 'כ', 'ל', 'ם', 'מ', 'ן',
+            // 0xF0
+            'נ', 'ס', 'ע', 'ף', 'פ', 'ץ', 'צ', 'ק', 'ר', 'ש', 'ת', '\u{200e}', '\u{200f}', '·', '‚', '„',
+        ];
+
+        data.iter()
+            .map(|&byte| {
+                if byte < 0x80 {
+                    char::from(byte)
+                } else {
+                    // The 0xFB–0xFF slots hold LRM, RLM, middle-dot and low-9
+                    // quotes – they are all table-driven so the index is safe.
+                    MAC_HEBREW_HIGH[(byte - 0x80) as usize]
+                }
+            })
+            .collect()
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -222,8 +277,16 @@ impl TTFParser {
                     .collect();
                 String::from_utf16(&utf16_chars).ok()
             }
-            PLATFORM_MACINTOSH if record.encoding_id == 0 => {
-                // Macintosh encoding 0 is Mac Roman, not UTF-8.
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
+                Some(Self::decode_mac_hebrew(str_data))
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_JAPANESE => {
+                // TODO: decode MacJapanese (Shift-JIS variant) — fall back to
+                // UTF-8 so that Windows-platform records (UTF-16BE) still work.
+                String::from_utf8(str_data.to_vec()).ok()
+            }
+            PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_ROMAN => {
+                // Macintosh encoding 0 is Mac Roman.
                 Some(Self::decode_mac_roman(str_data))
             }
             PLATFORM_MACINTOSH => {
@@ -241,6 +304,14 @@ impl TTFParser {
         match (record.platform_id, record.language_id) {
             (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_DUTCH_WINDOWS) => Some("nl-NL"),
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_NORWEGIAN_WINDOWS) => Some("no"),
             (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
             (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
@@ -580,6 +651,10 @@ mod tests {
         for (id, expected) in [
             (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
             (2, "de"),  // 2 => 'de'
+            (4, "nl-NL"),// 4 => 'nl-NL' (Dutch)
+            (9, "no"),  // 9 => 'no' (Norwegian)
+            (11, "ja"), // 11 => 'ja' (Japanese)
+            (23, "ko"), // 23 => 'ko' (Korean)
             (3, "it"),  // 3 => 'it'   (4 is nl-NL, not Italian)
             (6, "es"),  // 6 => 'es'   (12 is ar, not Spanish)
             (7, "da"),  // 7 => 'da'
@@ -602,7 +677,6 @@ mod tests {
     #[test]
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
         for id in [
-            4,  /* nl-NL */
             12, /* ar */
             5,  /* sv */
             8,  /* pt */
