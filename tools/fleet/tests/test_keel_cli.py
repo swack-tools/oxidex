@@ -116,7 +116,7 @@ for _p in (FLEET_DIR, KEEL_DIR):
 import hubstore  # noqa: E402
 import server as keel_server  # noqa: E402
 from _env import HermeticCase  # noqa: E402
-from claim import claim_ref, is_expired  # noqa: E402
+from claim import _iso as claim_iso, claim_ref, is_expired  # noqa: E402
 from fleetlib import Hub  # noqa: E402
 from keel.cachedhub import CachedHub  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
@@ -633,6 +633,22 @@ class TestServer(_KeelCliCase):
         sha, payload = self.direct_hub.read_with_sha(SERVER_CLAIM_REF)
         self.assertIsNotNone(sha)
         self.assertFalse(is_expired(payload))
+
+    def test_rehost_writes_the_shared_parseable_lease_timestamp(self):
+        # The supported Python 3.10 reader uses datetime.fromisoformat;
+        # a trailing Z makes an expired lease look live on that runtime.
+        result = self.run_cli("server", "rehost", "--direct")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _sha, payload = self.direct_hub.read_with_sha(SERVER_CLAIM_REF)
+        for field in ("started_at", "expires_at"):
+            with self.subTest(field=field):
+                raw = payload[field]
+                self.assertEqual(raw, claim_iso(datetime.fromisoformat(raw)))
+        started = datetime.fromisoformat(payload["started_at"])
+        expires = datetime.fromisoformat(payload["expires_at"])
+        self.assertEqual((expires - started).total_seconds(), 120)
+        self.assertEqual(started.utcoffset(), timedelta(0))
+        self.assertEqual(expires.utcoffset(), timedelta(0))
 
     def test_rehost_refuses_against_a_live_lease_from_someone_else(self):
         self.write_server_claim(expires_in_s=600, holder="other-host")
