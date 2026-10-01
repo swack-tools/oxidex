@@ -1264,6 +1264,46 @@ class TestAdoptAtStartup(JournalCase):
         self.assertEqual(res.suppressed_kills, [orphan.pid])
         self.assertIsNone(orphan.poll())
 
+    def test_dead_pending_spawn_is_closed_before_claim_deletion_and_restart(self):
+        p = self.spawn_stub()
+        pgid = p.pid
+        self.kill_stub(p)
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=None, started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=pgid,
+                               started_at=started)
+
+        first = self.startup()
+        self.assertEqual(first.mode, "store")
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertFalse(self.j.read_job("staging-one").open)
+        self.assertTrue(first.spawn_allowed)
+        self.j = jr.Journal(self.j.root)  # a new daemon sees only durable state
+        second = self.startup()
+        self.assertTrue(second.spawn_allowed)
+        self.assertFalse(self.j.read_job("staging-one").open)
+
+    def test_failed_pending_spawn_close_retains_claim_until_retry(self):
+        p = self.spawn_stub()
+        pgid = p.pid
+        self.kill_stub(p)
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=None, started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=pgid,
+                               started_at=started)
+
+        with mock.patch.object(self.j, "exit", side_effect=jr.JournalWriteError("full disk")):
+            first = self.startup()
+        self.assertFalse(first.spawn_allowed)
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNotNone(self.hub.sha(ref),
+                             "remote death evidence must survive a failed durable close")
+        self.j = jr.Journal(self.j.root)  # retry after daemon restart
+        second = self.startup()
+        self.assertTrue(second.spawn_allowed)
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertFalse(self.j.read_job("staging-one").open)
+
     def test_torn_journal_known_live_run_blocks_starts_without_claim(self):
         live = self.spawn_stub()
         self.journal_job("staging-one", pgid=live.pid)

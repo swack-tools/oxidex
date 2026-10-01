@@ -1810,6 +1810,7 @@ def adopt_workers(
     scope_token: Optional[str] = None,
     session_probe: Callable[[int], Optional[int]] = session_of,
     recorded_births: Optional[dict] = None,
+    before_dead_release: Optional[Callable[[str, dict], bool]] = None,
 ) -> AdoptionResult:
     """Rebuild `workers` from this host's live claims + process groups
     (ARCH-FIX-SPEC.md R6). Appends adopted workers to `workers` in place.
@@ -1892,6 +1893,7 @@ def adopt_workers(
         own_pgid = None
 
     claimed_pgids: set = set()
+    protected_pgids_by_ref: dict = {}
     adopted_pgids: set = set()
     # A claim we could not READ is a claim whose pgid we cannot add to
     # `claimed_pgids` -- and the docstring's promise ("a claim we decline
@@ -1927,6 +1929,7 @@ def adopt_workers(
                 # orphan sweep's exclusion list, and a claim we decline to
                 # adopt still protects its process from being swept.
                 claimed_pgids.add(pgid)
+                protected_pgids_by_ref[ref] = pgid
                 res.claim_pgids_by_ref[ref] = pgid
 
             if payload.get("holder_host") != host:
@@ -1953,9 +1956,20 @@ def adopt_workers(
                 try:
                     os.killpg(pgid, 0)
                 except ProcessLookupError:
+                    # A pending post-Popen journal prefix may have no PGID.
+                    # Persist this exact acquisition's proven-dead outcome
+                    # before deleting its only remote PGID evidence.
+                    if before_dead_release is not None and not before_dead_release(ref, payload):
+                        reason = f"could not durably close dead claim {ref} before release"
+                        res.skipped.append((ref, reason))
+                        res.unreadable.append((ref, reason))
+                        continue
                     reason = f"process group {pgid} is gone"
                     res.released.append((ref, reason))
-                    _release_claim_ref(hub, ref, sha, host, reason, res)
+                    if _release_claim_ref(hub, ref, sha, host, reason, res):
+                        protected_pgids_by_ref.pop(ref, None)
+                        if pgid not in protected_pgids_by_ref.values():
+                            claimed_pgids.discard(pgid)
                     continue
                 except OSError:
                     pass  # uncertain or EPERM: keep the claim for identity check
@@ -2003,8 +2017,14 @@ def adopt_workers(
                 reason = (f"recorded pgid {pgid} is not a scoped fleet "
                           f"worker (recycled, or pre-scope)")
                 res.released.append((ref, reason))
-                _release_claim_ref(hub, ref, sha, host, reason, res)
-                claimed_pgids.discard(pgid)
+                if _release_claim_ref(hub, ref, sha, host, reason, res):
+                    # Protection is per readable claim, not per numeric PGID.
+                    # Another ref (including a foreign host's) may name the
+                    # replacement group, and a failed CAS leaves this ref's
+                    # current owner unknown.
+                    protected_pgids_by_ref.pop(ref, None)
+                    if pgid not in protected_pgids_by_ref.values():
+                        claimed_pgids.discard(pgid)
                 continue
 
             c = claim_mod.Claim.adopt(
@@ -2015,12 +2035,15 @@ def adopt_workers(
                 # The lease is no longer ours (reaped and re-taken between
                 # our read and our renewal). Deliberately NOT released --
                 # it belongs to whoever holds it now. Its pgid is also
-                # deliberately NOT in `adopted_pgids`, so the sweep below
-                # kills that process: someone else may already be running
-                # this work, which is precisely T1's kill-on-lost rule
-                # arriving one moment earlier.
+                # deliberately NOT in `adopted_pgids`. The replacement's
+                # token/PGID is unknown until another full store pass, so
+                # disarm sweeping and starts rather than signal by a stale
+                # numeric PGID.
                 res.skipped.append((ref, "adopt refused: lease no longer ours"))
-                claimed_pgids.discard(pgid)
+                res.unreadable.append((ref, "adoption ownership changed during renewal"))
+                # The ref may now protect a replacement under another token;
+                # its PGID is unknown until the next complete store scan.
+                # Keep this pass's exclusion rather than sweeping it.
                 continue
 
             workers.append(
@@ -2112,10 +2135,11 @@ def adopt_workers(
 
 
 def _release_claim_ref(hub: Hub, ref: str, sha: str, host: str, reason: str,
-                       res: AdoptionResult) -> None:
+                       res: AdoptionResult) -> bool:
     """CAS-delete a claim of ours whose work is gone. A failed CAS means
     somebody moved the ref under us, which makes it not ours to delete --
-    downgrade the record from `released` to `skipped` rather than retry."""
+    downgrade the record from `released` to `skipped`, disarm this pass,
+    and return whether the exact CAS deletion succeeded."""
     try:
         ok = hub.delete(ref, expect_sha=sha)
     except HubError as e:
@@ -2124,9 +2148,11 @@ def _release_claim_ref(hub: Hub, ref: str, sha: str, host: str, reason: str,
     if not ok:
         res.released = [entry for entry in res.released if entry[0] != ref]
         res.skipped.append((ref, f"stale on release: {reason}"))
-        return
+        res.unreadable.append((ref, f"claim ownership unresolved after release refusal: {reason}"))
+        return False
     print(f"fleetd[{host}] RELEASED orphaned claim {ref}: {reason}",
           file=sys.stderr, flush=True)
+    return True
 
 
 def _exiftool_cache_dir() -> Path:

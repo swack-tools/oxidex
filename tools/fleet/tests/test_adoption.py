@@ -46,6 +46,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 FLEET_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(FLEET_DIR))
@@ -552,6 +553,60 @@ class TestAdoptWorkers(HermeticCase):
         self.assertTrue(any("a-different-host" in reason for _ref, reason in res.skipped),
                         f"the skip must be recorded and explained: {res.skipped}")
         self.assertTrue(p.poll() is None, "the other host's process must still be running")
+
+    def test_recycled_claim_cannot_remove_another_refs_pgid_protection(self):
+        for foreign_first in (True, False):
+            with self.subTest(foreign_first=foreign_first):
+                p = self.spawn_stub_worker()
+                suffix = "first" if foreign_first else "last"
+                foreign_key = f"a-foreign-{suffix}" if foreign_first else f"z-foreign-{suffix}"
+                stale_key = f"z-stale-{suffix}" if foreign_first else f"a-stale-{suffix}"
+                foreign = self.make_claim_on_hub(
+                    "gate", foreign_key, host="a-different-host", pgid=p.pid)
+                stale = self.make_claim_on_hub(
+                    "gate", stale_key, host=HOST, pgid=p.pid,
+                    recorded_birth="darwin:1:0")
+                res, killed = self.adopt()
+                self.assertEqual(killed, [], res)
+                self.assertIsNone(p.poll())
+                self.assertIsNotNone(self.hub.sha(foreign))
+                self.assertIsNone(self.hub.sha(stale))
+                self.assertEqual(res.orphans_killed, [])
+
+    def test_refused_adoption_cannot_remove_another_refs_pgid_protection(self):
+        p = self.spawn_stub_worker()
+        foreign = self.make_claim_on_hub(
+            "gate", "a-foreign", host="a-different-host", pgid=p.pid)
+        local = self.make_claim_on_hub("gate", "z-local", host=HOST, pgid=p.pid)
+        with mock.patch.object(claim_mod.Claim, "adopt", return_value=None):
+            res, killed = self.adopt()
+        self.assertEqual(killed, [], res)
+        self.assertIsNone(p.poll())
+        self.assertIsNotNone(self.hub.sha(foreign))
+        self.assertIsNotNone(self.hub.sha(local))
+        self.assertIn(local, [ref for ref, _ in res.unreadable])
+        self.assertIsNotNone(res.sweep_skipped)
+
+    def test_failed_stale_claim_delete_preserves_other_claim_and_disarms_sweep(self):
+        p = self.spawn_stub_worker()
+        foreign = self.make_claim_on_hub(
+            "gate", "a-foreign", host="a-different-host", pgid=p.pid)
+        stale = self.make_claim_on_hub(
+            "gate", "z-stale", host=HOST, pgid=p.pid,
+            recorded_birth="darwin:1:0")
+        real_delete = self.hub.delete
+
+        def refuse_stale(ref, **kwargs):
+            return False if ref == stale else real_delete(ref, **kwargs)
+
+        with mock.patch.object(self.hub, "delete", side_effect=refuse_stale):
+            res, killed = self.adopt()
+        self.assertEqual(killed, [], res)
+        self.assertIsNone(p.poll())
+        self.assertIsNotNone(self.hub.sha(foreign))
+        self.assertIsNotNone(self.hub.sha(stale))
+        self.assertIn(stale, [ref for ref, _ in res.unreadable])
+        self.assertIsNotNone(res.sweep_skipped)
 
     def test_unclaimed_fleet_worker_is_killed_by_group(self):
         """A fleet worker running with no lease at all is the hazard leases

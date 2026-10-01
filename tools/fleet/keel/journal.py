@@ -1278,8 +1278,9 @@ def adopt_at_startup(
        arrives after the SIGKILL suppresses nothing.
     2. `fleetd.adopt_workers` runs against the store. With the store
        reachable the hub claim is truth EXACTLY as today (SPEC §5.3);
-       the journal contributes nothing to that decision, because a local
-       file must never out-vote a CAS'd lease.
+       the journal cannot out-vote a CAS'd lease. For a pending-spawn
+       prefix, however, an exact store claim's kernel-absent PGID must be
+       durably closed locally before its last remote evidence is deleted.
     3. If the store pass fails, or the caller has no host singleton yet,
        the journal supplies local observation only. Without host ownership,
        rebuilt worker claims do not start renewers; the caller applies the
@@ -1310,6 +1311,43 @@ def adopt_at_startup(
         kwargs["markers"] = markers
     if scope_token is not None:
         kwargs["scope_token"] = scope_token
+    # A failed post-Popen append leaves only offer/claim locally while the
+    # exact store claim may already contain its PGID. If that group is now
+    # kernel-absent, journal its proven-dead outcome BEFORE the store claim
+    # (the only remaining PGID evidence) is deleted. A failed durable append
+    # keeps the claim and lets the next startup retry the same proof.
+    pending_by_ref: dict = {}
+    for job in scan.open_jobs:
+        if job.claim_ref and not job.spawned:
+            pending_by_ref.setdefault(job.claim_ref, []).append(job)
+    closed_pending: set = set()
+
+    def _before_dead_release(ref: str, payload: dict) -> bool:
+        pending = pending_by_ref.get(ref, ())
+        if not pending:
+            return True
+        if not scan.sweep_armed:
+            return False
+        for job in pending:
+            if (job.holder_host != host or not job.started_at or
+                    job.started_at != payload.get("started_at")):
+                return False
+        for job in pending:
+            try:
+                journal.exit(
+                    job_key=job.job_key, outcome="released",
+                    reason="exact store claim's process group is kernel-absent",
+                    pgid=payload["pgid"],
+                    holder_host=host, started_at=job.started_at,
+                    leader_birth=payload.get("leader_birth"),
+                )
+            except JournalError:
+                return False
+            closed_pending.add(job.job_key)
+        return True
+
+    if pending_by_ref:
+        kwargs["before_dead_release"] = _before_dead_release
     if not scan.sweep_armed:
         res.sweep_skipped = (
             f"journal at {scan.root} is not trustworthy ({scan.why_not_armed()}); "
@@ -1357,7 +1395,7 @@ def adopt_at_startup(
             claimed_pgids = set(claimed_by_ref.values())
             local_scope = scope_token or fleet_scope_token(hub.url)
             for job in scan.open_jobs:
-                if job.spawned or not job.started_at:
+                if job.spawned or job.job_key in closed_pending or not job.started_at:
                     continue
                 current = store_by_ref.get(job.claim_ref)
                 if (current is None or current.claim._started_at is None or
