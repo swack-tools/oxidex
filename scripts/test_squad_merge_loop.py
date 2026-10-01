@@ -768,6 +768,66 @@ class BatchCheckCadenceTests(unittest.TestCase):
         self.assertFalse(sml.batch_check_due(state, batch_commits=10, batch_seconds=900, now_fn=lambda: 200))
 
 
+class OneSquadPerEmitterFileTests(SquadProcessFixture):
+    """The invariant merge_squad_into_sweep assumes and nothing enforced.
+
+    Its own docstring says a content conflict is "structurally
+    near-impossible given one squad per shared emitter file" -- but
+    squads.toml lets several squads claim a format, and squad_slot_branches
+    filters ownership not at all. So two squads fix the SAME tags in the
+    SAME file with DIFFERENT code, which patch-id dedup cannot see.
+
+    Measured 2026-07-27: PR #154 shipped duplicate match arms (six clippy
+    errors), and the next sweep collected four squads' stamps and failed
+    EVERY merge with a cross-squad conflict -- nothing_merged in one second,
+    with real work available.
+    """
+
+    def _stage_on_other_squad(self, repo, other, path, content):
+        """Put a commit touching `path` on squad/<other>."""
+        cur = git_out(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        git(repo, "branch", "-f", f"squad/{other}", "main")
+        git(repo, "checkout", "-q", f"squad/{other}")
+        (Path(repo) / path).parent.mkdir(parents=True, exist_ok=True)
+        (Path(repo) / path).write_text(content)
+        git(repo, "add", path)
+        git(repo, "commit", "-q", "-m", f"{other} touches {path}")
+        git(repo, "checkout", "-q", cur)
+
+    def test_a_file_another_squad_is_staging_is_DEFERRED_not_consumed(self):
+        repo, staging, home, sha = self._setup_squad()
+        touched = git_out(repo, "show", "--name-only", "--format=", sha).split()
+        self.assertTrue(touched, "fixture must change at least one file")
+        self._stage_on_other_squad(repo, "canon", touched[0], "// canon's version\n")
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha, all_squads=["nikon", "canon"], origin_ref="main",
+            validate_fn=lambda *a, **kw: did_work.append("validate") or {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+        )
+        self.assertEqual(result["outcome"], "deferred_file_held")
+        self.assertEqual(result["held_by"], "canon")
+        self.assertEqual(did_work, [], "must defer BEFORE paying for validate/build")
+        # DEFER, not consume: no head recorded, so a later poll re-offers it.
+        status = sml.load_squad_status(sml.squad_status_file(home, "nikon"))
+        self.assertNotIn(sha, status.get("heads", {}),
+                         "a deferred commit must NOT be marked consumed")
+
+    def test_an_untouched_file_is_processed_normally(self):
+        repo, staging, home, sha = self._setup_squad()
+        self._stage_on_other_squad(repo, "canon", "src/somewhere/else.rs", "// unrelated\n")
+        result = self._process(repo, staging, home, sha, all_squads=["nikon", "canon"], origin_ref="main")
+        self.assertEqual(result["outcome"], "consumed")
+
+    def test_without_all_squads_the_check_is_inert(self):
+        """Opt-in: an unreadable squads.toml must never block a merger."""
+        repo, staging, home, sha = self._setup_squad()
+        touched = git_out(repo, "show", "--name-only", "--format=", sha).split()
+        self._stage_on_other_squad(repo, "canon", touched[0], "// canon's version\n")
+        result = self._process(repo, staging, home, sha, all_squads=None, origin_ref="main")
+        self.assertEqual(result["outcome"], "consumed")
+
+
 class CrossSquadDuplicateSkipTests(unittest.TestCase):
     """80% of merger work was re-validating patches another squad already had.
 

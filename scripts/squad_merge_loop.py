@@ -164,6 +164,22 @@ def default_staging_dir(home, squad):
 # squads.toml
 # ---------------------------------------------------------------------------
 
+def all_squad_names(squads_toml_path):
+    """Every squad name in squads.toml, or [] if it cannot be read.
+
+    Used to find which OTHER squad is already staging a file -- see
+    squad_holding_any_file. Unreadable config must never BLOCK a merger, so
+    a failure here degrades to "no other squads known", i.e. today's
+    behaviour.
+    """
+    try:
+        with open(squads_toml_path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError):
+        return []
+    return sorted((data.get("squads") or {}).keys())
+
+
 def squad_formats(squads_toml_path, squad):
     """squads.toml's advisory ``formats`` list for `squad` (spec S2) --
     the candidate-branch source (item 3a: read literally, not narrowed to
@@ -743,8 +759,91 @@ def squad_that_already_staged(home, squad, patch_id):
     return None
 
 
+def commit_files(repo_root, sha, run_git=None):
+    """Paths one commit changes. Empty on any git failure."""
+    runner = run_git or make_git_runner(repo_root)
+    try:
+        out = runner(["show", "--name-only", "--format=", sha])
+    except Exception:  # noqa: BLE001 -- must never block a merger
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def files_touched(repo_root, base, tip, run_git=None):
+    """Paths changed between `base` and `tip`. Empty on any git failure.
+
+    make_git_runner's contract is run_git(args, input_text=None) -> stdout,
+    with check=True, so a failure raises rather than returning a code.
+    """
+    runner = run_git or make_git_runner(repo_root)
+    try:
+        out = runner(["diff", "--name-only", f"{base}..{tip}"])
+    except Exception:  # noqa: BLE001 -- an unreadable range must never block
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def squad_holding_any_file(repo_root, squad, files, squads, origin_ref=ORIGIN_MAIN,
+                           run_git=None):
+    """The OTHER squad already staging work that touches one of `files`.
+
+    Enforces the invariant merge_squad_into_sweep is written against and
+    states in its own docstring -- "one squad per shared emitter file" --
+    which nothing was actually maintaining.
+
+    squads.toml deliberately lets several squads claim a format (JPEG carries
+    every brand's makernotes), and squad_slot_branches discovers work by ref
+    pattern with no ownership filter at all. So two squads routinely fix the
+    SAME tags in the SAME file with DIFFERENT code. Different code means
+    different patch-ids, so the cross-squad patch dedup (#150) correctly lets
+    both through -- and then they conflict textually when the sweep merges
+    them.
+
+    Measured 2026-07-27, and this is now the binding constraint on publishing:
+
+      * PR #154 shipped duplicate match arms (0xA405/0xA407/0xA411/0xA412/
+        0xA413 listed twice in src/parsers/raw/metadata.rs) -- six clippy
+        errors, born red.
+      * The very next sweep collected four squads' stamps and every single
+        merge failed:
+            HARD ERROR: cross-squad conflict merging squad/exif-core
+            HARD ERROR: cross-squad conflict merging squad/ps-docs
+            HARD ERROR: cross-squad conflict merging squad/sigma-c2pa
+            HARD ERROR: cross-squad conflict merging squad/xmp
+        -> nothing_merged, in one second, with real work available.
+
+    #154 published only because that round happened to hold two COMPATIBLE
+    squads. That was luck, not robustness.
+
+    Deferring is deliberately NOT consuming: the commit is left for a later
+    poll, so it lands once the holding squad's work reaches origin/main and
+    the file is free again. Nothing is dropped and nothing is starved.
+    """
+    if not files:
+        return None, []
+    runner = run_git or make_git_runner(repo_root)
+    for other in sorted(squads):
+        if other == squad:
+            continue
+        branch = f"squad/{other}"
+        if not branch_exists(repo_root, branch):
+            continue
+        try:
+            base = runner(["merge-base", branch, origin_ref]).strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if not base:
+            continue
+        staged = files_touched(repo_root, base, branch, run_git=runner)
+        overlap = files & staged
+        if overlap:
+            return other, sorted(overlap)[:3]
+    return None, []
+
+
 def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is_novel,
                     quarantine_entries, cache_dir, home, validate_fn, cargo_test_targeted_fn,
+                    all_squads=None, origin_ref=ORIGIN_MAIN,
                     comparison_fn, sweep_review_log_path=None, validate_kwargs=None,
                     now_fn=time.time, log_fn=print):
     """Process exactly one candidate commit through the full merger
@@ -773,6 +872,29 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
     # Before paying for a cherry-pick, a build and a corpus comparison, check
     # whether another squad already did exactly this. See
     # squad_that_already_staged -- 80% of merger work was this.
+    # The invariant merge_squad_into_sweep assumes and nothing enforced:
+    # one squad per shared emitter file. See squad_holding_any_file -- four
+    # squads' merges all failed with cross-squad conflicts on 2026-07-27,
+    # which is nothing_merged with real work sitting available.
+    #
+    # DEFER, never consume: no head is recorded, so this exact commit is
+    # re-offered on a later poll once the holding squad's work reaches
+    # origin/main and the file is free.
+    if all_squads:
+        # The commit's OWN changed files, not a diff against a ref. Using
+        # ORIGIN_MAIN here silently returned nothing wherever that ref does
+        # not exist -- which made the whole check inert instead of loud.
+        changed = commit_files(repo_root, sha, run_git=run_git)
+        holder, overlap = squad_holding_any_file(
+            repo_root, squad, changed, all_squads, origin_ref=origin_ref,
+            run_git=run_git)
+        if holder:
+            log_fn(f"[{squad}] {sha[:12]} ({fmt}): squad/{holder} is already staging "
+                   f"{', '.join(overlap)} -- deferring rather than racing it into a "
+                   "cross-squad conflict")
+            return {"sha": sha, "outcome": "deferred_file_held", "patch_id": patch_id,
+                    "held_by": holder, "files": overlap}
+
     staged_by = squad_that_already_staged(home, squad, patch_id)
     if staged_by:
         record_head(status_path, sha, status="consumed", patch_id=patch_id,
@@ -1159,6 +1281,9 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
 
     status_path = squad_status_file(home, squad)
     quarantine_entries = load_quarantine(quarantine_ledger_path(home))
+    # Every squad that could be racing this one for a file. Read once per
+    # poll: squads.toml is small and this is the only consumer.
+    known_squads = all_squad_names(squads_toml_path) or None
     branches = candidate_worker_branches(repo_root, squads_toml_path, squad)
     slot_branches = squad_slot_branches(repo_root, squad)
     # Union with squads.toml's own advisory list (not just formats seen on
@@ -1212,6 +1337,7 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
                 validate_fn=validate_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
                 comparison_fn=comparison_fn, sweep_review_log_path=sweep_review_log_path,
                 validate_kwargs=validate_kwargs, now_fn=now_fn, log_fn=log_fn,
+                all_squads=known_squads, origin_ref=origin_ref,
             )
             processed.append(result)
             heartbeat_fn()
@@ -1234,6 +1360,7 @@ def poll_once(*, repo_root, squad, home, staging_dir, squads_toml_path=DEFAULT_S
                 validate_fn=validate_fn, cargo_test_targeted_fn=cargo_test_targeted_fn,
                 comparison_fn=comparison_fn, sweep_review_log_path=sweep_review_log_path,
                 validate_kwargs=validate_kwargs, now_fn=now_fn, log_fn=log_fn,
+                all_squads=known_squads, origin_ref=origin_ref,
             )
             processed.append(result)
             heartbeat_fn()

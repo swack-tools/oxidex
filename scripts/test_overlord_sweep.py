@@ -1131,7 +1131,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 # a real cargo. It must REWRITE a tracked .rs file, exactly
                 # as rustfmt does: a no-op hook produces no commit and so
                 # cannot show whether that commit lands on the branch.
-                fmt_fn=self._reformatting_fmt_fn,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
                 now_fn=lambda: 12345,
             )
 
@@ -1221,7 +1221,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 push_branch_fn=lambda repo_root, branch: (
                     pushed.append(git_out(repo_root, "rev-parse", branch).strip()) or (True, "pushed")
                 ),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
 
         self.assertEqual(result["status"], "ok")
@@ -1393,7 +1393,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: (True, "pushed"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=logged.append,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=logged.append,
                 create_pr_fn=lambda *a, **kw: {
                     "ok": False, "stdout": "",
                     "stderr": "gh: To get started with GitHub CLI, please run: gh auth login",
@@ -1457,7 +1457,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=lambda *a, **kw: pr_calls.append(1),
                 push_branch_fn=lambda repo_root, branch: (False, "no configured push destination"),
-                fmt_fn=lambda repo_root: (True, ""),
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""),
             )
 
             self.assertEqual(result["status"], "push_failed")
@@ -1467,6 +1467,47 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             squads = overlord_sweep.squads_from_toml(squads_toml)
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
+
+    def test_a_LINT_failure_refuses_to_push_and_keeps_the_stamps(self):
+        """A sweep PR that cannot merge is worse than no sweep PR.
+
+        The sweep already ran cargo fmt and committed the result, so style was
+        covered -- but nothing ran the gate CI actually applies,
+        `cargo clippy --all-features -- -D warnings`.
+
+        Measured 2026-07-27 on sweep/tags-2026-07-27-8 (PR #154), the first PR
+        this pipeline opened autonomously: fmt clean, 70 tag trailers, and SIX
+        clippy errors -- one dead assignment and five `unreachable pattern`s,
+        because two squads had independently fixed the same X3F/RW2 tags with
+        DIFFERENT code. Different code means different patch-ids, so the
+        cross-squad dedup correctly let both through; they collided only once
+        merged.
+
+        Cursor semantics match the push_failed path: origin has nothing, so a
+        retry cannot duplicate a PR or a branch, and the stamps must NOT be
+        consumed.
+        """
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path,
+                origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                fmt_fn=self._reformatting_fmt_fn,
+                lint_fn=lambda repo_root: (False, "error: unreachable pattern\nerror: could not compile"),
+                push_branch_fn=lambda r, b: self.fail("must NOT push a branch that fails the lint gate"),
+                create_pr_fn=lambda *a, **kw: self.fail("must NOT open a PR for it"),
+                log_fn=lambda *a: None,
+            )
+            self.assertEqual(result["status"], "lint_failed")
+            self.assertIn("unreachable pattern", result["message"])
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+            self.assertNotIn("canon", cursor.get("squads", {}),
+                             "stamps must survive for the next round")
 
     def test_a_push_failure_is_retried_whole_by_the_next_round(self):
         """The end-to-end consequence, driven twice against one repo: a
@@ -1481,7 +1522,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
             first = overlord_sweep.run_sweep(
                 push_branch_fn=lambda repo_root, branch: (False, "fatal: could not read from remote"),
@@ -1543,7 +1584,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
 
@@ -1586,7 +1627,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: self.fail("no PR for a zero-delta sweep"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
         self.assertEqual(result["status"], "zero_delta")
         self.assertEqual(tested, [])
@@ -1722,7 +1763,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
         # It must NOT abort on a duplicate it inherited.
         self.assertNotEqual(result["status"], "sweep_aborted")
@@ -1766,7 +1807,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), run_git=revert_hostile_run_git,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=revert_hostile_run_git,
                 log_fn=lambda *a: None,
             )
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
@@ -1836,7 +1877,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), run_git=restore_hostile_run_git,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=restore_hostile_run_git,
                 log_fn=lambda *a: None,
             )
 
