@@ -110,6 +110,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -695,6 +696,18 @@ class SubprocessFleetd:
             return ""
 
 
+class TestSupervisedRunnerLookup(unittest.TestCase):
+    def test_runner_path_with_spaces_and_parent_filter(self):
+        driver = object.__new__(SupervisedFleetd)
+        driver.popen = mock.Mock(pid=123)
+        script = Path("/checkout with spaces/tools/fleet/keel/runner.py")
+        output = f"400 999 python3 {script} --interval 1\n401 123 python3 {script}.other\n402 123 python3 {script} --interval 1\n"
+        with mock.patch(__name__ + ".RUNNER_PY", script), mock.patch(
+            "subprocess.run", return_value=mock.Mock(stdout=output)
+        ):
+            self.assertEqual(driver.fleetd_pid(), 402)
+
+
 class SupervisedFleetd:
     """keel-runner under its REAL supervisor: `tools/fleet/units/fleetd-wrapper.sh`
     (R8), which runs `keel/runner.py "$@"` in a loop and restarts it after
@@ -776,7 +789,7 @@ class SupervisedFleetd:
             pid, ppid, command = parts
             if not pid.isdigit() or not ppid.isdigit():
                 continue
-            if int(ppid) == self.popen.pid and str(RUNNER_PY) in command.split():
+            if int(ppid) == self.popen.pid and re.search(r"(?<!\S)" + re.escape(str(RUNNER_PY)) + r"(?!\S)", command):
                 return int(pid)
         return None
 
