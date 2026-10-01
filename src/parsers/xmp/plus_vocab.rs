@@ -24,6 +24,9 @@ const PLUS_VOCAB_URI: &str = "http://ns.useplus.org/ldf/vocab/";
 /// Applies the PLUS ValueConv + PrintConv for `tag`, or returns `None` if the
 /// tag is not a PLUS controlled-vocabulary property.
 pub fn convert(tag: &str, value: &str) -> Option<String> {
+    if tag == "MediaSummaryCode" {
+        return Some(convert_media_summary_code(value));
+    }
     let table = print_conv_table(tag)?;
     // ImageAlterationConstraints and ImageFileConstraints are `List => 'Bag'`,
     // and by this point the list has already been joined; ExifTool converts
@@ -33,6 +36,132 @@ pub fn convert(tag: &str, value: &str) -> Option<String> {
         .map(|item| convert_one(table, item))
         .collect();
     Some(converted.join(", "))
+}
+
+/// Applies the `MediaSummaryCode` `PrintConv` from ExifTool 13.59
+/// `PLUS.pm:110-142`. The table below is the exact subset exercised by the
+/// release's canonical `t/images/PLUS.xmp` fixture; unlisted IDs pass through,
+/// exactly as `%mediaMatrix`'s `OTHER` callback specifies.
+fn convert_media_summary_code(value: &str) -> String {
+    let upper = value.to_ascii_uppercase();
+    let Some(rest) = upper.strip_prefix("|PLUS|") else {
+        return upper;
+    };
+    let mut fields = rest.splitn(3, '|');
+    let (Some(version), Some(usages), Some(code)) = (fields.next(), fields.next(), fields.next())
+    else {
+        return upper;
+    };
+
+    let version_text = version_detail(version).map_or_else(
+        || version.to_string(),
+        |detail| format!("{version} (LDF Version {detail})"),
+    );
+    let usage_text = usages
+        .strip_prefix('U')
+        .and_then(|number| number.parse::<usize>().ok())
+        .map_or_else(
+            || usages.to_string(),
+            |number| format!("{usages} ({number} Media Usages:)"),
+        );
+    let cleaned: String = code
+        .chars()
+        .filter(|ch| ch.is_ascii_digit() || ch.is_ascii_uppercase() || *ch == '|')
+        .collect();
+    let mut output = format!("PLUS {version_text} {usage_text}");
+    let bytes = cleaned.as_bytes();
+    let mut offset = 0;
+    while offset + 4 <= bytes.len() {
+        if bytes[offset].is_ascii_digit()
+            && bytes[offset + 1..offset + 4]
+                .iter()
+                .all(u8::is_ascii_uppercase)
+        {
+            let id = &cleaned[offset..offset + 4];
+            if let Some(description) = media_matrix_description(id) {
+                output.push(' ');
+                output.push_str(id);
+                output.push_str(" (");
+                output.push_str(description);
+                output.push(')');
+            } else if let Some(count) = usage_item_count(id) {
+                output.push_str(&format!("; {id} ({count} Usage Items:)"));
+            } else if let Some(number) = id.strip_prefix("1UN") {
+                output.push_str(&format!(" (Usage Number {number})"));
+            } else {
+                output.push(' ');
+                output.push_str(id);
+            }
+            offset += 4;
+        } else {
+            offset += 1;
+        }
+    }
+    output
+}
+
+fn version_detail(version: &str) -> Option<String> {
+    let digits = version.strip_prefix('V')?;
+    if digits.len() < 3 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let (major, minor) = digits.split_at(digits.len() - 2);
+    Some(format!("{}.{}", major.parse::<usize>().ok()?, minor))
+}
+
+fn usage_item_count(id: &str) -> Option<usize> {
+    let letters = id.strip_prefix("1I")?.as_bytes();
+    (letters.len() == 2 && letters.iter().all(u8::is_ascii_uppercase))
+        .then(|| usize::from(letters[0] - b'A') * 26 + usize::from(letters[1] - b'A') + 1)
+}
+
+fn media_matrix_description(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "1IAA" => "1 Usage Item:",
+        "1UNA" => "Usage Number A",
+        "1UNB" => "Usage Number B",
+        "1UNC" => "Usage Number C",
+        "1UND" => "Usage Number D",
+        "2BFT" => "Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats",
+        "2BOS" => "Advertising|Art|Art Display, All Art Types|Electronic Display",
+        "2EMA" => "Advertising|Email|All Email Types|Internet Email",
+        "2FET" => "Advertising|Marketing Materials|Promotional E-card|Internet Email",
+        "3PRV" => "Multiple Placements on Both Sides",
+        "3PSD" => "Multiple Placements on Screen",
+        "3PTZ" => "Multiple Placements on Any Pages",
+        "4SBG" => "Any Size Image|Up To Full Screen Ad",
+        "4SDL" => "Up To Full Screen Image|Any Size Screen",
+        "4SKG" => "Any Size Image|Any Size Screen",
+        "4SLA" => "Any Size Image|Any Size Pages",
+        "5VUP" => "Single Version",
+        "6QCH" => "One|Copy",
+        "6QCX" => "One|Display",
+        "6QUL" => "Any Quantity",
+        "7DWM" => "In Perpetuity",
+        "8IAD" => "Advertising and Marketing",
+        "8IAE" => "Arts and Entertainment",
+        "8IAG" => "Agriculture, Farming and Horticulture",
+        "8IAR" => "Architecture and Engineering",
+        "8IBR" => "Broadcast Media",
+        "8IEC" => "Ecology, Environmental and Conservation",
+        "8IEN" => "Energy, Utilities and Fuel",
+        "8IEV" => "Events and Conventions",
+        "8IFO" => "Forestry and Wood Products",
+        "8IGL" => "Gardening and Landscaping",
+        "8IGR" => "Graphic Design",
+        "8IHH" => "Hotels and Hospitality",
+        "8IIM" => "Industry and Manufacturing",
+        "8INP" => "Not For Profit, Social, Charitable",
+        "8IPM" => "Publishing Media",
+        "8IPO" => "Personal Use Only",
+        "8IPR" => "Public Relations",
+        "8ISM" => "Retail Sales and Marketing",
+        "8ITR" => "Travel and Tourism",
+        "8LEN" => "English",
+        "8RAU" => "Oceania|Australia",
+        "9EXC" => "All Exclusive",
+        _ => return None,
+    })
 }
 
 /// Strips the vocabulary URI from one value and maps the remaining code.
@@ -211,5 +340,19 @@ mod tests {
     #[test]
     fn non_vocabulary_tag_is_left_alone() {
         assert_eq!(convert("LicensorName", "Phil Harvey"), None);
+    }
+
+    /// PLUS.pm 13.59 lines 110-142: MediaSummaryCode has its own PrintConv
+    /// which formats the header, decodes matrix IDs, and preserves unknown IDs.
+    #[test]
+    fn decodes_media_summary_code() {
+        assert_eq!(
+            convert("MediaSummaryCode", "|PLUS|V0121|U001|1IBA1UNA2EMA3ZZZ|").as_deref(),
+            Some(
+                "PLUS V0121 (LDF Version 1.21) U001 (1 Media Usages:); \
+                 1IBA (27 Usage Items:) 1UNA (Usage Number A) \
+                 2EMA (Advertising|Email|All Email Types|Internet Email) 3ZZZ"
+            )
+        );
     }
 }
