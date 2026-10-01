@@ -2,8 +2,8 @@
   "exiftool_version": "13.59",
   "expression_counts": {
     "total": 1635,
-    "translated": 607,
-    "verified": 607
+    "translated": 608,
+    "verified": 608
   },
   "instrument": {
     "build_timeout_seconds": 1800,
@@ -18,14 +18,14 @@
   "perl_version": "v5.38.2",
   "probe_counts": {
     "fail": 0,
-    "pass": 16789,
+    "pass": 16807,
     "skip": 14
   },
   "schema": 2,
   "tables_sha256": "3f03a1669fe1dccf3aad64c99b8934858a537dba4c013599c4e931e23a3c9f3d",
   "use_counts": {
     "total": 7377,
-    "verified": 5511
+    "verified": 5520
   },
   "verified_expressions": [
     "\"$val %\"",
@@ -333,6 +333,7 @@
     "$val==0x7f ? \"n/a\" : $val",
     "$val==42 ? \"Out of range\" : \"$val dB\"",
     "$val==65535 ? undef : $val",
+    "$val=~s/ +$//; $val",
     "$val=~s/ .*//; $val",
     "$val=~s/ .*//; $val / 256",
     "$val=~s/\\s+$//; $val",

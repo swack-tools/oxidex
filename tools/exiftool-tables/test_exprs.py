@@ -11,6 +11,19 @@ import unittest
 import exprs
 
 
+class TrimTrailingSpacesGrammar(unittest.TestCase):
+    def test_iso_boot_system_expression(self):
+        expected = ("str", "String", "crate::exiftool_tables::exprs::trim_trailing_spaces({v})")
+        for source in ("$val=~s/ +$//; $val", "$val =~ s/ +$//; $val"):
+            self.assertTrue(exprs.is_trim_trailing_spaces_form(source))
+            self.assertEqual(exprs.translate_or_compile_any(source), expected)
+
+    def test_other_regexes_are_not_spaces_only(self):
+        for source in ("$val=~s/\\s+$//; $val", "$val=~s/  +$//; $val",
+                       "$val=~s/ +$//g; $val", "$val=~s/ +$//; $val . 'x'"):
+            self.assertFalse(exprs.is_trim_trailing_spaces_form(source), source)
+
+
 class ConvertUnixTimeGrammar(unittest.TestCase):
     """ExifTool.pm:6784-6810 in both spellings; `$toLocal` only as the
     literal 1; option-reading second arguments refused."""
