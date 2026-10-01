@@ -562,6 +562,13 @@ impl TTFParser {
                 NameLang::Suffixed(suffix) => format!("{base_key}-{suffix}"),
                 NameLang::Omitted => continue,
             };
+            // A zero-length in-bounds record is still a present value in
+            // Font.pm. It needs no character decoding, even when the
+            // platform's nonempty charset is unsupported here.
+            if record.length == 0 {
+                metadata.insert(key, TagValue::String(String::new()));
+                continue;
+            }
             let Some(charset) = Self::font_value_charset(record) else {
                 // Native name records replace earlier duplicates in order.
                 // An unreadable later value must not leave the earlier value
@@ -575,8 +582,8 @@ impl TTFParser {
                 continue;
             };
             // UTF-16BE combines surrogate pairs, but Font.pm's UCS2 decoder
-            // does not. Empty or undecodable in-bounds records also replace
-            // an earlier primary value; omit it instead of leaving a stale one.
+            // does not. An undecodable nonempty in-bounds record replaces an
+            // earlier primary value; omit it instead of leaving a stale one.
             if value.is_empty()
                 || (matches!(charset, FontValueCharset::Ucs2BmpOnly)
                     && value.chars().any(|ch| ch.len_utf16() == 2))
@@ -1578,12 +1585,15 @@ mod tests {
         assert_eq!(out_of_bounds.get(key), earlier);
         let past_declared_table = tags(2, 2, 2, &[0x82, 0xa0], Some(32), 30);
         assert_eq!(past_declared_table.get(key), earlier);
-        for (encoding, length, payload) in [
-            (2, 0, &[][..]),
-            (1, 0, &[][..]),
-            (1, 1, &[0][..]),
-            (1, 2, &[0xd8, 0][..]),
-        ] {
+        for encoding in [1, 2, 99] {
+            let empty = tags(encoding, 0, 2, &[], None, 30);
+            assert_eq!(
+                empty.get(key),
+                Some(&TagValue::String(String::new())),
+                "empty encoding {encoding}"
+            );
+        }
+        for (encoding, length, payload) in [(1, 1, &[0][..]), (1, 2, &[0xd8, 0][..])] {
             let refused = tags(encoding, length, 2, payload, None, 30);
             assert!(
                 !refused.contains_key(key),
@@ -1593,6 +1603,63 @@ mod tests {
         for (declared_size, string_start) in [(20, 30), (34, 18), (34, 40)] {
             let invalid_header = tags(1, 2, 2, &[0, b'B'], Some(declared_size), string_start);
             assert!(!invalid_header.contains_key(key));
+        }
+    }
+
+    #[test]
+    fn zero_length_name_records_replace_across_source_charsets() {
+        // Pinned Font.pm handles an in-bounds empty record as a present empty
+        // value even when its encoding has no text decoder. The ten native
+        // fixtures are recorded in record-order-empty-platform-matrix.json.
+        for (platform, first_encoding, last_encoding, language, initial) in [
+            (PLATFORM_WINDOWS, 1, 1, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_WINDOWS, 1, 2, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_WINDOWS, 1, 99, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 99, 0, &[0, b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 0, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 1, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 4, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 99, 0, &[b'A'][..]),
+        ] {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data.extend_from_slice(&2u16.to_be_bytes());
+            data.extend_from_slice(&30u16.to_be_bytes());
+            for (encoding, length, offset) in [
+                (first_encoding, initial.len() as u16, 0),
+                (last_encoding, 0, initial.len() as u16),
+            ] {
+                for field in [
+                    platform,
+                    encoding,
+                    language,
+                    NAME_FONT_FAMILY,
+                    length,
+                    offset,
+                ] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+            }
+            data.extend_from_slice(initial);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let tags = TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table)
+                .expect("name table parses");
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-en-US"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(String::new())),
+                "platform {platform}, last encoding {last_encoding}"
+            );
         }
     }
 
