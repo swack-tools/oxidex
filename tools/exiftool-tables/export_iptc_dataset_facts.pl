@@ -56,6 +56,8 @@ for my $pair ([1, 'EnvelopeRecord', 14], [2, 'ApplicationRecord', 70]) {
         push @rows, {
             record => 0 + $record, dataset => 0 + $id, name => $tag->{Name},
             format => $tag->{Format}, list => $list, conversion => $conversion,
+            print_conv => (defined($tag->{PrintConv}) ? JSON::PP::true : JSON::PP::false),
+            value_conv => (defined($tag->{ValueConv}) ? JSON::PP::true : JSON::PP::false),
         };
     }
 }

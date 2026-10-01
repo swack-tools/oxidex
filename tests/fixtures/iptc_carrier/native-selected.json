@@ -56,5 +56,45 @@
     "IPTC:ObjectName": "First",
     "IPTC2:Copy1:By-line": "Alice",
     "IPTC2:Copy1:ObjectName": "Second"
+  },
+  "converted-within-block.eps": {
+    "IPTC:FileFormat": "JPEG File Interchange (JFIF)",
+    "IPTC:EnvelopePriority": "5 (normal urgency)",
+    "IPTC:Urgency": "5 (normal urgency)",
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "Morning",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.pdf": {
+    "IPTC:FileFormat": "JPEG File Interchange (JFIF)",
+    "IPTC:EnvelopePriority": "5 (normal urgency)",
+    "IPTC:Urgency": "5 (normal urgency)",
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "Morning",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.psd": {
+    "IPTC:FileFormat": "JPEG File Interchange (JFIF)",
+    "IPTC:EnvelopePriority": "5 (normal urgency)",
+    "IPTC:Urgency": "5 (normal urgency)",
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "Morning",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.tif": {
+    "IPTC:FileFormat": "JPEG File Interchange (JFIF)",
+    "IPTC:EnvelopePriority": "5 (normal urgency)",
+    "IPTC:Urgency": "5 (normal urgency)",
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "Morning",
+    "IPTC:By-line": "Alice"
+  },
+  "tiff-linked-two-blocks.tif": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
   }
 }

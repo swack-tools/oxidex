@@ -1,0 +1,42 @@
+{
+  "converted-within-block.eps": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.pdf": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.psd": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "converted-within-block.tif": {
+    "IPTC:FileFormat": 11,
+    "IPTC:EnvelopePriority": 5,
+    "IPTC:Urgency": 5,
+    "IPTC:DateCreated": "2025:10:01",
+    "IPTC:TimeCreated": "12:34:56+01:00",
+    "IPTC:ObjectCycle": "a",
+    "IPTC:By-line": "Alice"
+  },
+  "tiff-linked-two-blocks.tif": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
+  }
+}

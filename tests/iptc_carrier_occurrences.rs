@@ -97,3 +97,29 @@ fn flashpix_copy_family_uses_the_same_projection() {
     assert_eq!(fields.get("FlashPix:Copy2:CodePage"), Some(&value));
     assert_eq!(fields.len(), 3);
 }
+
+#[test]
+fn carrier_value_conv_survives_numeric_output() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/iptc_carrier");
+    let expected: Value =
+        serde_json::from_str(include_str!("fixtures/iptc_carrier/native-selected-n.json"))
+            .expect("native numeric output is JSON");
+    for (file, tags) in expected.as_object().expect("file map") {
+        let actual = json_fields(
+            &root.join(file),
+            &["-j", "-a", "-G1:4", "-s", "--no-print-conv"],
+            "",
+        );
+        let selected: Map<String, Value> = actual
+            .into_iter()
+            .filter(|(key, _)| {
+                key.starts_with("IPTC:") || key.starts_with("IPTC2:") || key.starts_with("IPTC3:")
+            })
+            .collect();
+        assert_eq!(
+            Value::Object(selected),
+            *tags,
+            "{file} under --no-print-conv"
+        );
+    }
+}

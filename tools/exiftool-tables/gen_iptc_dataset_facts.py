@@ -42,6 +42,8 @@ def render(data: dict) -> str:
         "    pub format: IptcFormat,\n",
         "    pub list: bool,\n",
         "    pub conversion: bool,\n",
+        "    pub print_conv: bool,\n",
+        "    pub value_conv: bool,\n",
         "}\n\n",
         "pub(super) fn find(record: u8, dataset: u8) -> Option<&'static DatasetFact> {\n",
         "    let key = (record, dataset);\n",
@@ -56,14 +58,18 @@ def render(data: dict) -> str:
         if (not isinstance(name, str) or not name or "\x00" in name
                 or not isinstance(fmt, str) or not FORMAT.fullmatch(fmt)
                 or not isinstance(row.get("list"), bool)
-                or not isinstance(row.get("conversion"), bool)):
+                or not isinstance(row.get("conversion"), bool)
+                or not isinstance(row.get("print_conv"), bool)
+                or not isinstance(row.get("value_conv"), bool)):
             raise ValueError(f"unsupported IPTC dataset row: {row}")
         kind = ("Int" if fmt.startswith("int") else "Str" if fmt.startswith("string")
                 else "Digits" if fmt.startswith("digits") else "Undef")
         parts.append(
             f"    (({row['record']}, {row['dataset']}), DatasetFact {{ name: {json.dumps('IPTC:' + name, ensure_ascii=False)}, "
             f"format: IptcFormat::{kind}, list: {str(row['list']).lower()}, "
-            f"conversion: {str(row['conversion']).lower()} }}),\n"
+            f"conversion: {str(row['conversion']).lower()}, "
+            f"print_conv: {str(row['print_conv']).lower()}, "
+            f"value_conv: {str(row['value_conv']).lower()} }}),\n"
         )
     parts.append("];\n")
     formatted = subprocess.run(

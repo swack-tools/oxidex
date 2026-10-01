@@ -556,38 +556,98 @@ pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(Str
 /// table-declared integer type of binary version records. The JPEG segment
 /// aggregator keeps its existing projection until its cross-resource ordering
 /// and duplicate semantics are migrated independently.
-pub(crate) fn extract_iptc_carrier_values_from_block(data: &[u8]) -> Vec<(String, TagValue)> {
+pub(crate) fn extract_iptc_carrier_values_from_block(
+    data: &[u8],
+) -> Vec<(String, TagValue, TagValue)> {
     let Ok(records) = parse_all_iptc_records(data) else {
         return Vec::new();
     };
-    let entries = records
+    let mut print_entries = Vec::new();
+    let mut value_entries = Vec::new();
+    for record in records {
+        let Some(fact) =
+            generated_iptc_dataset_facts::find(record.record_number, record.dataset_number)
+        else {
+            continue;
+        };
+        let displayed =
+            dataset_value_to_string(record.record_number, record.dataset_number, &record.data);
+        let value_form = carrier_value_before_printconv(
+            record.record_number,
+            record.dataset_number,
+            &record.data,
+            fact,
+        );
+        let printed = if fact.format == IptcFormat::Int
+            && !fact.conversion
+            && !record.data.is_empty()
+            && record.data.len() <= 8
+        {
+            displayed
+                .parse::<i64>()
+                .map(TagValue::new_integer)
+                .unwrap_or_else(|_| TagValue::new_string(displayed))
+        } else {
+            TagValue::new_string(displayed)
+        };
+        print_entries.push((
+            record.record_number,
+            record.dataset_number,
+            fact.name.to_string(),
+            printed,
+        ));
+        value_entries.push((
+            record.record_number,
+            record.dataset_number,
+            fact.name.to_string(),
+            value_form,
+        ));
+    }
+    collapse_iptc_typed_entries(print_entries)
         .into_iter()
-        .filter_map(|record| {
-            let fact =
-                generated_iptc_dataset_facts::find(record.record_number, record.dataset_number)?;
-            let displayed =
-                dataset_value_to_string(record.record_number, record.dataset_number, &record.data);
-            let value = if fact.format == IptcFormat::Int
-                && !fact.conversion
-                && !record.data.is_empty()
-                && record.data.len() <= 8
-            {
-                displayed
-                    .parse::<i64>()
-                    .map(TagValue::new_integer)
-                    .unwrap_or_else(|_| TagValue::new_string(displayed))
-            } else {
-                TagValue::new_string(displayed)
-            };
-            Some((
-                record.record_number,
-                record.dataset_number,
-                fact.name.to_string(),
-                value,
-            ))
+        .zip(collapse_iptc_typed_entries(value_entries))
+        .map(|((print_name, print), (value_name, value))| {
+            debug_assert_eq!(print_name, value_name);
+            (print_name, print, value)
         })
-        .collect();
-    collapse_iptc_typed_entries(entries)
+        .collect()
+}
+
+/// Format and ValueConv are still active for `-n`; PrintConv is not. The
+/// source table tells us which stage each dataset declares, while the small
+/// procedural ValueConv branches mirror the pinned IPTC.pm date/time rules.
+fn carrier_value_before_printconv(
+    record: u8,
+    dataset: u8,
+    data: &[u8],
+    fact: &generated_iptc_dataset_facts::DatasetFact,
+) -> TagValue {
+    if (record, dataset) == (2, 202) {
+        return TagValue::new_string(dataset_value_to_string(record, dataset, data));
+    }
+    let formatted = apply_iptc_format(fact.format, data);
+    let value = if fact.value_conv {
+        match (record, dataset) {
+            (1, 70) | (2, 30 | 37 | 47 | 55 | 62) => format_iptc_date(&formatted),
+            (1, 80) | (2, 35 | 38 | 60 | 63) => format_iptc_time(&formatted),
+            _ => formatted,
+        }
+    } else {
+        formatted
+    };
+    let numeric = !data.is_empty()
+        && data.len() <= 8
+        && (fact.format == IptcFormat::Int
+            || (fact.format == IptcFormat::Digits && fact.print_conv))
+        && value.bytes().all(|byte| byte.is_ascii_digit());
+    if numeric {
+        value
+            .parse::<i64>()
+            .map(TagValue::new_integer)
+            .unwrap_or_else(|_| TagValue::new_string(value))
+    } else {
+        TagValue::new_string(value)
+    }
 }
 
 fn collapse_iptc_typed_entries(
@@ -639,8 +699,16 @@ impl CarrierIptcBlocks {
         };
         let priority = if self.count == 0 { 1 } else { 0 };
         self.count = self.count.saturating_add(1);
-        for (name, value) in extract_iptc_carrier_values_from_block(payload) {
-            metadata.insert_occurrence(name, value, priority, &group, Instance::default());
+        for (name, print, value) in extract_iptc_carrier_values_from_block(payload) {
+            metadata.insert_occurrence_with_forms(
+                name,
+                print,
+                value,
+                None,
+                priority,
+                &group,
+                Instance::default(),
+            );
         }
     }
 }

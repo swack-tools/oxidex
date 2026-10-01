@@ -385,6 +385,7 @@ fn parse_ifd_chain_with_optional_options(
     let mut ifd_offset = first_offset;
     let mut ifd_index = 0;
     let mut visited_ifds = HashSet::new();
+    let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
     let mut session = Session::new();
     session
         .set_member("FILE_TYPE", MemberVal::Str("TIFF".into()))
@@ -508,6 +509,7 @@ fn parse_ifd_chain_with_optional_options(
                 engine.as_mut(),
                 metadata,
                 Some(&mut read_subdir),
+                &mut iptc_blocks,
             );
             if let Some(engine) = engine {
                 engine.finish(metadata, |name| format!("{ifd_name}:{name}"), |_, _| true);
@@ -696,6 +698,7 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
+    let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
     process_tiff_ifd_tags_indexed(
         tags,
         None,
@@ -704,6 +707,7 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
         engine.as_deref_mut(),
         metadata,
         None,
+        &mut iptc_blocks,
     )
 }
 
@@ -715,6 +719,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
     mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
     mut read_subdir: Option<&mut ReadSubdir<'_>>,
+    iptc_blocks: &mut crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
@@ -724,7 +729,6 @@ fn process_tiff_ifd_tags_indexed<'a>(
     // read at their own entries; without it, their offsets/bytes are
     // returned.
     let mut arbiter = Ifd0Arbiter::default();
-    let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
 
     // GeoTiff tag data collectors
     let mut geotiff_directory: Option<&[u8]> = None;
