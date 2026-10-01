@@ -1046,7 +1046,14 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
                 still_owed.append(owed)
                 done.append((ref, f"journal unreadable: {exc}; left alone"))
                 continue
-            if (current is None or
+            # A new offer has not acquired ownership yet. It must not erase
+            # the previous run's cleanup debt; only the store can establish
+            # whether that acquisition still owns the claim.
+            pending_offer = (current is not None and
+                             current.prior_runs > owed.run_index and
+                             current.claim_ref == ref and
+                             current.started_at is None)
+            if not pending_offer and (current is None or
                     current.prior_runs != owed.run_index or
                     current.claim_ref != ref or current.started_at != started_at):
                 done.append((ref, "journal describes a newer run or different "
@@ -1055,7 +1062,7 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             # Local completion does not prove the remote claim was released.
             # Keep the ownership/CAS checks and retry debt, but do not append
             # another exit to this already completed run.
-            if current.closed:
+            if pending_offer or current.closed:
                 close_journal = None
         try:
             sha = hub.sha(ref)

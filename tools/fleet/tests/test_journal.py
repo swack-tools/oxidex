@@ -981,6 +981,18 @@ class TestReleasePending(JournalCase):
         self.assertTrue(job.open)
         self.assertEqual(job.started_at, current)
 
+    def test_new_offer_does_not_discard_previous_release_debt(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="old run ended")
+        self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
+                     tag="retry", claim_ref=ref)
+        before = self.j.path_for("staging-one").read_bytes()
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertEqual(out, [(ref, "released")])
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertEqual(self.j.path_for("staging-one").read_bytes(), before)
+        self.assertTrue(self.j.read_job("staging-one").open)
+
     def test_closed_run_still_releases_its_remote_claim_without_another_exit(self):
         ref, res = self.owed()
         self.j.exit(job_key="staging-one", outcome="locally finished")
