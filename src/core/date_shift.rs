@@ -366,18 +366,27 @@ const ALL_DATES_NAMES: &[&str] = &[
 /// Returns true when a metadata key matches a user-supplied tag pattern.
 ///
 /// A bare pattern ("DateTimeOriginal") matches the name part of any
-/// group-prefixed key; a prefixed pattern ("XMP:CreateDate") must match the
-/// full key. Comparison is ASCII case-insensitive.
+/// group-prefixed key. A qualified pattern matches its exact group, except
+/// the family-0 `XMP` group also matches an internally namespace-prefixed
+/// `XMP-<namespace>` key. Comparison is ASCII case-insensitive.
 fn key_matches_pattern(key: &str, pattern: &str) -> bool {
     if key.eq_ignore_ascii_case(pattern) {
         return true;
     }
-    if !pattern.contains(':')
-        && let Some((_, name)) = key.split_once(':')
-    {
-        return name.eq_ignore_ascii_case(pattern);
+    let Some((key_group, key_name)) = key.split_once(':') else {
+        return false;
+    };
+    match pattern.split_once(':') {
+        None => key_name.eq_ignore_ascii_case(pattern),
+        Some((pattern_group, pattern_name)) => {
+            key_name.eq_ignore_ascii_case(pattern_name)
+                && (key_group.eq_ignore_ascii_case(pattern_group)
+                    || (pattern_group.eq_ignore_ascii_case("XMP")
+                        && key_group
+                            .get(..4)
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("XMP-"))))
+        }
     }
-    false
 }
 
 /// ExifTool prepends the operation sign before validating a time shift.
@@ -1284,6 +1293,28 @@ mod tests {
         // Prefixed pattern must match the whole key
         assert!(key_matches_pattern("XMP:CreateDate", "xmp:createdate"));
         assert!(!key_matches_pattern("PDF:CreateDate", "XMP:CreateDate"));
+        // The public family-0 XMP spelling also selects an internally
+        // namespace-prefixed XMP property; a family-1 spelling stays exact.
+        assert!(key_matches_pattern(
+            "XMP-exif:DateTimeOriginal",
+            "xmp:datetimeoriginal"
+        ));
+        assert!(key_matches_pattern(
+            "XMP-exif:DateTimeOriginal",
+            "xMp-ExIf:DaTeTiMeOrIgInAl"
+        ));
+        assert!(!key_matches_pattern(
+            "XMP-exif:DateTimeOriginal",
+            "XMP-tiff:DateTimeOriginal"
+        ));
+        assert!(!key_matches_pattern(
+            "ExifIFD:DateTimeOriginal",
+            "XMP:DateTimeOriginal"
+        ));
+        assert!(!key_matches_pattern(
+            "XMP-exif:DateTimeOriginal",
+            "EXIF:DateTimeOriginal"
+        ));
         // Name-only mismatch
         assert!(!key_matches_pattern("XMP:ModifyDate", "CreateDate"));
     }
