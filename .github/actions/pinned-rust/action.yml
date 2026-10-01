@@ -1,0 +1,38 @@
+name: Pinned Rust toolchain
+description: Install the repository toolchain before invoking build or test commands.
+runs:
+  using: composite
+  steps:
+    - id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PYTHON'
+        import os
+        import re
+        import tomllib
+        from pathlib import Path
+        pin = tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]
+        channel = pin["channel"]
+        components = pin.get("components", [])
+        if not isinstance(channel, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", channel):
+            raise SystemExit("Rust channel must be an exact version")
+        if not isinstance(components, list) or any(not isinstance(c, str) or not re.fullmatch(r"[a-z0-9-]+", c) for c in components):
+            raise SystemExit("Invalid Rust component list")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"channel={channel}\ncomponents={','.join(components)}\n")
+        PYTHON
+    - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action, explicit repo version
+      with:
+        toolchain: ${{ steps.pin.outputs.channel }}
+        components: ${{ steps.pin.outputs.components }}
+    - name: Verify tools are ready before tests
+      shell: bash
+      env:
+        PINNED_RUST: ${{ steps.pin.outputs.channel }}
+      run: |
+        set -euo pipefail
+        test "$(rustup show active-toolchain | cut -d ' ' -f 1)" = "$(rustup run "$PINNED_RUST" rustc -vV | sed -n 's/^host: //p' | sed "s/^/$PINNED_RUST-/")"
+        rustc --version
+        cargo --version
+        rustfmt --version
