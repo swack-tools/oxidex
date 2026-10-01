@@ -242,7 +242,8 @@ class TestProcessListingFailure(FleetdBase):
         child = self.workers[0]
         self.adopted_child = child
         adopted = fleetd.Worker(child.branch, child.tag, child.pgid,
-                                child.claim, popen=None, kind=child.kind)
+                                child.claim, popen=None, kind=child.kind,
+                                job_key=child.job_key)
         self.workers[0] = adopted
         self.addCleanup(child.popen.wait, timeout=WAIT_BUDGET_S)
         self.assertTrue(adopted.alive(), "positive control: adopted group is live")
@@ -272,23 +273,134 @@ class TestProcessListingFailure(FleetdBase):
             if adopted not in self.workers:
                 self.workers.append(adopted)
 
-    def test_negative_control_empty_listing_reaps_but_journal_blocks_duplicate(self):
+    def test_false_empty_listing_keeps_real_adopted_worker_and_claim(self):
         adopted = self.make_adopted_gate()
+        self.assertEqual(adopted.job_key, "gate-staging-one")
         try:
             result = fleetd.reconcile_once(
                 self.hub, self.host, self.workers, [str(self.stub)],
                 self.tmp / "logs", Path(__file__).resolve().parents[3],
                 disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
                 pgid_probe=lambda: set(), warnings=self.host_warnings)
-            self.assertIn(adopted.tag, result.finished)
-            self.assertTrue(adopted.alive(), "the reaped gate is still running")
-            self.assertEqual(result.started, [], "the open journal blocks a duplicate")
-            self.assertTrue(any(reason == "spawn-failed" for reason, _ in result.refused))
-            self.assertIsNone(self.hub.sha(adopted.claim.ref),
-                              "the false listing still caused the bad release")
+            self.assertEqual(result.finished, [])
+            self.assertTrue(adopted.alive(), "the adopted gate is still running")
+            self.assertEqual(result.started, [], "a false listing cannot justify a duplicate")
+            self.assertIn(adopted, self.workers)
+            self.assertIsNotNone(self.hub.sha(adopted.claim.ref))
+            self.assertFalse(journal_mod.Journal().read_job(adopted.job_key).closed)
         finally:
             if adopted not in self.workers:
                 self.workers.append(adopted)
+
+    def test_false_empty_listing_does_not_hide_a_lost_lease(self):
+        adopted = self.make_adopted_gate()
+        adopted.claim._mark_lost("lease no longer ours")
+        try:
+            with mock.patch.object(fleetd, "kill_worker", return_value="killed") as killer:
+                result = fleetd.reconcile_once(
+                    self.hub, self.host, self.workers, [str(self.stub)],
+                    self.tmp / "logs", Path(__file__).resolve().parents[3],
+                    disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                    pgid_probe=lambda: set(), warnings=self.host_warnings)
+            self.assertEqual([tag for tag, _ in result.killed], [adopted.tag])
+            killer.assert_called_once_with(adopted)
+        finally:
+            if adopted not in self.workers:
+                self.workers.append(adopted)
+
+    def test_failed_exit_is_retried_before_the_next_offer(self):
+        self.set_desired(gates=1)
+        self.assertEqual(len(self.reconcile().started), 1)
+        old = self.workers[0]
+        self.finish_worker(old.tag)
+        journal = journal_mod.Journal()
+        with mock.patch.object(journal, "exit", side_effect=journal_mod.JournalWriteError("disk full")):
+            first = fleetd.reconcile_once(
+                self.hub, self.host, self.workers, [str(self.stub)],
+                self.tmp / "logs", Path(__file__).resolve().parents[3],
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                journal=journal, warnings=self.host_warnings)
+        self.assertIn(old.tag, first.finished)
+        self.assertFalse(journal.read_job(old.job_key).closed)
+        second = fleetd.reconcile_once(
+            self.hub, self.host, self.workers, [str(self.stub)],
+            self.tmp / "logs", Path(__file__).resolve().parents[3],
+            disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+            journal=journal, warnings=self.host_warnings)
+        self.assertEqual(len(second.started), 1, second.refused)
+        self.assertEqual(journal.read_job(old.job_key).prior_runs, 1)
+
+    def test_absent_claim_and_dead_worker_close_stale_run(self):
+        self.set_desired(gates=1)
+        self.assertEqual(len(self.reconcile().started), 1)
+        old = self.workers.pop()
+        (self.tmp / f"stop-{old.tag}").write_text("")
+        self.await_true(lambda: not old.alive(), "old gate to exit")
+        old.claim.release()
+        journal = journal_mod.Journal()
+        self.assertFalse(journal.read_job(old.job_key).closed)
+        result = fleetd.reconcile_once(
+            self.hub, self.host, self.workers, [str(self.stub)],
+            self.tmp / "logs", Path(__file__).resolve().parents[3],
+            disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+            journal=journal, warnings=self.host_warnings)
+        self.assertEqual(len(result.started), 1, result.refused)
+        self.assertEqual(journal.read_job(old.job_key).prior_runs, 1)
+
+    def test_offline_start_adopts_with_unreachable_host_singleton(self):
+        self.set_desired(gates=1)
+        self.assertEqual(len(self.reconcile().started), 1)
+        child = self.workers[0]
+        child.claim.stop_renewer(timeout=2)
+        from fleetlib import HubUnreachableError
+        observed = {}
+        real_acquire = claim_mod.Claim.acquire_or_reap
+
+        def unavailable_singleton(claim):
+            if claim.kind == "host":
+                raise HubUnreachableError("both routes down")
+            return real_acquire(claim)
+
+        def inspect(_hub, _host, workers, *_args, **kw):
+            observed["workers"] = [(w.job_key, w.pgid) for w in workers]
+            observed["claims"] = [w.claim for w in workers]
+            observed["spawn_allowed"] = kw["spawn_allowed"]
+            return fleetd.ReconcileResult()
+
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", unavailable_singleton), \
+                mock.patch.object(fleetd, "adopt_workers", side_effect=HubUnreachableError("both routes down")), \
+                mock.patch.object(runner_mod, "check_toolchain_agreement", return_value=(True, None)):
+            rc = runner_mod.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.tmp / "logs", repo_root=Path(__file__).resolve().parents[3],
+                reconcile=inspect, once=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(observed["workers"], [(child.job_key, child.pgid)])
+        self.assertFalse(observed["spawn_allowed"])
+        for claim in observed["claims"]:
+            claim.stop_renewer(timeout=2)
+        os.environ.pop("FLEET_WORKER_MARKERS", None)
+
+    def test_log_open_failure_compensates_gate_and_agent_claims(self):
+        journal = journal_mod.Journal()
+        for kind in ("gate", "agent"):
+            with self.subTest(kind=kind):
+                branch = f"staging/{kind}"
+                key = f"{kind}-staging-{kind}"
+                with mock.patch.object(runner_mod, "open", create=True,
+                                       side_effect=OSError("log is unwritable")):
+                    with self.assertRaisesRegex(OSError, "log is unwritable"):
+                        if kind == "gate":
+                            runner_mod.start_gate(
+                                self.hub, branch, kind, [str(self.stub)], self.host,
+                                self.tmp / "logs", journal=journal)
+                        else:
+                            runner_mod.start_agent(
+                                self.hub, branch, kind, self.host, self.tmp / "logs",
+                                Path(__file__).resolve().parents[3], journal=journal)
+                self.assertIsNone(self.hub.sha(claim_mod.claim_ref(kind, f"staging-{kind}")))
+                self.assertTrue(journal.read_job(key).closed)
 
     def test_startup_adoption_with_failed_listing_neither_releases_nor_sweeps(self):
         adopted = self.make_adopted_gate()

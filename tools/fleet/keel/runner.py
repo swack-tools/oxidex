@@ -89,6 +89,7 @@ vs hostname, holder_host threading) are unchanged.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import os
 import shlex
@@ -903,23 +904,42 @@ def _check_journal_slot(jn, job_key: str) -> None:
             f"{job_key}: previous journal run is open or torn; refusing new offer")
 
 
-def _close_hub_released_runs(jn, adoption, host: str, label: str) -> None:
-    """Retire local runs whose claims the authoritative hub pass released."""
-    if adoption.mode != "store" or not adoption.scan.sweep_armed:
+def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
+                           label: str = "fleetd") -> None:
+    """Retry closing dead runs against the authoritative claim store.
+
+    An exit write can fail after a worker leaves memory. The same state is
+    reached after a crash when its claim has already expired or disappeared.
+    Neither a journal record nor a process listing alone may authorize a
+    release: require the group to be absent from the kernel and let
+    release_pending compare the original ownership token and CAS the ref.
+    """
+    scan = jn.scan()
+    if not scan.sweep_armed:
         return
-    released = dict(adoption.hub_result.released)
-    for job in adoption.scan.open_jobs:
-        if job.claim_ref not in released or job.holder_host != host:
+    active = {w.job_key for w in workers if w.job_key}
+    debt = journal_mod.JournalAdoption()
+    for job in scan.open_jobs:
+        if job.job_key in active or job.torn or job.holder_host not in (None, host):
             continue
-        reason = released[job.claim_ref]
-        if not (reason == f"process group {job.pgid} is gone" or
-                (not job.spawned and reason.startswith("no adoptable process group"))):
-            continue
-        try:
-            jn.exit(job_key=job.job_key, outcome="hub-released-at-startup")
-        except journal_mod.JournalError as exc:
-            print(f"{label}[{host}] journal exit failed for {job.job_key}: {exc}",
-                  file=sys.stderr, flush=True)
+        if job.spawned:
+            try:
+                os.killpg(job.pgid, 0)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                # EPERM and any other uncertainty mean the group may be live.
+                continue
+            else:
+                continue
+        debt.to_release.append(journal_mod.OwedRelease(
+            job.job_key, job.claim_ref, job.started_at,
+            "recorded process group is gone", job.prior_runs))
+    if debt.to_release:
+        for ref, outcome in journal_mod.release_pending(hub, host, debt, journal=jn):
+            if "unreachable" in outcome or "failed" in outcome:
+                print(f"{label}[{host}] journal close pending for {ref}: {outcome}",
+                      file=sys.stderr, flush=True)
 
 
 def start_gate(
@@ -1620,10 +1640,19 @@ def adopt_workers(
                 continue
 
             if pgid not in live:
-                reason = f"process group {pgid} is gone"
-                res.released.append((ref, reason))
-                _release_claim_ref(hub, ref, sha, host, reason, res)
-                continue
+                # A single ps snapshot can omit a live group. A kernel
+                # signal probe cannot prove identity, but it can prevent
+                # releasing a lease for a group the kernel still knows.
+                # The identity check below must still succeed to adopt it.
+                try:
+                    os.killpg(pgid, 0)
+                except ProcessLookupError:
+                    reason = f"process group {pgid} is gone"
+                    res.released.append((ref, reason))
+                    _release_claim_ref(hub, ref, sha, host, reason, res)
+                    continue
+                except OSError:
+                    pass  # uncertain or EPERM: keep the claim for identity check
 
             # IDENTITY, not just liveness. A pgid is a name that gets
             # recycled; between this claim's write and this daemon's start
@@ -2204,6 +2233,37 @@ def register_cycle(client, runner_id: str, session: dict,
 
 
 def run_daemon(
+    hub, host: str, *, gate_command: list, log_dir: Path, repo_root: Path,
+    interval: float = LOOP_SECONDS, once: bool = False,
+    reconcile: Optional[Callable] = None, label: str = "keel-runner",
+) -> int:
+    """Hold a local host lock even when the store cannot write a singleton."""
+    lock_dir = journal_mod.Journal().root.parent / "runner-locks"
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / (hashlib.sha256(host.encode()).hexdigest() + ".lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        print(f"{label}[{host}] cannot establish local singleton: {exc}",
+              file=sys.stderr, flush=True)
+        return 5
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"{label}[{host}] another local runner holds the host lock",
+                  file=sys.stderr, flush=True)
+            return 3
+        return _run_daemon_locked(
+            hub, host, gate_command=gate_command, log_dir=log_dir,
+            repo_root=repo_root, interval=interval, once=once,
+            reconcile=reconcile, label=label)
+    finally:
+        os.close(fd)
+
+
+def _run_daemon_locked(
     hub,
     host: str,
     *,
@@ -2215,9 +2275,8 @@ def run_daemon(
     reconcile: Optional[Callable] = None,
     label: str = "keel-runner",
 ) -> int:
-    """Everything `fleetd.main` did after parsing argv and building its
-    `Hub`, unchanged: acquire the host singleton (reaping a provably-dead
-    same-host predecessor's), rebuild `workers` by adoption, then loop
+    """Acquire the hub singleton when reachable, rebuild `workers` by
+    adoption, then loop
     `reconcile(hub, host, workers, gate_command, log_dir, repo_root,
     warnings=...)` at `interval`, tolerating up to
     `RECONCILE_HUB_FAILURE_LIMIT` consecutive `HubError` steps, exiting
@@ -2256,6 +2315,7 @@ def run_daemon(
     singleton = Claim(hub, kind="host", key=host, work_kind="fleetd", work_key=host,
                       holder_host=host,  # fleet identity, not hostname -- see start_gate
                       ttl=singleton_ttl_s())  # short TTL for the scheduler lease itself
+    singleton_owned = False
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire
@@ -2263,6 +2323,7 @@ def run_daemon(
         # spent 20 minutes in a KeepAlive spawn/refuse/exit loop this way.
         # A LIVE predecessor still refuses (the singleton guard stands).
         singleton.acquire_or_reap()
+        singleton_owned = True
     except claim_mod.ClaimHeldError:
         # ARCH-FIX-SPEC.md FIX 2 (seam 4's red half): `acquire_or_reap`
         # above only reaps an EXPIRED claim, so a hard-killed predecessor
@@ -2276,6 +2337,7 @@ def run_daemon(
         if reap_dead_same_host_singleton(hub, host, singleton.ref, own_pid=os.getpid()):
             try:
                 singleton.acquire()
+                singleton_owned = True
             except claim_mod.ClaimHeldError:
                 # Lost a race for the ref we just deleted (another reaper,
                 # or the "dead" predecessor renewing after all). Refuse,
@@ -2285,15 +2347,21 @@ def run_daemon(
         else:
             print(f"{label}: another instance holds refs/fleet/claims/host/{host}; exiting")
             return 3
+    except HubUnreachableError as exc:
+        print(f"{label}[{host}] host singleton unavailable ({exc}); "
+              "local lock held, starts disabled until store ownership is acquired",
+              file=sys.stderr, flush=True)
 
-    # R6: rebuild `workers` from the hub BEFORE the first reconcile. It has
-    # to be after the singleton (only one daemon per host may adopt) and
-    # before reconcile_once (which would otherwise see zero workers, think
-    # every slot free, and start a duplicate of everything still running).
+    # R6: rebuild `workers` before the first reconcile. The local lock
+    # excludes another daemon here when the hub singleton is unavailable;
+    # with the store reachable, the hub claim remains the shared guard.
+    # Adoption must be before reconcile_once, which would otherwise see
+    # zero workers, think every slot free, and start a duplicate.
     jn = journal_mod.Journal()
     try:
         adoption = journal_mod.adopt_at_startup(hub, host, workers, journal=jn)
-        _close_hub_released_runs(jn, adoption, host, label)
+        if adoption.mode == "store":
+            reconcile_journal_runs(jn, hub, host, workers, label=label)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
     except (HubError, journal_mod.JournalError, ProcessListingUnavailable) as e:
         # An unreachable hub at startup is not a reason to run with an
@@ -2301,14 +2369,19 @@ def run_daemon(
         # gates. Refuse to start; the supervisor will retry.
         print(f"{label}[{host}]: cannot rebuild worker state from the hub ({e}); "
               f"refusing to start rather than risk duplicate work", file=sys.stderr)
+        for worker in workers:
+            worker.claim.stop_renewer(timeout=2)
         singleton.release()
         return 5
-    spawn_allowed = adoption.spawn_allowed
+    spawn_allowed = adoption.spawn_allowed and singleton_owned
     owed_releases = adoption.journal_result
-    if not spawn_allowed:
+    if adoption.offline:
         print(f"{label}[{host}] OFFLINE START: adopting only identity-verified "
               "journaled work; starts disabled until the store answers",
               file=sys.stderr, flush=True)
+    elif not singleton_owned:
+        print(f"{label}[{host}] HOST LEASE PENDING: starts disabled until "
+              "singleton ownership is acquired", file=sys.stderr, flush=True)
 
     # T3: one warning store for the daemon's whole lifetime, so a warning
     # survives every reconcile until its marker file is gone. Owned by
@@ -2411,11 +2484,29 @@ def run_daemon(
                         print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
                               "starts remain disabled", file=sys.stderr, flush=True)
                     else:
+                        if current.mode == "store" and not singleton_owned:
+                            try:
+                                singleton.acquire_or_reap()
+                            except claim_mod.ClaimHeldError:
+                                for extra in refreshed:
+                                    extra.claim.stop_renewer(timeout=2)
+                                print(f"{label}[{host}] another runner holds the "
+                                      "host singleton; exiting", file=sys.stderr, flush=True)
+                                rc = 3
+                                break
+                            except HubError as exc:
+                                for extra in refreshed:
+                                    extra.claim.stop_renewer(timeout=2)
+                                print(f"{label}[{host}] host singleton still unavailable: "
+                                      f"{exc}; starts remain disabled",
+                                      file=sys.stderr, flush=True)
+                                continue
+                            singleton_owned = True
                         if current.mode == "store":
                             for old in workers:
                                 old.claim.stop_renewer(timeout=2)
                             workers[:] = refreshed
-                            _close_hub_released_runs(jn, current, host, label)
+                            reconcile_journal_runs(jn, hub, host, workers, label=label)
                             spawn_allowed = True
                             print(f"{label}[{host}] STORE BACK: authoritative "
                                   "adoption completed; starts can be CAS "

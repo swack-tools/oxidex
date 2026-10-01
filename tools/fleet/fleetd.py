@@ -829,9 +829,23 @@ def reconcile_once(
               "retaining adopted workers and starting no new work this pass",
               file=sys.stderr, flush=True)
     for w in list(workers):
+        if (pgids is not None and w.popen is None and w.pgid not in pgids
+                and not w.claim.lost):
+            # A missing row in one ps snapshot cannot close an adopted
+            # worker's claim while the kernel still knows its group.
+            try:
+                os.killpg(w.pgid, 0)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                continue
+            else:
+                continue
         # A direct child's poll is still decisive when ps is unavailable.
         # An adopted worker has no such proof, so keep its claim and slot.
-        if (pgids is not None or w.popen is not None) and not w.alive(pgids):
+        if ((pgids is not None or w.popen is not None)
+                and (w.popen is not None or not w.claim.lost)
+                and not w.alive(pgids)):
             # Best-effort: an undeleted claim expires on its TTL, but a
             # worker left in `workers` because the release raised would
             # hold a slot until restart -- and would take the rest of this
@@ -925,6 +939,11 @@ def reconcile_once(
                 file=sys.stderr,
                 flush=True,
             )
+
+    # A failed exit append survives the in-memory reap. Retry it before
+    # scheduling, with kernel liveness and store ownership checked anew.
+    if pgids is not None and spawn_allowed:
+        keel_runner.reconcile_journal_runs(jn, hub, host, workers)
 
     # ---- (2) HUB READS, each guarded on its own. --------------------- #
     # Independently, so that one unreadable ref degrades one concern. The

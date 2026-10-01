@@ -38,6 +38,8 @@ same shape as test_fleetd's); nothing here builds Rust.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import signal as signal_mod
 import subprocess
@@ -292,6 +294,118 @@ class TestJournalWiring(RunnerFixture):
                              claim_mod._iso(replacement._started_at))
         finally:
             replacement.release()
+
+    def test_reconcile_closes_superseded_run_without_deleting_new_claim(self):
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                   self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        (self.tmp / f"stop-{worker.tag}").write_text("")
+        worker.popen.wait(timeout=10)
+        worker.claim.release()
+        replacement = claim_mod.Claim(
+            self.hub, kind="gate", key="staging-one", work_kind="gate",
+            work_key="staging/one", holder_host=self.host)
+        replacement.acquire()
+        try:
+            new_token = self.hub.read(replacement.ref)["started_at"]
+            self.assertNotEqual(new_token, journal.read_job(worker.job_key).started_at)
+            runner.reconcile_journal_runs(journal, self.hub, self.host, [])
+            self.assertTrue(journal.read_job(worker.job_key).closed)
+            self.assertEqual(self.hub.read(replacement.ref)["started_at"], new_token)
+        finally:
+            replacement.release()
+
+    def test_local_lock_refuses_a_second_runner_before_store_access(self):
+        lock_dir = journal_mod.Journal().root.parent / "runner-locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        path = lock_dir / (hashlib.sha256(self.host.encode()).hexdigest() + ".lock")
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with mock.patch.object(claim_mod.Claim, "acquire_or_reap",
+                                   side_effect=AssertionError("store touched")):
+                rc = runner.run_daemon(
+                    self.hub, self.host, gate_command=[str(self.stub)],
+                    log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
+                    reconcile=lambda *_a, **_kw: self.fail("second runner reconciled"))
+            self.assertEqual(rc, 3)
+        finally:
+            os.close(fd)
+
+    def test_store_recovery_takes_host_singleton_before_enabling_starts(self):
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        real_adopt = fleetd.adopt_workers
+        calls = {"singleton": 0, "adopt": 0}
+        allowed = []
+
+        def acquire(claim):
+            if claim.kind == "host":
+                calls["singleton"] += 1
+                if calls["singleton"] == 1:
+                    raise HubUnreachableError("both routes down")
+            return real_acquire(claim)
+
+        def adopt(*args, **kwargs):
+            calls["adopt"] += 1
+            if calls["adopt"] == 1:
+                raise HubUnreachableError("both routes down")
+            return real_adopt(*args, **kwargs)
+
+        def step(hub, host, _workers, *_args, **kw):
+            allowed.append(kw["spawn_allowed"])
+            if kw["spawn_allowed"]:
+                self.assertIsNotNone(hub.sha(claim_mod.claim_ref("host", host)))
+                os.kill(os.getpid(), signal_mod.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", acquire), \
+                mock.patch.object(fleetd, "adopt_workers", adopt), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0, reconcile=step)
+        self.assertEqual(rc, 0)
+        self.assertEqual(allowed, [False, True])
+        self.assertEqual(calls["singleton"], 2)
+
+    def test_false_startup_listing_keeps_live_journal_run_open(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(
+            self.hub, "staging/one", "live", [str(self.stub)],
+            self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        worker.claim.stop_renewer(timeout=2)
+        real_adopt = fleetd.adopt_workers
+
+        def false_listing(*args, **kwargs):
+            return real_adopt(*args, pgid_probe=lambda: set(), **kwargs)
+
+        observed = {}
+
+        def inspect(_hub, _host, workers, *_args, **_kw):
+            observed["pgids"] = [w.pgid for w in workers]
+            observed["claims"] = [w.claim for w in workers]
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(fleetd, "adopt_workers", false_listing), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
+                reconcile=inspect), 0)
+        self.assertTrue(worker.alive())
+        self.assertEqual(observed["pgids"], [worker.pgid])
+        for claim in observed["claims"]:
+            claim.stop_renewer(timeout=2)
+        self.assertIsNotNone(self.hub.sha(worker.claim.ref))
+        self.assertFalse(journal.read_job(worker.job_key).closed)
+        with self.assertRaisesRegex(journal_mod.JournalError, "previous journal run"):
+            runner.start_gate(self.hub, "staging/one", "duplicate", [str(self.stub)],
+                              self.host, self.log_dir, journal=journal)
 
     def test_unavailable_process_listing_cannot_turn_open_run_into_release(self):
         j = journal_mod.Journal()
