@@ -643,14 +643,32 @@ fn parse_embedded_tiff_ifds(data: &[u8]) -> Option<MetadataMap> {
                     }
                 }
             }
-            // ExifTool 13.55 Exif.pm 0x8298: Name => 'Copyright',
-            // WriteGroup => 'IFD0', Format => 'undef', Writable => 'string'.
-            // PDF.pdf stores it with the ASCII field type and the Format
-            // override only affects the raw read, so the string arm applies.
+            // Exif.pm declares Copyright as undef even for ASCII entries.
+            // Preserve both NUL-separated notices for the source-bound RawConv.
             TAG_COPYRIGHT if field_type == 2 || field_type == 7 => {
-                if let Some(v) = read_ascii_value(data, base, byte_order, count) {
+                let value = (|| {
+                    let len = usize::try_from(count).ok()?;
+                    let offset = get_entry_value_offset(data, base, 1, len, byte_order)?;
+                    let raw = data.get(offset..offset.checked_add(len)?)?;
+                    let order = match byte_order {
+                        EmbeddedTiffByteOrder::Little => {
+                            crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian
+                        }
+                        EmbeddedTiffByteOrder::Big => {
+                            crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian
+                        }
+                    };
+                    crate::core::tag_conversion::exif_entry_to_tag_value(
+                        raw,
+                        field_type,
+                        count,
+                        TAG_COPYRIGHT,
+                        order,
+                    )
+                })();
+                if let Some(value) = value {
                     let key = crate::tag_db::lookup_tag_name(TAG_COPYRIGHT, "IFD0");
-                    metadata.insert(key, crate::core::TagValue::new_string(v));
+                    metadata.insert(key, value);
                 }
             }
             TAG_EXIF_IFD if field_type == 4 || field_type == 13 => {
@@ -1564,6 +1582,34 @@ mod embedded_exif_tests {
         map.get_string(key)
             .unwrap_or_else(|| panic!("must contain {key}"))
             .to_string()
+    }
+
+    #[test]
+    fn malformed_copyright_offset_keeps_neighboring_exif_fields() {
+        let mut pdf = ExifFixture::default().build();
+        let marker = [0x98, 0x82, 2, 0];
+        let entry = pdf.windows(4).position(|bytes| bytes == marker).unwrap();
+        pdf[entry + 8..entry + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        let map = find_embedded_exif_tags(&pdf).expect("other EXIF fields survive");
+        assert!(!map.contains_key("IFD0:Copyright"));
+        assert_eq!(get(&map, "ExifIFD:DateTimeOriginal"), "2001:05:19 18:36:41");
+    }
+
+    #[test]
+    fn copyright_preserves_both_native_notice_components() {
+        for (raw, expected) in [
+            ("Photographer\0Editor\0", "Photographer\nEditor"),
+            ("Photographer\0Editor\0Ignored", "Photographer\nEditor"),
+            (" \0Editor\0", "\nEditor"),
+            ("Photographer  \0", "Photographer"),
+        ] {
+            let map = ExifFixture {
+                copyright: raw,
+                ..Default::default()
+            }
+            .tags();
+            assert_eq!(get(&map, "IFD0:Copyright"), expected, "{raw:?}");
+        }
     }
 
     #[test]
