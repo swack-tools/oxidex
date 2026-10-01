@@ -122,7 +122,7 @@ pub fn family0_label(occurrence: &TagOccurrence) -> &str {
 }
 
 /// The label for an arbitrary family number, for `-Gn` display.
-/// Family 2 and above are always empty in Phase A (`TagOccurrence::group2`
+/// At the source-row level, family 2 and above are empty (`TagOccurrence::group2`
 /// is never populated yet -- see `OVERHAUL_STEP18_DESIGN.md`), so only 0
 /// and 1 ever resolve to anything.
 fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
@@ -136,6 +136,33 @@ fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
             .unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+/// The copy number belongs to the resolved key, not the source row.
+/// Project family 4 only after FoundTag duplicate numbering has run.
+fn joined_family_label_for_entry(entry: &ResolvedOccurrence<'_>, families: &[u8]) -> String {
+    if !families.contains(&4) {
+        return joined_family_label(entry.occurrence, families);
+    }
+    let mut labels = Vec::with_capacity(families.len());
+    for &family in families {
+        let label = if family == 4 {
+            entry
+                .copy
+                .filter(|copy| *copy > 0)
+                .map(|copy| format!("Copy{copy}"))
+                .unwrap_or_default()
+        } else {
+            family_label(entry.occurrence, family)
+        };
+        if !label.is_empty() && labels.last() != Some(&label) {
+            labels.push(label);
+        }
+    }
+    if labels.len() > 1 && labels[0] == "Main" {
+        labels.remove(0);
+    }
+    labels.join(":")
 }
 
 /// Joins the requested `-Gn:m:...` families for one occurrence into the
@@ -977,7 +1004,7 @@ fn json_group_winners<'m>(
     for (index, entry) in resolved.iter().enumerate() {
         groups
             .entry((
-                joined_family_label(entry.occurrence, families),
+                joined_family_label_for_entry(entry, families),
                 entry.occurrence.name.to_string(),
             ))
             .or_default()
@@ -1091,7 +1118,7 @@ pub fn build_display_map(
         .iter()
         .map(|entry| match group_display {
             Some(families) => {
-                let label = joined_family_label(entry.occurrence, families);
+                let label = joined_family_label_for_entry(entry, families);
                 if bracketed {
                     format!("[{label}] {}", entry.occurrence.name)
                 } else {
@@ -1168,7 +1195,7 @@ pub fn render_group_display_lines(
 ) -> String {
     let mut out = String::new();
     for entry in resolved {
-        let label = joined_family_label(entry.occurrence, families);
+        let label = joined_family_label_for_entry(entry, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         let rendered = super::output_formatter::format_tag_value_with_mode(
             &entry.lookup_key,
@@ -1263,7 +1290,7 @@ pub fn render_short_lines(
             &value,
             no_print_conv,
         );
-        let label = families.map(|families| joined_family_label(entry.occurrence, families));
+        let label = families.map(|families| joined_family_label_for_entry(entry, families));
         out.push_str(&short_output_line(
             level,
             label.as_deref(),
@@ -1496,7 +1523,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .map(|entry| {
                     let next = rank.len();
                     *rank
-                        .entry(joined_family_label(entry.occurrence, families))
+                        .entry(joined_family_label_for_entry(entry, families))
                         .or_insert(next)
                 })
                 .collect();

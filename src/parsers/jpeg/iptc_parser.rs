@@ -3,7 +3,11 @@
 //! This module handles parsing of IPTC data in JPEG APP13 segments.
 //! IPTC data is stored in Adobe Photoshop Image Resource Blocks (8BIM).
 
-use crate::core::TagValue;
+use crate::core::tag_occurrence::Instance;
+use crate::core::{MetadataMap, TagValue};
+
+#[path = "generated_iptc_dataset_facts.rs"]
+mod generated_iptc_dataset_facts;
 use crate::core::value_formatter::{
     format_iptc_coded_charset, format_iptc_date, format_iptc_time, format_iptc_urgency,
 };
@@ -22,36 +26,9 @@ const IPTC_RESOURCE_ID: u16 = 0x0404;
 const IPTC_TAG_MARKER: u8 = 0x1C;
 const APP13_MARKER: u16 = 0xFFED;
 
-/// Datasets ExifTool reports as lists because the IIM spec marks them
-/// repeatable.
-///
-/// In `IPTC.pm` these carry `Flags => 'List'`; only 2:255 CatalogSets spells
-/// the same flag `List => 1`, which is why grepping for the latter finds one
-/// dataset and misses the rest. The full set, by table and dataset number:
-///
-/// | Record | Datasets |
-/// |--------|----------|
-/// | 1 Envelope | 5 Destination, 50 ProductID |
-/// | 2 Application | 4 ObjectAttributeReference, 12 SubjectReference, 20 SupplementalCategories, 25 Keywords, 26 ContentLocationCode, 27 ContentLocationName, 45 ReferenceService, 47 ReferenceDate, 50 ReferenceNumber, 80 By-line, 85 By-lineTitle, 118 Contact, 122 Writer-Editor, 255 CatalogSets |
-///
-/// `%IPTC::ObjectData` marks 8:10 SubFile `List` too, but no record-8 dataset
-/// is decoded here, so no such entry can reach this predicate.
-///
-/// Every other dataset keeps last-wins semantics, which is what a
-/// single-valued map insert already does.
-///
-/// This is the one place the rule lives -- `parsers::pdf::photoshop_resources`
-/// decodes the same 0x0404 resource out of a PDF and asks here rather than
-/// keeping a second copy that can drift.
+/// Whether pinned IPTC.pm marks this dataset as repeatable within one IIM block.
 pub fn is_repeatable_iptc_dataset(record_number: u8, dataset_number: u8) -> bool {
-    match record_number {
-        1 => matches!(dataset_number, 5 | 50),
-        2 => matches!(
-            dataset_number,
-            4 | 12 | 20 | 25 | 26 | 27 | 45 | 47 | 50 | 80 | 85 | 118 | 122 | 255
-        ),
-        _ => false,
-    }
+    generated_iptc_dataset_facts::find(record_number, dataset_number).is_some_and(|fact| fact.list)
 }
 
 /// Represents an Adobe Photoshop Image Resource Block
@@ -215,109 +192,7 @@ pub fn dataset_to_tag_name(record_number: u8, dataset_number: u8) -> String {
 /// out of a default dump, so callers that want ExifTool's tag set should skip
 /// the `None` cases rather than invent a name for them.
 pub fn known_dataset_name(record_number: u8, dataset_number: u8) -> Option<&'static str> {
-    // Handle Record 2 (Application Record)
-    if record_number == 2 {
-        let tag_name = match dataset_number {
-            0 => "IPTC:ApplicationRecordVersion",
-            3 => "IPTC:ObjectTypeReference",
-            4 => "IPTC:ObjectAttributeReference",
-            5 => "IPTC:ObjectName",
-            7 => "IPTC:EditStatus",
-            8 => "IPTC:EditorialUpdate",
-            10 => "IPTC:Urgency",
-            12 => "IPTC:SubjectReference",
-            15 => "IPTC:Category",
-            20 => "IPTC:SupplementalCategories",
-            22 => "IPTC:FixtureIdentifier",
-            25 => "IPTC:Keywords",
-            26 => "IPTC:ContentLocationCode",
-            27 => "IPTC:ContentLocationName",
-            30 => "IPTC:ReleaseDate",
-            35 => "IPTC:ReleaseTime",
-            37 => "IPTC:ExpirationDate",
-            38 => "IPTC:ExpirationTime",
-            40 => "IPTC:SpecialInstructions",
-            42 => "IPTC:ActionAdvised",
-            45 => "IPTC:ReferenceService",
-            47 => "IPTC:ReferenceDate",
-            50 => "IPTC:ReferenceNumber",
-            55 => "IPTC:DateCreated",
-            60 => "IPTC:TimeCreated",
-            62 => "IPTC:DigitalCreationDate",
-            63 => "IPTC:DigitalCreationTime",
-            65 => "IPTC:OriginatingProgram",
-            70 => "IPTC:ProgramVersion",
-            75 => "IPTC:ObjectCycle",
-            80 => "IPTC:By-line",
-            85 => "IPTC:By-lineTitle",
-            90 => "IPTC:City",
-            92 => "IPTC:Sub-location",
-            95 => "IPTC:Province-State",
-            100 => "IPTC:Country-PrimaryLocationCode",
-            101 => "IPTC:Country-PrimaryLocationName",
-            103 => "IPTC:OriginalTransmissionReference",
-            105 => "IPTC:Headline",
-            110 => "IPTC:Credit",
-            115 => "IPTC:Source",
-            116 => "IPTC:CopyrightNotice",
-            118 => "IPTC:Contact",
-            120 => "IPTC:Caption-Abstract",
-            121 => "IPTC:LocalCaption",
-            122 => "IPTC:Writer-Editor",
-            125 => "IPTC:RasterizedCaption",
-            130 => "IPTC:ImageType",
-            131 => "IPTC:ImageOrientation",
-            135 => "IPTC:LanguageIdentifier",
-            150 => "IPTC:AudioType",
-            151 => "IPTC:AudioSamplingRate",
-            152 => "IPTC:AudioSamplingResolution",
-            153 => "IPTC:AudioDuration",
-            154 => "IPTC:AudioOutcue",
-            184 => "IPTC:JobID",
-            185 => "IPTC:MasterDocumentID",
-            186 => "IPTC:ShortDocumentID",
-            187 => "IPTC:UniqueDocumentID",
-            188 => "IPTC:OwnerID",
-            200 => "IPTC:ObjectPreviewFileFormat",
-            // ExifTool calls 2:201 ObjectPreviewFileVersion (IPTC.pm ApplicationRecord),
-            // not "...FileFormatVer".
-            201 => "IPTC:ObjectPreviewFileVersion",
-            202 => "IPTC:ObjectPreviewData",
-            221 => "IPTC:Prefs",
-            225 => "IPTC:ClassifyState",
-            228 => "IPTC:SimilarityIndex",
-            230 => "IPTC:DocumentNotes",
-            231 => "IPTC:DocumentHistory",
-            232 => "IPTC:ExifCameraInfo",
-            255 => "IPTC:CatalogSets",
-            _ => return None,
-        };
-        return Some(tag_name);
-    }
-
-    // Handle Record 1 (Envelope Record)
-    if record_number == 1 {
-        let tag_name = match dataset_number {
-            0 => "IPTC:EnvelopeRecordVersion",
-            5 => "IPTC:Destination",
-            20 => "IPTC:FileFormat",
-            22 => "IPTC:FileVersion",
-            30 => "IPTC:ServiceIdentifier",
-            40 => "IPTC:EnvelopeNumber",
-            50 => "IPTC:ProductID",
-            60 => "IPTC:EnvelopePriority",
-            70 => "IPTC:DateSent",
-            80 => "IPTC:TimeSent",
-            90 => "IPTC:CodedCharacterSet",
-            100 => "IPTC:UniqueObjectName",
-            120 => "IPTC:ARMIdentifier",
-            122 => "IPTC:ARMVersion",
-            _ => return None,
-        };
-        return Some(tag_name);
-    }
-
-    None
+    generated_iptc_dataset_facts::find(record_number, dataset_number).map(|fact| fact.name)
 }
 
 /// The `Format` ExifTool's IPTC tag tables declare for a dataset.
@@ -351,62 +226,8 @@ pub enum IptcFormat {
 /// tables get [`IptcFormat::Auto`], matching ExifTool's `AddTagToTable` fallback
 /// for unknown datasets.
 pub fn dataset_format(record_number: u8, dataset_number: u8) -> IptcFormat {
-    match record_number {
-        1 => match dataset_number {
-            0 | 20 | 22 | 120 | 122 => IptcFormat::Int,
-            40 | 60 | 70 => IptcFormat::Digits,
-            5 | 30 | 50 | 80 | 90 | 100 => IptcFormat::Str,
-            _ => IptcFormat::Auto,
-        },
-        2 => match dataset_number {
-            0 | 200 | 201 => IptcFormat::Int,
-            8 | 10 | 30 | 37 | 42 | 47 | 50 | 55 | 62 | 151 | 152 | 153 => IptcFormat::Digits,
-            125 | 202 => IptcFormat::Undef,
-            3..=5
-            | 7
-            | 12
-            | 15
-            | 20
-            | 22
-            | 25..=27
-            | 35
-            | 38
-            | 40
-            | 45
-            | 60
-            | 63
-            | 65
-            | 70
-            | 75
-            | 80
-            | 85
-            | 90
-            | 92
-            | 95
-            | 100
-            | 101
-            | 103
-            | 105
-            | 110
-            | 115
-            | 116
-            | 118
-            | 120..=122
-            | 130
-            | 131
-            | 135
-            | 150
-            | 154
-            | 184..=188
-            | 221
-            | 225
-            | 228
-            | 230..=232
-            | 255 => IptcFormat::Str,
-            _ => IptcFormat::Auto,
-        },
-        _ => IptcFormat::Auto,
-    }
+    generated_iptc_dataset_facts::find(record_number, dataset_number)
+        .map_or(IptcFormat::Auto, |fact| fact.format)
 }
 
 /// ExifTool's `%fileFormat` PrintConv (IPTC.pm:56-86), shared by the Envelope
@@ -721,26 +542,73 @@ fn extract_iptc_entries_from_block(data: &[u8]) -> Vec<(u8, u8, String, String)>
 /// entry. Inserting them into a map one at a time keeps only the last, which is
 /// why `IPTC.jpg` reported a single keyword where ExifTool reports three.
 pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(String, TagValue)> {
+    collapse_iptc_typed_entries(
+        entries
+            .into_iter()
+            .map(|(record, dataset, name, value)| {
+                (record, dataset, name, TagValue::new_string(value))
+            })
+            .collect(),
+    )
+}
+
+/// One carrier's IIM payload uses the shared dataset decoder, retaining the
+/// table-declared integer type of binary version records. The JPEG segment
+/// aggregator keeps its existing projection until its cross-resource ordering
+/// and duplicate semantics are migrated independently.
+pub(crate) fn extract_iptc_carrier_values_from_block(data: &[u8]) -> Vec<(String, TagValue)> {
+    let Ok(records) = parse_all_iptc_records(data) else {
+        return Vec::new();
+    };
+    let entries = records
+        .into_iter()
+        .filter_map(|record| {
+            let fact =
+                generated_iptc_dataset_facts::find(record.record_number, record.dataset_number)?;
+            let displayed =
+                dataset_value_to_string(record.record_number, record.dataset_number, &record.data);
+            let value = if fact.format == IptcFormat::Int
+                && !fact.conversion
+                && !record.data.is_empty()
+                && record.data.len() <= 8
+            {
+                displayed
+                    .parse::<i64>()
+                    .map(TagValue::new_integer)
+                    .unwrap_or_else(|_| TagValue::new_string(displayed))
+            } else {
+                TagValue::new_string(displayed)
+            };
+            Some((
+                record.record_number,
+                record.dataset_number,
+                fact.name.to_string(),
+                value,
+            ))
+        })
+        .collect();
+    collapse_iptc_typed_entries(entries)
+}
+
+fn collapse_iptc_typed_entries(
+    entries: Vec<(u8, u8, String, TagValue)>,
+) -> Vec<(String, TagValue)> {
     let mut out: Vec<(String, TagValue)> = Vec::new();
     let mut lists: Vec<(String, Vec<TagValue>)> = Vec::new();
-
     for (record_number, dataset_number, name, value) in entries {
         if is_repeatable_iptc_dataset(record_number, dataset_number) {
             match lists.iter_mut().find(|(tag, _)| *tag == name) {
-                Some((_, values)) => values.push(TagValue::new_string(value)),
-                None => lists.push((name, vec![TagValue::new_string(value)])),
+                Some((_, values)) => values.push(value),
+                None => lists.push((name, vec![value])),
             }
             continue;
         }
-        let stored = TagValue::new_string(value);
         match out.iter_mut().find(|(tag, _)| *tag == name) {
-            Some(entry) => entry.1 = stored,
-            None => out.push((name, stored)),
+            Some(entry) => entry.1 = value,
+            None => out.push((name, value)),
         }
     }
-
     for (name, mut values) in lists {
-        // ExifTool prints a one-element list as a bare scalar.
         let stored = if values.len() == 1 {
             values.remove(0)
         } else {
@@ -751,8 +619,30 @@ pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(Str
             None => out.push((name, stored)),
         }
     }
-
     out
+}
+
+/// Record one physical IPTC IIM directory at a time. A second 8BIM resource
+/// is a duplicate occurrence in IPTC2, never another member of the first
+/// resource's repeatable list.
+#[derive(Default)]
+pub(crate) struct CarrierIptcBlocks {
+    count: u32,
+}
+
+impl CarrierIptcBlocks {
+    pub(crate) fn insert(&mut self, payload: &[u8], metadata: &mut MetadataMap) {
+        let group = if self.count == 0 {
+            "IPTC".to_string()
+        } else {
+            format!("IPTC{}", self.count + 1)
+        };
+        let priority = if self.count == 0 { 1 } else { 0 };
+        self.count = self.count.saturating_add(1);
+        for (name, value) in extract_iptc_carrier_values_from_block(payload) {
+            metadata.insert_occurrence(name, value, priority, &group, Instance::default());
+        }
+    }
 }
 
 /// Hands out ExifTool's numbered family-1 groups (`IPTC2`, `IPTC3`, ...) to the

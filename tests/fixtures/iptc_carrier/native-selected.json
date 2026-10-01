@@ -1,0 +1,60 @@
+{
+  "repeatable-byline.psd": {
+    "IPTC:EnvelopeRecordVersion": 4,
+    "IPTC:ApplicationRecordVersion": 2,
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ]
+  },
+  "two-iptc-resources.psd": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
+  },
+  "within-block.tif": {
+    "IPTC:EnvelopeRecordVersion": 4,
+    "IPTC:ApplicationRecordVersion": 2,
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ],
+    "IPTC:Category": "0042"
+  },
+  "within-block.eps": {
+    "IPTC:EnvelopeRecordVersion": 4,
+    "IPTC:ApplicationRecordVersion": 2,
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ],
+    "IPTC:Category": "0042"
+  },
+  "two-blocks.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
+  },
+  "within-block.pdf": {
+    "IPTC:EnvelopeRecordVersion": 4,
+    "IPTC:ApplicationRecordVersion": 2,
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ],
+    "IPTC:Category": "0042"
+  },
+  "two-blocks.pdf": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob"
+  },
+  "three-blocks.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob",
+    "IPTC3:Copy2:By-line": "Carol"
+  },
+  "pdf-same-value-two-blocks.pdf": {
+    "IPTC:By-line": "Alice",
+    "IPTC:ObjectName": "First",
+    "IPTC2:Copy1:By-line": "Alice",
+    "IPTC2:Copy1:ObjectName": "Second"
+  }
+}
