@@ -6,7 +6,7 @@
 mod fixtures;
 
 use oxidex::core::TagValue;
-use oxidex::parsers::raw::{parse_raw_metadata, RawFormat};
+use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
 
 fn source() -> Vec<u8> {
     std::fs::read(fixtures::required_t_images_fixture_path("Panasonic.rw2"))
@@ -315,6 +315,30 @@ fn thumbnail_guard_accounts_for_gps_and_interop_pointer_shapes() {
 }
 
 #[test]
+fn preview_value_after_app1_remains_readable_through_jpeg() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let make = entry(&data, ifd0, 0x010f);
+    let app1_length = usize::from(u16::from_be_bytes(
+        data[tiff - 8..tiff - 6].try_into().unwrap(),
+    ));
+    let app1_end = tiff - 8 + app1_length;
+    let value_at = app1_end + 4;
+    assert!(value_at + 10 <= data.len());
+    data[make + 8..make + 12]
+        .copy_from_slice(&u32::try_from(value_at - tiff).unwrap().to_le_bytes());
+    data[value_at..value_at + 10].copy_from_slice(b"Panasonic\0");
+
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:Make"), Some("Panasonic"));
+    assert_eq!(
+        metadata.get_string("InteropIFD:InteropIndex"),
+        Some("R98 - DCF basic file (sRGB)")
+    );
+    assert_eq!(metadata.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+}
+
+#[test]
 fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
@@ -328,7 +352,7 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     // Exif.pm's Writable int16u is a write format. Its ProcessExif reader
     // accepts every integral wire format, including type 13 (IFD).
     for (id, name) in [(0xA411u16, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
-        for field_type in [1u16, 3, 4, 6, 8, 9, 13] {
+        for field_type in [1u16, 3, 4, 6, 7, 8, 9, 13] {
             for (raw, expected) in [(0u32, "No"), (1, "Yes"), (2, "Unknown (2)")] {
                 let mut data = original.clone();
                 data[slot..slot + 2].copy_from_slice(&id.to_le_bytes());
@@ -347,5 +371,81 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn preview_a411_uses_source_read_formats_beyond_integral_wires() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, pointer + 8) as usize;
+    let slot = entry(&original, exif_ifd, 0xA405);
+
+    for (field_type, count, inline, expected) in [
+        (2u16, 2u32, [b'1', 0, 0, 0], "Yes"),
+        (2, 3, [b'0', b'1', 0, 0], "Unknown (01)"),
+        (2, 3, [b'+', b'1', 0, 0], "Unknown (+1)"),
+        (7, 2, [1, 0, 0, 0], "Unknown (\u{1})"),
+        (11, 1, 1f32.to_le_bytes(), "Yes"),
+        (129, 2, [b'1', 0, 0, 0], "Unknown (1)"),
+        (3, 0, [0, 0, 0, 0], "Unknown ()"),
+    ] {
+        let mut data = original.clone();
+        data[slot..slot + 2].copy_from_slice(&0xA411u16.to_le_bytes());
+        data[slot + 2..slot + 4].copy_from_slice(&field_type.to_le_bytes());
+        data[slot + 4..slot + 8].copy_from_slice(&count.to_le_bytes());
+        data[slot + 8..slot + 12].copy_from_slice(&inline);
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_string("ExifIFD:ShadingCorrection"),
+            Some(expected),
+            "type={field_type} count={count}"
+        );
+    }
+
+    for (field_type, payload) in [
+        (4u16, vec![1, 0, 0, 0, 0, 0, 0, 0]),
+        (5, vec![1, 0, 0, 0, 1, 0, 0, 0]),
+        (10, vec![1, 0, 0, 0, 1, 0, 0, 0]),
+        (12, 1f64.to_le_bytes().to_vec()),
+    ] {
+        let mut data = original.clone();
+        data[slot..slot + 2].copy_from_slice(&0xA411u16.to_le_bytes());
+        data[slot + 2..slot + 4].copy_from_slice(&field_type.to_le_bytes());
+        let count = if field_type == 4 { 2u32 } else { 1u32 };
+        data[slot + 4..slot + 8].copy_from_slice(&count.to_le_bytes());
+        data[slot + 8..slot + 12].copy_from_slice(&9000u32.to_le_bytes());
+        data[tiff + 9000..tiff + 9000 + payload.len()].copy_from_slice(&payload);
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_string("ExifIFD:ShadingCorrection"),
+            Some(if field_type == 4 {
+                "Unknown (1 0)"
+            } else {
+                "Yes"
+            }),
+            "type={field_type}"
+        );
+    }
+}
+
+#[test]
+fn preview_a411_a412_arrays_use_generated_unknown_fallback() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, pointer + 8) as usize;
+    let slot = entry(&original, exif_ifd, 0xA405);
+    for (id, name) in [(0xA411u16, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
+        let mut data = original.clone();
+        data[slot..slot + 2].copy_from_slice(&id.to_le_bytes());
+        data[slot + 4..slot + 8].copy_from_slice(&2u32.to_le_bytes());
+        data[slot + 8..slot + 12].copy_from_slice(&[1, 0, 0, 0]);
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_string(&format!("ExifIFD:{name}")),
+            Some("Unknown (1 0)")
+        );
     }
 }

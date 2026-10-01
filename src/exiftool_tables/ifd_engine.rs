@@ -839,6 +839,34 @@ fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Optio
     }
 }
 
+/// Decode a reached classic-TIFF entry's value using the same ProcessExif
+/// format table and ReadValue implementation as the generated IFD engine.
+/// Callers must separately establish that the physical entry was reached;
+/// this only converts its already-located value bytes. It is read-only and
+/// does not widen writer-facing `ExifType` support.
+pub(crate) fn decode_reached_tiff_value(
+    bytes: &[u8],
+    field_type: u16,
+    count: u32,
+    order: ByteOrder,
+) -> Option<DecodedValue> {
+    if !(1..=13).contains(&field_type) && field_type != 129 {
+        return None;
+    }
+    let ty = entry_type(field_type)?;
+    let size = ty.size.checked_mul(usize::try_from(count).ok()?)?;
+    if bytes.len() != size {
+        return None;
+    }
+    let located = Located {
+        value_pos: 0,
+        bytes,
+        ty,
+    };
+    let plan = read_plan(&located, None)?;
+    Some(round_rationals(decode_plan(&located, plan, order)?))
+}
+
 /// Project the bytes selected by `ReadValue` into the stored channel before
 /// its string repair or later rational rounding. Numeric IFD formats already
 /// have exact typed representations; strings need the physical byte scalar

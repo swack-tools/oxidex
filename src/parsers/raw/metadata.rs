@@ -1669,7 +1669,10 @@ fn extract_rw2_embedded_exif_tags(
         .get(4..8)
         .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in RW2 preview EXIF"))?;
     let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
-    let reader = SliceReader::new(tiff_data);
+    // ProcessExif may seek through the JPEG RAF for a value whose offset is
+    // beyond APP1. Keep the TIFF-relative base, but expose those bytes to
+    // the reader instead of ending it at the APP1 payload boundary.
+    let reader = SliceReader::new(&jpeg[tiff_start_in_jpeg..]);
     let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
@@ -1838,7 +1841,7 @@ fn extract_rw2_embedded_exif_tags(
     )
     .into_iter()
     .find(|entry| entry.count == 1)
-    .and_then(|entry| u64::try_from(entry.first_value).ok())
+    .and_then(|entry| u64::try_from(entry.values[0]).ok())
     .filter(|offset| *offset != 0);
     let Some(exif_ifd_offset) = exif_ifd_offset else {
         return Ok(());
@@ -1921,9 +1924,6 @@ fn extract_rw2_embedded_exif_tags(
         byte_order,
         &[0xA411, 0xA412],
     ) {
-        if entry.count != 1 {
-            continue;
-        }
         let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
             .and_then(|table| table.tag(entry.tag_id))
             .filter(|row| {
@@ -1941,10 +1941,59 @@ fn extract_rw2_embedded_exif_tags(
         else {
             continue;
         };
-        let Some(display) = crate::exiftool_tables::runtime::render(
-            row.print_conv,
-            &crate::exiftool_tables::DecodedValue::Integer(entry.first_value),
+        let Some((value_pos, value_len)) = entry.raw_value else {
+            continue;
+        };
+        let Ok(raw) = reader.read(value_pos, value_len) else {
+            continue;
+        };
+        let Some(decoded) = crate::exiftool_tables::ifd_engine::decode_reached_tiff_value(
+            raw,
+            entry.field_type,
+            entry.count,
+            byte_order.to_io_byte_order(),
         ) else {
+            continue;
+        };
+        // A Perl hash keyed by integer 1 also matches the exact string "1".
+        // NUL bytes inside undef/utf8 values survive the hash lookup but are
+        // trimmed by the JSON output path, so retain their miss before trim.
+        let decoded = match decoded {
+            crate::exiftool_tables::DecodedValue::StringBytes(bytes) => {
+                let canonical = std::str::from_utf8(&bytes).ok().and_then(|text| {
+                    text.parse::<i64>()
+                        .ok()
+                        .filter(|value| value.to_string() == text)
+                });
+                match canonical {
+                    Some(value) => crate::exiftool_tables::DecodedValue::Integer(value),
+                    None => crate::exiftool_tables::DecodedValue::StringBytes(bytes),
+                }
+            }
+            crate::exiftool_tables::DecodedValue::String(value) if !value.contains('\0') => {
+                match value.parse::<i64>() {
+                    Ok(number) if number.to_string() == value => {
+                        crate::exiftool_tables::DecodedValue::Integer(number)
+                    }
+                    _ => crate::exiftool_tables::DecodedValue::String(value),
+                }
+            }
+            crate::exiftool_tables::DecodedValue::String(value) => {
+                crate::exiftool_tables::DecodedValue::String(
+                    value.split('\0').next().unwrap_or("").to_string(),
+                )
+            }
+            crate::exiftool_tables::DecodedValue::Undefined(bytes) => {
+                let end = bytes
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(bytes.len());
+                crate::exiftool_tables::DecodedValue::Undefined(bytes[..end].to_vec())
+            }
+            other => other,
+        };
+        let Some(display) = crate::exiftool_tables::runtime::render(row.print_conv, &decoded)
+        else {
             continue;
         };
         metadata.insert(
@@ -11335,11 +11384,12 @@ mod rw2_embedded_exif_printconv_tests {
                         Some(expected)
                     );
                 }
-                let payload = short(1, big_endian);
-                assert!(
+                let mut payload = short(1, big_endian);
+                payload.extend_from_slice(&short(0, big_endian));
+                assert_eq!(
                     extract(&[(id, 3, 2, &payload)], big_endian)
-                        .get(&format!("ExifIFD:{name}"))
-                        .is_none()
+                        .get_string(&format!("ExifIFD:{name}")),
+                    Some("Unknown (1 0)")
                 );
             }
         }

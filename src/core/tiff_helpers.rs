@@ -3242,11 +3242,13 @@ fn next_ifd_offset(
 /// available because ExifOffset requires a scalar while GPS and Interop use
 /// the first value of an array. Type 13 is decoded here, on the read side;
 /// widening the shared ExifType enum would also change writer eligibility.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ReachedIntegralEntry {
     pub tag_id: u16,
+    pub field_type: u16,
     pub count: u32,
-    pub first_value: i64,
+    pub values: Vec<i64>,
+    pub raw_value: Option<(u64, usize)>,
 }
 
 /// Read requested integral values only from physical entries that ExifTool's
@@ -3260,32 +3262,48 @@ pub(crate) fn reached_integral_ifd_entries(
     byte_order: ByteOrder,
     requested_tags: &[u16],
 ) -> Vec<ReachedIntegralEntry> {
+    scan_reached_integral_ifd_entries(reader, ifd_offset, byte_order, requested_tags).0
+}
+
+/// Return both reached values and whether ProcessExif completed the IFD loop.
+/// A stopped subdirectory retains earlier values; a stopped IFD0 must not
+/// proceed to its next-IFD pointer (Exif.pm:7197-7232).
+fn scan_reached_integral_ifd_entries(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    requested_tags: &[u16],
+) -> (Vec<ReachedIntegralEntry>, bool) {
     let Some(count) = ifd_entry_count(reader, ifd_offset, byte_order) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     let Some(dir_end) = ifd_offset
         .checked_add(2)
         .and_then(|n| n.checked_add(u64::from(count) * 12))
     else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     if dir_end > reader.size() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let mut reached = Vec::new();
     let mut warnings = 0u32;
+    let mut completed = true;
     for index in 0..u64::from(count) {
         if warnings > 10 {
+            completed = false;
             break; // Exif.pm:6455: later entries were never visited.
         }
         let Some(entry_offset) = ifd_offset
             .checked_add(2)
             .and_then(|n| n.checked_add(index * 12))
         else {
+            completed = false;
             break;
         };
         let Ok(entry) = reader.read(entry_offset, 12) else {
+            completed = false;
             break;
         };
         let tag_id = read_u16(entry, byte_order);
@@ -3303,6 +3321,7 @@ pub(crate) fn reached_integral_ifd_entries(
                 // Exif.pm:6475-6477 abandons a corrupt first entry (except
                 // Sony ILCE; preview callers have no model-specific override).
                 if index == 0 {
+                    completed = false;
                     break;
                 }
                 continue;
@@ -3316,11 +3335,12 @@ pub(crate) fn reached_integral_ifd_entries(
             warnings += 1;
             continue;
         }
-        let bytes = if size <= 4 {
-            &entry[8..12]
+        let (bytes, value_pos) = if size <= 4 {
+            (&entry[8..12], entry_offset + 8)
         } else {
             let start = u64::from(read_u32(&entry[8..12], byte_order));
             let Some(end) = start.checked_add(size) else {
+                completed = false;
                 break;
             };
             // Exif.pm:6549 and 6670-6678 reject an out-of-line value in
@@ -3331,34 +3351,59 @@ pub(crate) fn reached_integral_ifd_entries(
                 continue;
             }
             if end > reader.size() {
-                // ProcessExif's RAF short read returns from the directory
-                // before any later pointer can be followed (Exif.pm:6594).
-                break;
+                // In these EXIF walks an unavailable value is a bad-offset
+                // warning for this entry. ExifTool still follows IFD1 after
+                // an invalid ExifOffset array (pinned RW2 matrix).
+                warnings += 1;
+                continue;
             }
-            let Ok(value) = reader.read(start, width as usize) else {
-                break;
+            let Ok(value) = reader.read(start, size as usize) else {
+                warnings += 1;
+                continue;
             };
-            value
+            (value, start)
         };
-        if !requested_tags.contains(&tag_id) || value_count == 0 {
+        if !requested_tags.contains(&tag_id) {
             continue;
         }
-        let first_value = match field_type {
-            1 => i64::from(bytes[0]),
-            3 => i64::from(read_u16(bytes, byte_order)),
-            4 | 13 => i64::from(read_u32(bytes, byte_order)),
-            6 => i64::from(bytes[0] as i8),
-            8 => i64::from(read_u16(bytes, byte_order) as i16),
-            9 => i64::from(read_u32(bytes, byte_order) as i32),
-            _ => continue,
+        if matches!(tag_id, 0xA411 | 0xA412) {
+            reached.push(ReachedIntegralEntry {
+                tag_id,
+                field_type,
+                count: value_count,
+                values: Vec::new(),
+                raw_value: Some((value_pos, size as usize)),
+            });
+            continue;
+        }
+        if value_count == 0 {
+            continue;
+        }
+        // Exif.pm:6681 treats a singleton UNDEFINED byte as int8u.
+        let is_integral = matches!(field_type, 1 | 3 | 4 | 6 | 8 | 9 | 13)
+            || (field_type == 7 && value_count == 1);
+        if !is_integral {
+            continue;
+        }
+        let chunk = &bytes[..width as usize];
+        let value = match field_type {
+            1 | 7 => i64::from(chunk[0]),
+            3 => i64::from(read_u16(chunk, byte_order)),
+            4 | 13 => i64::from(read_u32(chunk, byte_order)),
+            6 => i64::from(chunk[0] as i8),
+            8 => i64::from(read_u16(chunk, byte_order) as i16),
+            9 => i64::from(read_u32(chunk, byte_order) as i32),
+            _ => unreachable!(),
         };
         reached.push(ReachedIntegralEntry {
             tag_id,
+            field_type,
             count: value_count,
-            first_value,
+            values: vec![value],
+            raw_value: None,
         });
     }
-    reached
+    (reached, completed)
 }
 
 /// Enumerate only parseable subdirectories that ExifTool would actually enter.
@@ -3376,7 +3421,7 @@ fn followed_subdirectories(
         if entry.tag_id == 0x8769 && entry.count != 1 {
             continue;
         }
-        let Ok(target) = u64::try_from(entry.first_value) else {
+        let Ok(target) = u64::try_from(entry.values[0]) else {
             continue;
         };
         if target == 0 {
@@ -3492,6 +3537,54 @@ mod followed_directory_tests {
         assert_eq!(
             legal_ifd1_offset(&reader, 8, 2, ByteOrder::LittleEndian),
             Some(42)
+        );
+    }
+
+    #[test]
+    fn singleton_undefined_pointer_marks_a_followed_directory() {
+        let mut data = vec![0u8; 128];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        put16(&mut data, 8, 1);
+        entry(&mut data, 10, 0x8825, 7, 1, 42);
+        put32(&mut data, 22, 42);
+        thumbnail_ifd(&mut data, 42, 112);
+        let reader = TestReader::new(data);
+        assert_eq!(
+            legal_ifd1_offset(&reader, 8, 1, ByteOrder::LittleEndian),
+            None
+        );
+    }
+
+    #[test]
+    fn first_invalid_ifd0_entry_prevents_ifd1_walk() {
+        let mut data = vec![0u8; 128];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        put16(&mut data, 8, 1);
+        entry(&mut data, 10, 0x8825, 99, 1, 42);
+        put32(&mut data, 22, 42);
+        thumbnail_ifd(&mut data, 42, 112);
+        let reader = TestReader::new(data);
+        assert_eq!(
+            legal_ifd1_offset(&reader, 8, 1, ByteOrder::LittleEndian),
+            None
+        );
+    }
+
+    #[test]
+    fn ifd0_warning_abort_prevents_linked_ifd1_walk() {
+        let mut data = vec![0u8; 600];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        put16(&mut data, 8, 13);
+        entry(&mut data, 10, 0x0100, 4, 1, 1);
+        for index in 0..12 {
+            entry(&mut data, 22 + index * 12, 0xC100 + index as u16, 99, 1, 1);
+        }
+        put32(&mut data, 166, 400);
+        thumbnail_ifd(&mut data, 400, 512);
+        let reader = TestReader::new(data);
+        assert_eq!(
+            legal_ifd1_offset(&reader, 8, 13, ByteOrder::LittleEndian),
+            None
         );
     }
 
@@ -3877,7 +3970,11 @@ pub(crate) fn legal_ifd1_offset(
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
 ) -> Option<u64> {
-    // No IFD1: nothing. A wrong thumbnail tag is worse than a missing one.
+    // ProcessExif returns before the linked IFD when IFD0 aborts on its first
+    // invalid entry, warning limit, or unreadable value (Exif.pm:6475, 7197).
+    if !scan_reached_integral_ifd_entries(reader, ifd0_offset, byte_order, &[]).1 {
+        return None;
+    }
     let ifd1_offset = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)?;
     if visited_directory_offsets(reader, ifd0_offset, byte_order).contains(&ifd1_offset) {
         return None;
