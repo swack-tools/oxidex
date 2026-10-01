@@ -993,6 +993,43 @@ class TestReleasePending(JournalCase):
         self.assertEqual(self.j.path_for("staging-one").read_bytes(), before)
         self.assertTrue(self.j.read_job("staging-one").open)
 
+    def test_pruned_closed_run_preserves_release_debt_until_store_returns(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="locally finished")
+        later = datetime.now(timezone.utc) + timedelta(hours=2)
+        self.assertEqual(self.j.prune(retention_s=3600, now=later), ["staging-one"])
+        with mock.patch.object(self.hub, "sha", side_effect=HubError("offline")):
+            jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertEqual([o.claim_ref for o in res.to_release], [ref])
+        self.assertEqual(jr.release_pending(self.hub, HOST, res, journal=self.j),
+                         [(ref, "released")])
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertFalse(self.j.path_for("staging-one").exists())
+
+    def test_pruned_journal_cannot_release_another_hosts_claim(self):
+        ref, res = self.owed(host_on_hub=OTHER_HOST)
+        self.j.exit(job_key="staging-one", outcome="finished")
+        self.j.prune(retention_s=3600,
+                     now=datetime.now(timezone.utc) + timedelta(hours=2))
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIn("left alone", out[0][1])
+        self.assertEqual(self.hub.read(ref)["holder_host"], OTHER_HOST)
+        self.assertFalse(self.j.path_for("staging-one").exists())
+
+    def test_pruned_journal_cannot_release_new_acquisition(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="finished")
+        self.j.prune(retention_s=3600,
+                     now=datetime.now(timezone.utc) + timedelta(hours=2))
+        sha = self.hub.sha(ref)
+        payload = self.hub.read(ref)
+        payload["started_at"] = iso(datetime.now(timezone.utc))
+        self.assertTrue(self.hub.update(ref, payload, expect_sha=sha))
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIn("re-acquired", out[0][1])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertFalse(self.j.path_for("staging-one").exists())
+
     def test_closed_run_still_releases_its_remote_claim_without_another_exit(self):
         ref, res = self.owed()
         self.j.exit(job_key="staging-one", outcome="locally finished")

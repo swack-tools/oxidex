@@ -1053,7 +1053,7 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
                              current.prior_runs > owed.run_index and
                              current.claim_ref == ref and
                              current.started_at is None)
-            if not pending_offer and (current is None or
+            if current is not None and not pending_offer and (
                     current.prior_runs != owed.run_index or
                     current.claim_ref != ref or current.started_at != started_at):
                 done.append((ref, "journal describes a newer run or different "
@@ -1062,7 +1062,9 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             # Local completion does not prove the remote claim was released.
             # Keep the ownership/CAS checks and retry debt, but do not append
             # another exit to this already completed run.
-            if pending_offer or current.closed:
+            if current is None or pending_offer or current.closed:
+                # Retention can remove local evidence before a store outage
+                # ends. The captured token and remote CAS still prove ownership.
                 close_journal = None
         try:
             sha = hub.sha(ref)
