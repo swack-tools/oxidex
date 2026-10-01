@@ -270,6 +270,11 @@ pub(crate) fn process_exif_segments_with_options(
             let tiff_offset = segment.offset + 10; // Segment offset + marker(2) + length(2) + "Exif\0\0"(6)
             let tiff_reader = TiffSubReader::new(reader, tiff_offset);
 
+            // Exif.pm's Sony ILCE exception may use a Model established by an
+            // earlier EXIF segment. Capture it before this IFD0 is read: a
+            // later Model entry in this same IFD0 is not yet known to ExifTool.
+            let known_model = metadata.get_string("IFD0:Model").unwrap_or("").to_string();
+
             // Parse IFD structure
             match parse_ifd(&tiff_reader, ifd_offset, byte_order) {
                 Err(e) => {
@@ -377,6 +382,7 @@ pub(crate) fn process_exif_segments_with_options(
                         byte_order,
                         tiff_offset,
                         true,
+                        &known_model,
                         &mut session,
                         &mut cond_ctx,
                         metadata,
@@ -3319,6 +3325,62 @@ mod print_im_tests {
             Some("Horizontal (normal)")
         );
         assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("cm"));
+    }
+
+    #[test]
+    fn prior_ilce_model_keeps_ifd1_after_bad_first_entry_in_later_exif_segment() {
+        // Native 13.59 accepts IFD1 only after an earlier APP1 established
+        // Model=ILCE-TEST; the same second APP1 alone stops at its bad entry.
+        fn push_app1(jpeg: &mut Vec<u8>, tiff: &[u8]) {
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend_from_slice(tiff);
+            jpeg.extend_from_slice(&[0xff, 0xe1]);
+            jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            jpeg.extend_from_slice(&payload);
+        }
+        let mut first = vec![0u8; 40];
+        first[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        first[8..10].copy_from_slice(&1u16.to_le_bytes());
+        first[10..12].copy_from_slice(&0x0110u16.to_le_bytes());
+        first[12..14].copy_from_slice(&2u16.to_le_bytes());
+        first[14..18].copy_from_slice(&10u32.to_le_bytes());
+        first[18..22].copy_from_slice(&26u32.to_le_bytes());
+        first[26..36].copy_from_slice(b"ILCE-TEST\0");
+
+        let mut second = vec![0u8; 100];
+        second[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        second[8..10].copy_from_slice(&1u16.to_le_bytes());
+        second[10..12].copy_from_slice(&0x0100u16.to_le_bytes());
+        second[12..14].copy_from_slice(&99u16.to_le_bytes());
+        second[14..18].copy_from_slice(&1u32.to_le_bytes());
+        second[22..26].copy_from_slice(&42u32.to_le_bytes());
+        second[42..44].copy_from_slice(&2u16.to_le_bytes());
+        second[44..46].copy_from_slice(&0x0201u16.to_le_bytes());
+        second[46..48].copy_from_slice(&4u16.to_le_bytes());
+        second[48..52].copy_from_slice(&1u32.to_le_bytes());
+        second[52..56].copy_from_slice(&72u32.to_le_bytes());
+        second[56..58].copy_from_slice(&0x0202u16.to_le_bytes());
+        second[58..60].copy_from_slice(&4u16.to_le_bytes());
+        second[60..64].copy_from_slice(&1u32.to_le_bytes());
+        second[64..68].copy_from_slice(&4u32.to_le_bytes());
+
+        for prior_model in [false, true] {
+            let mut jpeg = vec![0xff, 0xd8];
+            if prior_model {
+                push_app1(&mut jpeg, &first);
+            }
+            push_app1(&mut jpeg, &second);
+            jpeg.extend_from_slice(&[0xff, 0xd9]);
+            let reader = TestReader::new(jpeg);
+            let segments = parse_segments(&reader).expect("synthetic EXIF segments");
+            let mut metadata = MetadataMap::new();
+            process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+            assert_eq!(
+                metadata.get_integer("IFD1:ThumbnailOffset"),
+                prior_model.then_some(134),
+                "prior_model={prior_model}"
+            );
+        }
     }
 
     #[test]

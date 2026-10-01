@@ -151,6 +151,10 @@ pub static ENABLED: &[(&str, &str)] = &[
     // which is exactly where ExifTool.pm:6301-6303's count shortening and
     // the old all-or-nothing read can disagree. Corpus carrier: `MP3.mp3`.
     ("ID3", "v1"),
+    // ISO::BootRecord -- only BootSystem is modeled; BootIdentifier is
+    // explicitly omitted for its unmodeled RawConv. Gate B evidence: see
+    // evidence/iso-branch-recovery-20261001 (pinned native fixtures).
+    ("ISO", "BootRecord"),
     // MPF::MPImage -- `src/parsers/jpeg/mpf_parser.rs:591`. The most heavily
     // exercised of the five: 689 corpus files report `MPImage1:*`.
     ("MPF", "MPImage"),

@@ -566,7 +566,10 @@ pub(crate) fn declared_non_apple_makernote_value(
     };
     let plan = read_plan(&located, None)?;
     // Exif.pm:6763-6773 refuses excessive non-string arrays for this row.
-    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+    if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+        plan.count,
+        matches!(plan.kind, Kind::Str | Kind::Undef),
+    ) {
         return None;
     }
     let decoded = decode_plan(&located, plan, order)?;
@@ -837,6 +840,62 @@ fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Optio
         Kind::Undef => Some(DecodedValue::Undefined(bytes.to_vec())),
         Kind::Utf8 => runtime::fix_utf8(bytes).map(DecodedValue::String),
     }
+}
+
+/// Decode a reached classic-TIFF entry's value using the same ProcessExif
+/// format table and ReadValue implementation as the generated IFD engine.
+/// Callers must separately establish that the physical entry was reached;
+/// this only converts its already-located value bytes. It is read-only and
+/// does not widen writer-facing `ExifType` support.
+pub(crate) fn decode_reached_tiff_value(
+    bytes: &[u8],
+    field_type: u16,
+    count: u32,
+    order: ByteOrder,
+) -> Option<DecodedValue> {
+    if !(1..=13).contains(&field_type) && field_type != 129 {
+        return None;
+    }
+    let ty = entry_type(field_type)?;
+    let size = ty.size.checked_mul(usize::try_from(count).ok()?)?;
+    if bytes.len() != size {
+        return None;
+    }
+    let located = Located {
+        value_pos: 0,
+        bytes,
+        ty,
+    };
+    let plan = read_plan(&located, None)?;
+    // Exif.pm:6763-6773 refuses excessive numeric arrays before ReadValue.
+    // Undefined and string byte runs remain eligible at this count.
+    if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+        plan.count,
+        matches!(plan.kind, Kind::Str | Kind::Undef),
+    ) {
+        return None;
+    }
+    // ReadValue returns the strings `inf` or `undef` for a rational with a
+    // zero denominator. The ordinary IFD walker retains the pair until its
+    // output boundary; this entry point hands a decoded scalar to a hash
+    // PrintConv, which must see those ReadValue strings before lookup.
+    fn zero_denominator_text(value: DecodedValue) -> DecodedValue {
+        match value {
+            DecodedValue::UnsignedRational(n, 0) => {
+                DecodedValue::String(runtime::perl_rational64(f64::from(n), 0.0))
+            }
+            DecodedValue::SignedRational(n, 0) => {
+                DecodedValue::String(runtime::perl_rational64(f64::from(n), 0.0))
+            }
+            DecodedValue::Array(values) => {
+                DecodedValue::Array(values.into_iter().map(zero_denominator_text).collect())
+            }
+            other => other,
+        }
+    }
+    Some(zero_denominator_text(round_rationals(decode_plan(
+        &located, plan, order,
+    )?)))
 }
 
 /// Project the bytes selected by `ReadValue` into the stored channel before
@@ -1355,9 +1414,10 @@ fn walk_scoped(
         };
         // Exif.pm:6763-6773: "Ignoring ... with excessive count" (the
         // warning is minor, so the default options take the `next`).
-        if plan.count > 100_000
-            && !matches!(plan.kind, Kind::Str | Kind::Undef)
-            && !(tag.name == "TransferFunction" && plan.count == 196_608)
+        if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+            plan.count,
+            matches!(plan.kind, Kind::Str | Kind::Undef),
+        ) && !(tag.name == "TransferFunction" && plan.count == 196_608)
         {
             if let Some(reads) = decoded.as_deref_mut() {
                 reads.entries[index] = EntryRead::Refused;
@@ -4258,6 +4318,19 @@ mod tests {
         );
         let other = DecodedValue::String("s".to_string());
         assert_eq!(round_rationals(other.clone()), other);
+    }
+
+    #[test]
+    fn reached_value_decoder_respects_process_exif_excessive_count() {
+        let oversized_numeric = vec![0u8; 100_001 * 2];
+        assert!(
+            decode_reached_tiff_value(&oversized_numeric, 3, 100_001, ByteOrder::Little,).is_none()
+        );
+        let oversized_undefined = vec![0u8; 100_001];
+        assert!(
+            decode_reached_tiff_value(&oversized_undefined, 7, 100_001, ByteOrder::Little,)
+                .is_some()
+        );
     }
 
     // -- A hash PrintConv keyed by a fixed-count value (ExifTool.pm:6330, 3616) ---

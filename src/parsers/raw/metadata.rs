@@ -469,6 +469,72 @@ fn record_raw_ifd_row(
     }
 }
 
+/// Keep NEF's legacy lookup key and winner ordering while recording the IFD
+/// that physically supplied each Exif::Main row. The generated table owns the
+/// Priority => 0 facts; the full-resolution directory promotes those rows.
+#[allow(clippy::too_many_arguments)]
+fn record_nef_ifd_row(
+    metadata: &mut MetadataMap,
+    key: String,
+    display: TagValue,
+    tag_id: u16,
+    field_type: u16,
+    count: u32,
+    bytes: &[u8],
+    byte_order: ByteOrder,
+    directory: &str,
+    is_priority_dir: bool,
+) {
+    let table = crate::exiftool_tables::find_ifd_table("Exif", "Main");
+    let low_priority = table
+        .is_some_and(|table| crate::core::exif_dir_engine::tag_priority_is_zero(table, tag_id));
+    let mut occurrence = TagOccurrence::from_insert_shim(&key, display, 0);
+    occurrence.group1 = intern(directory);
+    occurrence.priority = i16::from(!low_priority || is_priority_dir);
+    if table.is_some_and(|table| table.tag(tag_id).is_some()) {
+        occurrence.origin.module = Some("Exif");
+        occurrence.origin.table = Some("Main");
+    }
+
+    // Exif.pm's 0xfe/0xff PrintConv labels the same scalar that its RawConv
+    // returns. Keep that scalar for -n without changing the displayed winner.
+    let subfile_scalar = if count == 1 && matches!(tag_id, 0x00fe | 0x00ff) {
+        match field_type {
+            3 => read_tiff_u16(bytes, byte_order).map(u32::from),
+            4 => read_tiff_u32(bytes, byte_order),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(scalar) = subfile_scalar {
+        occurrence.print = Some(crate::core::exiftool_compat::format_tag_value_rules(
+            &occurrence.lookup_key(),
+            &occurrence.raw,
+        ));
+        occurrence.value = Some(TagValue::new_integer(i64::from(scalar)));
+        occurrence.stored = occurrence.value.clone();
+    }
+    // Exif.pm 0x9216's PrintConv only replaces spaces with dots. The
+    // pre-PrintConv BYTE-array text is the numeric output, e.g. "1 0 0 0".
+    if tag_id == 0x9216
+        && field_type == 1
+        && let Ok(count) = usize::try_from(count)
+        && let Some(components) = bytes.get(..count)
+        && !components.is_empty()
+    {
+        occurrence.print = Some(occurrence.raw.clone());
+        occurrence.value = Some(TagValue::new_string(
+            components
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+    }
+    metadata.record_occurrence(key, occurrence);
+}
+
 /// Whether a directory is a full-resolution image: SubfileType (0xfe) 0 or
 /// OldSubfileType (0xff) 1, the values whose `RawConv` calls
 /// `SetPriorityDir` (Exif.pm 13.59:450-472).
@@ -713,7 +779,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // to turn its IFD1 ThumbnailOffset back into the
                         // absolute file position ExifTool reports.
                         let jpeg_file_offset =
-                            tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e)
+                            tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e, None)
                                 .map(|(offset, _length)| offset)
                                 .unwrap_or(0);
                         // `PanasonicRaw::ProcessJpgFromRaw` reads the preview
@@ -724,9 +790,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // `-WBRedLevel` is the outer IFD0's 570, not the
                         // preview MakerNote's 2283.
                         let mut preview = MetadataMap::new();
-                        if let Err(error) =
-                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut preview)
-                        {
+                        let known_model = metadata
+                            .get_string("IFD0:Model")
+                            .or_else(|| metadata.get_string("EXIF:Model"))
+                            .unwrap_or("")
+                            .to_string();
+                        if let Err(error) = extract_rw2_embedded_exif_tags(
+                            bytes,
+                            jpeg_file_offset,
+                            &known_model,
+                            &mut preview,
+                        ) {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
                         metadata.merge_as_subdocument(preview, crate::core::Instance(1));
@@ -1106,6 +1180,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             tag_name,
                             tag_value,
                         );
+                    } else if format == RawFormat::NikonNEF {
+                        // `ifd_name` retains the legacy lookup fallback for
+                        // IFD2+, but the occurrence records the actual chain.
+                        let physical_ifd_name = format!("IFD{ifd_index}");
+                        record_nef_ifd_row(
+                            &mut metadata,
+                            tag_name,
+                            tag_value,
+                            *tag_id,
+                            *field_type,
+                            *value_count,
+                            bytes,
+                            byte_order,
+                            &physical_ifd_name,
+                            chain_is_priority_dir,
+                        );
                     } else {
                         record_raw_ifd_row(
                             &mut metadata,
@@ -1425,6 +1515,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         eprintln!("Warning: Found SubIFD{} which is unusual", sub_index);
                     }
                     let sub_ifd_name = "SubIFD0";
+                    let nef_directory = if sub_index == 0 {
+                        "SubIFD".to_string()
+                    } else {
+                        format!("SubIFD{sub_index}")
+                    };
 
                     if let Ok(sub_tags) = parse_ifd(&reader, *sub_offset, byte_order) {
                         let sub_is_priority_dir = !priority_dir_set
@@ -1439,6 +1534,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 &sub_tags,
                                 byte_order,
                                 &mut metadata,
+                                (format == RawFormat::NikonNEF).then_some(nef_directory.as_str()),
                             );
                         }
 
@@ -1451,10 +1547,24 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                 && let Some(dim) =
                                     format_cfa_repeat_pattern_dim(raw_bytes.as_ref(), byte_order)
                             {
-                                metadata.insert(
-                                    "EXIF:CFARepeatPatternDim".to_string(),
-                                    TagValue::new_string(dim),
-                                );
+                                let key = "EXIF:CFARepeatPatternDim".to_string();
+                                let value = TagValue::new_string(dim);
+                                if format == RawFormat::NikonNEF {
+                                    record_nef_ifd_row(
+                                        &mut metadata,
+                                        key,
+                                        value,
+                                        tag_id,
+                                        field_type,
+                                        value_count,
+                                        raw_bytes.as_ref(),
+                                        byte_order,
+                                        &nef_directory,
+                                        sub_is_priority_dir,
+                                    );
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                                 continue;
                             }
 
@@ -1468,7 +1578,22 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     raw_bytes.as_ref(),
                                     byte_order,
                                 ) {
-                                    metadata.insert(tag_name, tag_value);
+                                    if format == RawFormat::NikonNEF {
+                                        record_nef_ifd_row(
+                                            &mut metadata,
+                                            tag_name,
+                                            tag_value,
+                                            tag_id,
+                                            field_type,
+                                            value_count,
+                                            raw_bytes.as_ref(),
+                                            byte_order,
+                                            &nef_directory,
+                                            sub_is_priority_dir,
+                                        );
+                                    } else {
+                                        metadata.insert(tag_name, tag_value);
+                                    }
                                     continue;
                                 }
                                 // Tags not handled specially fall through to the
@@ -1504,19 +1629,33 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             // missing EXIF:CFAPattern2 plus a spurious extra
                             // tag in every comparison report.
                             if tag_id == 0x828E {
-                                metadata.insert(
-                                    format!(
-                                        "EXIF:{}",
-                                        lookup_tag_name(tag_id, sub_ifd_name)
-                                            .rsplit(':')
-                                            .next()
-                                            .unwrap_or("CFAPattern2")
-                                    ),
-                                    TagValue::new_string(format_cfa_pattern2(
-                                        raw_bytes.as_ref(),
-                                        value_count,
-                                    )),
+                                let key = format!(
+                                    "EXIF:{}",
+                                    lookup_tag_name(tag_id, sub_ifd_name)
+                                        .rsplit(':')
+                                        .next()
+                                        .unwrap_or("CFAPattern2")
                                 );
+                                let value = TagValue::new_string(format_cfa_pattern2(
+                                    raw_bytes.as_ref(),
+                                    value_count,
+                                ));
+                                if format == RawFormat::NikonNEF {
+                                    record_nef_ifd_row(
+                                        &mut metadata,
+                                        key,
+                                        value,
+                                        tag_id,
+                                        field_type,
+                                        value_count,
+                                        raw_bytes.as_ref(),
+                                        byte_order,
+                                        &nef_directory,
+                                        sub_is_priority_dir,
+                                    );
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                                 continue;
                             }
 
@@ -1551,13 +1690,28 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     byte_order,
                                 )
                             };
-                            record_raw_ifd_row(
-                                &mut metadata,
-                                tag_name,
-                                tag_value,
-                                tag_id,
-                                !sub_is_priority_dir,
-                            );
+                            if format == RawFormat::NikonNEF {
+                                record_nef_ifd_row(
+                                    &mut metadata,
+                                    tag_name,
+                                    tag_value,
+                                    tag_id,
+                                    field_type,
+                                    value_count,
+                                    bytes,
+                                    byte_order,
+                                    &nef_directory,
+                                    sub_is_priority_dir,
+                                );
+                            } else {
+                                record_raw_ifd_row(
+                                    &mut metadata,
+                                    tag_name,
+                                    tag_value,
+                                    tag_id,
+                                    !sub_is_priority_dir,
+                                );
+                            }
                         }
                     }
                 }
@@ -1649,6 +1803,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 fn extract_rw2_embedded_exif_tags(
     jpeg: &[u8],
     jpeg_file_offset: usize,
+    known_model: &str,
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     let Some((tiff_start_in_jpeg, tiff_data)) = find_jpeg_exif_tiff(jpeg)? else {
@@ -1657,29 +1812,37 @@ fn extract_rw2_embedded_exif_tags(
     // Where the preview's TIFF header sits in the RW2 itself. ThumbnailOffset
     // is stored relative to that header but reported by ExifTool as a
     // position in the physical file.
-    let tiff_base_in_file = jpeg_file_offset.saturating_add(tiff_start_in_jpeg);
+    let tiff_base_in_file = jpeg_file_offset
+        .checked_add(tiff_start_in_jpeg)
+        .and_then(|offset| i64::try_from(offset).ok())
+        .ok_or_else(|| ExifToolError::parse_error("RW2 preview TIFF file offset overflow"))?;
 
     let byte_order = detect_byte_order(tiff_data)?;
     let first_ifd_bytes = tiff_data
         .get(4..8)
         .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in RW2 preview EXIF"))?;
     let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
+    // ProcessExif reads ordinary preview IFD values from this APP1 payload.
+    // The enclosing JPEG may hold other bytes, but source-derived mutations
+    // of IFD0 Software and ExifIFD A411 outside APP1 are both bad offsets.
     let reader = SliceReader::new(tiff_data);
-    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
-
-    let exif_ifd_offset =
-        ifd0_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            });
-    let Some(exif_ifd_offset) = exif_ifd_offset else {
-        return Ok(());
-    };
+    let directory_limit = tiff_data.len() as u64;
+    let ifd0_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        &reader,
+        first_ifd_offset,
+        byte_order,
+        &[],
+        known_model,
+        directory_limit,
+    );
+    let ifd0_tags = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        &reader,
+        first_ifd_offset,
+        byte_order,
+        directory_limit,
+        &[0xC4A5, 0x011A, 0x011B, 0x0128, 0x0131, 0x0132, 0x0213],
+        &ifd0_walk.eligible_indices,
+    )?;
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         let bytes = raw_bytes.as_ref();
@@ -1774,20 +1937,133 @@ fn extract_rw2_embedded_exif_tags(
         metadata.insert(tag_name, tag_value);
     }
 
-    let exif_tags = parse_ifd(&reader, exif_ifd_offset, byte_order)?;
+    // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
+    // Its 0x0201/0x0202 values are stored relative to this embedded TIFF
+    // header; ExifTool reports ThumbnailOffset as a position in the physical
+    // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
+    // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
+    // The shared IFD1 resolver reads the physical entry count (decoded
+    // `ifd0_tags` may omit malformed entries) and refuses pointers back to
+    // IFD0 or an already visited Exif/GPS/Interop directory. Otherwise this
+    // preview path could relabel a previous directory as thumbnail metadata.
+    let thumbnail_ifd_offset = crate::core::tiff_helpers::legal_ifd1_offset_with_directory_limit(
+        &reader,
+        first_ifd_offset,
+        ifd0_tags.len(),
+        byte_order,
+        known_model,
+        directory_limit,
+    );
+
+    if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
+        && thumbnail_ifd_offset != 0
+        && let thumbnail_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+            &reader,
+            thumbnail_ifd_offset,
+            byte_order,
+            &[],
+            &ifd0_walk.final_model,
+            directory_limit,
+        )
+        && let Ok(thumbnail_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+            &reader,
+            thumbnail_ifd_offset,
+            byte_order,
+            directory_limit,
+            &[0x0201, 0x0202],
+            &thumbnail_walk.eligible_indices,
+        )
+    {
+        let mut thumbnail_offset = None;
+        let mut thumbnail_length = None;
+        for (tag_id, field_type, value_count, raw_bytes) in thumbnail_tags {
+            if field_type != 4 || value_count != 1 {
+                continue;
+            }
+            match tag_id {
+                // Exif.pm 0x0201: JPEGInterchangeFormat.
+                0x0201 => {
+                    thumbnail_offset = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                // Exif.pm 0x0202: JPEGInterchangeFormatLength.
+                0x0202 => {
+                    thumbnail_length = read_tiff_u32(raw_bytes.as_ref(), byte_order);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(offset) = thumbnail_offset
+            && let Some(absolute) = i64::from(offset).checked_add(tiff_base_in_file)
+        {
+            metadata.insert(
+                "IFD1:ThumbnailOffset".to_string(),
+                TagValue::new_integer(absolute),
+            );
+        }
+        if let Some(length) = thumbnail_length {
+            metadata.insert(
+                "IFD1:ThumbnailLength".to_string(),
+                TagValue::new_integer(i64::from(length)),
+            );
+        }
+        if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
+            && let (Ok(offset), Ok(length)) = (usize::try_from(offset), usize::try_from(length))
+            && let Some(end) = offset.checked_add(length)
+            && let Some(image) = tiff_data.get(offset..end)
+        {
+            metadata.insert(
+                "IFD1:ThumbnailImage".to_string(),
+                TagValue::Binary(image.to_vec()),
+            );
+        }
+    }
+
+    let Some((exif_ifd_offset, preview_model)) =
+        crate::core::tiff_helpers::first_unvisited_exif_ifd(
+            &reader,
+            first_ifd_offset,
+            byte_order,
+            known_model,
+            directory_limit,
+        )
+    else {
+        return Ok(());
+    };
+
+    // A complete embedded ExifIFD can end without a next-IFD footer. A
+    // malformed optional ExifIFD must not discard IFD0 or IFD1 values.
+    let exif_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        &reader,
+        exif_ifd_offset,
+        byte_order,
+        &[0xA005, 0xA411, 0xA412],
+        &preview_model,
+        directory_limit,
+    );
+    let Ok(exif_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        &reader,
+        exif_ifd_offset,
+        byte_order,
+        directory_limit,
+        &[
+            0x9101, 0x9102, 0x9208, 0xA403, 0xA405, 0xA407, 0xA000, 0xA001, 0xA002, 0xA003, 0xA302,
+            0xA401, 0xA402, 0xA404, 0xA408, 0xA409, 0xA217, 0xA301, 0xA406, 0xA40A,
+        ],
+        &exif_walk.eligible_indices,
+    ) else {
+        return Ok(());
+    };
 
     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
         let (tag_id, field_type, value_count) = (*tag_id, *field_type, *value_count);
+        // A411/A412 use the physical reached-entry decoder below, including
+        // ExifTool's read support for TIFF type 13 that parse_ifd omits.
+        if matches!(tag_id, 0xA411 | 0xA412) {
+            continue;
+        }
         // Filter to the exact set of EXIF tags that ExifTool extracts from
         // the RW2 JpgFromRaw preview EXIF IFD.
-        //
-        // NOTE (2026-07-27): 0xA411/0xA412/0xA413 were previously listed here
-        // as HighISOMultiplierRed/Green/Blue. No such EXIF tags exist -- those
-        // ids appear nowhere in ExifTool 13.55 (`grep -n '0xa411' *.pm` over
-        // .../Image/ExifTool/ returns nothing). The real HighISOMultiplier
-        // tags are PanasonicRaw.pm IFD0 0x18/0x19/0x1a and are handled on the
-        // outer IFD0 path. The invented ids are dropped so they cannot emit a
-        // hex-named oxidex-only tag if some file happens to carry them.
         if !matches!(
             tag_id,
             0x9101 // ComponentsConfiguration
@@ -1842,6 +2118,82 @@ fn extract_rw2_embedded_exif_tags(
         metadata.insert(tag_name, tag_value);
     }
 
+    // Exif.pm:3006-3014 supplies names and PrintConv for these tags. Its
+    // Writable int16u describes serialization, while ProcessExif reads all
+    // seven integral formats, including IFD/type 13 (Exif.pm:82-132, 6782).
+    // Exif.pm:6475-6477 skips a bad first entry for Sony ILCE only when
+    // Model was known when this ExifIFD was entered. The pointer walk captured
+    // the Model at ExifOffset, so a later IFD0 Model cannot activate it.
+    for entry in exif_walk
+        .requested_entries
+        .iter()
+        .filter(|entry| matches!(entry.tag_id, 0xA411 | 0xA412))
+    {
+        let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
+            .and_then(|table| table.tag(entry.tag_id))
+            .filter(|row| {
+                row.writable == Some("int16u")
+                    && row.omitted == crate::exiftool_tables::Omitted::NONE
+                    && row.condition.is_none()
+                    && row.raw_conv.is_none()
+                    && row.value_conv.is_none()
+                    && row.subdir.is_none()
+                    && matches!(
+                        row.print_conv,
+                        crate::exiftool_tables::PrintConv::IntEnum(_)
+                    )
+            })
+        else {
+            continue;
+        };
+        let Some((value_pos, value_len)) = entry.raw_value else {
+            continue;
+        };
+        let Ok(raw) = reader.read(value_pos, value_len) else {
+            continue;
+        };
+        let Some(decoded) = crate::exiftool_tables::ifd_engine::decode_reached_tiff_value(
+            raw,
+            entry.field_type,
+            entry.count,
+            byte_order.to_io_byte_order(),
+        ) else {
+            continue;
+        };
+        // A Perl hash keyed by integer 1 also matches the exact string "1".
+        // NUL bytes inside undef/utf8 values survive the Perl hash lookup.
+        // Keep the full scalar through PrintConv, then apply the CLI output
+        // projection so bytes after an embedded NUL are not discarded.
+        let decoded = match decoded {
+            crate::exiftool_tables::DecodedValue::StringBytes(bytes) => {
+                let canonical = std::str::from_utf8(&bytes).ok().and_then(|text| {
+                    text.parse::<i64>()
+                        .ok()
+                        .filter(|value| value.to_string() == text)
+                });
+                match canonical {
+                    Some(value) => crate::exiftool_tables::DecodedValue::Integer(value),
+                    None => crate::exiftool_tables::DecodedValue::StringBytes(bytes),
+                }
+            }
+            crate::exiftool_tables::DecodedValue::String(value) => match value.parse::<i64>() {
+                Ok(number) if number.to_string() == value => {
+                    crate::exiftool_tables::DecodedValue::Integer(number)
+                }
+                _ => crate::exiftool_tables::DecodedValue::String(value),
+            },
+            other => other,
+        };
+        let Some(display) = crate::exiftool_tables::runtime::render(row.print_conv, &decoded)
+        else {
+            continue;
+        };
+        metadata.insert(
+            format!("ExifIFD:{}", row.name),
+            TagValue::new_string(display.replace('\0', "")),
+        );
+    }
+
     // The Panasonic MakerNote lives in the preview's ExifIFD (0x927C) --
     // ExifTool reports 54 [Panasonic] tags for Panasonic.rw2 that oxidex read
     // straight past, because this walk only ever looked at a fixed list of
@@ -1852,9 +2204,13 @@ fn extract_rw2_embedded_exif_tags(
     // dispatcher (see rebuild_relocated_makernote). MakerNotes.pm gives
     // MakerNotePanasonic `Start => '$valuePtr + 12'`, i.e. a fixed 12-byte
     // "Panasonic\0\0\0" header ahead of the IFD, which is preserved verbatim.
-    if let Some((makernote_offset, makernote_len)) =
-        tiff_external_entry_extent(tiff_data, exif_ifd_offset, byte_order, 0x927C)
-        && let Some(makernote) = tiff_data.get(makernote_offset..makernote_offset + makernote_len)
+    if let Some((makernote_offset, makernote_len)) = tiff_external_entry_extent(
+        tiff_data,
+        exif_ifd_offset,
+        byte_order,
+        0x927C,
+        Some(&exif_walk.eligible_indices),
+    ) && let Some(makernote) = tiff_data.get(makernote_offset..makernote_offset + makernote_len)
         && makernote.starts_with(b"Panasonic\0\0\0")
         && let Ok(base) = u32::try_from(makernote_offset)
         && let Some(rebuilt) = rebuild_relocated_makernote(
@@ -1891,86 +2247,26 @@ fn extract_rw2_embedded_exif_tags(
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
     // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    if let Some(interop_offset) =
-        exif_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0xA005 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            })
+    if let Some(interop_entry) = exif_walk
+        .requested_entries
+        .iter()
+        .find(|entry| entry.tag_id == 0xA005 && entry.field_type == 4 && !entry.values.is_empty())
+        && let Ok(interop_offset) = u64::try_from(interop_entry.values[0])
     {
-        extract_interop_index(&reader, interop_offset, byte_order, metadata);
-    }
-
-    // The next-IFD pointer after preview IFD0 leads to the thumbnail IFD.
-    // Its 0x0201/0x0202 values are stored relative to this embedded TIFF
-    // header; ExifTool reports ThumbnailOffset as a position in the physical
-    // file (11976 for Panasonic.rw2 = stored 10428 plus the preview TIFF's
-    // 1548-byte offset into the RW2), so `tiff_base_in_file` is added back.
-    let ifd0_entry_count = u64::try_from(ifd0_tags.len()).ok();
-    let next_ifd_position = ifd0_entry_count.and_then(|entry_count| {
-        first_ifd_offset
-            .checked_add(2)?
-            .checked_add(entry_count.checked_mul(12)?)
-    });
-    let thumbnail_ifd_offset = next_ifd_position
-        .and_then(|offset| reader.read(offset, 4).ok())
-        .map(|bytes| u64::from(read_u32(bytes, byte_order)));
-
-    if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
-        && thumbnail_ifd_offset != 0
-        && let Ok(thumbnail_tags) = parse_ifd(&reader, thumbnail_ifd_offset, byte_order)
-    {
-        let mut thumbnail_offset = None;
-        let mut thumbnail_length = None;
-        for (tag_id, field_type, value_count, raw_bytes) in thumbnail_tags {
-            if field_type != 4 || value_count != 1 {
-                continue;
-            }
-            match tag_id {
-                // Exif.pm 0x0201: JPEGInterchangeFormat.
-                0x0201 => {
-                    thumbnail_offset = read_tiff_u32(raw_bytes.as_ref(), byte_order);
-                }
-                // Exif.pm 0x0202: JPEGInterchangeFormatLength.
-                0x0202 => {
-                    thumbnail_length = read_tiff_u32(raw_bytes.as_ref(), byte_order);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(offset) = thumbnail_offset {
-            metadata.insert(
-                "EXIF:ThumbnailOffset".to_string(),
-                TagValue::new_integer(i64::from(offset) + tiff_base_in_file as i64),
-            );
-        }
-        if let Some(length) = thumbnail_length {
-            metadata.insert(
-                "EXIF:ThumbnailLength".to_string(),
-                TagValue::new_integer(i64::from(length)),
-            );
-        }
-        if let (Some(offset), Some(length)) = (thumbnail_offset, thumbnail_length)
-            && let (Ok(offset), Ok(length)) = (usize::try_from(offset), usize::try_from(length))
-            && let Some(end) = offset.checked_add(length)
-            && let Some(image) = tiff_data.get(offset..end)
-        {
-            metadata.insert(
-                "EXIF:ThumbnailImage".to_string(),
-                TagValue::Binary(image.to_vec()),
-            );
-        }
+        extract_interop_index(
+            &reader,
+            interop_offset,
+            byte_order,
+            &interop_entry.known_model,
+            directory_limit,
+            metadata,
+        );
     }
 
     Ok(())
 }
 
-/// Emit InteropIFD tag 0x0001 (InteropIndex) with ExifTool's PrintConv.
+/// Emit selected InteropIFD tags with ExifTool's display values.
 ///
 /// Exif.pm, Image::ExifTool::Exif::Main InteropIFD table, verbatim:
 /// ```text
@@ -1990,9 +2286,26 @@ fn extract_interop_index(
     reader: &SliceReader<'_>,
     interop_offset: u64,
     byte_order: ByteOrder,
+    known_model: &str,
+    directory_limit: u64,
     metadata: &mut MetadataMap,
 ) {
-    let Ok(interop_tags) = parse_ifd(reader, interop_offset, byte_order) else {
+    let walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        reader,
+        interop_offset,
+        byte_order,
+        &[],
+        known_model,
+        directory_limit,
+    );
+    let Ok(interop_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        reader,
+        interop_offset,
+        byte_order,
+        directory_limit,
+        &[0x0001, 0x0002],
+        &walk.eligible_indices,
+    ) else {
         eprintln!("Warning: Failed to parse Interoperability IFD");
         return;
     };
@@ -2015,14 +2328,18 @@ fn extract_interop_index(
                 );
             }
             // Exif.pm InteropIFD 0x0002: InteropVersion, UNDEFINED[4].
-            // ExifTool reports this preview-derived value in the EXIF group.
+            // ExifTool reports this preview-derived value in InteropIFD.
             0x0002 if *field_type == 7 && *value_count == 4 => {
                 let Some(version) = raw_bytes.get(..4) else {
                     continue;
                 };
                 metadata.insert(
-                    lookup_tag_name(*tag_id, "EXIF"),
-                    TagValue::new_string(String::from_utf8_lossy(version).into_owned()),
+                    lookup_tag_name(*tag_id, "InteropIFD"),
+                    TagValue::new_string(
+                        String::from_utf8_lossy(version)
+                            .trim_end_matches('\0')
+                            .to_string(),
+                    ),
                 );
             }
             _ => {}
@@ -3377,12 +3694,14 @@ const PANASONIC_DEREFERENCED_TAGS: &[u16] = &[
 /// relocating a MakerNote needs exactly that: the offset IS the base its own
 /// internal offsets are stated against. Returns `None` for a value small
 /// enough to be stored inline in the entry, which by definition has no
-/// offset.
+/// offset. An embedded preview supplies `eligible_indices` from its shared
+/// ProcessExif walk so a raw extent lookup cannot revive an aborted entry.
 fn tiff_external_entry_extent(
     tiff: &[u8],
     ifd_offset: u64,
     byte_order: ByteOrder,
     wanted_tag: u16,
+    eligible_indices: Option<&[usize]>,
 ) -> Option<(usize, usize)> {
     let ifd_offset = usize::try_from(ifd_offset).ok()?;
     let entry_count = usize::from(read_tiff_u16(
@@ -3390,6 +3709,9 @@ fn tiff_external_entry_extent(
         byte_order,
     )?);
     for index in 0..entry_count {
+        if eligible_indices.is_some_and(|indices| indices.binary_search(&index).is_err()) {
+            continue;
+        }
         let start = ifd_offset.checked_add(2 + index * 12)?;
         let entry = tiff.get(start..start.checked_add(12)?)?;
         if read_tiff_u16(&entry[..2], byte_order)? != wanted_tag {
@@ -4636,6 +4958,50 @@ mod dng_thumbnail_tiff_tests {
             .collect()
     }
 
+    #[test]
+    fn nef_retains_physical_ifd_occurrences_and_full_image_winner() {
+        for big_endian in [false, true] {
+            let data = synthetic_dng(
+                &[
+                    dimensions(Some((0xFE, 1)), 160, 120),
+                    dimensions(Some((0xFE, 0)), 4000, 3000),
+                    dimensions(Some((0xFE, 1)), 640, 480),
+                ],
+                big_endian,
+            );
+            let mut metadata = parse_raw_metadata(&data, RawFormat::NikonNEF).unwrap();
+            let widths: Vec<_> = metadata
+                .occurrences()
+                .filter(|o| o.name.as_ref() == "ImageWidth")
+                .map(|o| {
+                    (
+                        crate::cli::tag_resolution::family0_label(o).to_string(),
+                        o.group1.to_string(),
+                        o.raw.as_integer(),
+                        o.priority,
+                    )
+                })
+                .collect();
+            assert_eq!(
+                widths,
+                vec![
+                    ("EXIF".into(), "IFD0".into(), Some(160), 0),
+                    ("EXIF".into(), "SubIFD".into(), Some(4000), 1),
+                    ("EXIF".into(), "SubIFD1".into(), Some(640), 0),
+                ]
+            );
+            let winner =
+                crate::cli::tag_resolution::resolve_requested_tag(&metadata, "ImageWidth").unwrap();
+            assert_eq!(winner.group1.as_ref(), "SubIFD");
+            assert_eq!(winner.raw.as_integer(), Some(4000));
+            crate::composite::apply(&mut metadata);
+            assert_eq!(
+                metadata.get_string("Composite:ImageSize"),
+                Some("4000x3000")
+            );
+        }
+    }
+
     fn assert_dng_size(data: &[u8], expected: &str) -> MetadataMap {
         let mut metadata = parse_raw_metadata(data, RawFormat::AdobeDNG).expect("synthetic DNG");
         crate::composite::apply(&mut metadata);
@@ -5239,7 +5605,7 @@ mod panasonic_rw2_tests {
         jpeg.extend_from_slice(&[0xff, 0xd9]);
 
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, 1000, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 1000, "", &mut metadata)
             .expect("synthetic preview EXIF should parse");
 
         assert_eq!(
@@ -5263,15 +5629,15 @@ mod panasonic_rw2_tests {
             Some(&TagValue::new_string("Normal".to_string()))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailOffset"),
+            metadata.get("IFD1:ThumbnailOffset"),
             Some(&TagValue::new_integer(1150))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailLength"),
+            metadata.get("IFD1:ThumbnailLength"),
             Some(&TagValue::new_integer(4))
         );
         assert_eq!(
-            metadata.get("EXIF:ThumbnailImage"),
+            metadata.get("IFD1:ThumbnailImage"),
             Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
         );
         assert!(!metadata.contains_key("EXIF:0x0201"));
@@ -9759,6 +10125,7 @@ fn extract_nef_subifd_jpg_from_raw(
     sub_tags: &[(u16, u16, u32, impl AsRef<[u8]>)],
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
+    directory: Option<&str>,
 ) {
     let mut offset = None;
     let mut length = None;
@@ -9785,10 +10152,19 @@ fn extract_nef_subifd_jpg_from_raw(
     let end = start.saturating_add(length as usize);
     match data.get(start..end) {
         Some(bytes) => {
-            metadata.insert("EXIF:JpgFromRaw", TagValue::new_binary(bytes.to_vec()));
+            let image = TagValue::new_binary(bytes.to_vec());
+            if let Some(directory) = directory {
+                metadata.insert_with_group1("EXIF:JpgFromRaw", image, directory);
+            } else {
+                metadata.insert("EXIF:JpgFromRaw", image);
+            }
         }
         None => {
-            metadata.insert_unavailable_binary("EXIF:JpgFromRaw", length as usize, "");
+            metadata.insert_unavailable_binary(
+                "EXIF:JpgFromRaw",
+                length as usize,
+                directory.unwrap_or(""),
+            );
         }
     }
 }
@@ -11177,9 +11553,129 @@ mod rw2_embedded_exif_printconv_tests {
     fn extract(entries: &[Entry<'_>], big_endian: bool) -> MetadataMap {
         let jpeg = build_preview_jpeg(entries, big_endian);
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 0, "", &mut metadata)
             .expect("synthetic RW2 preview EXIF must parse");
         metadata
+    }
+
+    /// IFD0, PrintIM and IFD1 remain readable with no ExifIFD, a valid
+    /// ExifIFD, or a pointer outside the APP1 TIFF. The real RW2 mutations
+    /// were checked against pinned 13.59 on 2026-09-30.
+    fn preview_with_independent_ifds(
+        big_endian: bool,
+        exif_pointer: Option<u32>,
+    ) -> (Vec<u8>, u32) {
+        let count = if exif_pointer.is_some() { 3u16 } else { 2u16 };
+        let ifd1 = 8 + 2 + 12 * u32::from(count) + 4;
+        let date = ifd1 + 2 + 2 * 12 + 4;
+        let print_im = date + 20;
+        let thumbnail = print_im + 16;
+        let exif_ifd = thumbnail + 4;
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(if big_endian { b"MM\0*" } else { b"II*\0" });
+        tiff.extend_from_slice(&u32b(8, big_endian));
+        tiff.extend_from_slice(&u16b(count, big_endian));
+        let entry = |tiff: &mut Vec<u8>, id: u16, field_type: u16, value_count: u32, value: u32| {
+            tiff.extend_from_slice(&u16b(id, big_endian));
+            tiff.extend_from_slice(&u16b(field_type, big_endian));
+            tiff.extend_from_slice(&u32b(value_count, big_endian));
+            tiff.extend_from_slice(&u32b(value, big_endian));
+        };
+        entry(&mut tiff, 0x0132, 2, 20, date);
+        if let Some(pointer) = exif_pointer {
+            entry(
+                &mut tiff,
+                0x8769,
+                4,
+                1,
+                if pointer == 0 { exif_ifd } else { pointer },
+            );
+        }
+        entry(&mut tiff, 0xC4A5, 7, 16, print_im);
+        tiff.extend_from_slice(&u32b(ifd1, big_endian));
+        assert_eq!(tiff.len(), ifd1 as usize);
+        tiff.extend_from_slice(&u16b(2, big_endian));
+        entry(&mut tiff, 0x0201, 4, 1, thumbnail);
+        entry(&mut tiff, 0x0202, 4, 1, 4);
+        tiff.extend_from_slice(&u32b(0, big_endian));
+        assert_eq!(tiff.len(), date as usize);
+        tiff.extend_from_slice(b"2008:08:06 15:21:56\0");
+        tiff.extend_from_slice(b"PrintIM\0");
+        tiff.extend_from_slice(b"0250\0\0");
+        tiff.extend_from_slice(&u16b(0, big_endian));
+        tiff.extend_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+        assert_eq!(tiff.len(), exif_ifd as usize);
+        if exif_pointer == Some(0) {
+            tiff.extend_from_slice(&u16b(0, big_endian));
+            tiff.extend_from_slice(&u32b(0, big_endian));
+        }
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend_from_slice(&u16::try_from(8 + tiff.len()).unwrap().to_be_bytes());
+        jpeg.extend_from_slice(b"Exif\0\0");
+        jpeg.extend_from_slice(&tiff);
+        (jpeg, thumbnail)
+    }
+
+    #[test]
+    fn rw2_preview_ifd0_print_im_and_ifd1_do_not_require_exif_ifd() {
+        for big_endian in [false, true] {
+            for pointer in [None, Some(0), Some(u32::MAX)] {
+                let (jpeg, thumbnail) = preview_with_independent_ifds(big_endian, pointer);
+                let mut metadata = MetadataMap::new();
+                extract_rw2_embedded_exif_tags(&jpeg, 1000, "", &mut metadata).unwrap();
+                assert_eq!(
+                    metadata.get_string("IFD0:ModifyDate"),
+                    Some("2008:08:06 15:21:56"),
+                    "big_endian={big_endian}, pointer={pointer:?}"
+                );
+                assert_eq!(metadata.get_string(PRINT_IM_VERSION_TAG), Some("0250"));
+                assert_eq!(
+                    metadata.get("IFD1:ThumbnailOffset"),
+                    Some(&TagValue::new_integer(1012 + i64::from(thumbnail)))
+                );
+                assert_eq!(metadata.get_integer("IFD1:ThumbnailLength"), Some(4));
+                assert_eq!(
+                    metadata.get("IFD1:ThumbnailImage"),
+                    Some(&TagValue::new_binary(vec![0xff, 0xd8, 0xff, 0xd9]))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rw2_preview_a411_a412_use_generated_exif_main_print_conv() {
+        let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        for (id, name) in [(0xA411, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
+            let row = table.tag(id).unwrap();
+            assert_eq!(row.name, name);
+            assert_eq!(row.writable, Some("int16u"));
+            assert_eq!(row.omitted, crate::exiftool_tables::Omitted::NONE);
+            assert!(row.condition.is_none());
+            assert!(row.raw_conv.is_none());
+            assert!(row.value_conv.is_none());
+            assert!(row.subdir.is_none());
+            let crate::exiftool_tables::PrintConv::IntEnum(values) = row.print_conv else {
+                panic!("{name} must use the generated integer PrintConv");
+            };
+            assert_eq!(values, &[(0, "No"), (1, "Yes")]);
+            for big_endian in [false, true] {
+                for (raw, expected) in [(0, "No"), (1, "Yes"), (2, "Unknown (2)")] {
+                    let payload = short(raw, big_endian);
+                    let metadata = extract(&[(id, 3, 1, &payload)], big_endian);
+                    assert_eq!(
+                        metadata.get_string(&format!("ExifIFD:{name}")),
+                        Some(expected)
+                    );
+                }
+                let mut payload = short(1, big_endian);
+                payload.extend_from_slice(&short(0, big_endian));
+                assert_eq!(
+                    extract(&[(id, 3, 2, &payload)], big_endian)
+                        .get_string(&format!("ExifIFD:{name}")),
+                    Some("Unknown (1 0)")
+                );
+            }
+        }
     }
 
     fn short(value: u16, big_endian: bool) -> Vec<u8> {

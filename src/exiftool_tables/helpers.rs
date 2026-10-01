@@ -1681,7 +1681,7 @@ fn nul_space_run_to_dollar(s: &[u8]) -> bool {
 
 /// `$str =~ s/ +$//` (Perl's `$`: a run of spaces at the end, or just
 /// before a final newline, which stays).
-fn trim_spaces_before_dollar(s: &[u8]) -> Vec<u8> {
+pub(crate) fn trim_spaces_before_dollar(s: &[u8]) -> Vec<u8> {
     let (body, nl) = match s.strip_suffix(b"\n") {
         Some(body) => (body, true),
         None => (s, false),
