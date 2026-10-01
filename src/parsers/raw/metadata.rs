@@ -1000,12 +1000,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     "IFD1:ThumbnailLength".to_string(),
                                     TagValue::new_integer(value as i64),
                                 );
-                                metadata.insert(
-                                    "EXIF:ThumbnailImage".to_string(),
-                                    TagValue::new_string(format!(
-                                        "(Binary data {} bytes, use -b option to extract)",
-                                        value
-                                    )),
+                                metadata.insert_unavailable_binary(
+                                    "EXIF:ThumbnailImage",
+                                    value as usize,
+                                    "",
                                 );
                                 continue;
                             }
@@ -2237,7 +2235,11 @@ fn extract_rw2_embedded_exif_tags(
                 for (tag_name, tag_value) in
                     crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(tags)
                 {
-                    metadata.insert(tag_name, TagValue::new_string(tag_value));
+                    crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+                        metadata,
+                        tag_name,
+                        TagValue::new_string(tag_value),
+                    );
                 }
             }
             Err(error) => {
@@ -6704,7 +6706,11 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
                     } else {
                         for (tag_name, tag_value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(makernote_tags) {
                             if attach_canon_value(&mut metadata, &tag_name, &tag_value, &mut forms, false) { continue; }
-                            metadata.insert(tag_name, TagValue::new_string(tag_value));
+                            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+                                &mut metadata,
+                                tag_name,
+                                TagValue::new_string(tag_value),
+                            );
                         }
                     }
                 }
@@ -6789,16 +6795,39 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
         && let Some(image) = payload.get(PREVIEW_IMAGE_DATA_OFFSET..)
         && !image.is_empty()
     {
-        metadata.insert(
-            "QuickTime:PreviewImage".to_string(),
-            TagValue::new_string(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                image.len()
-            )),
-        );
+        // QuickTime.pm's RawConv calls ExifTool::ValidateImage. A default
+        // scan still displays an invalid preview's length, but an explicit
+        // extraction must not hand its non-JPEG bytes out as PreviewImage.
+        if let Some(validated) = validate_cr3_preview_image(image) {
+            metadata.insert_available_binary_with_display_and_group1(
+                "QuickTime:PreviewImage",
+                validated,
+                "QuickTime",
+            );
+        } else {
+            metadata.insert_unavailable_binary("QuickTime:PreviewImage", image.len(), "QuickTime");
+        }
     }
 
     Ok(metadata)
+}
+
+/// ExifTool.pm::ValidateImage accepts JPEG SOI, its literal Binary data
+/// sentinel, and repairs a known one-byte SOI corruption before extraction.
+/// It rejects other bytes when PreviewImage is specifically requested.
+fn validate_cr3_preview_image(image: &[u8]) -> Option<Vec<u8>> {
+    if image == b"none" {
+        return None;
+    }
+    if image.starts_with(b"\xff\xd8\xff") || image.starts_with(b"Binary data") {
+        return Some(image.to_vec());
+    }
+    if image.len() >= 4 && image[1..4] == [0xd8, 0xff, 0xdb] {
+        let mut repaired = image.to_vec();
+        repaired[0] = 0xff;
+        return Some(repaired);
+    }
+    None
 }
 
 /// Parse Sigma X3F format
@@ -9395,6 +9424,8 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
                             priority: i16::from(!(row.low_priority || row.avoid)),
                             is_list: row.is_list,
                             order: 0,
+                            binary_payload_unavailable: false,
+                            binary_extract_from_stored: false,
                             origin: Provenance {
                                 module: Some(row.module),
                                 table: Some(row.table),
@@ -9797,12 +9828,10 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         // data with a placeholder unless -b is used to
                                         // extract binary data.
                                         if let Some(len) = thumbnail_length {
-                                            metadata.insert(
-                                                "IFD1:ThumbnailImage".to_string(),
-                                                TagValue::new_string(format!(
-                                                    "(Binary data {} bytes, use -b option to extract)",
-                                                    len
-                                                )),
+                                            metadata.insert_unavailable_binary(
+                                                "IFD1:ThumbnailImage",
+                                                len as usize,
+                                                "",
                                             );
                                         }
                                     }
@@ -10154,17 +10183,22 @@ fn extract_nef_subifd_jpg_from_raw(
 
     let start = offset as usize;
     let end = start.saturating_add(length as usize);
-    let image = match data.get(start..end) {
-        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
-        None => TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            length
-        )),
-    };
-    if let Some(directory) = directory {
-        metadata.insert_with_group1("EXIF:JpgFromRaw".to_string(), image, directory);
-    } else {
-        metadata.insert("EXIF:JpgFromRaw".to_string(), image);
+    match data.get(start..end) {
+        Some(bytes) => {
+            let image = TagValue::new_binary(bytes.to_vec());
+            if let Some(directory) = directory {
+                metadata.insert_with_group1("EXIF:JpgFromRaw", image, directory);
+            } else {
+                metadata.insert("EXIF:JpgFromRaw", image);
+            }
+        }
+        None => {
+            metadata.insert_unavailable_binary(
+                "EXIF:JpgFromRaw",
+                length as usize,
+                directory.unwrap_or(""),
+            );
+        }
     }
 }
 
@@ -10305,12 +10339,19 @@ fn extract_dng_subifd_preview(
     // `core::tiff_helpers::read_or_placeholder`, which this mirrors for a
     // byte slice instead of a `FileReader`.
     if length > 0 {
-        metadata.insert_occurrence(
+        let image = dng_binary_or_placeholder(data, offset, length);
+        // This helper's String branch is reached only when the declared
+        // source range cannot be read. Keep that fact with this SubIFD copy.
+        let unavailable = matches!(image, TagValue::String(_));
+        metadata.insert_occurrence_with_forms_and_binary_state(
             image_key,
-            dng_binary_or_placeholder(data, offset, length),
+            image.clone(),
+            image,
+            None,
             1,
             &directory,
             crate::core::tag_occurrence::Instance::default(),
+            unavailable,
         );
     }
 }
@@ -11732,6 +11773,10 @@ mod rw2_embedded_exif_printconv_tests {
             tag("Panasonic:DataDump"),
             Some("(Binary data 8200 bytes, use -b option to extract)")
         );
+        assert!(
+            metadata.occurrences_for("Panasonic:DataDump")[0].binary_payload_unavailable,
+            "RW2 MakerNote binary provenance must survive the RAW merge"
+        );
         assert_eq!(tag("Panasonic:HighlightWarning"), Some("Yes"));
         assert_eq!(tag("Panasonic:JPEGQuality"), Some("High"));
         assert_eq!(tag("Panasonic:NumFacePositions"), Some("0"));
@@ -13006,6 +13051,27 @@ mod rational_array_tests {
         assert_eq!(data.len(), preview_start as usize);
         data.extend_from_slice(preview);
         data
+    }
+
+    #[test]
+    fn cr3_preview_validation_follows_pinned_validate_image_rules() {
+        assert_eq!(
+            validate_cr3_preview_image(b"\xff\xd8\xff\xe0jpeg"),
+            Some(b"\xff\xd8\xff\xe0jpeg".to_vec())
+        );
+        assert_eq!(
+            validate_cr3_preview_image(b"\x00\xd8\xff\xdbjpeg"),
+            Some(b"\xff\xd8\xff\xdbjpeg".to_vec())
+        );
+        assert_eq!(
+            validate_cr3_preview_image(b"Binary data token"),
+            Some(b"Binary data token".to_vec())
+        );
+        assert_eq!(
+            validate_cr3_preview_image(b"<Dummy preview image data>"),
+            None
+        );
+        assert_eq!(validate_cr3_preview_image(b"none"), None);
     }
 
     #[test]

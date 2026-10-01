@@ -2160,7 +2160,8 @@ fn parse_interop_directory_with_session(
     if length == 0 || length > MAX_THUMBNAIL_BYTES {
         return;
     }
-    metadata.insert(
+    insert_range_binary(
+        metadata,
         "InteropIFD:OtherImage",
         read_or_placeholder(reader, image_offset, length),
     );
@@ -4238,6 +4239,32 @@ impl Ifd1Hand {
             }
         }
     }
+
+    fn insert_range_binary(self, metadata: &mut MetadataMap, key: &str, value: TagValue) {
+        // read_or_placeholder returns String only for an unreadable source
+        // range; the value type here is provenance from that exact helper.
+        let unavailable = matches!(value, TagValue::String(_));
+        match self {
+            Self::Thumbnail if unavailable => {
+                metadata.insert_unavailable_binary_display(key, value, "");
+            }
+            Self::Thumbnail => {
+                metadata.insert(key, value);
+            }
+            Self::Residual { priority } => {
+                metadata.insert_occurrence_with_forms_and_binary_state(
+                    key,
+                    value.clone(),
+                    value,
+                    None,
+                    priority,
+                    IFD1_GROUP1,
+                    Instance::default(),
+                    unavailable,
+                );
+            }
+        }
+    }
 }
 
 /// The IFD1 offset a walk may follow, or `None`: IFD0's next-IFD link
@@ -4838,7 +4865,7 @@ fn collect_ifd1_thumbnail(
     if length == 0 || length > MAX_THUMBNAIL_BYTES {
         return;
     }
-    mode.insert(
+    mode.insert_range_binary(
         metadata,
         "IFD1:ThumbnailImage",
         read_or_placeholder(reader, offset, length),
@@ -5095,7 +5122,8 @@ pub fn parse_ifd2_preview_image(
             TagValue::new_integer(length as i64),
         );
         if length > 0 {
-            metadata.insert(
+            insert_range_binary(
+                metadata,
                 "IFD2:PreviewImage",
                 read_or_placeholder(reader, start, length),
             );
@@ -5114,7 +5142,8 @@ pub fn parse_ifd2_preview_image(
             TagValue::new_integer(length as i64),
         );
         if length > 0 {
-            metadata.insert(
+            insert_range_binary(
+                metadata,
                 "IFD2:JpgFromRaw",
                 read_or_placeholder(reader, start, length),
             );
@@ -5168,6 +5197,16 @@ fn read_or_placeholder(reader: &dyn FileReader, offset: u64, length: u64) -> Tag
             "(Binary data {} bytes, use -b option to extract)",
             length
         )),
+    }
+}
+
+/// Preserve the range reader's unavailable state at a direct insertion site.
+/// The named caller has already established that this is an image DataTag.
+fn insert_range_binary(metadata: &mut MetadataMap, key: &str, value: TagValue) {
+    if matches!(value, TagValue::String(_)) {
+        metadata.insert_unavailable_binary_display(key, value, "");
+    } else {
+        metadata.insert(key, value);
     }
 }
 
@@ -9937,6 +9976,7 @@ mod ifd2_preview_image_tests {
             metadata.get("IFD2:PreviewImage"),
             Some(&TagValue::new_binary(preview_bytes.to_vec()))
         );
+        assert!(!metadata.occurrences_for("IFD2:PreviewImage")[0].binary_payload_unavailable);
         assert!(metadata.get("IFD2:StripOffsets").is_none());
         assert!(metadata.get("IFD2:StripByteCounts").is_none());
     }
@@ -9971,6 +10011,7 @@ mod ifd2_preview_image_tests {
                 declared_length
             )))
         );
+        assert!(metadata.occurrences_for("IFD2:PreviewImage")[0].binary_payload_unavailable);
     }
 
     #[test]

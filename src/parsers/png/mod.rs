@@ -199,9 +199,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             6 => "RGB with Alpha".to_string(),
                             other => format!("Unknown ({})", other),
                         };
-                        metadata.insert(
-                            "PNG:ColorType".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:ColorType",
                             TagValue::new_string(color_type_str),
+                            TagValue::new_integer(color_type as i64),
+                            "",
                         );
 
                         // Compression method: `PrintConv => { 0 => 'Deflate/Inflate' }`
@@ -210,9 +212,11 @@ pub fn parse_png_metadata_with_diagnostics(
                         } else {
                             format!("Unknown ({})", compression)
                         };
-                        metadata.insert(
-                            "PNG:Compression".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Compression",
                             TagValue::new_string(compression_str),
+                            TagValue::new_integer(compression as i64),
+                            "",
                         );
 
                         // Filter method: `PrintConv => { 0 => 'Adaptive' }`
@@ -221,7 +225,12 @@ pub fn parse_png_metadata_with_diagnostics(
                         } else {
                             format!("Unknown ({})", filter)
                         };
-                        metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Filter",
+                            TagValue::new_string(filter_str),
+                            TagValue::new_integer(filter as i64),
+                            "",
+                        );
 
                         // Interlace method
                         let interlace_str = match interlace {
@@ -229,9 +238,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             1 => "Adam7 Interlace".to_string(),
                             other => format!("Unknown ({})", other),
                         };
-                        metadata.insert(
-                            "PNG:Interlace".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Interlace",
                             TagValue::new_string(interlace_str),
+                            TagValue::new_integer(interlace as i64),
+                            "",
                         );
 
                         // HasTransparency tag - true for color types with alpha channel (4, 6)
@@ -287,9 +298,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             1 => "Meters",
                             _ => "Unknown",
                         };
-                        metadata.insert(
-                            "PNG-pHYs:PixelUnits".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG-pHYs:PixelUnits",
                             TagValue::new_string(unit_str),
+                            TagValue::new_integer(unit as i64),
+                            "",
                         );
                     }
                 }
@@ -313,15 +326,19 @@ pub fn parse_png_metadata_with_diagnostics(
                 }
 
                 b"PLTE" => {
-                    // Parse PLTE chunk (palette)
-                    // Perl ExifTool shows "(Binary data N bytes, use -b option to extract)"
-                    metadata.insert(
-                        "PNG:Palette".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            chunk.data.len()
-                        )),
-                    );
+                    // PNG.pm's PLTE ValueConv renders up to three bytes as
+                    // decimal components; longer palettes remain binary.
+                    if chunk.data.len() <= 3 {
+                        let components = chunk
+                            .data
+                            .iter()
+                            .map(u8::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        metadata.insert("PNG:Palette", TagValue::new_string(components));
+                    } else {
+                        metadata.insert_available_binary_with_display("PNG:Palette", chunk.data);
+                    }
                 }
 
                 b"tEXt" | b"zTXt" | b"iTXt" => {
@@ -331,8 +348,17 @@ pub fn parse_png_metadata_with_diagnostics(
                     // handler rejects before naming yields no record.
                     if let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data) {
                         match text_namer.row(&record) {
-                            TextRow::Tag { name, value, .. } => {
-                                metadata.insert(format!("PNG:{name}"), value);
+                            TextRow::Tag {
+                                name,
+                                value,
+                                binary,
+                            } => {
+                                let key = format!("PNG:{name}");
+                                if binary {
+                                    metadata.insert_unavailable_binary_display(key, value, "PNG");
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                             }
                             TextRow::Xmp(packet) => {
                                 match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
@@ -373,12 +399,13 @@ pub fn parse_png_metadata_with_diagnostics(
                 b"hIST" => {
                     // Parse hIST chunk (histogram)
                     if let Ok(histogram) = parse_hist_chunk(&chunk.data) {
-                        metadata.insert(
-                            "PNG:Histogram".to_string(),
+                        metadata.insert_unavailable_binary_display(
+                            "PNG:Histogram",
                             TagValue::new_string(format!(
                                 "(Binary data {} entries, use -b option to extract)",
                                 histogram.len()
                             )),
+                            "",
                         );
                     }
                 }

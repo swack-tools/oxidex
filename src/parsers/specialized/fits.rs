@@ -873,7 +873,12 @@ pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         crate::exiftool_tables::attribution::Token::Producers,
                     )
                 {
-                    metadata.insert(format!("DICOM:{}", entry.name), value);
+                    let key = format!("DICOM:{}", entry.name);
+                    if element.value.len() > 1024 || entry.binary {
+                        metadata.insert_unavailable_binary_display(key, value, "");
+                    } else {
+                        metadata.insert(key, value);
+                    }
                 }
             }
             if element.next_offset <= offset {

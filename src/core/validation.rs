@@ -111,6 +111,12 @@ pub fn validate_tag_value_with_name(
     descriptor: &TagDescriptor,
     value: &TagValue,
 ) -> Result<(), ExifToolError> {
+    if matches!(value, TagValue::TextBytes(_)) {
+        return Err(ExifToolError::invalid_tag_value(
+            tag_name,
+            "Non-Unicode text cannot be written through a typed string setter",
+        ));
+    }
     // UserComment, GPSProcessingMethod and GPSAreaInformation take text:
     // ExifTool stores it through `EncodeExifText`, whatever `TagValue` shape
     // the registry records for the stored bytes (tag metadata,
@@ -132,6 +138,12 @@ pub fn validate_tag_value_with_name(
                     format!("Type mismatch: expected {:?} but got String", expected_type),
                 ));
             }
+        }
+        TagValue::TextBytes(_) => {
+            return Err(ExifToolError::invalid_tag_value(
+                tag_name,
+                "Non-Unicode text cannot be written through a typed string setter",
+            ));
         }
         TagValue::Integer(_) => {
             if expected_type != ValueType::Integer {
@@ -273,6 +285,13 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn non_unicode_read_text_is_refused_by_typed_write_validation() {
+        let descriptor = create_descriptor(ValueType::String);
+        let value = TagValue::new_text_bytes(vec![0xed, 0xa0, 0x80]);
+        assert!(validate_tag_value_with_name("EXIF:Make", &descriptor, &value).is_err());
     }
 
     // Helper function to create a test descriptor

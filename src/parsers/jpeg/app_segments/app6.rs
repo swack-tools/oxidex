@@ -559,12 +559,15 @@ fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
         };
         if let Some(value) = decode_gpmf_value(format, size, count, value_data) {
             let value = gopro_print_conv(fourcc, value);
-            let value = if BINARY_TAGS.contains(&fourcc) {
-                binary_placeholder(&value)
+            if BINARY_TAGS.contains(&fourcc) {
+                metadata.insert_unavailable_binary_display(
+                    format!("APP6:{}", tag_name),
+                    binary_placeholder(&value),
+                    GOPRO_GROUP1,
+                );
             } else {
-                value
-            };
-            metadata.insert_with_group1(format!("APP6:{}", tag_name), value, GOPRO_GROUP1);
+                metadata.insert_with_group1(format!("APP6:{}", tag_name), value, GOPRO_GROUP1);
+            }
         }
     }
 }

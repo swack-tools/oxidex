@@ -67,6 +67,9 @@ elif mode=='chosen-perl':
     elif name=='capture_xmp_priorities.pl':
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'marker':'explicit-A'}))
+    elif name=='capture_font_languages.pl':
+        assert pathlib.Path(args[0]).resolve()==lib
+        print(json.dumps({'marker':'explicit-A'}))
     elif name=='dump_af_points.pl':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Nikon.pm'
         pathlib.Path(args[1]).write_text(json.dumps({'marker':'explicit-A'}))
@@ -244,6 +247,12 @@ else:
         assert flag('--rust-out')==artifact_path('xmp-priority-rust')
         output(flag('--fixture-out'),name)
         output(flag('--rust-out'),name)
+    elif name=='font_language_specs.py':
+        dump(flag('--capture'))
+        assert flag('--fixture-out')==artifact_path('font-language-capture')
+        assert flag('--rust-out')==artifact_path('font-language-rust')
+        output(flag('--fixture-out'),name)
+        output(flag('--rust-out'),name)
     elif name=='gen_xmp_lens_maps.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -404,7 +413,8 @@ class RegenerationShellTests(unittest.TestCase):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
                 'dump_lens_alternatives.pl', 'capture_xmp_priorities.pl',
-                'xmp_priority_specs.py', 'gen_xmp_lens_maps.py',
+                'xmp_priority_specs.py', 'capture_font_languages.pl',
+                'font_language_specs.py', 'gen_xmp_lens_maps.py',
                 'gen_xmp_lens_maps.py:check', 'gen_plus_media_matrix.py',
                 'gen_plus_media_matrix.py:check', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',

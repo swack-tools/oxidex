@@ -7,10 +7,11 @@
 
 #![allow(dead_code)]
 
-use super::mac_charset;
+use super::{generated_languages, mac_charset};
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use std::collections::HashMap;
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -19,47 +20,12 @@ const TTF_SIGNATURE_2: &[u8] = b"true";
 /// Platform IDs for name table records
 const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
+const PLATFORM_ISO: u16 = 2;
 const PLATFORM_WINDOWS: u16 = 3;
+const PLATFORM_CUSTOM: u16 = 4;
 
-/// Platform-specific language IDs for localized name records.
-///
-/// The Macintosh values are the ones ExifTool lists in `%ttLang{Macintosh}`
-/// (Font.pm) -- every value below is quoted from that table, not inferred
-/// from the language's name or position. Two of them were originally wrong
-/// (Spanish as 12, Italian as 4) and the recheck still passed, because
-/// Font.ttf's Spanish and Italian records are 6 and 3: constant 12 matched
-/// nothing, and 4 matched the *Dutch* record, so `FontSubfamily-it` would
-/// have carried Dutch text. A sample only exercises the IDs it happens to
-/// contain, so these must be read off the table rather than trusted to a
-/// green recheck.
-const LANGUAGE_DANISH_MACINTOSH: u16 = 7;
-const LANGUAGE_GERMAN_MACINTOSH: u16 = 2;
-const LANGUAGE_HEBREW_MACINTOSH: u16 = 10;
-const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
-const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
-const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
-const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
-const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
-const LANGUAGE_SWEDISH_MACINTOSH: u16 = 5;
-const LANGUAGE_PORTUGUESE_MACINTOSH: u16 = 8;
-const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 9;
-const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
-const LANGUAGE_CHINESE_TW_MACINTOSH: u16 = 19;
-const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
-const LANGUAGE_CHINESE_CN_MACINTOSH: u16 = 33;
-const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
-const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
-const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
-const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
-const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
-const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
-const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
+/// The legacy best-record selector still treats Windows 0x0409 as English.
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
-const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
-const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
-const LANGUAGE_DUTCH_NL_WINDOWS: u16 = 0x0413;
-const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
-const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
 /// (Font.pm). Only the two decoded inline are named here; the four CJK
@@ -102,15 +68,24 @@ pub(crate) struct TableEntry {
     length: u32,
 }
 
+/// Whether the supported source charset has UCS2's BMP-only boundary.
+#[derive(Clone, Copy)]
+enum FontValueCharset {
+    /// Font.pm's UCS2 is equivalent to this reader only for BMP text.
+    Ucs2BmpOnly,
+    /// A supported Macintosh source table or Unicode UTF16.
+    FullyDecoded,
+}
+
 /// How a name record's language maps onto ExifTool's tag naming -- see
 /// [`TTFParser::name_record_lang`].
-enum NameLang {
+enum NameLang<'a> {
     /// `$lang` is `'en'` or undefined: the tag name takes no suffix.
     Unsuffixed,
-    /// A `%ttLang` code this parser claims: `Tag-<code>`.
-    Suffixed(&'static str),
-    /// ExifTool would name a language this parser does not claim; the
-    /// record is omitted rather than emitted under a wrong name.
+    /// A source language code or a valid format-1 tag: `Tag-<code>`.
+    Suffixed(&'a str),
+    /// The format-1 language tag is absent or the value decoder is outside
+    /// this parser's supported platforms.
     Omitted,
 }
 
@@ -390,66 +365,141 @@ impl TTFParser {
         Ok(decoded)
     }
 
-    /// Returns the ExifTool language suffix for supported localized name records.
-    fn language_suffix(record: &NameRecord) -> Option<&'static str> {
-        match (record.platform_id, record.language_id) {
-            (PLATFORM_MACINTOSH, LANGUAGE_DANISH_MACINTOSH) => Some("da"),
-            (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH) => Some("de"),
-            (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH) => Some("he"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH) => Some("es"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH) => Some("fi"),
-            (PLATFORM_MACINTOSH, LANGUAGE_FRENCH_MACINTOSH) => Some("fr"),
-            (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH) => Some("it"),
-            // Macintosh-only below. No Windows LCID is paired with these
-            // because ExifTool's %ttLang{Windows} spells most of them with a
-            // region subtag that %ttLang{Macintosh} does not use -- 0x0414
-            // is 'no-NO' not 'no', 0x041d is 'sv-SE' not 'sv', 0x0816 is
-            // 'pt-PT' and 0x0416 is 'pt-BR', neither of which is 'pt'. Four
-            // of today's backlog patches paired them anyway; that would have
-            // emitted FontSubfamily-no for a record ExifTool reports as
-            // FontSubfamily-no-NO. Only the Macintosh side is claimed here.
-            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH) => Some("nl-NL"),
-            (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
-            (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
-            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
-            // Records in these languages carry the Macintosh CJK scripts,
-            // which `mac_charset` decodes with ExifTool's own tables.
-            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
-            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
-            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
-            (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_CN_MACINTOSH) => Some("zh-CN"),
-            // Windows LCIDs are a SEPARATE table with SEPARATE spellings.
-            // `ProcessTTF` looks the record up in `%ttLang{Windows}` and uses
-            // whatever string it finds verbatim, so the Windows suffix for a
-            // language is not interchangeable with its Macintosh suffix: the
-            // Macintosh side calls German 'de' while %ttLang{Windows} calls
-            // 0x0407 'de-DE'. Pairing the two arms -- which this function did
-            // until now -- emitted `FontSubfamily-de` for a record ExifTool
-            // reports as `FontSubfamily-de-DE`. Every value below is quoted
-            // from %ttLang{Windows} in Font.pm.
-            //
-            // 0x0409 is 'en-US', NOT 'en', so ExifTool suffixes it like any
-            // other language -- `$lang ne 'en'` is false only for the literal
-            // string 'en', which no Windows LCID maps to. Confirmed against
-            // the corpus: `exiftool -G1 combined-samples/Font.dfont`, whose
-            // name table is entirely Plat=3/Windows Lang=0x409, prints
-            // `FontSubfamily-en-US`, `Copyright-en-US`, `FontName-en-US` and
-            // so on for every nameID it carries.
-            (PLATFORM_WINDOWS, LANGUAGE_ENGLISH_WINDOWS) => Some("en-US"),
-            (PLATFORM_WINDOWS, LANGUAGE_DANISH_WINDOWS) => Some("da"),
-            (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de-DE"),
-            (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
-            (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es-ES"),
-            (PLATFORM_WINDOWS, LANGUAGE_FINNISH_WINDOWS) => Some("fi"),
-            (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr-FR"),
-            (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it-IT"),
-            (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
-            (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
-            (PLATFORM_WINDOWS, LANGUAGE_DUTCH_NL_WINDOWS) => Some("nl-NL"),
-            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_TW_WINDOWS) => Some("zh-TW"),
-            (PLATFORM_WINDOWS, LANGUAGE_CHINESE_CN_WINDOWS) => Some("zh-CN"),
-            _ => None,
+    /// Decode a Font.pm UCS2/UTF16 string after its BOM and NUL rules.
+    /// Format-1 language tags need the source's loss-tolerant replacement;
+    /// name values use `decode_font_name_bytes` so Perl's malformed raw
+    /// bytes survive until the output mode chooses how to render them.
+    fn decode_font_utf16(data: &[u8], lossy: bool) -> Option<String> {
+        let (body, little_endian) = match data.get(..2) {
+            Some([0xfe, 0xff]) => (&data[2..], false),
+            Some([0xff, 0xfe]) => (&data[2..], true),
+            _ => (data, false),
+        };
+        if !body.len().is_multiple_of(2) {
+            return None;
         }
+        let words: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|pair| {
+                if little_endian {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect();
+        let mut decoded = if lossy {
+            String::from_utf16_lossy(&words)
+        } else {
+            String::from_utf16(&words).ok()?
+        };
+        if let Some(nul) = decoded.find('\0') {
+            decoded.truncate(nul);
+        }
+        Some(decoded)
+    }
+
+    /// Charset.pm's fixed-width unpack followed by `pack('C0U*')`: UCS2
+    /// leaves each surrogate as a code point, while UTF16 combines pairs.
+    /// Perl's unpack ignores an incomplete final word. Recompose stops at
+    /// the first NUL code point, after consuming any BOM.
+    fn decode_font_name_bytes(data: &[u8], utf16: bool) -> Vec<u8> {
+        let (body, little_endian) = match data.get(..2) {
+            Some([0xfe, 0xff]) => (&data[2..], false),
+            Some([0xff, 0xfe]) => (&data[2..], true),
+            _ => (data, false),
+        };
+        let words: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|pair| {
+                if little_endian {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect();
+        let mut out = Vec::with_capacity(words.len() * 3);
+        let mut index = 0;
+        while index < words.len() {
+            let word = words[index];
+            if word == 0 {
+                break;
+            }
+            let point = if utf16
+                && (0xd800..=0xdbff).contains(&word)
+                && words
+                    .get(index + 1)
+                    .is_some_and(|next| (0xdc00..=0xdfff).contains(next))
+            {
+                index += 1;
+                0x10000 + ((u32::from(word) - 0xd800) << 10) + u32::from(words[index] - 0xdc00)
+            } else {
+                u32::from(word)
+            };
+            // `char::from_u32` excludes surrogates. Perl's pack does not.
+            if let Some(ch) = char::from_u32(point) {
+                let mut buffer = [0; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            } else {
+                out.extend_from_slice(&[
+                    0xe0 | ((point >> 12) as u8),
+                    0x80 | (((point >> 6) & 0x3f) as u8),
+                    0x80 | ((point & 0x3f) as u8),
+                ]);
+            }
+            index += 1;
+        }
+        out
+    }
+
+    /// Decode a `Font:` value with Font.pm's charset boundary. The older
+    /// bare-name extractor above intentionally keeps its existing behavior.
+    fn extract_font_name_string(
+        reader: &dyn FileReader,
+        table: &TableEntry,
+        record: &NameRecord,
+        string_offset: u16,
+        charset: FontValueCharset,
+    ) -> Result<Option<TagValue>> {
+        let start = table.offset as u64 + u64::from(string_offset) + u64::from(record.offset);
+        let data = reader.read(start, record.length as usize)?;
+        if matches!(record.platform_id, PLATFORM_WINDOWS | PLATFORM_UNICODE) {
+            return Ok(Some(TagValue::new_text_bytes(
+                Self::decode_font_name_bytes(
+                    data,
+                    matches!(charset, FontValueCharset::FullyDecoded),
+                ),
+            )));
+        }
+        let mut decoded = match record.platform_id {
+            PLATFORM_MACINTOSH => match record.encoding_id {
+                MAC_ENCODING_ROMAN => Some(Self::decode_mac_roman(data)),
+                MAC_ENCODING_HEBREW => Some(Self::decode_mac_hebrew(data)),
+                encoding => mac_charset::for_mac_encoding(encoding)
+                    .map(|charset| mac_charset::decode(data, charset)),
+            },
+            _ => None,
+        };
+        if let Some(value) = decoded.as_mut() {
+            if record.platform_id == PLATFORM_MACINTOSH
+                && record.encoding_id != 1
+                && data.iter().all(|byte| *byte < 0x80)
+            {
+                // ExifTool::Decode skips conversion in this case. The final
+                // tag value drops NULs but keeps later ASCII characters.
+                value.retain(|ch| ch != '\0');
+            } else if let Some(nul) = value.find('\0') {
+                // Recompose truncates a converted value at its first NUL.
+                value.truncate(nul);
+            }
+        }
+        Ok(decoded.map(TagValue::String))
+    }
+
+    /// The exact source-defined suffix for this platform and language ID.
+    fn language_suffix(record: &NameRecord) -> Option<&'static str> {
+        generated_languages::font_language(record.platform_id, record.language_id)
     }
 
     /// Maps a name-table record's name ID to the key ExifTool reports it
@@ -493,99 +543,125 @@ impl TTFParser {
         }
     }
 
-    /// How ExifTool names the tag for this record's language: unsuffixed,
-    /// suffixed with a claimed `%ttLang` code, or not claimable here.
-    ///
-    /// `ProcessTableEntry` (Font.pm:504-521) computes
-    /// `$lang = $ttLang{$sys}{$langID}` and suffixes the tag name whenever
-    /// `$lang` is defined and `ne 'en'`; an *undefined* `$lang` leaves the
-    /// tag unsuffixed. So:
-    ///
-    /// * Macintosh language 0 is `'en'` (`%ttLang{Macintosh}: 0 => 'en'`)
-    ///   -- unsuffixed.
-    /// * A claimed (platform, language) pair from [`Self::language_suffix`]
-    ///   -- suffixed with that exact string.
-    /// * `%ttLang{Unicode}` is the EMPTY hash (Font.pm:184), so a
-    ///   Unicode-platform record's `$lang` is undef -- unsuffixed
-    ///   (language-tag IDs >= 0x8000 aside, next bullet).
-    /// * A Macintosh or Windows ID that `%ttLang` DEFINES but this parser
-    ///   has not claimed is OMITTED rather than emitted unsuffixed:
-    ///   ExifTool would suffix such a record with a code we cannot name,
-    ///   and an unsuffixed emission would be a wrong tag name, which is
-    ///   worse than an open gap. [`Self::ttlang_defines`] carries the key
-    ///   sets that decide this.
-    /// * A Macintosh or Windows ID that `%ttLang` does NOT define leaves
-    ///   `$lang` undef in the Perl, so the tag is UNSUFFIXED -- e.g.
-    ///   Windows language 0x0009 ("English, neutral") is absent from
-    ///   `%ttLang{Windows}` and its records land on the plain tag name.
-    /// * IDs >= 0x8000 index the format-1 naming table's language-tag
-    ///   records (`%langTag`, Font.pm:465-479), the `|| $langTag{$langID}`
-    ///   half of the lookup, on every platform. This parser does not read
-    ///   language-tag records, so such IDs are omitted rather than guessed
-    ///   unsuffixed.
-    /// * ISO (2) and Custom (4) platform records are also omitted: their
-    ///   `%ttLang` hashes are empty too, but `%ttCharset{ISO}` maps encoding
-    ///   1 to UCS2 (Font.pm:79-83) and this parser's fallback decode for
-    ///   those platforms is UTF-8, so the value could be mojibake under a
-    ///   correct name. Omit and count.
-    fn name_record_lang(record: &NameRecord) -> NameLang {
-        if record.language_id >= 0x8000 {
+    /// Match Font.pm's `%ttLang{$sys}{$langID} || %langTag{$langID}`.
+    /// Unknown source IDs stay unsuffixed. A missing format-1 tag is omitted
+    /// rather than guessed; every source-defined platform uses this naming
+    /// path, while unsupported text decoding is refused separately.
+    fn name_record_lang_with_fallback<'a>(
+        record: &NameRecord,
+        format_one_language: Option<&'a str>,
+    ) -> NameLang<'a> {
+        if !matches!(
+            record.platform_id,
+            PLATFORM_MACINTOSH
+                | PLATFORM_WINDOWS
+                | PLATFORM_UNICODE
+                | PLATFORM_ISO
+                | PLATFORM_CUSTOM
+        ) {
             return NameLang::Omitted;
         }
-        match record.platform_id {
-            PLATFORM_MACINTOSH if record.language_id == 0 => NameLang::Unsuffixed,
-            PLATFORM_MACINTOSH | PLATFORM_WINDOWS => match Self::language_suffix(record) {
-                Some(suffix) => NameLang::Suffixed(suffix),
-                None if Self::ttlang_defines(record) => NameLang::Omitted,
-                None => NameLang::Unsuffixed,
-            },
-            PLATFORM_UNICODE => NameLang::Unsuffixed,
-            _ => NameLang::Omitted,
+        let source = Self::language_suffix(record)
+            .or(format_one_language.filter(|language| !language.is_empty()));
+        if record.language_id >= 0x8000 && source.is_none() && format_one_language.is_none() {
+            return NameLang::Omitted;
+        }
+        match source {
+            Some("en") | None => NameLang::Unsuffixed,
+            Some(suffix) => NameLang::Suffixed(suffix),
         }
     }
 
-    /// Whether `%ttLang{Macintosh}` / `%ttLang{Windows}` defines this
-    /// language ID at all. The key sets were dumped from the pinned tree
-    /// itself -- `perl -Ilib -MImage::ExifTool::Font -e '... keys ...'` on
-    /// 13.59 -- not transcribed by eye: Macintosh holds 0x00-0x5e
-    /// contiguously plus 0x80-0x96 with 0x8f absent (117 keys), Windows the
-    /// 210 LCIDs below. `%ttLang{Unicode}`, `{ISO}` and `{Custom}` are
-    /// empty.
-    fn ttlang_defines(record: &NameRecord) -> bool {
-        /// The 210 keys of `%ttLang{Windows}` (Font.pm), sorted for binary
-        /// search.
-        const TTLANG_WINDOWS_IDS: [u16; 210] = [
-            0x0401, 0x0402, 0x0403, 0x0404, 0x0405, 0x0406, 0x0407, 0x0408, 0x0409, 0x040a, 0x040b,
-            0x040c, 0x040d, 0x040e, 0x040f, 0x0410, 0x0411, 0x0412, 0x0413, 0x0414, 0x0415, 0x0416,
-            0x0417, 0x0418, 0x0419, 0x041a, 0x041b, 0x041c, 0x041d, 0x041e, 0x041f, 0x0420, 0x0421,
-            0x0422, 0x0423, 0x0424, 0x0425, 0x0426, 0x0427, 0x0428, 0x042a, 0x042b, 0x042c, 0x042d,
-            0x042e, 0x042f, 0x0430, 0x0431, 0x0432, 0x0434, 0x0435, 0x0436, 0x0437, 0x0438, 0x0439,
-            0x043a, 0x043b, 0x043c, 0x043d, 0x043e, 0x043f, 0x0440, 0x0441, 0x0442, 0x0443, 0x0444,
-            0x0445, 0x0446, 0x0447, 0x0448, 0x0449, 0x044a, 0x044b, 0x044c, 0x044d, 0x044e, 0x044f,
-            0x0450, 0x0451, 0x0452, 0x0453, 0x0454, 0x0456, 0x0457, 0x045a, 0x045b, 0x045d, 0x045e,
-            0x0461, 0x0462, 0x0463, 0x0464, 0x0465, 0x0468, 0x046a, 0x046b, 0x046c, 0x046d, 0x046e,
-            0x046f, 0x0470, 0x0478, 0x047a, 0x047c, 0x047e, 0x0480, 0x0481, 0x0482, 0x0483, 0x0484,
-            0x0485, 0x0486, 0x0487, 0x048c, 0x0801, 0x0804, 0x0807, 0x0809, 0x080a, 0x080c, 0x0810,
-            0x0813, 0x0814, 0x0816, 0x0818, 0x0819, 0x081a, 0x081d, 0x082c, 0x082e, 0x083b, 0x083c,
-            0x083e, 0x0843, 0x0845, 0x0850, 0x085d, 0x085f, 0x086b, 0x0c01, 0x0c04, 0x0c07, 0x0c09,
-            0x0c0a, 0x0c0c, 0x0c1a, 0x0c3b, 0x0c6b, 0x1001, 0x1004, 0x1007, 0x1009, 0x100a, 0x100c,
-            0x101a, 0x103b, 0x1401, 0x1404, 0x1407, 0x1409, 0x140a, 0x140c, 0x141a, 0x143b, 0x1801,
-            0x1809, 0x180a, 0x180c, 0x181a, 0x183b, 0x1c01, 0x1c09, 0x1c0a, 0x1c1a, 0x1c3b, 0x2001,
-            0x2009, 0x200a, 0x201a, 0x203b, 0x2401, 0x2409, 0x240a, 0x243b, 0x2801, 0x2809, 0x280a,
-            0x2c01, 0x2c09, 0x2c0a, 0x3001, 0x3009, 0x300a, 0x3401, 0x3409, 0x340a, 0x3801, 0x380a,
-            0x3c01, 0x3c0a, 0x4001, 0x4009, 0x400a, 0x4409, 0x440a, 0x4809, 0x480a, 0x4c0a, 0x500a,
-            0x540a,
-        ];
-        match record.platform_id {
-            PLATFORM_MACINTOSH => {
-                record.language_id <= 0x5e
-                    || ((0x80..=0x96).contains(&record.language_id) && record.language_id != 0x8f)
+    fn name_record_lang(record: &NameRecord) -> NameLang<'static> {
+        Self::name_record_lang_with_fallback(record, None)
+    }
+
+    /// Which Font.pm name charset this reader can reproduce for a `Font:`
+    /// value. `%ttLang` is independent of `%ttCharset`: adding a language
+    /// name must not turn an unsupported script into a guessed text value.
+    fn font_value_charset(record: &NameRecord) -> Option<FontValueCharset> {
+        match (record.platform_id, record.encoding_id) {
+            (PLATFORM_MACINTOSH, MAC_ENCODING_ROMAN | MAC_ENCODING_HEBREW) => {
+                Some(FontValueCharset::FullyDecoded)
             }
-            PLATFORM_WINDOWS => TTLANG_WINDOWS_IDS
-                .binary_search(&record.language_id)
-                .is_ok(),
+            (PLATFORM_MACINTOSH, encoding) if mac_charset::for_mac_encoding(encoding).is_some() => {
+                Some(FontValueCharset::FullyDecoded)
+            }
+            (PLATFORM_WINDOWS, 1) | (PLATFORM_UNICODE, 0..=3) => {
+                Some(FontValueCharset::Ucs2BmpOnly)
+            }
+            (PLATFORM_UNICODE, 4) => Some(FontValueCharset::FullyDecoded),
+            _ => None,
+        }
+    }
+
+    /// Font.pm's `Decode` leaves raw ASCII alone when the source charset is
+    /// absent or does not require remapping low bytes. The excluded Windows
+    /// charsets are Symbol, UCS2, ShiftJIS and UCS4; ISO UCS2 is fixed-width,
+    /// and MacJapanese remaps ASCII.
+    fn font_ascii_passthrough(record: &NameRecord) -> bool {
+        match (record.platform_id, record.encoding_id) {
+            (PLATFORM_MACINTOSH, 1) => false,
+            (PLATFORM_MACINTOSH, _) => true,
+            (PLATFORM_WINDOWS, 0 | 1 | 2 | 10) => false,
+            (PLATFORM_WINDOWS, _) => true,
+            (PLATFORM_UNICODE, 0..=4) | (PLATFORM_ISO, 1) => false,
+            (PLATFORM_UNICODE | PLATFORM_ISO | PLATFORM_CUSTOM, _) => true,
             _ => false,
         }
+    }
+
+    /// Parse format-1 language tags with Font.pm's bounds, decode and filter.
+    fn format_one_language_tags(
+        reader: &dyn FileReader,
+        table: &TableEntry,
+    ) -> Result<HashMap<u16, String>> {
+        let mut tags = HashMap::new();
+        let table_start = table.offset as u64;
+        let size = table.length as u64;
+        if size < 6 || table_start + size > reader.size() {
+            return Ok(tags);
+        }
+        let header = reader.read(table_start, 6)?;
+        let r = EndianReader::big_endian(header);
+        if r.u16_at(0) != Some(1) {
+            return Ok(tags);
+        }
+        let entries = r.u16_at(2).unwrap_or(0) as u64;
+        let str_start = r.u16_at(4).unwrap_or(0) as u64;
+        let rec_end = 6 + entries * 12;
+        if rec_end > size || str_start < rec_end || str_start > size || rec_end + 2 > size {
+            return Ok(tags);
+        }
+        let lang_count = reader.read(table_start + rec_end, 2)?;
+        let count = u16::from_be_bytes([lang_count[0], lang_count[1]]) as u64;
+        if count == 0 || rec_end + 2 + count * 4 >= size {
+            return Ok(tags);
+        }
+        for index in 0..count {
+            if index > 0x7fff {
+                break;
+            }
+            let record = reader.read(table_start + rec_end + 2 + index * 4, 4)?;
+            let len = u16::from_be_bytes([record[0], record[1]]) as u64;
+            let offset = u16::from_be_bytes([record[2], record[3]]) as u64;
+            if len == 0 || len % 2 != 0 || len > 40 || str_start + offset + len > size {
+                break;
+            }
+            let data = reader.read(table_start + str_start + offset, len as usize)?;
+            // Font.pm's UCS2 decoder consumes a BOM, truncates at NUL, and
+            // replaces invalid surrogates without stopping later records.
+            // The ASCII filter removes replacement characters.
+            let Some(decoded) = Self::decode_font_utf16(data, true) else {
+                break;
+            };
+            let filtered: String = decoded
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                .collect();
+            tags.insert(0x8000 + index as u16, filtered);
+        }
+        Ok(tags)
     }
 
     /// The name-table walk exactly as `ProcessTableEntry` performs it
@@ -605,30 +681,76 @@ impl TTFParser {
     ) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
         let offset = table.offset as u64;
-
-        if offset + 6 > reader.size() {
+        let table_size = u64::from(table.length).min(reader.size().saturating_sub(offset));
+        if table_size < 8 {
             return Ok(metadata);
         }
 
         let header = reader.read(offset, 6)?;
         let r = EndianReader::big_endian(header);
+        let records_end = 6 + u64::from(r.u16_at(2).unwrap_or(0)) * 12;
         let string_offset = r.u16_at(4).unwrap_or(0);
+        let string_start = u64::from(string_offset);
+        if records_end > table_size || string_start < records_end || string_start > table_size {
+            return Ok(metadata);
+        }
         let records = Self::parse_name_table(reader, table)?;
+        let format_one_tags = Self::format_one_language_tags(reader, table)?;
 
         for record in &records {
+            // Font.pm checks the string against the name table's own size
+            // before it decodes or replaces any tag from this record.
+            if string_start + u64::from(record.offset) + u64::from(record.length) > table_size {
+                continue;
+            }
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
-            let key = match Self::name_record_lang(record) {
+            let key = match Self::name_record_lang_with_fallback(
+                record,
+                format_one_tags.get(&record.language_id).map(String::as_str),
+            ) {
                 NameLang::Unsuffixed => base_key.to_string(),
                 NameLang::Suffixed(suffix) => format!("{base_key}-{suffix}"),
                 NameLang::Omitted => continue,
             };
-            if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
-                && !value.is_empty()
-            {
-                metadata.insert(key, TagValue::String(value));
+            // A zero-length in-bounds record is still a present value in
+            // Font.pm. It needs no character decoding, even when the
+            // platform's nonempty charset is unsupported here.
+            if record.length == 0 {
+                metadata.insert(key, TagValue::String(String::new()));
+                continue;
             }
+            let Some(charset) = Self::font_value_charset(record) else {
+                if Self::font_ascii_passthrough(record) {
+                    let start = offset + string_start + u64::from(record.offset);
+                    let data = reader.read(start, record.length as usize)?;
+                    if data.is_ascii() {
+                        // Decode leaves source-skipped conversion bytes raw.
+                        // The final tag drops NULs but retains later ASCII.
+                        let value = data
+                            .iter()
+                            .copied()
+                            .filter(|byte| *byte != 0)
+                            .map(char::from)
+                            .collect();
+                        metadata.insert(key, TagValue::String(value));
+                        continue;
+                    }
+                }
+                // Native name records replace earlier duplicates in order.
+                // An unreadable later value must not leave the earlier value
+                // looking like the final ExifTool value.
+                metadata.remove(&key);
+                continue;
+            };
+            let Some(value) =
+                Self::extract_font_name_string(reader, table, record, string_offset, charset)?
+            else {
+                metadata.remove(&key);
+                continue;
+            };
+            metadata.insert(key, value);
         }
 
         Ok(metadata)
@@ -914,10 +1036,8 @@ mod tests {
     /// 4 as well, which silently routed Dutch text into FontSubfamily-it.
     #[test]
     fn macintosh_language_ids_match_exiftool_ttlang_table() {
-        // Literal IDs on purpose. Writing LANGUAGE_SPANISH_MACINTOSH here
-        // instead of 6 would make this a tautology -- it would feed the
-        // constant in and assert the constant's own meaning back out, and
-        // pass for any value it held. The literals ARE the table.
+        // Literal IDs and expected strings are independent of the generated
+        // Rust lookup; the complete fixture is checked against fresh Perl.
         for (id, expected) in [
             (1, "fr"),  // %ttLang{Macintosh}: 1 => 'fr'
             (2, "de"),  // 2 => 'de'
@@ -1001,10 +1121,8 @@ mod tests {
         }
     }
 
-    /// `name_record_lang` reproduces `ProcessTableEntry`'s
-    /// `$lang = $ttLang{$sys}{$langID} || $langTag{$langID}` naming rule
-    /// (Font.pm:501) within the subset this parser claims, and omits the
-    /// rest rather than emitting a name ExifTool would spell differently.
+    /// `name_record_lang` uses Font.pm's platform-specific source mapping.
+    /// Missing IDs are unsuffixed; unavailable format-1 records are refused.
     #[test]
     fn name_record_lang_unsuffixes_omits_and_suffixes_per_ttlang() {
         let rec = |platform_id: u16, language_id: u16| NameRecord {
@@ -1025,16 +1143,14 @@ mod tests {
             TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 2)),
             NameLang::Suffixed("de")
         ));
-        // %ttLang-defined but unclaimed Macintosh (12 => 'ar') and Windows
-        // (0x0414 => 'no-NO') IDs are omitted: ExifTool would suffix them
-        // with a code this parser has not claimed.
+        // Every source-defined ID uses its exact platform-specific suffix.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 12)),
-            NameLang::Omitted
+            NameLang::Suffixed("ar")
         ));
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_WINDOWS, 0x0414)),
-            NameLang::Omitted
+            NameLang::Suffixed("no-NO")
         ));
         // IDs ABSENT from %ttLang leave `$lang` undef -- unsuffixed. The
         // key sets are dumped from the pinned Perl: Windows has no 0x0009
@@ -1053,41 +1169,49 @@ mod tests {
                 record.language_id,
             );
         }
-        // ...while their defined neighbours stay omitted.
-        for record in [
-            rec(PLATFORM_WINDOWS, 0x0408), // 'el'
-            rec(PLATFORM_MACINTOSH, 0x5e), // 'eo'
-            rec(PLATFORM_MACINTOSH, 0x90), // 'gd'
-        ] {
-            assert!(
-                matches!(TTFParser::name_record_lang(&record), NameLang::Omitted),
-                "platform {} language {:#06x} is defined in %ttLang but unclaimed",
-                record.platform_id,
-                record.language_id,
-            );
-        }
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_WINDOWS, 0x0408)),
+            NameLang::Suffixed("el")
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 0x5e)),
+            NameLang::Suffixed("eo")
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_MACINTOSH, 0x90)),
+            NameLang::Suffixed("gd")
+        ));
         // %ttLang{Unicode} is empty (Font.pm), so $lang is undef and the
         // tag is unsuffixed -- for ordinary language IDs.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_UNICODE, 0)),
             NameLang::Unsuffixed
         ));
-        // ...but IDs >= 0x8000 index format-1 language-tag records
-        // (Font.pm:465-479, applied at Font.pm:501), which this parser does
-        // not read, so they are omitted rather than guessed unsuffixed.
+        // IDs >= 0x8000 without a valid format-1 language tag are omitted
+        // rather than guessed unsuffixed.
         assert!(matches!(
             TTFParser::name_record_lang(&rec(PLATFORM_UNICODE, 0x8000)),
             NameLang::Omitted
         ));
-        // ISO (2) and Custom (4) platforms: omitted (charset risk -- see
-        // name_record_lang's doc).
+        // ExifTool treats a format-1 tag filtered to an empty string like
+        // an absent language; a literal 'en' is likewise unsuffixed.
         assert!(matches!(
-            TTFParser::name_record_lang(&rec(2, 0)),
-            NameLang::Omitted
+            TTFParser::name_record_lang_with_fallback(&rec(PLATFORM_UNICODE, 0x8000), Some("")),
+            NameLang::Unsuffixed
         ));
         assert!(matches!(
-            TTFParser::name_record_lang(&rec(4, 0)),
-            NameLang::Omitted
+            TTFParser::name_record_lang_with_fallback(&rec(PLATFORM_UNICODE, 0x8000), Some("en")),
+            NameLang::Unsuffixed
+        ));
+        // %ttLang{ISO} and %ttLang{Custom} are empty too, so ordinary
+        // language IDs use the unsuffixed source name.
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_ISO, 0)),
+            NameLang::Unsuffixed
+        ));
+        assert!(matches!(
+            TTFParser::name_record_lang(&rec(PLATFORM_CUSTOM, 0)),
+            NameLang::Unsuffixed
         ));
     }
 
@@ -1120,26 +1244,195 @@ mod tests {
         );
     }
 
-    /// The Windows LCIDs three backlog patches wanted to claim under the
-    /// Macintosh spelling. `%ttLang{Windows}` gives 0x0414 => 'no-NO',
-    /// 0x0416 => 'pt-BR' and 0x041d => 'sv-SE'; claiming them as 'no', 'pt'
-    /// and 'sv' would emit a tag name ExifTool never produces. Leaving them
-    /// unmapped keeps the gap open instead of filling it with a wrong name.
     #[test]
-    fn windows_region_tagged_language_ids_are_not_claimed_unqualified() {
-        for id in [
-            0x0414, /* no-NO, not 'no' */
-            0x0416, /* pt-BR, not 'pt' */
-            0x041d, /* sv-SE, not 'sv' */
-            0x0816, /* pt-PT, not 'pt' */
+    fn format_one_language_tag_names_font_family() {
+        // Format 1 has one Unicode record with language ID 0x8000 and one
+        // UTF-16BE language tag, nb-NO. The pinned native reader emits
+        // Font:FontFamily-nb-NO for this shape.
+        let language = "nb-NO"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family = "Recovery Format One"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one name record
+        data.extend_from_slice(&24u16.to_be_bytes()); // string storage
+        for field in [
+            0u16,
+            3,
+            0x8000,
+            1,
+            family.len() as u16,
+            language.len() as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&1u16.to_be_bytes()); // one language tag
+        data.extend_from_slice(&(language.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&language);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let tags = TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap();
+        assert_eq!(
+            tags.get("Font:FontFamily-nb-NO"),
+            Some(&TagValue::String("Recovery Format One".to_string()))
+        );
+        assert!(!tags.contains_key("Font:FontFamily"));
+    }
+
+    fn format_one_font_family_with_language(language: &[u8]) -> MetadataMap {
+        let family = [0, b'F'];
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&24u16.to_be_bytes());
+        for field in [
+            PLATFORM_UNICODE,
+            3,
+            0x8000,
+            NAME_FONT_FAMILY,
+            family.len() as u16,
+            language.len() as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&(language.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(language);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+    }
+
+    #[test]
+    fn format_one_language_bom_matches_pinned_source() {
+        // Pinned native matrix: format1-decode-native-matrix.json.
+        for language in [
+            &[0, b'n', 0, b'b'][..],
+            &[0xfe, 0xff, 0, b'n', 0, b'b'][..],
+            &[0xff, 0xfe, b'n', 0, b'b', 0][..],
+        ] {
+            let tags = format_one_font_family_with_language(language);
+            assert_eq!(
+                tags.get("Font:FontFamily-nb"),
+                Some(&TagValue::String("F".to_string())),
+                "language bytes {language:02x?}"
+            );
+            assert!(!tags.contains_key("Font:FontFamily"));
+        }
+    }
+
+    #[test]
+    fn format_one_language_nul_filter_and_loss_match_pinned_source() {
+        for (language, expected_key) in [
+            (
+                &[0, b'e', 0, b'n', 0, 0, 0, b'-', 0, b'U', 0, b'S'][..],
+                "Font:FontFamily",
+            ),
+            (
+                &[0, b'n', 0, b'b', 0, 0, 0, b'-', 0, b'N', 0, b'O'][..],
+                "Font:FontFamily-nb",
+            ),
+            (&[0, 0, 0, b'n', 0, b'b'][..], "Font:FontFamily"),
+            (&[0, b'A', 0xd8, 0, 0, b'B'][..], "Font:FontFamily-AB"),
+            (&[0, b'n', 0, b'!', 0, b'b'][..], "Font:FontFamily-nb"),
+            (&[0xff, 0xfe][..], "Font:FontFamily"),
+        ] {
+            let tags = format_one_font_family_with_language(language);
+            assert_eq!(
+                tags.get(expected_key),
+                Some(&TagValue::String("F".to_string())),
+                "language bytes {language:02x?}"
+            );
+            assert_eq!(
+                tags.keys()
+                    .filter(|key| key.starts_with("Font:FontFamily"))
+                    .count(),
+                1,
+                "language bytes {language:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_format_one_language_does_not_hide_later_valid_tag() {
+        // Pinned ExifTool decodes A, a lone surrogate, B to a string whose
+        // language-name filter is AB, then still reads the next nb-NO tag.
+        let malformed = [0, b'A', 0xd8, 0, 0, b'B'];
+        let later = "nb-NO"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let family = "Later Valid"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one name record
+        data.extend_from_slice(&28u16.to_be_bytes()); // string storage
+        for field in [
+            0u16,
+            3,
+            0x8001,
+            1,
+            family.len() as u16,
+            (malformed.len() + later.len()) as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&2u16.to_be_bytes()); // two language tags
+        for (len, offset) in [(malformed.len(), 0), (later.len(), malformed.len())] {
+            data.extend_from_slice(&(len as u16).to_be_bytes());
+            data.extend_from_slice(&(offset as u16).to_be_bytes());
+        }
+        data.extend_from_slice(&malformed);
+        data.extend_from_slice(&later);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let reader = TestReader::new(data);
+        let languages = TTFParser::format_one_language_tags(&reader, &table).unwrap();
+        assert_eq!(languages.get(&0x8000).map(String::as_str), Some("AB"));
+        assert_eq!(languages.get(&0x8001).map(String::as_str), Some("nb-NO"));
+        let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+        assert_eq!(
+            tags.get("Font:FontFamily-nb-NO"),
+            Some(&TagValue::String("Later Valid".to_string()))
+        );
+    }
+
+    /// The Windows LCIDs retain Font.pm's region subtags.
+    #[test]
+    fn windows_region_tagged_language_ids_keep_source_suffixes() {
+        for (id, expected) in [
+            (0x0414, "no-NO"),
+            (0x0416, "pt-BR"),
+            (0x041d, "sv-SE"),
+            (0x0816, "pt-PT"),
         ] {
             let record = windows_record(id);
             assert_eq!(
                 TTFParser::language_suffix(&record),
-                None,
-                "Windows LCID {id:#06x} is spelled with a region subtag in \
-                 %ttLang{{Windows}}; claiming it unqualified would emit a tag \
-                 name ExifTool does not produce",
+                Some(expected),
+                "Windows LCID {id:#06x} must retain Font.pm's region subtag",
             );
         }
     }
@@ -1163,19 +1456,15 @@ mod tests {
         );
     }
 
-    /// The IDs ExifTool assigns to languages this parser does NOT claim.
-    /// Guards the specific failure mode above: mapping one of these to a
-    /// language we do support would emit that record's text under the
-    /// wrong suffix rather than simply leaving a gap open.
+    /// Source-defined Macintosh IDs are no longer dropped by a manual subset.
     #[test]
-    fn unclaimed_macintosh_language_ids_stay_unmapped() {
-        for id in [12 /* ar */, 14 /* el */, 32 /* ru */] {
+    fn source_defined_macintosh_language_ids_are_mapped() {
+        for (id, expected) in [(12, "ar"), (14, "el"), (32, "ru")] {
             let record = mac_record(id);
             assert_eq!(
                 TTFParser::language_suffix(&record),
-                None,
-                "Macintosh language ID {id} is not a language this parser claims; \
-                 mapping it would mislabel that record's text",
+                Some(expected),
+                "Macintosh language ID {id} must keep Font.pm's suffix",
             );
         }
     }
@@ -1358,6 +1647,587 @@ mod tests {
         assert_eq!(metadata.get("Font:Copyright"), Some(&expected));
     }
 
+    #[test]
+    fn unsupported_macintosh_charset_does_not_publish_wrong_font_value() {
+        // Pinned Font.pm decodes c2 a0 with MacArabic as "آ "; interpreting
+        // it as UTF-8 would publish a non-breaking space under the new ar tag.
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_be_bytes()); // format
+        data.extend_from_slice(&1u16.to_be_bytes()); // one record
+        data.extend_from_slice(&18u16.to_be_bytes()); // string storage
+        for field in [PLATFORM_MACINTOSH, 4, 12, NAME_FONT_FAMILY, 2, 0] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&[0xc2, 0xa0]);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        let reader = TestReader::new(data);
+        let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+        assert!(!tags.contains_key("Font:FontFamily-ar"));
+    }
+
+    #[test]
+    fn unsupported_macintosh_charset_preserves_ascii_font_value() {
+        // Pinned Font.pm 13.59 returns A and AB for these Mac encodings,
+        // including a supported-but-unimplemented table (4), an absent
+        // table (9), an uninterpreted charset (32), and an unknown ID (33).
+        // Decode leaves bytes needing no remapping alone; a later record
+        // replaces the earlier same-key value.
+        for encoding in [4, 9, 21, 32, 33] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB")] {
+                let tags = font_two_record_decode_case(
+                    PLATFORM_MACINTOSH,
+                    MAC_ENCODING_ROMAN,
+                    encoding,
+                    12,
+                    b"Earlier",
+                    last,
+                );
+                assert_eq!(
+                    tags.get("Font:FontFamily-ar"),
+                    Some(&TagValue::String(expected.to_string())),
+                    "Mac encoding {encoding} final record {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn windows_and_unicode_unknown_charsets_preserve_raw_ascii_font_values() {
+        // Pinned ascii-eligibility-native-matrix.json reports A and AB for
+        // these charset IDs. record-order-native-matrix.json also reports B
+        // when a Windows encoding-99 record follows a UCS2 A record.
+        for (platform, initial_encoding, encoding, language, key) in [
+            (PLATFORM_WINDOWS, 1, 3, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 4, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 5, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 6, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 99, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_UNICODE, 4, 5, 0, "Font:FontFamily"),
+        ] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB"), (&b"B"[..], "B")] {
+                let tags = font_two_record_decode_case(
+                    platform,
+                    initial_encoding,
+                    encoding,
+                    language,
+                    &[0, b'E'],
+                    last,
+                );
+                assert_eq!(
+                    tags.get(key),
+                    Some(&TagValue::String(expected.to_string())),
+                    "platform {platform} encoding {encoding} final record {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iso_and_custom_ascii_name_records_publish_unsuffixed_font_values() {
+        // Font.pm maps ISO and Custom platforms to empty ttLang tables;
+        // pinned ascii-eligibility-native-matrix.json returns A and AB for
+        // ISO UTF8/Latin and unknown Custom raw ASCII name records.
+        for (platform, encoding) in [(2, 0), (2, 2), (4, 0)] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB")] {
+                let tags =
+                    font_two_record_decode_case(platform, encoding, encoding, 0, b"Earlier", last);
+                assert_eq!(
+                    tags.get("Font:FontFamily"),
+                    Some(&TagValue::String(expected.to_string())),
+                    "platform {platform} encoding {encoding} final record {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn font_group_respects_platform_charset_and_ucs2_boundary() {
+        // These bytes were checked against pinned Font.pm 13.59: ShiftJIS
+        // 82 a0 is あ, while interpreting it as UTF-16BE produces 芠.
+        // UCS2 does not combine D83D DE00 into the emoji that UTF16 does.
+        let smile = &[0xd8, 0x3d, 0xde, 0x00];
+        let omega = &[0x03, 0xa9];
+        let cases: &[(u16, u16, u16, &[u8], &str, Option<&str>)] = &[
+            (
+                PLATFORM_WINDOWS,
+                2,
+                0x0414,
+                &[0x82, 0xa0],
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                0,
+                0x0414,
+                omega,
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                0x0414,
+                smile,
+                "Font:FontFamily-no-NO",
+                None,
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                0x0414,
+                omega,
+                "Font:FontFamily-no-NO",
+                Some("Ω"),
+            ),
+            (PLATFORM_UNICODE, 0, 0, smile, "Font:FontFamily", None),
+            (PLATFORM_UNICODE, 0, 0, omega, "Font:FontFamily", Some("Ω")),
+            (PLATFORM_UNICODE, 4, 0, smile, "Font:FontFamily", Some("😀")),
+            (PLATFORM_UNICODE, 5, 0, omega, "Font:FontFamily", None),
+        ];
+        for &(platform, encoding, language, bytes, key, expected) in cases {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&1u16.to_be_bytes()); // one record
+            data.extend_from_slice(&18u16.to_be_bytes()); // string storage
+            for field in [
+                platform,
+                encoding,
+                language,
+                NAME_FONT_FAMILY,
+                bytes.len() as u16,
+                0,
+            ] {
+                data.extend_from_slice(&field.to_be_bytes());
+            }
+            data.extend_from_slice(bytes);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let reader = TestReader::new(data);
+            let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+            let expected_value = if bytes == smile
+                && matches!(
+                    (platform, encoding),
+                    (PLATFORM_WINDOWS, 1) | (PLATFORM_UNICODE, 0)
+                ) {
+                Some(TagValue::TextBytes(vec![
+                    0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80,
+                ]))
+            } else {
+                expected.map(|value| TagValue::String(value.to_string()))
+            };
+            assert_eq!(
+                tags.get(key),
+                expected_value.as_ref(),
+                "platform {platform}, encoding {encoding}, language {language}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_ucs2_name_records_are_retained() {
+        // Pinned 13.59 `Font.pm`/`Charset.pm` yields raw ED-prefixed UTF-8
+        // for each surrogate; the JSON writer later applies FixUTF8.
+        for (bytes, expected_present) in [
+            (&[0xd8, 0x00, 0x00, 0x41][..], true),
+            (&[0xdc, 0x00, 0x00, 0x41][..], true),
+            (&[0xd8, 0x3d, 0xde, 0x00][..], true),
+            (&[0x00, 0x41, 0x00][..], true),
+        ] {
+            let tags =
+                font_two_record_decode_case(PLATFORM_WINDOWS, 1, 1, 0x0409, &[0x00, 0x42], bytes);
+            assert_eq!(
+                tags.contains_key("Font:FontFamily-en-US"),
+                expected_present,
+                "bytes {bytes:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn font_fixed_width_name_bytes_and_json_follow_pinned_charset_boundary() {
+        use crate::cli::output_formatter::tag_value_to_json;
+
+        // Raw expected bytes from pinned Perl 5.38.2 + ExifTool 13.59
+        // `-b -FontFamily-en-US` (Unicode 4 uses `-FontFamily`); JSON values
+        // from `-j -G1` on the same single-record name-table files.
+        let cases: &[(u16, u16, &[u8], &[u8], &str)] = &[
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xd8, 0x00, 0x00, 0x41],
+                &[0xed, 0xa0, 0x80, b'A'],
+                "???A",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xdc, 0x00, 0x00, 0x41],
+                &[0xed, 0xb0, 0x80, b'A'],
+                "???A",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xd8, 0x3d, 0xde, 0x00],
+                &[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80],
+                "??????",
+            ),
+            (
+                PLATFORM_UNICODE,
+                4,
+                &[0xd8, 0x3d, 0xde, 0x00],
+                "😀".as_bytes(),
+                "😀",
+            ),
+            (PLATFORM_WINDOWS, 1, &[0xff, 0xfe, 0x41, 0x00], b"A", "A"),
+            (PLATFORM_WINDOWS, 1, &[0xfe, 0xff, 0x00, 0x41], b"A", "A"),
+            (PLATFORM_WINDOWS, 1, &[0, 0, 0xd8, 0], b"", ""),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xff, 0xff, 0, 0x41],
+                &[0xef, 0xbf, 0xbf, b'A'],
+                "???A",
+            ),
+            (PLATFORM_WINDOWS, 1, &[0, 0x41, 0], b"A", "A"),
+        ];
+        for &(platform, encoding, source, raw, json) in cases {
+            let language = if platform == PLATFORM_WINDOWS {
+                0x0409
+            } else {
+                0
+            };
+            let tags = font_two_record_decode_case(
+                platform,
+                encoding,
+                encoding,
+                language,
+                &[0, b'B'],
+                source,
+            );
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-en-US"
+            } else {
+                "Font:FontFamily"
+            };
+            let value = tags
+                .get(key)
+                .unwrap_or_else(|| panic!("missing {key}: {source:02x?}"));
+            assert_eq!(value.as_text_bytes(), Some(raw), "source {source:02x?}");
+            assert_eq!(
+                tag_value_to_json(Some(key), value),
+                serde_json::json!(json),
+                "source {source:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_duplicate_clears_prior_font_value_in_name_order() {
+        // Native Font.pm's final no-NO value is "あ" when ShiftJIS is last,
+        // and "A" when the UCS2 record is last. This reader cannot decode
+        // ShiftJIS, so it must not leave an earlier "A" as the final value.
+        for unsupported_last in [true, false] {
+            let records: [(u16, &[u8]); 2] = if unsupported_last {
+                [(1, &[0, b'A']), (2, &[0x82, 0xa0])]
+            } else {
+                [(2, &[0x82, 0xa0]), (1, &[0, b'A'])]
+            };
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&2u16.to_be_bytes()); // two records
+            data.extend_from_slice(&30u16.to_be_bytes()); // string storage
+            let mut strings = Vec::new();
+            for &(encoding, bytes) in &records {
+                for field in [
+                    PLATFORM_WINDOWS,
+                    encoding,
+                    0x0414,
+                    NAME_FONT_FAMILY,
+                    bytes.len() as u16,
+                    strings.len() as u16,
+                ] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+                strings.extend_from_slice(bytes);
+            }
+            data.extend_from_slice(&strings);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let reader = TestReader::new(data);
+            let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+            let expected = (!unsupported_last).then(|| TagValue::String("A".to_string()));
+            assert_eq!(tags.get("Font:FontFamily-no-NO"), expected.as_ref());
+        }
+    }
+
+    #[test]
+    fn font_name_record_bounds_precede_duplicate_refusal() {
+        // Native Font.pm skips out-of-table records before HandleTag, but an
+        // in-bounds empty or malformed value replaces the earlier primary.
+        let tags = |encoding: u16,
+                    length: u16,
+                    offset: u16,
+                    payload: &[u8],
+                    declared_size: Option<u32>,
+                    string_start: u16| {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&2u16.to_be_bytes()); // two records
+            data.extend_from_slice(&string_start.to_be_bytes());
+            for (enc, len, off) in [(1u16, 2u16, 0u16), (encoding, length, offset)] {
+                for field in [PLATFORM_WINDOWS, enc, 0x0409, NAME_FONT_FAMILY, len, off] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+            }
+            data.extend_from_slice(&[0, b'A']);
+            data.extend_from_slice(payload);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: declared_size.unwrap_or(data.len() as u32),
+            };
+            TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+        };
+        let key = "Font:FontFamily-en-US";
+        let earlier_value = TagValue::String("A".to_string());
+        let earlier = Some(&earlier_value);
+        let out_of_bounds = tags(2, 2, 100, &[], None, 30);
+        assert_eq!(out_of_bounds.get(key), earlier);
+        let past_declared_table = tags(2, 2, 2, &[0x82, 0xa0], Some(32), 30);
+        assert_eq!(past_declared_table.get(key), earlier);
+        for encoding in [1, 2, 99] {
+            let empty = tags(encoding, 0, 2, &[], None, 30);
+            assert_eq!(
+                empty.get(key),
+                Some(&TagValue::String(String::new())),
+                "empty encoding {encoding}"
+            );
+        }
+        // Perl's `unpack('n*')` drops the odd byte; an isolated surrogate
+        // remains a three-byte non-Unicode text value. Both displace `A`.
+        assert_eq!(
+            tags(1, 1, 2, &[0], None, 30).get(key),
+            Some(&TagValue::new_string(""))
+        );
+        assert_eq!(
+            tags(1, 2, 2, &[0xd8, 0], None, 30).get(key),
+            Some(&TagValue::new_text_bytes(vec![0xed, 0xa0, 0x80]))
+        );
+        for (declared_size, string_start) in [(20, 30), (34, 18), (34, 40)] {
+            let invalid_header = tags(1, 2, 2, &[0, b'B'], Some(declared_size), string_start);
+            assert!(!invalid_header.contains_key(key));
+        }
+    }
+
+    #[test]
+    fn zero_length_name_records_replace_across_source_charsets() {
+        // Pinned Font.pm handles an in-bounds empty record as a present empty
+        // value even when its encoding has no text decoder. The ten native
+        // fixtures are recorded in record-order-empty-platform-matrix.json.
+        for (platform, first_encoding, last_encoding, language, initial) in [
+            (PLATFORM_WINDOWS, 1, 1, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_WINDOWS, 1, 2, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_WINDOWS, 1, 99, 0x0409, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0, b'A'][..]),
+            (PLATFORM_UNICODE, 4, 99, 0, &[0, b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 0, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 1, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 4, 0, &[b'A'][..]),
+            (PLATFORM_MACINTOSH, 0, 99, 0, &[b'A'][..]),
+        ] {
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data.extend_from_slice(&2u16.to_be_bytes());
+            data.extend_from_slice(&30u16.to_be_bytes());
+            for (encoding, length, offset) in [
+                (first_encoding, initial.len() as u16, 0),
+                (last_encoding, 0, initial.len() as u16),
+            ] {
+                for field in [
+                    platform,
+                    encoding,
+                    language,
+                    NAME_FONT_FAMILY,
+                    length,
+                    offset,
+                ] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+            }
+            data.extend_from_slice(initial);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let tags = TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table)
+                .expect("name table parses");
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-en-US"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(String::new())),
+                "platform {platform}, last encoding {last_encoding}"
+            );
+        }
+    }
+
+    fn font_two_record_decode_case(
+        platform: u16,
+        initial_encoding: u16,
+        second_encoding: u16,
+        language: u16,
+        initial: &[u8],
+        second: &[u8],
+    ) -> MetadataMap {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&2u16.to_be_bytes());
+        data.extend_from_slice(&30u16.to_be_bytes());
+        for (encoding, length, offset) in [
+            (initial_encoding, initial.len() as u16, 0),
+            (second_encoding, second.len() as u16, initial.len() as u16),
+        ] {
+            for field in [
+                platform,
+                encoding,
+                language,
+                NAME_FONT_FAMILY,
+                length,
+                offset,
+            ] {
+                data.extend_from_slice(&field.to_be_bytes());
+            }
+        }
+        data.extend_from_slice(initial);
+        data.extend_from_slice(second);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+    }
+
+    #[test]
+    fn font_unicode_bom_and_decoded_nul_match_source() {
+        // Pinned native values: decode-boundary-native-matrix.json and
+        // nul-boundary-native-matrix.json.
+        for (platform, initial_encoding, encoding, language, bytes, expected) in [
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0, b'B'][..], "B"),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0xfe, 0xff, 0, b'B'][..],
+                "B",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0xff, 0xfe, b'B', 0][..],
+                "B",
+            ),
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0xff, 0xfe][..], ""),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0xff, 0xfe, b'B', 0][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xfe, 0xff, 0, b'B'][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xff, 0xfe, b'B', 0][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xff, 0xfe][..], ""),
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0, 0, 0, b'B'][..], ""),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0, b'A', 0, 0, 0, b'B'][..],
+                "A",
+            ),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0, 0, 0, b'B'][..], ""),
+            (
+                PLATFORM_UNICODE,
+                4,
+                4,
+                0,
+                &[0, b'A', 0, 0, 0, b'B'][..],
+                "A",
+            ),
+        ] {
+            let initial = &[0, b'A'];
+            let tags = font_two_record_decode_case(
+                platform,
+                initial_encoding,
+                encoding,
+                language,
+                initial,
+                bytes,
+            );
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-no-NO"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(expected.to_string())),
+                "platform {platform}, encoding {encoding}, bytes {bytes:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn font_macintosh_decoded_empty_and_nul_match_source() {
+        // MacJapanese converts even ASCII; the other supported Macintosh
+        // charsets skip conversion for ASCII-only strings. Source conversion
+        // truncates at NUL, while the fast path removes NUL and keeps text.
+        for (encoding, language, bytes, expected) in [
+            (0, 0, &[0, b'A'][..], "A"),
+            (0, 0, &[0, 0x80][..], ""),
+            (0, 0, &[b'A', 0, b'B'][..], "AB"),
+            (5, 0, &[0, b'A'][..], "A"),
+            (5, 0, &[0, 0x80][..], ""),
+            (1, 12, &[0, b'A'][..], ""),
+            (1, 12, &[0, 0x80][..], ""),
+            (2, 0, &[0, b'A'][..], "A"),
+            (2, 0, &[0, 0x80][..], ""),
+            (3, 0, &[0, b'A'][..], "A"),
+            (3, 0, &[0, 0x80][..], ""),
+            (25, 0, &[0, b'A'][..], "A"),
+            (25, 0, &[0, 0x80][..], ""),
+        ] {
+            let tags =
+                font_two_record_decode_case(PLATFORM_MACINTOSH, 0, encoding, language, b"A", bytes);
+            let key = if language == 12 {
+                "Font:FontFamily-ar"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(expected.to_string())),
+                "Macintosh encoding {encoding}, bytes {bytes:02x?}"
+            );
+        }
+    }
+
     /// End-to-end check that a Macintosh CJK record reaches the right tag
     /// with the right text: the encoding ID has to pick the charset, the
     /// language ID has to pick the suffix, and the two are different numbers.
@@ -1402,7 +2272,7 @@ mod tests {
             b'n', b'a', b'm', b'e', // table tag
             0x00, 0x00, 0x00, 0x00, // checksum
             0x00, 0x00, 0x00, 0x1c, // table offset = 28
-            0x00, 0x00, 0x00, 0x00, // table length (unused by the parser)
+            0x00, 0x00, 0x00, 0x00, // table length filled after strings
         ];
         header.extend_from_slice(&0u16.to_be_bytes()); // name table format
         header.extend_from_slice(&count.to_be_bytes());
@@ -1419,6 +2289,8 @@ mod tests {
             strings.extend_from_slice(bytes);
         }
         header.extend_from_slice(&strings);
+        let table_length = (header.len() - 28) as u32;
+        header[24..28].copy_from_slice(&table_length.to_be_bytes());
 
         let metadata = TTFParser.parse(&TestReader::new(header)).unwrap();
         for (_, _, _, suffix, expected) in records {

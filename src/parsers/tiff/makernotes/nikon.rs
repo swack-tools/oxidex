@@ -1243,6 +1243,8 @@ impl NikonParser {
                                         priority: 1,
                                         is_list: false,
                                         order: 0,
+                                        binary_payload_unavailable: false,
+                                        binary_extract_from_stored: false,
                                         origin: Provenance {
                                             module: Some("Nikon"),
                                             table: Some(field.table),
@@ -1302,6 +1304,8 @@ impl NikonParser {
                                         priority: i16::from(!(tag.low_priority || tag.avoid)),
                                         is_list: tag.is_list,
                                         order: 0,
+                                        binary_payload_unavailable: false,
+                                        binary_extract_from_stored: false,
                                         origin: Provenance {
                                             module: Some(tag.module),
                                             table: Some(tag.table),
@@ -1652,6 +1656,8 @@ impl NikonParser {
                                     priority: 1,
                                     is_list: false,
                                     order: 0,
+                                    binary_payload_unavailable: false,
+                                    binary_extract_from_stored: false,
                                     origin: Provenance {
                                         module: Some("Nikon"),
                                         table: Some("Main"),
@@ -1931,6 +1937,8 @@ impl NikonParser {
                                         priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                                         is_list: false,
                                         order: 0,
+                                        binary_payload_unavailable: false,
+                                        binary_extract_from_stored: false,
                                         origin: crate::core::Provenance {
                                             module: Some("Nikon"),
                                             table: Some("AFInfo2V0300"),

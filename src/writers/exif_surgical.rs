@@ -1054,6 +1054,9 @@ pub(crate) fn tag_value_to_field(
             bytes.push(0);
             Ok((2, bytes.len() as u32, bytes))
         }
+        TagValue::TextBytes(_) => Err(ExifToolError::parse_error(
+            "Non-Unicode text cannot be written as an EXIF string",
+        )),
         TagValue::Integer(i) => {
             let i = *i;
             match hint {

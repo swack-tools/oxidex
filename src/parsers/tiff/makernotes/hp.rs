@@ -222,6 +222,8 @@ fn type4_occurrence(row: crate::exiftool_tables::Emitted) -> (String, TagOccurre
             priority: i16::from(!(row.low_priority || row.avoid)),
             is_list: row.is_list,
             order: 0,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             origin: Provenance {
                 module: Some(row.module),
                 table: Some(row.table),

@@ -169,6 +169,8 @@ fn parse_ricoh_type2_rows(
                 priority: 1,
                 is_list: false,
                 order: 0,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Ricoh"),
                     table: Some("Type2"),

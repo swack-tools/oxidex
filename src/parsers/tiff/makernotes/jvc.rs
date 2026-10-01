@@ -245,6 +245,8 @@ impl JvcParser {
                 priority: 1,
                 is_list: false,
                 order: 0,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("JVC"),
                     table: Some("Main"),

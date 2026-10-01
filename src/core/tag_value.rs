@@ -18,6 +18,12 @@ pub enum TagValue {
     /// UTF-8 string value (most common type)
     String(String),
 
+    /// Decoded text bytes that are not valid Unicode. ExifTool's UCS2
+    /// decoder can emit UTF-8 encodings of surrogate code points; these
+    /// bytes are text for read output, not a binary metadata blob. Typed
+    /// writers refuse them until a destination-specific encoding is known.
+    TextBytes(Vec<u8>),
+
     /// Signed 64-bit integer value
     Integer(i64),
 
@@ -50,6 +56,25 @@ impl TagValue {
     /// Creates a new String variant
     pub fn new_string<S: Into<String>>(s: S) -> Self {
         TagValue::String(s.into())
+    }
+
+    /// Retains text that may contain ExifTool's non-Unicode UTF-8 bytes.
+    /// Ordinary UTF-8 stays a String, so existing typed reads and writes
+    /// retain their original representation.
+    pub fn new_text_bytes(bytes: Vec<u8>) -> Self {
+        match String::from_utf8(bytes) {
+            Ok(text) => TagValue::String(text),
+            Err(error) => TagValue::TextBytes(error.into_bytes()),
+        }
+    }
+
+    /// The exact bytes of a text value, including malformed UTF-8.
+    pub fn as_text_bytes(&self) -> Option<&[u8]> {
+        match self {
+            TagValue::String(text) => Some(text.as_bytes()),
+            TagValue::TextBytes(bytes) => Some(bytes),
+            _ => None,
+        }
     }
 
     /// Creates a new Integer variant
@@ -278,5 +303,21 @@ mod tests {
         let json = r#"{"type":"Integer","value":100}"#;
         let value: TagValue = serde_json::from_str(json).unwrap();
         assert_eq!(value.as_integer(), Some(100));
+    }
+
+    #[test]
+    fn non_unicode_text_round_trips_without_becoming_binary_or_lossy_string() {
+        let raw = vec![0xed, 0xa0, 0x80, b'A'];
+        let value = TagValue::new_text_bytes(raw.clone());
+        assert_eq!(value.as_text_bytes(), Some(raw.as_slice()));
+        assert_eq!(value.as_string(), None);
+        assert!(!value.is_binary());
+        let encoded = serde_json::to_string(&value).unwrap();
+        let decoded: TagValue = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, value);
+        assert_eq!(
+            TagValue::new_text_bytes(b"ordinary".to_vec()),
+            TagValue::new_string("ordinary")
+        );
     }
 }

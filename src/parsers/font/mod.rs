@@ -1,6 +1,7 @@
 //! Font format parsers
 
 pub mod afm;
+mod generated_languages;
 mod mac_charset;
 pub mod otf;
 pub mod pfb;

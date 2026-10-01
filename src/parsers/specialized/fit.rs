@@ -294,7 +294,7 @@ impl Walk<'_> {
                 "(Binary data {} bytes, use -b option to extract)",
                 bytes.len()
             ));
-            self.metadata.insert_occurrence_with_forms(
+            self.metadata.insert_occurrence_with_forms_and_binary_state(
                 key,
                 placeholder.clone(),
                 placeholder,
@@ -302,6 +302,7 @@ impl Walk<'_> {
                 SHIM_DEFAULT_PRIORITY,
                 group1,
                 instance,
+                true,
             );
             return;
         }

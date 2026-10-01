@@ -1458,6 +1458,8 @@ impl LeicaMakerNoteParser {
                                 priority: priority.into(),
                                 is_list: false,
                                 order: 0,
+                                binary_payload_unavailable: false,
+                                binary_extract_from_stored: false,
                                 origin: Provenance {
                                     module: Some("Panasonic"),
                                     table: Some("Leica5"),

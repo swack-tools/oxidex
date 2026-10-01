@@ -2250,6 +2250,8 @@ impl PentaxParser {
                                             priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                                             is_list: false,
                                             order: 0,
+                                            binary_payload_unavailable: false,
+                                            binary_extract_from_stored: false,
                                             origin: crate::core::Provenance {
                                                 module: Some("Pentax"),
                                                 table: Some("CAFPointInfo"),
@@ -3195,6 +3197,8 @@ fn decode_pentax_external_flash_guide_number(
                 priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                 is_list: false,
                 order: 0,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: crate::core::Provenance {
                     module: Some("Pentax"),
                     table: Some("FlashInfo"),
@@ -3411,6 +3415,8 @@ fn decode_pentax_digital_filters(
                     priority: crate::core::SHIM_DEFAULT_PRIORITY.into(),
                     is_list: true,
                     order: 0,
+                    binary_payload_unavailable: false,
+                    binary_extract_from_stored: false,
                     origin: crate::core::Provenance {
                         module: Some("Pentax"),
                         table: Some("FilterInfo"),
