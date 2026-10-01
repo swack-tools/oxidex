@@ -375,6 +375,37 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 }
 
 #[test]
+fn preview_ilce_model_keeps_a411_after_bad_first_exif_entry() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let model = entry(&data, ifd0, 0x0110);
+    assert_eq!(read_u16(&data, model + 2), 2);
+    let model_at = tiff + read_u32(&data, model + 8) as usize;
+
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    data[exif_ifd + 4..exif_ifd + 6].copy_from_slice(&99u16.to_le_bytes());
+    let shading = entry(&data, exif_ifd, 0xa405);
+    data[shading..shading + 2].copy_from_slice(&0xa411u16.to_le_bytes());
+    data[shading + 2..shading + 4].copy_from_slice(&3u16.to_le_bytes());
+    data[shading + 4..shading + 8].copy_from_slice(&1u32.to_le_bytes());
+    data[shading + 8..shading + 12].copy_from_slice(&1u32.to_le_bytes());
+
+    // Pinned ExifTool stops at the bad first ExifIFD entry for DMC-LX3.
+    assert!(parse(&data).get("ExifIFD:ShadingCorrection").is_none());
+
+    // With a previously established ILCE Model, ExifTool skips the bad entry
+    // and reports the reached later A411 as Yes.
+    data[model + 4..model + 8].copy_from_slice(&7u32.to_le_bytes());
+    data[model_at..model_at + 7].copy_from_slice(b"ILCE-T\0");
+    let metadata = parse(&data);
+    assert_eq!(
+        metadata.get_string("ExifIFD:ShadingCorrection"),
+        Some("Yes")
+    );
+}
+
+#[test]
 fn preview_ifd0_chain_uses_app1_boundary_not_jpeg_tail() {
     let mut data = source();
     let outer_ifd0 = read_u32(&data, 4) as usize;

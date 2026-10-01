@@ -3274,13 +3274,33 @@ pub(crate) fn reached_integral_ifd_entries(
     byte_order: ByteOrder,
     requested_tags: &[u16],
 ) -> Vec<ReachedIntegralEntry> {
-    scan_reached_integral_ifd_entries(
+    reached_integral_ifd_entries_with_known_model(
         reader,
         ifd_offset,
         byte_order,
         requested_tags,
         "",
         reader.size(),
+    )
+}
+
+/// Scan a subdirectory with the Model established before that directory was
+/// entered. The APP1 structural limit can be narrower than the value reader.
+pub(crate) fn reached_integral_ifd_entries_with_known_model(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    requested_tags: &[u16],
+    known_model: &str,
+    directory_limit: u64,
+) -> Vec<ReachedIntegralEntry> {
+    scan_reached_integral_ifd_entries(
+        reader,
+        ifd_offset,
+        byte_order,
+        requested_tags,
+        known_model,
+        directory_limit,
     )
     .0
 }
