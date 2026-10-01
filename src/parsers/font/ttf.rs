@@ -20,7 +20,9 @@ const TTF_SIGNATURE_2: &[u8] = b"true";
 /// Platform IDs for name table records
 const PLATFORM_UNICODE: u16 = 0;
 const PLATFORM_MACINTOSH: u16 = 1;
+const PLATFORM_ISO: u16 = 2;
 const PLATFORM_WINDOWS: u16 = 3;
+const PLATFORM_CUSTOM: u16 = 4;
 
 /// The legacy best-record selector still treats Windows 0x0409 as English.
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
@@ -480,15 +482,19 @@ impl TTFParser {
 
     /// Match Font.pm's `%ttLang{$sys}{$langID} || %langTag{$langID}`.
     /// Unknown source IDs stay unsuffixed. A missing format-1 tag is omitted
-    /// rather than guessed; ISO and Custom remain refused by the existing
-    /// text-decoding boundary.
+    /// rather than guessed; every source-defined platform uses this naming
+    /// path, while unsupported text decoding is refused separately.
     fn name_record_lang_with_fallback<'a>(
         record: &NameRecord,
         format_one_language: Option<&'a str>,
     ) -> NameLang<'a> {
         if !matches!(
             record.platform_id,
-            PLATFORM_MACINTOSH | PLATFORM_WINDOWS | PLATFORM_UNICODE
+            PLATFORM_MACINTOSH
+                | PLATFORM_WINDOWS
+                | PLATFORM_UNICODE
+                | PLATFORM_ISO
+                | PLATFORM_CUSTOM
         ) {
             return NameLang::Omitted;
         }
@@ -523,6 +529,22 @@ impl TTFParser {
             }
             (PLATFORM_UNICODE, 4) => Some(FontValueCharset::FullyDecoded),
             _ => None,
+        }
+    }
+
+    /// Font.pm's `Decode` leaves raw ASCII alone when the source charset is
+    /// absent or does not require remapping low bytes. The excluded Windows
+    /// charsets are Symbol, UCS2, ShiftJIS and UCS4; ISO UCS2 is fixed-width,
+    /// and MacJapanese remaps ASCII.
+    fn font_ascii_passthrough(record: &NameRecord) -> bool {
+        match (record.platform_id, record.encoding_id) {
+            (PLATFORM_MACINTOSH, 1) => false,
+            (PLATFORM_MACINTOSH, _) => true,
+            (PLATFORM_WINDOWS, 0 | 1 | 2 | 10) => false,
+            (PLATFORM_WINDOWS, _) => true,
+            (PLATFORM_UNICODE, 0..=4) | (PLATFORM_ISO, 1) => false,
+            (PLATFORM_UNICODE | PLATFORM_ISO | PLATFORM_CUSTOM, _) => true,
+            _ => false,
         }
     }
 
@@ -637,13 +659,12 @@ impl TTFParser {
                 continue;
             }
             let Some(charset) = Self::font_value_charset(record) else {
-                if record.platform_id == PLATFORM_MACINTOSH {
+                if Self::font_ascii_passthrough(record) {
                     let start = offset + string_start + u64::from(record.offset);
                     let data = reader.read(start, record.length as usize)?;
                     if data.is_ascii() {
-                        // Font.pm leaves an unsupported Mac charset's raw
-                        // bytes alone when they need no remapping. Its final
-                        // tag value drops NULs but retains later ASCII.
+                        // Decode leaves source-skipped conversion bytes raw.
+                        // The final tag drops NULs but retains later ASCII.
                         let value = data
                             .iter()
                             .copied()
@@ -1127,15 +1148,15 @@ mod tests {
             TTFParser::name_record_lang_with_fallback(&rec(PLATFORM_UNICODE, 0x8000), Some("en")),
             NameLang::Unsuffixed
         ));
-        // ISO (2) and Custom (4) platforms: omitted (charset risk -- see
-        // name_record_lang's doc).
+        // %ttLang{ISO} and %ttLang{Custom} are empty too, so ordinary
+        // language IDs use the unsuffixed source name.
         assert!(matches!(
-            TTFParser::name_record_lang(&rec(2, 0)),
-            NameLang::Omitted
+            TTFParser::name_record_lang(&rec(PLATFORM_ISO, 0)),
+            NameLang::Unsuffixed
         ));
         assert!(matches!(
-            TTFParser::name_record_lang(&rec(4, 0)),
-            NameLang::Omitted
+            TTFParser::name_record_lang(&rec(PLATFORM_CUSTOM, 0)),
+            NameLang::Unsuffixed
         ));
     }
 
@@ -1614,6 +1635,55 @@ mod tests {
                     tags.get("Font:FontFamily-ar"),
                     Some(&TagValue::String(expected.to_string())),
                     "Mac encoding {encoding} final record {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn windows_and_unicode_unknown_charsets_preserve_raw_ascii_font_values() {
+        // Pinned ascii-eligibility-native-matrix.json reports A and AB for
+        // these charset IDs. record-order-native-matrix.json also reports B
+        // when a Windows encoding-99 record follows a UCS2 A record.
+        for (platform, initial_encoding, encoding, language, key) in [
+            (PLATFORM_WINDOWS, 1, 3, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 4, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 5, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 6, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_WINDOWS, 1, 99, 0x0409, "Font:FontFamily-en-US"),
+            (PLATFORM_UNICODE, 4, 5, 0, "Font:FontFamily"),
+        ] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB"), (&b"B"[..], "B")] {
+                let tags = font_two_record_decode_case(
+                    platform,
+                    initial_encoding,
+                    encoding,
+                    language,
+                    &[0, b'E'],
+                    last,
+                );
+                assert_eq!(
+                    tags.get(key),
+                    Some(&TagValue::String(expected.to_string())),
+                    "platform {platform} encoding {encoding} final record {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iso_and_custom_ascii_name_records_publish_unsuffixed_font_values() {
+        // Font.pm maps ISO and Custom platforms to empty ttLang tables;
+        // pinned ascii-eligibility-native-matrix.json returns A and AB for
+        // ISO UTF8/Latin and unknown Custom raw ASCII name records.
+        for (platform, encoding) in [(2, 0), (2, 2), (4, 0)] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB")] {
+                let tags =
+                    font_two_record_decode_case(platform, encoding, encoding, 0, b"Earlier", last);
+                assert_eq!(
+                    tags.get("Font:FontFamily"),
+                    Some(&TagValue::String(expected.to_string())),
+                    "platform {platform} encoding {encoding} final record {last:?}"
                 );
             }
         }
