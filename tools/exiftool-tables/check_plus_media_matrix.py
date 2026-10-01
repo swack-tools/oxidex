@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 from pathlib import Path
 import subprocess
@@ -25,6 +26,8 @@ from exiftool_oracle import Oracle  # noqa: E402
 PLUS_URI = "http://ns.useplus.org/ldf/xmp/1.0/"
 
 EDGE_CASES = [
+    "|PLUS|V0100\n|U001|2AAA|",
+    "|PLUS|V0100\n\n|U001|2AAA|",
     "2AAA",
     "2aaa",
     "|plus|v0100|u001|1iaa2bft|",
@@ -93,11 +96,12 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="oxidex-plus-matrix-") as directory:
         for index, value in enumerate(cases):
             path = Path(directory) / f"case-{index:02}.xmp"
+            wire = html.escape(value, quote=True).replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#9;")
             path.write_text(
                 f'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF '
                 f'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
                 f'xmlns:plus="{PLUS_URI}"><rdf:Description '
-                f'rdf:about="" plus:MediaSummaryCode="{value}"/>'
+                f'rdf:about="" plus:MediaSummaryCode="{wire}"/>'
                 f'</rdf:RDF></x:xmpmeta>')
             native = read_tag(native_cmd, path)
             if native is None:

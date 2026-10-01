@@ -4645,7 +4645,7 @@ fn format_plus_media_summary_code(value: &str) -> String {
 fn plus_version_parts(version: &str) -> Option<(&str, &str)> {
     use std::sync::OnceLock;
     static VERSION: OnceLock<regex::Regex> = OnceLock::new();
-    let pattern = VERSION.get_or_init(|| regex::Regex::new(r"V0*(\d+)(\d{2})$").unwrap());
+    let pattern = VERSION.get_or_init(|| regex::Regex::new(r"V0*(\d+)(\d{2})(?:\n)?\z").unwrap());
     let captures = pattern.captures(version)?;
     Some((captures.get(1)?.as_str(), captures.get(2)?.as_str()))
 }
@@ -5761,6 +5761,10 @@ mod tests {
     fn plus_media_summary_code_matches_pinned_other_edge_cases() {
         let tag = "XMP-plus:MediaSummaryCode";
         let cases = [
+            (
+                "|PLUS|V0100\n|U001|2AAA|",
+                "PLUS V0100\n (LDF Version 1.00) U001 (1 Media Usages:) 2AAA (Advertising|All Media Types|All Formats|All Distribution Formats)",
+            ),
             (
                 "2AAA",
                 "Advertising|All Media Types|All Formats|All Distribution Formats",
