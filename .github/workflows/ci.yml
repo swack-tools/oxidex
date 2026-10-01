@@ -75,6 +75,7 @@ jobs:
     name: Multi-platform Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
