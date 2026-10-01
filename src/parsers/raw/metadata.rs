@@ -1842,7 +1842,9 @@ fn extract_rw2_embedded_exif_tags(
     .into_iter()
     .find(|entry| entry.count == 1)
     .and_then(|entry| u64::try_from(entry.values[0]).ok())
-    .filter(|offset| *offset != 0);
+    // ExifTool refuses an ExifIFD pointer back to the already processed
+    // preview IFD0. Re-reading it here would assign IFD0 values to ExifIFD.
+    .filter(|offset| *offset != 0 && *offset != first_ifd_offset);
     let Some(exif_ifd_offset) = exif_ifd_offset else {
         return Ok(());
     };

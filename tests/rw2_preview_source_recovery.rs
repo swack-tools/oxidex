@@ -375,6 +375,26 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 }
 
 #[test]
+fn cyclic_preview_exififd_does_not_relabel_ifd0_shading_correction() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let shading = entry(&data, ifd0, 0xc4a5);
+    data[exif_pointer + 8..exif_pointer + 12]
+        .copy_from_slice(&u32::try_from(ifd0 - tiff).unwrap().to_le_bytes());
+    data[shading..shading + 2].copy_from_slice(&0xa411u16.to_le_bytes());
+    data[shading + 2..shading + 4].copy_from_slice(&3u16.to_le_bytes());
+    data[shading + 4..shading + 8].copy_from_slice(&1u32.to_le_bytes());
+    data[shading + 8..shading + 12].copy_from_slice(&1u32.to_le_bytes());
+
+    // Pinned ExifTool reports IFD0:ShadingCorrection=Yes, warns that the
+    // ExifIFD pointer references prior IFD0, and reports no ExifIFD A411.
+    let metadata = parse(&data);
+    assert!(metadata.get("ExifIFD:ShadingCorrection").is_none());
+    assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
+}
+
+#[test]
 fn footerless_preview_exififd_keeps_reached_shading_correction() {
     let data = source();
     let outer_ifd0 = read_u32(&data, 4) as usize;
