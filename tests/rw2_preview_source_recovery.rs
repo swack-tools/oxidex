@@ -391,6 +391,7 @@ fn bad_first_preview_exififd_entry_aborts_later_exif_values() {
     assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("inches"));
     assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
     assert!(metadata.get("ExifIFD:ColorSpace").is_none());
+    assert!(metadata.get("Panasonic:BatteryLevel").is_none());
 }
 
 #[test]

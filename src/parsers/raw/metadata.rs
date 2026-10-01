@@ -713,7 +713,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // to turn its IFD1 ThumbnailOffset back into the
                         // absolute file position ExifTool reports.
                         let jpeg_file_offset =
-                            tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e)
+                            tiff_external_entry_extent(data, ifd_offset, byte_order, 0x002e, None)
                                 .map(|(offset, _length)| offset)
                                 .unwrap_or(0);
                         // `PanasonicRaw::ProcessJpgFromRaw` reads the preview
@@ -2060,9 +2060,13 @@ fn extract_rw2_embedded_exif_tags(
     // dispatcher (see rebuild_relocated_makernote). MakerNotes.pm gives
     // MakerNotePanasonic `Start => '$valuePtr + 12'`, i.e. a fixed 12-byte
     // "Panasonic\0\0\0" header ahead of the IFD, which is preserved verbatim.
-    if let Some((makernote_offset, makernote_len)) =
-        tiff_external_entry_extent(tiff_data, exif_ifd_offset, byte_order, 0x927C)
-        && let Some(makernote) = tiff_data.get(makernote_offset..makernote_offset + makernote_len)
+    if let Some((makernote_offset, makernote_len)) = tiff_external_entry_extent(
+        tiff_data,
+        exif_ifd_offset,
+        byte_order,
+        0x927C,
+        Some(&exif_walk.eligible_indices),
+    ) && let Some(makernote) = tiff_data.get(makernote_offset..makernote_offset + makernote_len)
         && makernote.starts_with(b"Panasonic\0\0\0")
         && let Ok(base) = u32::try_from(makernote_offset)
         && let Some(rebuilt) = rebuild_relocated_makernote(
@@ -3542,12 +3546,14 @@ const PANASONIC_DEREFERENCED_TAGS: &[u16] = &[
 /// relocating a MakerNote needs exactly that: the offset IS the base its own
 /// internal offsets are stated against. Returns `None` for a value small
 /// enough to be stored inline in the entry, which by definition has no
-/// offset.
+/// offset. An embedded preview supplies `eligible_indices` from its shared
+/// ProcessExif walk so a raw extent lookup cannot revive an aborted entry.
 fn tiff_external_entry_extent(
     tiff: &[u8],
     ifd_offset: u64,
     byte_order: ByteOrder,
     wanted_tag: u16,
+    eligible_indices: Option<&[usize]>,
 ) -> Option<(usize, usize)> {
     let ifd_offset = usize::try_from(ifd_offset).ok()?;
     let entry_count = usize::from(read_tiff_u16(
@@ -3555,6 +3561,9 @@ fn tiff_external_entry_extent(
         byte_order,
     )?);
     for index in 0..entry_count {
+        if eligible_indices.is_some_and(|indices| indices.binary_search(&index).is_err()) {
+            continue;
+        }
         let start = ifd_offset.checked_add(2 + index * 12)?;
         let entry = tiff.get(start..start.checked_add(12)?)?;
         if read_tiff_u16(&entry[..2], byte_order)? != wanted_tag {
