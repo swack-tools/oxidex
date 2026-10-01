@@ -393,7 +393,7 @@ mod tests {
             b'n', b'a', b'm', b'e', // tag
             0x00, 0x00, 0x00, 0x00, // checksum
             0x00, 0x00, 0x00, 0x1c, // offset = 28
-            0x00, 0x00, 0x00, 0x00, // length (unused)
+            0x00, 0x00, 0x00, 0x00, // name table length (patched below)
             0x00, 0x00, // format
             0x00, 0x01, // count = 1
             0x00, 0x12, // stringOffset = 18
@@ -407,6 +407,8 @@ mod tests {
         let len_pos = sfnt.len() - 4;
         sfnt[len_pos..len_pos + 2].copy_from_slice(&(family.len() as u16).to_be_bytes());
         sfnt.extend_from_slice(family);
+        let name_table_len = (sfnt.len() - 28) as u32;
+        sfnt[24..28].copy_from_slice(&name_table_len.to_be_bytes());
         sfnt
     }
 

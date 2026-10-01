@@ -121,6 +121,8 @@ pub(crate) fn shim_group_priority(group0: &str) -> u8 {
 ///     value: None,
 ///     print: None,
 ///     stored: None,
+///     binary_payload_unavailable: false,
+///     binary_extract_from_stored: false,
 ///     priority: 1,
 ///     is_list: false,
 ///     order: 0,
@@ -177,6 +179,14 @@ pub struct TagOccurrence {
     /// without the original bytes (the PNG `eXIf` rebuild,
     /// `copy_metadata`). `None` everywhere else, where `raw` already is it.
     pub stored: Option<TagValue>,
+    /// The display value describes binary data whose bytes this reader did
+    /// not retain. `-b` must refuse this occurrence explicitly; ordinary
+    /// strings can have the same spelling and must remain extractable text.
+    pub binary_payload_unavailable: bool,
+    /// `-b` may use `stored` as the binary payload when the display and
+    /// ValueConv forms are summaries. Other tags can have binary source bytes
+    /// yet legitimately extract decoded text, so this must be explicit.
+    pub binary_extract_from_stored: bool,
     /// `FoundTag`'s `Priority` (`ExifTool.pm:9539`+): higher wins, ties
     /// broken by file order. See [`SHIM_DEFAULT_PRIORITY`] for what
     /// shim-minted occurrences get and why.
@@ -257,6 +267,8 @@ impl TagOccurrence {
             value: None,
             print: None,
             stored: None,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             priority: priority.into(),
             is_list: false,
             order,

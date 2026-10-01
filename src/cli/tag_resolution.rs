@@ -122,7 +122,7 @@ pub fn family0_label(occurrence: &TagOccurrence) -> &str {
 }
 
 /// The label for an arbitrary family number, for `-Gn` display.
-/// Family 2 and above are always empty in Phase A (`TagOccurrence::group2`
+/// At the source-row level, family 2 and above are empty (`TagOccurrence::group2`
 /// is never populated yet -- see `OVERHAUL_STEP18_DESIGN.md`), so only 0
 /// and 1 ever resolve to anything.
 fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
@@ -136,6 +136,39 @@ fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
             .unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+/// The copy number belongs to the resolved key, not the source row.
+/// Project family 4 only after FoundTag duplicate numbering has run.
+fn joined_family_label_for_entry(entry: &ResolvedOccurrence<'_>, families: &[u8]) -> String {
+    joined_family_label_for_copy(entry.occurrence, entry.copy, families)
+}
+
+fn joined_family_label_for_copy(
+    occurrence: &TagOccurrence,
+    copy: Option<u32>,
+    families: &[u8],
+) -> String {
+    if !families.contains(&4) {
+        return joined_family_label(occurrence, families);
+    }
+    let mut labels = Vec::with_capacity(families.len());
+    for &family in families {
+        let label = if family == 4 {
+            copy.filter(|copy| *copy > 0)
+                .map(|copy| format!("Copy{copy}"))
+                .unwrap_or_default()
+        } else {
+            family_label(occurrence, family)
+        };
+        if !label.is_empty() && labels.last() != Some(&label) {
+            labels.push(label);
+        }
+    }
+    if labels.len() > 1 && labels[0] == "Main" {
+        labels.remove(0);
+    }
+    labels.join(":")
 }
 
 /// Joins the requested `-Gn:m:...` families for one occurrence into the
@@ -382,6 +415,332 @@ pub fn resolve_requested_tags<'a>(
         }
     }
     out
+}
+
+/// The bytes selected by `-b`: Font.pm can return decoded text containing
+/// non-Unicode UTF-8 sequences, which must reach stdout unchanged. Separate
+/// selected values are concatenated, as pinned ExifTool does.
+pub fn render_binary_requested_tags(
+    metadata: &MetadataMap,
+    args: &CliArgs,
+) -> Result<Vec<u8>, String> {
+    let requested = args
+        .specific_tags()
+        .ok_or_else(|| "-b requires an explicit tag request".to_string())?;
+    if !args.excluded_tags().is_empty() {
+        return Err("-b with tag exclusions is not supported".to_string());
+    }
+    if requested
+        .iter()
+        .any(|name| name.contains('*') || name.contains('?'))
+    {
+        return Err("-b with wildcard tag requests is not supported".to_string());
+    }
+    let mut out = Vec::new();
+    for entry in resolve_requested_tags(metadata, &requested, args.all_tags) {
+        if entry.occurrence.binary_payload_unavailable {
+            return Err(format!(
+                "binary payload is unavailable for {}",
+                entry.lookup_key
+            ));
+        }
+        if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::ValueConv).as_ref()
+        {
+            out.extend_from_slice(bytes);
+            continue;
+        }
+        // Some source bytes belong to decoded text tags; only an explicit
+        // parser declaration permits extracting `stored` as the binary value.
+        if entry.occurrence.binary_extract_from_stored {
+            if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::Stored).as_ref()
+            {
+                out.extend_from_slice(bytes);
+                continue;
+            }
+            return Err(format!(
+                "binary payload is unavailable for {}",
+                entry.lookup_key
+            ));
+        }
+        // ExifTool's -b disables PrintConv independently of -n. The
+        // occurrence's ValueConv channel is the only honest source for text
+        // and numeric extraction after binary payload cases above.
+        let value = entry.occurrence.project(ValueChannel::ValueConv);
+        match value.as_ref() {
+            TagValue::String(text) => out.extend_from_slice(text.as_bytes()),
+            TagValue::TextBytes(bytes) | TagValue::Binary(bytes) => out.extend_from_slice(bytes),
+            other => out.extend_from_slice(
+                super::output_formatter::format_tag_value_with_mode(&entry.lookup_key, other, true)
+                    .as_bytes(),
+            ),
+        }
+    }
+    Ok(out)
+}
+
+fn value_text_bytes(tag_name: &str, value: &TagValue, no_print_conv: bool, short: bool) -> Vec<u8> {
+    match value {
+        TagValue::TextBytes(bytes) => {
+            // Pinned exiftool ordinary output: remove NUL, replace controls
+            // with dots, then trim trailing whitespace. Keep non-Unicode bytes.
+            let sanitized: Vec<u8> = bytes
+                .iter()
+                .copied()
+                .filter(|byte| *byte != 0)
+                .map(|byte| {
+                    if matches!(byte, 1..=31 | 127) {
+                        b'.'
+                    } else {
+                        byte
+                    }
+                })
+                .collect();
+            sanitized.trim_ascii_end().to_vec()
+        }
+        other if short => super::output_formatter::format_tag_value_short_with_mode(
+            tag_name,
+            other,
+            no_print_conv,
+        )
+        .into_bytes(),
+        other => {
+            super::output_formatter::format_tag_value_with_mode(tag_name, other, no_print_conv)
+                .into_bytes()
+        }
+    }
+}
+
+fn has_non_unicode_text(resolved: &[ResolvedOccurrence<'_>], no_print_conv: bool) -> bool {
+    resolved.iter().any(|entry| {
+        matches!(
+            resolved_display_value(entry.occurrence, no_print_conv),
+            TagValue::TextBytes(_)
+        )
+    })
+}
+
+fn render_text_lines_bytes(
+    resolved: &[ResolvedOccurrence<'_>],
+    families: Option<&[u8]>,
+    no_print_conv: bool,
+    short_level: u8,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for entry in resolved {
+        let value = resolved_display_value(entry.occurrence, no_print_conv);
+        if families.is_none()
+            && super::output_formatter::hidden_from_ungrouped_short_listing(
+                &entry.lookup_key,
+                &value,
+            )
+        {
+            continue;
+        }
+        let label = families.map(|families| joined_family_label(entry.occurrence, families));
+        let prefix = if short_level > 0 {
+            short_output_line(short_level, label.as_deref(), &entry.occurrence.name, "")
+                .trim_end_matches('\n')
+                .to_string()
+        } else if let Some(label) = label {
+            format!("[{label}] {}: ", entry.occurrence.name)
+        } else {
+            format!("{}: ", entry.lookup_key)
+        };
+        out.extend_from_slice(prefix.as_bytes());
+        out.extend_from_slice(&value_text_bytes(
+            &entry.lookup_key,
+            &value,
+            no_print_conv,
+            short_level > 0,
+        ));
+        out.push(b'\n');
+    }
+    out
+}
+
+fn render_map_text_bytes(metadata: &MetadataMap, no_print_conv: bool) -> Vec<u8> {
+    let mut entries: Vec<_> = metadata.iter().collect();
+    entries.sort_by_key(|(key, _)| *key);
+    let mut out = Vec::new();
+    for (key, value) in entries {
+        if super::output_formatter::hidden_from_ungrouped_short_listing(key, value) {
+            continue;
+        }
+        out.extend_from_slice(key.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(&value_text_bytes(key, value, no_print_conv, false));
+        out.push(b'\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod binary_text_tests {
+    use super::*;
+
+    #[test]
+    fn binary_mpf_uid_request_returns_original_payload() {
+        for count in [3u32, 33] {
+            let payload: Vec<u8> = (0..count as u8).collect();
+            let mut segment = b"MPF\0II\x2a\0\x08\0\0\0".to_vec();
+            segment.extend_from_slice(&1u16.to_le_bytes());
+            segment.extend_from_slice(&0xb003u16.to_le_bytes());
+            segment.extend_from_slice(&7u16.to_le_bytes());
+            segment.extend_from_slice(&count.to_le_bytes());
+            if count <= 4 {
+                let mut slot = [0; 4];
+                slot[..payload.len()].copy_from_slice(&payload);
+                segment.extend_from_slice(&slot);
+            } else {
+                segment.extend_from_slice(&26u32.to_le_bytes());
+            }
+            segment.extend_from_slice(&0u32.to_le_bytes());
+            if count > 4 {
+                segment.extend_from_slice(&payload);
+            }
+            let mut metadata = MetadataMap::new();
+            crate::parsers::jpeg::mpf_parser::parse_mpf_segment(&segment, 0, &mut metadata)
+                .unwrap();
+            let args =
+                CliArgs::parse_from(["-b".into(), "-ImageUIDList".into(), "fixture.jpg".into()])
+                    .unwrap();
+            assert_eq!(
+                render_binary_requested_tags(&metadata, &args).unwrap(),
+                payload
+            );
+            if count > 4 {
+                segment.pop();
+                let mut truncated = MetadataMap::new();
+                crate::parsers::jpeg::mpf_parser::parse_mpf_segment(&segment, 0, &mut truncated)
+                    .unwrap();
+                assert!(!truncated.contains_key("MPF0:ImageUIDList"));
+            }
+        }
+    }
+
+    #[test]
+    fn binary_request_refuses_unavailable_payload_summary() {
+        let args = CliArgs::parse_from(["-b".into(), "-PreviewImage".into(), "fixture.jpg".into()])
+            .unwrap();
+        let mut metadata = MetadataMap::new();
+        metadata.insert_unavailable_binary("MPImage2:PreviewImage", 50000, "");
+        assert!(
+            render_binary_requested_tags(&metadata, &args)
+                .unwrap_err()
+                .contains("PreviewImage")
+        );
+
+        let mut merged = MetadataMap::new();
+        merged.merge_winners_keeping_group1(&metadata);
+        assert!(
+            render_binary_requested_tags(&merged, &args)
+                .unwrap_err()
+                .contains("PreviewImage"),
+            "merging a parser map must retain unavailable-payload state"
+        );
+        *merged.get_mut("MPImage2:PreviewImage").unwrap() =
+            TagValue::new_string("replacement text");
+        assert_eq!(
+            render_binary_requested_tags(&merged, &args).unwrap(),
+            b"replacement text"
+        );
+    }
+
+    #[test]
+    fn binary_request_returns_payload_not_display_placeholder() {
+        let args =
+            CliArgs::parse_from(["-b".into(), "-ThumbnailImage".into(), "fixture.jpg".into()])
+                .unwrap();
+        let mut metadata = MetadataMap::new();
+        let payload = vec![0xff, 0xd8, 0, 0xff, 0xd9];
+        metadata.insert("IFD1:ThumbnailImage", TagValue::Binary(payload.clone()));
+        assert_eq!(
+            render_binary_requested_tags(&metadata, &args).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn binary_request_keeps_decoded_text_when_stored_form_is_binary() {
+        let args = CliArgs::parse_from(["-b".into(), "-Description".into(), "fixture.jpg".into()])
+            .unwrap();
+        let text = TagValue::new_string("decoded description");
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence_with_forms(
+            "XMP-dc:Description",
+            text.clone(),
+            text,
+            Some(TagValue::Binary(vec![0, 1, 2])),
+            1,
+            "",
+            Instance::default(),
+        );
+        assert_eq!(
+            render_binary_requested_tags(&metadata, &args).unwrap(),
+            b"decoded description"
+        );
+    }
+
+    #[test]
+    fn non_unicode_text_sanitizes_controls_before_trimming() {
+        let value = TagValue::new_text_bytes(vec![0xed, 0xa0, 0x80, 0, b'\n', b'\t', 0x7f, b' ']);
+        assert_eq!(
+            value_text_bytes("FontFamily", &value, false, true),
+            vec![0xed, 0xa0, 0x80, b'.', b'.', b'.']
+        );
+    }
+
+    #[test]
+    fn explicit_binary_request_emits_raw_text_bytes_without_placeholder() {
+        let args = CliArgs::parse_from([
+            "-b".into(),
+            "-FontFamily-en-US".into(),
+            "fixture.ttf".into(),
+        ])
+        .unwrap();
+        assert!(args.binary_output);
+        assert_eq!(args.specific_tags(), Some(vec!["FontFamily-en-US".into()]));
+        let mut metadata = MetadataMap::new();
+        let raw = vec![0xed, 0xa0, 0x80, b'A'];
+        metadata.insert(
+            "Font:FontFamily-en-US",
+            TagValue::new_text_bytes(raw.clone()),
+        );
+        assert_eq!(render_binary_requested_tags(&metadata, &args).unwrap(), raw);
+    }
+
+    #[test]
+    fn short_text_request_keeps_non_unicode_bytes_until_stdout() {
+        let args = CliArgs::parse_from([
+            "-s3".into(),
+            "-FontFamily-en-US".into(),
+            "fixture.ttf".into(),
+        ])
+        .unwrap();
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            "Font:FontFamily-en-US",
+            TagValue::new_text_bytes(vec![0xed, 0xa0, 0x80, b'A']),
+        );
+        let ResolvedFileOutput::Bytes(bytes) = resolve_file_output(&metadata, &args) else {
+            panic!("malformed text must use byte output");
+        };
+        assert_eq!(bytes, vec![0xed, 0xa0, 0x80, b'A', b'\n']);
+    }
+
+    #[test]
+    fn binary_option_refuses_unsupported_combinations_by_name() {
+        for args in [
+            vec!["-b", "fixture.ttf"],
+            vec!["-b", "-j", "-FontFamily-en-US", "fixture.ttf"],
+            vec!["--binary", "-FontFamily-en-US", "fixture.ttf"],
+        ] {
+            assert!(
+                CliArgs::parse_from(args.into_iter().map(Into::into)).is_err(),
+                "unsupported args were accepted"
+            );
+        }
+    }
 }
 
 /// ExifTool's family-2 group names (`ExifTool.pod`, `GetGroup`, "Family 2
@@ -934,7 +1293,11 @@ fn select_occurrences<'m>(
             let ranks: Vec<usize> = found
                 .iter()
                 .map(|&i| {
-                    let label = joined_family_label(keys[i].occurrence, families);
+                    let label = joined_family_label_for_copy(
+                        keys[i].occurrence,
+                        Some(keys[i].copy),
+                        families,
+                    );
                     let next = rank.len();
                     *rank.entry(label).or_insert(next)
                 })
@@ -977,7 +1340,7 @@ fn json_group_winners<'m>(
     for (index, entry) in resolved.iter().enumerate() {
         groups
             .entry((
-                joined_family_label(entry.occurrence, families),
+                joined_family_label_for_entry(entry, families),
                 entry.occurrence.name.to_string(),
             ))
             .or_default()
@@ -1091,7 +1454,7 @@ pub fn build_display_map(
         .iter()
         .map(|entry| match group_display {
             Some(families) => {
-                let label = joined_family_label(entry.occurrence, families);
+                let label = joined_family_label_for_entry(entry, families);
                 if bracketed {
                     format!("[{label}] {}", entry.occurrence.name)
                 } else {
@@ -1168,7 +1531,7 @@ pub fn render_group_display_lines(
 ) -> String {
     let mut out = String::new();
     for entry in resolved {
-        let label = joined_family_label(entry.occurrence, families);
+        let label = joined_family_label_for_entry(entry, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
         let rendered = super::output_formatter::format_tag_value_with_mode(
             &entry.lookup_key,
@@ -1263,7 +1626,7 @@ pub fn render_short_lines(
             &value,
             no_print_conv,
         );
-        let label = families.map(|families| joined_family_label(entry.occurrence, families));
+        let label = families.map(|families| joined_family_label_for_entry(entry, families));
         out.push_str(&short_output_line(
             level,
             label.as_deref(),
@@ -1307,6 +1670,8 @@ pub enum ResolvedFileOutput {
     /// Pre-rendered `"[label] name: value\n"` lines, from
     /// [`render_group_display_lines`].
     Lines(String),
+    /// Non-JSON text containing decoded bytes that Rust strings cannot hold.
+    Bytes(Vec<u8>),
     /// Display-ready metadata: PrintConv applied or not per
     /// `--no-print-conv`, already filtered/resolved, keyed the way the
     /// caller's `-Gn`/plain-key choice requires.
@@ -1386,6 +1751,14 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                     .expect("grouped JSON has a group"),
             );
         }
+        if !args.json && !args.csv && has_non_unicode_text(&resolved, no_print_conv) {
+            return ResolvedFileOutput::Bytes(render_text_lines_bytes(
+                &resolved,
+                args.group_display.as_deref(),
+                no_print_conv,
+                args.short_level,
+            ));
+        }
         if short_text {
             return ResolvedFileOutput::Lines(render_short_lines(
                 &resolved,
@@ -1447,7 +1820,12 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     // that path has always gone through `resolve_requested_tags`; only the
     // unfiltered listing was affected.
     let surviving = options.strip_extended_only(raw_metadata);
-    if args.group_display.is_some() || args.all_tags || short_text {
+    let has_text_bytes = !args.json
+        && !args.csv
+        && surviving
+            .iter()
+            .any(|(_, value)| matches!(value, TagValue::TextBytes(_)));
+    if args.group_display.is_some() || args.all_tags || short_text || has_text_bytes {
         let surviving_keys: HashSet<&str> = surviving.keys().map(String::as_str).collect();
         let mut resolved: Vec<ResolvedOccurrence> = if args.all_tags || grouped_json {
             // Full and requested listings must replay the same FoundTag
@@ -1496,7 +1874,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 .map(|entry| {
                     let next = rank.len();
                     *rank
-                        .entry(joined_family_label(entry.occurrence, families))
+                        .entry(joined_family_label_for_entry(entry, families))
                         .or_insert(next)
                 })
                 .collect();
@@ -1506,6 +1884,18 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
             resolved = ranked.into_iter().map(|(_, entry)| entry).collect();
         }
 
+        if !args.json && !args.csv && has_non_unicode_text(&resolved, no_print_conv) {
+            if short_text || args.group_display.is_some() {
+                return ResolvedFileOutput::Bytes(render_text_lines_bytes(
+                    &resolved,
+                    args.group_display.as_deref(),
+                    no_print_conv,
+                    args.short_level,
+                ));
+            }
+            let metadata = build_display_map(&resolved, None, no_print_conv, true);
+            return ResolvedFileOutput::Bytes(render_map_text_bytes(&metadata, no_print_conv));
+        }
         if short_text {
             return ResolvedFileOutput::Lines(render_short_lines(
                 &resolved,
@@ -1606,6 +1996,8 @@ mod tests {
             priority: priority.into(),
             is_list: false,
             order: 999,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             origin: Provenance {
                 module: Some("Olympus"),
                 table: Some("CameraSettings"),
@@ -1682,6 +2074,7 @@ mod tests {
         CliArgs {
             detector: crate::cli::args::DetectorMode::Signature,
             json: true,
+            binary_output: false,
             csv: false,
             short_level: 0,
             all_tags,
@@ -1705,7 +2098,9 @@ mod tests {
     fn output_map(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
         match resolve_file_output(metadata, args) {
             ResolvedFileOutput::Metadata(map) => map,
-            ResolvedFileOutput::Lines(_) => panic!("JSON matrix must return metadata"),
+            ResolvedFileOutput::Lines(_) | ResolvedFileOutput::Bytes(_) => {
+                panic!("JSON matrix must return metadata")
+            }
         }
     }
 
@@ -1773,6 +2168,8 @@ mod tests {
                 priority: priority.into(),
                 is_list: false,
                 order: u32::MAX,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Olympus"),
                     table: Some("CameraSettings"),
@@ -2069,6 +2466,7 @@ mod tests {
                 let args = CliArgs {
                     detector: DetectorMode::Signature,
                     json: true,
+                    binary_output: false,
                     csv: false,
                     short_level: 0,
                     all_tags,
@@ -2448,6 +2846,7 @@ mod tests {
                 let mut args = CliArgs {
                     detector: DetectorMode::Signature,
                     json: true,
+                    binary_output: false,
                     csv: false,
                     short_level: 0,
                     all_tags,

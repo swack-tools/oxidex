@@ -19,25 +19,48 @@ use std::collections::HashMap;
 /// Inserts stay constant-time on average, including profiles with many
 /// repeated language records; removing and shifting an ordered map would
 /// make those profiles quadratic.
+#[derive(Debug)]
+pub(super) struct IccDecodedTag {
+    pub name: String,
+    pub value: TagValue,
+    /// Original unformatted tag bytes, only for a source-declared binary
+    /// payload. Display text never determines whether this is populated.
+    pub binary_payload: Option<Vec<u8>>,
+}
+
 #[derive(Default)]
 struct IccTagRecords {
-    records: Vec<Option<(String, TagValue)>>,
+    records: Vec<Option<IccDecodedTag>>,
     winners: HashMap<String, usize>,
 }
 
 impl IccTagRecords {
     fn insert(&mut self, name: String, value: TagValue) {
+        self.insert_with_payload(name, value, None);
+    }
+
+    fn insert_with_payload(&mut self, name: String, value: TagValue, payload: Option<Vec<u8>>) {
         if let Some(previous) = self.winners.insert(name.clone(), self.records.len()) {
             self.records[previous] = None;
         }
-        self.records.push(Some((name, value)));
+        self.records.push(Some(IccDecodedTag {
+            name,
+            value,
+            binary_payload: payload,
+        }));
     }
 }
 
-/// Parses ICC tags using the tag registry
-///
-/// This function reads the tag table and dispatches each tag to its
-/// appropriate decoder based on the tag type in the registry.
+/// Parses ICC tags using the tag registry, retaining binary source bytes for
+/// the complete parser's occurrence channels.
+pub(super) fn parse_tags_registry_with_payloads(data: &[u8]) -> Result<Vec<IccDecodedTag>> {
+    let mut records = IccTagRecords::default();
+    parse_tag_records(data, &mut records)?;
+    Ok(records.records.into_iter().flatten().collect())
+}
+
+/// Parses ICC tags into the legacy public value map. Its display values stay
+/// unchanged; the complete parser uses `parse_tags_registry_with_payloads`.
 pub fn parse_tags_registry(data: &[u8], metadata: &mut OrderedTags<TagValue>) -> Result<()> {
     let mut records = IccTagRecords::default();
     for (name, value) in std::mem::take(metadata) {
@@ -45,7 +68,13 @@ pub fn parse_tags_registry(data: &[u8], metadata: &mut OrderedTags<TagValue>) ->
     }
     let result = parse_tag_records(data, &mut records);
     // Preserve any successfully decoded prefix even if a later entry fails.
-    metadata.extend(records.records.into_iter().flatten());
+    metadata.extend(
+        records
+            .records
+            .into_iter()
+            .flatten()
+            .map(|row| (row.name, row.value)),
+    );
     result
 }
 
@@ -153,14 +182,27 @@ fn decode_tag(signature: &str, data: &[u8], size: usize, metadata: &mut IccTagRe
             };
             TagValue::new_string(value)
         }),
-        TagType::Curve | TagType::Binary => Some(binary_placeholder(size)),
-        TagType::S15Fixed16Array => Some(
-            parse_s15fixed16_array(data)
-                .map(TagValue::new_string)
-                // FormatICCTag returns undef for a payload that is not really
-                // an 'sf32' array, and ExifTool then stores the raw bytes.
-                .unwrap_or_else(|_| binary_placeholder(size)),
-        ),
+        TagType::Curve | TagType::Binary => {
+            metadata.insert_with_payload(
+                def.name.to_string(),
+                binary_placeholder(size),
+                Some(data.to_vec()),
+            );
+            None
+        }
+        TagType::S15Fixed16Array => match parse_s15fixed16_array(data) {
+            Ok(decoded) => Some(TagValue::new_string(decoded)),
+            // FormatICCTag returns undef for a payload that is not really
+            // an 'sf32' array, and ExifTool then stores the raw bytes.
+            Err(_) => {
+                metadata.insert_with_payload(
+                    def.name.to_string(),
+                    binary_placeholder(size),
+                    Some(data.to_vec()),
+                );
+                None
+            }
+        },
         TagType::ViewingConditions => parse_viewing_conditions(data)
             .ok()
             .and_then(|vc| decode_viewing_conditions(vc, metadata)),

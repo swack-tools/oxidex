@@ -877,13 +877,7 @@ fn parse_raw_data_record(data: &[u8], metadata: &mut MetadataMap, endian: FlirEn
 
         // The image itself is not embedded in the metadata map; report it the
         // way ExifTool reports binary tags without `-b`.
-        metadata.insert(
-            "FLIR:RawThermalImage".to_string(),
-            TagValue::String(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                image.len()
-            )),
-        );
+        metadata.insert_unavailable_binary("FLIR:RawThermalImage", image.len(), "");
     }
 }
 
@@ -1537,13 +1531,7 @@ fn parse_palette_info_record(data: &[u8], metadata: &mut MetadataMap) {
     if let Some(colors) = reader.u8_at(palette_info_offsets::PALETTE_COLORS) {
         let palette_len = 3 * colors as usize;
         if palette_len > 0 && palette_info_offsets::PALETTE + palette_len <= data.len() {
-            metadata.insert(
-                "FLIR:Palette".to_string(),
-                TagValue::String(format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    palette_len
-                )),
-            );
+            metadata.insert_unavailable_binary("FLIR:Palette", palette_len, "");
         }
     }
 }

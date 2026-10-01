@@ -215,10 +215,20 @@ pub struct XmpEntry {
     /// FoundXMP/FoundTag priority of this exact source property, including
     /// signed tag-level priorities. The display name is never its lookup key.
     pub priority: i16,
+    /// Source table/default-property binary declaration, retained separately
+    /// from the printed summary so literal text with the same words stays text.
+    pub binary_payload_unavailable: bool,
 }
 
 impl XmpEntry {
-    fn new(legacy_key: &str, tag: &str, value: XmpValue, shadowed: bool, priority: i16) -> Self {
+    fn new(
+        legacy_key: &str,
+        tag: &str,
+        value: XmpValue,
+        shadowed: bool,
+        priority: i16,
+        binary_payload_unavailable: bool,
+    ) -> Self {
         Self {
             key: legacy_key.to_string(),
             tag: tag.to_string(),
@@ -229,6 +239,7 @@ impl XmpEntry {
             value,
             shadowed,
             priority,
+            binary_payload_unavailable,
         }
     }
 
@@ -242,14 +253,17 @@ impl XmpEntry {
             value,
             shadowed: false,
             priority: 1,
+            binary_payload_unavailable: false,
         }
     }
 
     /// An entry decoded from Google's `HdrPlusMakernote`/`ShotLogData`
     /// (`google_hdrp`): family 0 is MakerNotes and family 1 is Google.
     fn hdrp(key: String, value: XmpValue) -> Self {
+        let binary_payload_unavailable = super::google_hdrp::is_binary_output_tag(&key);
         Self {
             group1: super::google_hdrp::HDRP_GROUP1.to_string(),
+            binary_payload_unavailable,
             ..Self::plain(key, value)
         }
     }
@@ -423,14 +437,29 @@ pub(crate) fn insert_xmp_entry_with_source(
         entry.priority
     };
     if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
-        metadata.insert_occurrence_with_group0(
-            entry.key.clone(),
-            value,
-            super::google_hdrp::hdrp_tag_priority(&entry.key),
-            super::google_hdrp::HDRP_GROUP0,
-            &entry.group1,
-            crate::core::Instance::default(),
-        );
+        if entry.binary_payload_unavailable {
+            metadata.insert_occurrence_with_group0_binary_state(
+                entry.key.clone(),
+                value,
+                super::google_hdrp::hdrp_tag_priority(&entry.key),
+                super::google_hdrp::HDRP_GROUP0,
+                &entry.group1,
+                crate::core::Instance::default(),
+            );
+        } else {
+            metadata.insert_occurrence_with_group0(
+                entry.key.clone(),
+                value,
+                super::google_hdrp::hdrp_tag_priority(&entry.key),
+                super::google_hdrp::HDRP_GROUP0,
+                &entry.group1,
+                crate::core::Instance::default(),
+            );
+        }
+        return;
+    }
+    if entry.binary_payload_unavailable {
+        metadata.insert_xmp_binary_unavailable(entry.key.clone(), value, priority, &entry.group1);
         return;
     }
     if let Some((source, forms)) =
@@ -1531,6 +1560,11 @@ fn parse_xmp_packet_in_directory(
                 formatted[index].1.clone(),
                 false,
                 *priority,
+                xmp_binary_source(
+                    tag,
+                    &results[index].value,
+                    default_namespace_tags.contains(tag),
+                ),
             ));
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         } else {
@@ -1540,6 +1574,7 @@ fn parse_xmp_packet_in_directory(
                 format_value(tag, value, false),
                 false,
                 *priority,
+                xmp_binary_source(tag, value, default_namespace_tags.contains(tag)),
             ));
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         }
@@ -1552,6 +1587,11 @@ fn parse_xmp_packet_in_directory(
                 formatted[index].1.clone(),
                 true,
                 legacy.priority_for(&result.tag, &result.value),
+                xmp_binary_source(
+                    &result.tag,
+                    &result.value,
+                    default_namespace_tags.contains(&result.tag),
+                ),
             ));
             gps_sources
                 .push(convert_xmp_gps(&result.tag, &result.value).map(|_| result.value.clone()));
@@ -4265,6 +4305,15 @@ const RAW_BINARY_TAGS: [&str; 3] = [
     "XMP-GCamera:HDRPlusMakerNote",
     "XMP-GCamera:ShotLogData",
 ];
+
+/// The selected XMP source declares these scalar values binary before their
+/// public text is formatted. A default property becomes Binary only above
+/// FoundXMP's source-length threshold. Invalid base64 remains ordinary text.
+fn xmp_binary_source(tag: &str, raw: &str, is_default: bool) -> bool {
+    (is_default && raw.len() > 65536)
+        || RAW_BINARY_TAGS.contains(&tag)
+        || (BASE64_DECODED_BINARY_TAGS.contains(&tag) && base64_binary_placeholder(raw).is_some())
+}
 
 /// Renders a base64 XMP property the way ExifTool renders a binary tag.
 ///
@@ -8135,7 +8184,7 @@ mod entry_tests {
     }
 
     #[test]
-    fn public_entry_literal_keeps_its_original_five_fields() {
+    fn public_entry_literal_keeps_source_binary_state_explicit() {
         let entry = XmpEntry {
             key: "XMP-exif:GPSLatitude".into(),
             tag: "XMP-exif:GPSLatitude".into(),
@@ -8143,8 +8192,33 @@ mod entry_tests {
             value: XmpValue::Scalar("43 deg 30' 0.00\" N".into()),
             shadowed: false,
             priority: 0,
+            binary_payload_unavailable: false,
         };
         assert_eq!(entry.group1, "XMP-exif");
+    }
+
+    #[test]
+    fn xmp_binary_provenance_comes_from_source_not_display_words() {
+        let long_default = "A".repeat(65537);
+        let xml = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" xmlns:GMask="http://ns.google.com/photos/1.0/gmaskmap/" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description GDepth:DepthImage="AQIDBA==" dc:description="(Binary data 4 bytes, use -b option to extract)"><GMask:Data>{long_default}</GMask:Data></rdf:Description></rdf:RDF>"#
+        );
+        let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tag == "XMP-GDepth:DepthImage" && e.binary_payload_unavailable)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tag == "XMP-GMask:Data" && e.binary_payload_unavailable)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tag == "XMP-dc:Description" && !e.binary_payload_unavailable)
+        );
     }
 
     #[test]

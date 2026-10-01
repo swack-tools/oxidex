@@ -498,13 +498,10 @@ impl SVGParser {
             return;
         };
 
-        metadata.insert(
-            "JUMBF:JUMBF".to_string(),
-            TagValue::new_string(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                decoded.len()
-            )),
-        );
+        // The decoded manifest is needed below to enumerate children. Keep
+        // its public summary, but refuse -b until a shared payload can be
+        // retained without duplicating a potentially large manifest.
+        metadata.insert_unavailable_binary("JUMBF:JUMBF", decoded.len(), "");
 
         let mut first_jumd_seen = false;
         let mut docs = JumbfDocs::default();

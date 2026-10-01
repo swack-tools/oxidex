@@ -324,8 +324,19 @@ fn parse_section(
         let Some(name) = name else {
             continue;
         };
+        // Blob properties become binary summaries unless a named conversion
+        // consumes the bytes as text or a structured hyperlink list.
+        let binary_source = values
+            .iter()
+            .any(|value| matches!(value, FpxValue::Bytes(_)))
+            && !matches!(name.as_str(), "HyperlinkBase" | "Hyperlinks");
         if let Some(value) = convert_value(&name, values) {
-            metadata.insert(&format!("FlashPix:{}", name), value);
+            let key = format!("FlashPix:{name}");
+            if binary_source {
+                metadata.insert_unavailable_binary_display(key, value, "");
+            } else {
+                metadata.insert(key, value);
+            }
             found_any = true;
         }
     }
@@ -1390,6 +1401,32 @@ mod tests {
             &mut metadata
         ));
         assert_eq!(metadata.get_string("FlashPix:Title"), Some("title"));
+    }
+
+    #[test]
+    fn document_info_bytes_number_is_not_binary_payload() {
+        let mut data = vec![0u8; 48];
+        data[0..2].copy_from_slice(&BOM_LITTLE_ENDIAN);
+        data[44..48].copy_from_slice(&48u32.to_le_bytes());
+        let mut section = Vec::new();
+        section.extend_from_slice(&24u32.to_le_bytes());
+        section.extend_from_slice(&1u32.to_le_bytes());
+        section.extend_from_slice(&4u32.to_le_bytes()); // DocumentInfo Bytes
+        section.extend_from_slice(&16u32.to_le_bytes());
+        section.extend_from_slice(&3u32.to_le_bytes()); // VT_I4
+        section.extend_from_slice(&741u32.to_le_bytes());
+        data.extend_from_slice(&section);
+        let mut metadata = MetadataMap::new();
+        assert!(parse_property_stream(
+            &data,
+            PropertySet::DocumentInfo,
+            &mut metadata
+        ));
+        assert_eq!(
+            metadata.get("FlashPix:Bytes"),
+            Some(&TagValue::Integer(741))
+        );
+        assert!(!metadata.occurrences_for("FlashPix:Bytes")[0].binary_payload_unavailable);
     }
 
     #[test]

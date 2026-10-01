@@ -115,7 +115,11 @@ pub fn parse_afcp_trailer_grouped(
                 TAG_IPTC => {
                     let group1 = iptc_groups.next_group();
                     for (name, value) in extract_iptc_values_from_block(data) {
-                        metadata.insert_with_group1(name, value, &group1);
+                        if name == "IPTC:ObjectPreviewData" {
+                            metadata.insert_unavailable_binary_display(name, value, &group1);
+                        } else {
+                            metadata.insert_with_group1(name, value, &group1);
+                        }
                     }
                 }
                 TAG_TEXT => {

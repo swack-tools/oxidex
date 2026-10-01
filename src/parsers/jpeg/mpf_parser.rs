@@ -276,15 +276,17 @@ fn parse_mp_index_ifd(
                 }
             }
             IMAGE_UID_LIST => {
-                // ImageUIDList - 33 bytes per image (UNDEFINED type)
-                // Match ExifTool format exactly (no comma)
-                metadata.insert(
-                    "MPF0:ImageUIDList".to_string(),
-                    TagValue::String(format!(
-                        "(Binary data {} bytes, use -b option to extract)",
-                        value_count
-                    )),
-                );
+                // MPF.pm marks ImageUIDList as binary. Preserve its bytes so
+                // explicit extraction never emits the display placeholder.
+                let data_offset = if value_count <= 4 {
+                    entry_offset + 8
+                } else {
+                    value_or_offset as usize
+                };
+                if let Some(bytes) = reader.bytes_at(data_offset, value_count) {
+                    metadata
+                        .insert_available_binary_with_display("MPF0:ImageUIDList", bytes.to_vec());
+                }
             }
             TOTAL_FRAMES => {
                 // TotalFrames - LONG
@@ -555,12 +557,10 @@ fn parse_mp_entry_array(
                 } else {
                     format!("MPImage{}", i + 1)
                 };
-            metadata.insert(
+            metadata.insert_unavailable_binary(
                 format!("{}:{}", group, name),
-                TagValue::String(format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    image_size
-                )),
+                image_size as usize,
+                "",
             );
         }
     }
@@ -1100,6 +1100,18 @@ mod tests {
             metadata.get_string("MPImage2:PreviewImage"),
             Some("(Binary data 50000 bytes, use -b option to extract)"),
             "entry 2 is a Large Thumbnail, so its image tag is PreviewImage"
+        );
+        assert!(metadata.occurrences_for("MPImage2:PreviewImage")[0].binary_payload_unavailable);
+        let binary_args = crate::cli::args::CliArgs::parse_from([
+            "-b".into(),
+            "-PreviewImage".into(),
+            "fixture.jpg".into(),
+        ])
+        .unwrap();
+        assert!(
+            crate::cli::tag_resolution::render_binary_requested_tags(&metadata, &binary_args)
+                .unwrap_err()
+                .contains("PreviewImage")
         );
         assert!(
             !metadata.contains_key("MPImage1:MPImage1"),

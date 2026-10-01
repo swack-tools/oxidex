@@ -252,6 +252,18 @@ const V2_TABLE: &[(&[u8], &str)] = &[
     (b"GoudaRequest", "GoudaRequestText"),
 ];
 
+/// These rows are emitted only from Google.pm's binary fields, including
+/// dynamically numbered payload frames. This is source identity, not a check
+/// of the placeholder text produced by their formatter.
+pub(crate) fn is_binary_output_tag(tag: &str) -> bool {
+    let Some(name) = tag.strip_prefix("Google:") else {
+        return false;
+    };
+    name == "ImageData"
+        || name.starts_with("PayloadFrame")
+        || V2_TABLE.iter().any(|(_, declared)| *declared == name)
+}
+
 /// A port of `ProcessHDRPMakerNote` (Google.pm:630-663), the text-framed
 /// version-2 HDRP stream. Ported from origin/main ed2982e1/f6d86743/a5fdaf48
 /// and re-expressed as a line-for-line transcription of the Perl loop, so

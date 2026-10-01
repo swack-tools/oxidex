@@ -359,9 +359,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // Extract ICC profile metadata
         match extract_icc_profile(reader) {
             Ok(icc_metadata) => {
-                for (key, value) in icc_metadata.iter() {
-                    metadata.insert(key.clone(), value.clone());
-                }
+                // The ICC parser owns each binary payload and its family-1
+                // group. Replay occurrences instead of flattening displays.
+                metadata.merge(icc_metadata);
             }
             Err(_) => {
                 // ICC profile is optional - silently continue if not present
@@ -458,15 +458,18 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // EXIF tags it carries.
         if let Ok(photoshop_metadata) = photoshop_resources::parse_photoshop_image_resources(reader)
         {
-            // Preserve this PDF boundary's existing one-winner-per-key projection.
-            // Repeated EXIFInfo resources need ExifTool's shared processed-directory
-            // address state before their additional occurrences can be exposed.
-            // Carry each selected winner's forms/priority in its recorded order;
-            // HashMap iteration and plain insert would discard that information.
-            let mut winners = photoshop_metadata.winner_occurrences().collect::<Vec<_>>();
-            winners.sort_by_key(|(_, occurrence)| occurrence.order);
-            for (key, occurrence) in winners {
-                metadata.insert_renamed_occurrence(key.clone(), occurrence);
+            // Preserve the historical winner-only EXIF/Photoshop projection,
+            // while retaining every physical IPTC 0x0404 directory. Those
+            // directories are numbered by the shared carrier decoder and
+            // must remain distinct through this outer PDF map copy.
+            let winners: std::collections::HashSet<u32> = photoshop_metadata
+                .winner_occurrences()
+                .map(|(_, occurrence)| occurrence.order)
+                .collect();
+            for (key, occurrence) in photoshop_metadata.keyed_occurrences() {
+                if key.starts_with("IPTC:") || winners.contains(&occurrence.order) {
+                    metadata.insert_renamed_occurrence(key.to_string(), occurrence);
+                }
             }
         }
 

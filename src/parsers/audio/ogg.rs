@@ -745,14 +745,7 @@ fn parse_vorbis_comments(data: &[u8], metadata: &mut MetadataMap) -> Result<()> 
             } else if upper_field == "COVERART" {
                 // Decode base64 to get actual size
                 if let Ok(decoded) = base64_decode(field_value) {
-                    let size = decoded.len();
-                    metadata.insert(
-                        tag_name,
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            size
-                        )),
-                    );
+                    metadata.insert_available_binary_with_display(tag_name, decoded);
                 } else {
                     // If decoding fails, just report the base64 size
                     metadata.insert(tag_name, TagValue::new_string(field_value.to_string()));

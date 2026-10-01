@@ -257,6 +257,14 @@ echo "=========================================================="
 python3 "$ROOT/src/parsers/font/mac_charset/generate_tables.py" \
     "$LIB/Image/ExifTool/Charset"
 
+# Font.pm's %ttLang is runtime lookup data, not a tag declaration. Capture
+# it separately so a release bump refreshes all platform-specific suffixes.
+FONT_LANG_CAPTURE="$CACHE/font-languages-$PIN.json"
+"$PERL" "$HERE/capture_font_languages.pl" "$LIB" > "$FONT_LANG_CAPTURE"
+python3 "$HERE/font_language_specs.py" --capture "$FONT_LANG_CAPTURE" \
+    --fixture-out "$(artifact_path font-language-capture)" \
+    --rust-out "$(artifact_path font-language-rust)"
+
 echo "=========================================================="
 echo ">> TIER 2f: GeoTIFF, DICOM and lens alternatives"
 echo "=========================================================="
@@ -270,6 +278,8 @@ python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path xmp-lens-maps)"
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path plus-media-matrix)"
+python3 "$HERE/gen_iptc_dataset_facts.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --out "$(artifact_path iptc-dataset-facts)"
 
 echo ">> capturing XMP read priorities from the selected native source"
 XMP_PRIORITY_CAPTURE="$CACHE/xmp-priorities-$PIN.json"
@@ -321,6 +331,8 @@ python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)"
 python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --check
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --check
+python3 "$HERE/gen_iptc_dataset_facts.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --check
 python3 "$HERE/verify_nikon_settings.py" --input "$(artifact_path nikon-settings)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"

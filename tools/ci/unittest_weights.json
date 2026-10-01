@@ -49,6 +49,7 @@
   "test_exprs": 0.1,
   "test_final_scalar_codegen": 14.3,
   "test_final_scalar_stage": 72.7,
+  "test_font_language_specs": 0.1,
   "test_fresh_jpeg_byte_order_codegen": 76.9,
   "test_fresh_jpeg_public_batch_matrix": 0.1,
   "test_fresh_jpeg_public_write_matrix": 0.1,

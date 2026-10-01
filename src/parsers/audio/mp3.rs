@@ -816,9 +816,11 @@ fn parse_mpeg_audio_frame(
             };
             // ExifTool reports version as integer (1 for MPEG 1, 2 for MPEG 2/2.5)
             let version_int = if mpeg_version == 1.0 { 1 } else { 2 };
-            metadata.insert(
-                "MPEG:MPEGAudioVersion".to_string(),
+            metadata.insert_with_group1_and_value(
+                "MPEG:MPEGAudioVersion",
                 TagValue::new_integer(version_int),
+                TagValue::new_integer(i64::from(version_bits)),
+                "",
             );
 
             // Audio Layer
@@ -828,7 +830,12 @@ fn parse_mpeg_audio_frame(
                 0x03 => 1, // Layer I
                 _ => continue,
             };
-            metadata.insert("MPEG:AudioLayer".to_string(), TagValue::new_integer(layer));
+            metadata.insert_with_group1_and_value(
+                "MPEG:AudioLayer",
+                TagValue::new_integer(layer),
+                TagValue::new_integer(i64::from(layer_bits)),
+                "",
+            );
 
             // Protection (CRC)
             let _crc_protected = protection_bit == 0;
@@ -836,9 +843,11 @@ fn parse_mpeg_audio_frame(
             // Bitrate (kbps)
             let bitrate = get_mpeg_bitrate(mpeg_version, layer, bitrate_index);
             if bitrate > 0 {
-                metadata.insert(
-                    "MPEG:AudioBitrate".to_string(),
+                metadata.insert_with_group1_and_value(
+                    "MPEG:AudioBitrate",
                     TagValue::new_string(format!("{} kbps", bitrate)),
+                    TagValue::new_integer(i64::from(bitrate) * 1000),
+                    "",
                 );
                 // Also add MP3:BitRate in kbps format for ExifTool compatibility
                 metadata.insert(
@@ -850,9 +859,11 @@ fn parse_mpeg_audio_frame(
             // Sample Rate (Hz)
             let sample_rate = get_mpeg_sample_rate(mpeg_version, sample_rate_index);
             if sample_rate > 0 {
-                metadata.insert(
-                    "MPEG:SampleRate".to_string(),
+                metadata.insert_with_group1_and_value(
+                    "MPEG:SampleRate",
                     TagValue::new_integer(sample_rate as i64),
+                    TagValue::new_integer(i64::from(sample_rate_index)),
+                    "",
                 );
                 // Also add MP3:SampleRate for ExifTool compatibility
                 metadata.insert(
@@ -869,9 +880,11 @@ fn parse_mpeg_audio_frame(
                 0x03 => "Mono",
                 _ => "Unknown",
             };
-            metadata.insert(
-                "MPEG:ChannelMode".to_string(),
+            metadata.insert_with_group1_and_value(
+                "MPEG:ChannelMode",
                 TagValue::new_string(channel_mode_str),
+                TagValue::new_integer(i64::from(channel_mode)),
+                "",
             );
 
             // Extract channel count from channel mode for MP3:Channels
@@ -903,27 +916,35 @@ fn parse_mpeg_audio_frame(
                 if layer == 3 {
                     let ms_stereo = (mode_extension & 0x02) != 0;
                     let intensity_stereo = (mode_extension & 0x01) != 0;
-                    metadata.insert(
-                        "MPEG:MSStereo".to_string(),
+                    metadata.insert_with_group1_and_value(
+                        "MPEG:MSStereo",
                         TagValue::new_string(if ms_stereo { "On" } else { "Off" }),
+                        TagValue::new_integer(i64::from(ms_stereo)),
+                        "",
                     );
-                    metadata.insert(
-                        "MPEG:IntensityStereo".to_string(),
+                    metadata.insert_with_group1_and_value(
+                        "MPEG:IntensityStereo",
                         TagValue::new_string(if intensity_stereo { "On" } else { "Off" }),
+                        TagValue::new_integer(i64::from(intensity_stereo)),
+                        "",
                     );
                 }
             }
 
             // Copyright
-            metadata.insert(
-                "MPEG:CopyrightFlag".to_string(),
+            metadata.insert_with_group1_and_value(
+                "MPEG:CopyrightFlag",
                 TagValue::new_string(if copyright_bit != 0 { "true" } else { "false" }),
+                TagValue::new_integer(i64::from(copyright_bit)),
+                "",
             );
 
             // Original
-            metadata.insert(
-                "MPEG:OriginalMedia".to_string(),
+            metadata.insert_with_group1_and_value(
+                "MPEG:OriginalMedia",
                 TagValue::new_string(if original_bit != 0 { "true" } else { "false" }),
+                TagValue::new_integer(i64::from(original_bit)),
+                "",
             );
 
             // Emphasis
@@ -934,9 +955,11 @@ fn parse_mpeg_audio_frame(
                 0x03 => "CCIT J.17",
                 _ => "Unknown",
             };
-            metadata.insert(
-                "MPEG:Emphasis".to_string(),
+            metadata.insert_with_group1_and_value(
+                "MPEG:Emphasis",
                 TagValue::new_string(emphasis_str),
+                TagValue::new_integer(i64::from(emphasis_bits)),
+                "",
             );
 
             // Found valid frame, stop searching
@@ -1224,8 +1247,7 @@ fn parse_picture_frame(
     };
 
     // Picture data size
-    let _data_pos = description_end + if encoding == 1 || encoding == 2 { 2 } else { 1 };
-    let picture_size = data.len().saturating_sub(_data_pos);
+    let data_pos = description_end + if encoding == 1 || encoding == 2 { 2 } else { 1 };
 
     // Store metadata
     let format_str = if mime_type.contains("jpeg") || mime_type == "JPG" {
@@ -1255,12 +1277,9 @@ fn parse_picture_frame(
             group1,
         );
     }
-    metadata.insert_with_group1(
+    metadata.insert_available_binary_with_display_and_group1(
         "ID3:Picture",
-        TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            picture_size
-        )),
+        data.get(data_pos..).unwrap_or_default().to_vec(),
         group1,
     );
 

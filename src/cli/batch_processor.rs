@@ -801,14 +801,16 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
     // straight into each formatter's own exact/suffix `filter_tags`
     // matching, bypassing Step 20's group/priority-aware resolution
     // entirely).
-    if args.csv {
+    if args.binary_output {
+        output_binary_results(&results, args)?;
+    } else if args.csv {
         output_csv_results(&results, args)?;
     } else if args.json {
         output_json_results(&results, args)?;
     } else if args.short_level > 0 {
-        output_short_results(&results, args);
+        output_short_results(&results, args)?;
     } else {
-        output_human_readable_results(&results, args);
+        output_human_readable_results(&results, args)?;
     }
 
     Ok(BatchStats {
@@ -820,6 +822,18 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
         unidentified: 0,
         directories_scanned: 0,
     })
+}
+
+fn output_binary_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    for (_, result) in results {
+        if let Ok(report) = result {
+            let bytes = super::tag_resolution::render_binary_requested_tags(&report.metadata, args)
+                .map_err(ExifToolError::parse_error)?;
+            stdout.write_all(&bytes).map_err(ExifToolError::from)?;
+        }
+    }
+    Ok(())
 }
 
 /// `--strict`'s refusal of a read that did not fully parse, as
@@ -1019,7 +1033,7 @@ fn create_progress_bar(total: usize, action: &str) -> ProgressBar {
 fn resolved_metadata_for_structured_output(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
     match resolve_file_output(metadata, args) {
         ResolvedFileOutput::Metadata(m) => m,
-        ResolvedFileOutput::Lines(_) => MetadataMap::new(),
+        ResolvedFileOutput::Lines(_) | ResolvedFileOutput::Bytes(_) => MetadataMap::new(),
     }
 }
 
@@ -1094,7 +1108,7 @@ fn output_csv_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs)
 /// (`exiftool`:2328-2332, printed whenever more than one file is processed),
 /// including a file that has none of the requested tags; the caller prints
 /// the `%5d image files read` summary after the last one.
-fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
+fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     let formatter = ShortFormatter;
 
     for (path, result) in results {
@@ -1102,6 +1116,12 @@ fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArg
             PathLine::new("======== ").path(path).print();
             match resolve_file_output(&report.metadata, args) {
                 ResolvedFileOutput::Lines(lines) => print!("{}", lines),
+                ResolvedFileOutput::Bytes(bytes) => {
+                    std::io::stdout()
+                        .lock()
+                        .write_all(&bytes)
+                        .map_err(ExifToolError::from)?;
+                }
                 ResolvedFileOutput::Metadata(metadata) => {
                     let output =
                         formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
@@ -1110,6 +1130,7 @@ fn output_short_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArg
             }
         }
     }
+    Ok(())
 }
 
 /// Outputs results in JSON format.
@@ -1252,7 +1273,10 @@ mod json_ordering_tests {
 /// Outputs results in human-readable format.
 ///
 /// Prints each file's metadata with a file path header.
-fn output_human_readable_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) {
+fn output_human_readable_results(
+    results: &[(PathBuf, Result<ReadReport>)],
+    args: &CliArgs,
+) -> Result<()> {
     let formatter = HumanReadableFormatter;
 
     for (path, result) in results {
@@ -1261,6 +1285,12 @@ fn output_human_readable_results(results: &[(PathBuf, Result<ReadReport>)], args
                 PathLine::new("File: ").path(path).print();
                 match resolve_file_output(&report.metadata, args) {
                     ResolvedFileOutput::Lines(lines) => print!("{}", lines),
+                    ResolvedFileOutput::Bytes(bytes) => {
+                        std::io::stdout()
+                            .lock()
+                            .write_all(&bytes)
+                            .map_err(ExifToolError::from)?;
+                    }
                     ResolvedFileOutput::Metadata(metadata) => {
                         let output =
                             formatter.format_with_mode(&metadata, None, !args.exiftool_compat());
@@ -1273,4 +1303,5 @@ fn output_human_readable_results(results: &[(PathBuf, Result<ReadReport>)], args
             }
         }
     }
+    Ok(())
 }

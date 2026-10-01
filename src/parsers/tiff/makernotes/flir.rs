@@ -524,6 +524,8 @@ impl MakerNoteParser for FlirParser {
                         priority: i16::from(!(tag.low_priority || tag.avoid)),
                         is_list: tag.is_list,
                         order: 0,
+                        binary_payload_unavailable: false,
+                        binary_extract_from_stored: false,
                         origin: Provenance {
                             module: Some(tag.module),
                             table: Some(tag.table),
