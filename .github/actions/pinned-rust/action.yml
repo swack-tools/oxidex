@@ -22,6 +22,63 @@ runs:
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"channel={channel}\ncomponents={','.join(components)}\n")
         PYTHON
+    - name: Bootstrap rustup if missing on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v rustup >/dev/null 2>&1; then
+          exit 0
+        fi
+        export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+        if [ -x "$CARGO_HOME/bin/rustup" ]; then
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          exit 0
+        fi
+        case "$(uname -m)" in
+          x86_64) target=x86_64-unknown-linux-gnu ;;
+          aarch64) target=aarch64-unknown-linux-gnu ;;
+          *) echo "Unsupported Linux architecture for rustup bootstrap" >&2; exit 1 ;;
+        esac
+        temp_dir=$(mktemp -d "${RUNNER_TEMP:?}/oxidex-rustup.XXXXXXXX")
+        trap 'rm -rf -- "$temp_dir"' EXIT
+        base="https://static.rust-lang.org/rustup/dist/$target/rustup-init"
+        retry_download() {
+          local url=$1 dest=$2 attempt status
+          for attempt in 1 2 3; do
+            rm -f -- "$dest"
+            if curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --location --silent --show-error --fail --retry 2 --retry-connrefused \
+                --connect-timeout 10 --max-time 60 --output "$dest" "$url"; then
+              return 0
+            else
+              status=$?
+            fi
+            case "$status" in
+              5|6|7|18|28|35|52|55|56)
+                if [ "$attempt" -lt 3 ]; then
+                  echo "Rustup bootstrap download transport failure ($status); retrying $url" >&2
+                  sleep "$attempt"
+                  continue
+                fi ;;
+            esac
+            echo "Rustup bootstrap download failed ($status): $url" >&2
+            return 1
+          done
+        }
+        retry_download "$base" "$temp_dir/rustup-init"
+        retry_download "$base.sha256" "$temp_dir/rustup-init.sha256"
+        checksum=$(cat "$temp_dir/rustup-init.sha256")
+        checksum_pattern='^[a-f0-9]{64} \*\./rustup-init$'
+        if [[ ! $checksum =~ $checksum_pattern ]]; then
+          echo "Invalid rustup-init checksum format" >&2
+          exit 1
+        fi
+        (cd "$temp_dir" && sha256sum --check --status rustup-init.sha256)
+        chmod +x "$temp_dir/rustup-init"
+        "$temp_dir/rustup-init" --default-toolchain none --no-modify-path -y
+        test -x "$CARGO_HOME/bin/rustup"
+        echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
     - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action, explicit repo version
       with:
         toolchain: ${{ steps.pin.outputs.channel }}
