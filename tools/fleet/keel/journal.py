@@ -950,9 +950,9 @@ def adopt_from_journal(
         own_pgid = None
 
     for job in sorted(scan.open_jobs, key=lambda j: j.job_key):
-        if any(w.job_key == job.job_key or
-               (w.claim.ref == job.claim_ref and w.pgid == job.pgid and
-                claim_mod._iso(w.claim._started_at) == job.started_at)
+        if any(w.claim.ref == job.claim_ref and w.pgid == job.pgid and
+               w.claim._started_at is not None and
+               claim_mod._iso(w.claim._started_at) == job.started_at
                for w in workers):
             # A store pass may have adopted this job before a later hub
             # listing failed. Keep its live claim/renewer as the one owner.
@@ -1182,6 +1182,7 @@ class StartupAdoption:
 
     mode: str
     hub_result: object = None            # fleetd.AdoptionResult, or None
+    store_workers: list = field(default_factory=list)  # includes partial adoption
     journal_result: Optional[JournalAdoption] = None
     scan: Optional[JournalScan] = None
     hub_error: Optional[BaseException] = None
@@ -1296,7 +1297,9 @@ def adopt_at_startup(
         if not allow_store_adoption:
             raise HubError("host singleton ownership is not established")
         res.hub_result = hub_adopt(hub, host, workers, **kwargs)
+        res.store_workers = list(workers)
     except HubError as exc:
+        res.store_workers = list(workers)
         # BOTH routes are down. This is the exit-5 path, and it is now an
         # adoption from local evidence instead of a refusal to start.
         res.mode = "journal"

@@ -786,6 +786,18 @@ class TestAdoptFromJournal(JournalCase):
         self.assertIsNotNone(self.hub.sha(ref))
         self.assertIsNone(p.poll())
 
+    def test_only_unmarked_child_visible_does_not_prove_recycled_group(self):
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid)
+        row = f"{p.pid} {p.pid + 1} {os.getuid()} cargo build"
+        with mock.patch("keel.runner._ps_lines", return_value=[row]):
+            res = self.adopt(pgid_probe=lambda: {p.pid},
+                             identity_probe=lambda *_args: None)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.adopted, [])
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNone(p.poll())
+
     def test_a_journal_entry_from_another_hubs_scope_is_refused(self):
         """The scope token is derived from the HUB URL, so a
         disagreement means this entry was written by a runner pointed at
@@ -1249,6 +1261,29 @@ class TestAdoptAtStartup(JournalCase):
         self.assertEqual([w.pgid for w in self.workers], [p.pid])
         self.assertTrue(self.workers[0].claim.renewer_running())
         self.assertEqual(res.journal_result.adopted, [])
+
+    def test_partial_store_replacement_keeps_distinct_old_run(self):
+        old = self.spawn_stub()
+        new = self.spawn_stub()
+        old_token = iso(datetime.now(timezone.utc) - timedelta(seconds=60))
+        new_token = iso(datetime.now(timezone.utc) - timedelta(seconds=10))
+        ref = self.journal_job("staging-one", pgid=old.pid, started_at=old_token)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=new.pid,
+                               started_at=new_token)
+        real_list = claim_mod.list_claims
+
+        def fail_agent_list(hub, *, kind):
+            if kind == "agent":
+                raise HubError("agent listing unavailable after gate adoption")
+            return real_list(hub, kind=kind)
+
+        with mock.patch.object(claim_mod, "list_claims", side_effect=fail_agent_list):
+            res = self.startup()
+        self.assertEqual(res.mode, "journal")
+        self.assertEqual({w.pgid for w in self.workers}, {old.pid, new.pid})
+        self.assertEqual(len(res.store_workers), 1)
+        self.assertEqual(res.store_workers[0].pgid, new.pid)
+        self.assertEqual(len(res.journal_result.adopted), 1)
 
     def test_an_offline_runner_is_not_allowed_to_spawn(self):
         """SPEC §5.3: "sweeps nothing, spawns nothing, and retries the

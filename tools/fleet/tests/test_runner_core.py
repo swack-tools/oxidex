@@ -947,6 +947,87 @@ class TestJournalWiring(RunnerFixture):
         self.assertEqual(calls, 2)
         adopted_offline[0].claim.stop_renewer(timeout=2)
 
+    def test_partial_store_replacement_retains_old_group_for_stop_retry(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        old = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                self.host, self.log_dir, journal=journal)
+        self.workers.append(old)
+        old.claim.stop_renewer(timeout=2)
+        new = subprocess.Popen(
+            [str(self.stub), runner.fleet_scope_token(self.hub.url), "new"],
+            start_new_session=True, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: new.wait(timeout=10))
+        self.addCleanup(lambda: (self.tmp / "stop-new").write_text(""))
+        payload = self.hub.read(old.claim.ref)
+        payload["started_at"] = claim_mod._iso(claim_mod._utcnow())
+        payload["expires_at"] = claim_mod._iso(
+            claim_mod._utcnow() + claim_mod.timedelta(seconds=600))
+        payload["pid"] = payload["pgid"] = new.pid
+        self.assertTrue(self.hub.update(old.claim.ref, payload,
+                                        expect_sha=self.hub.sha(old.claim.ref)))
+        real_adopt = fleetd.adopt_workers
+        real_list = claim_mod.list_claims
+        real_kill = runner.kill_process_group
+        calls = 0
+        recovered = []
+        denied = []
+
+        def adopt(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise HubUnreachableError("initial listing unavailable")
+            return real_adopt(*args, **kwargs)
+
+        def list_claims(hub, *, kind):
+            if kind == "agent":
+                raise HubUnreachableError("agent listing unavailable")
+            return real_list(hub, kind=kind)
+
+        def capture(*args, **kwargs):
+            result = real_startup(*args, **kwargs)
+            if calls == 2:
+                recovered.append(args[2])
+            return result
+
+        def deny_first_old_group(pgid, **kwargs):
+            if pgid == old.pgid and not denied:
+                denied.append(pgid)
+                return "injected signal refusal"
+            return real_kill(pgid, **kwargs)
+
+        real_startup = journal_mod.adopt_at_startup
+        with mock.patch.object(fleetd, "adopt_workers", side_effect=adopt), \
+                mock.patch.object(claim_mod, "list_claims", side_effect=list_claims), \
+                mock.patch.object(journal_mod, "adopt_at_startup", side_effect=capture), \
+                mock.patch.object(runner, "kill_process_group",
+                                  side_effect=deny_first_old_group), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
+                reconcile=lambda *_args, **_kw: fleetd.ReconcileResult()), 0)
+        self.assertEqual(calls, 2)
+        self.assertEqual(denied, [old.pgid])
+        self.assertEqual(len(recovered), 1)
+        self.assertTrue(any(w.pgid == new.pid for w in recovered[0]))
+        self.assertIsNone(old.popen.poll())
+        self.assertTrue(any(w.pgid == old.pgid and w.claim.lost
+                            for w in recovered[0]),
+                        "still-live old group remains supervised for retry")
+        self.assertTrue(journal.read_job(old.job_key).open)
+        runner.stop_lost_workers(recovered[0], journal, self.host)
+        old.popen.wait(timeout=10)
+        runner.stop_lost_workers(recovered[0], journal, self.host)
+        self.assertFalse(any(w.pgid == old.pgid for w in recovered[0]))
+        self.assertIsNotNone(self.hub.sha(old.claim.ref))
+        self.assertIsNone(new.poll())
+        for worker in recovered[0]:
+            worker.claim.stop_renewer(timeout=2)
+
     def test_hub_startup_closes_a_run_after_releasing_its_dead_claim(self):
         j = journal_mod.Journal()
         w = runner.start_gate(self.hub, "staging/one", "dead", [str(self.stub)],

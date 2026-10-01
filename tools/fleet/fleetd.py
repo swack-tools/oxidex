@@ -772,7 +772,7 @@ _AGENT_RC_OUTCOMES = {
 def _journal_close(journal: "journal_mod.Journal", worker: Worker, *,
                    rc: Optional[int], outcome: str, host: str) -> None:
     """Close a completed local run without interrupting the reap on I/O failure."""
-    if not getattr(worker, "job_key", None):
+    if not keel_runner._journal_run_matches_worker(journal, worker):
         return
     try:
         journal.exit(job_key=worker.job_key, rc=rc, outcome=outcome)

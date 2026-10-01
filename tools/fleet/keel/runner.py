@@ -468,7 +468,7 @@ def _journal_group_identity(pgid: int, scope_token: str,
         uid = os.getuid()
     except AttributeError:
         uid = None
-    present = False
+    leader_present = False
     markers = worker_markers() if markers is None else markers
     for line in lines:
         spgid, spid, suid, command = _ps_fields(line, 4)
@@ -476,10 +476,14 @@ def _journal_group_identity(pgid: int, scope_token: str,
             continue
         if uid is not None and int(suid) != uid:
             continue
-        present = True
+        if int(spid) == pgid:
+            leader_present = True
         if scope_token in command and any(marker in command for marker in markers):
             return "scoped"
-    return "other" if present else "missing"
+    # A cargo/rustc child without the gate leader can be the old worker
+    # whose marker row ps omitted. Only the leader itself proves a
+    # different process now occupies the group number.
+    return "other" if leader_present else "missing"
 
 
 def fleet_worker_pgids(markers: Optional[Sequence[str]] = None) -> dict:
@@ -821,7 +825,7 @@ def stop_lost_workers(workers: list, journal, host: str,
             continue
         workers.remove(worker)
         killed.append((worker.tag, reason))
-        if worker.job_key:
+        if _journal_run_matches_worker(journal, worker):
             try:
                 journal.exit(job_key=worker.job_key, rc=None,
                              outcome="killed-lost-lease")
@@ -835,6 +839,20 @@ def stop_lost_workers(workers: list, journal, host: str,
             f"{reason} -- killed process group: {outcome}",
             file=sys.stderr, flush=True)
     return killed
+
+
+def _journal_run_matches_worker(journal, worker: "Worker") -> bool:
+    """An exit must close only the exact run this worker supervised."""
+    if not worker.job_key or worker.claim._started_at is None:
+        return False
+    try:
+        job = journal.read_job(worker.job_key)
+    except journal_mod.JournalError:
+        return False
+    return bool(job is not None and job.open and
+                job.claim_ref == worker.claim.ref and
+                job.started_at == claim_mod._iso(worker.claim._started_at) and
+                job.pgid == worker.pgid)
 
 
 def _spawn_env(hub: Hub) -> dict:
@@ -981,11 +999,15 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
     scan = jn.scan()
     if not scan.sweep_armed:
         return
-    active = {w.job_key for w in workers if w.job_key}
     debt = journal_mod.JournalAdoption()
     scope_token = fleet_scope_token(hub.url)
     for job in scan.open_jobs:
-        if job.job_key in active or job.torn or job.holder_host not in (None, host):
+        if (any(w.job_key == job.job_key and
+                w.claim.ref == job.claim_ref and
+                w.claim._started_at is not None and
+                claim_mod._iso(w.claim._started_at) == job.started_at and
+                w.pgid == job.pgid for w in workers) or
+                job.torn or job.holder_host not in (None, host)):
             continue
         if job.scope_token is not None and job.scope_token != scope_token:
             continue
@@ -2681,20 +2703,40 @@ def _run_daemon_locked(
                             print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
                                   "starts remain disabled", file=sys.stderr, flush=True)
                             current = None
-                        # A partial store pass remains authoritative for the
-                        # jobs it adopted; the journal path skips those keys.
+                        # A partial store pass remains authoritative for
+                        # the exact runs it adopted. Keep a different old
+                        # group under supervision even if its job key is
+                        # identical to a replacement's.
                         for old in workers:
                             if not any(
-                                new.job_key == old.job_key or
-                                (new.claim.ref == old.claim.ref and
-                                 new.pgid == old.pgid and
-                                 new.claim._started_at == old.claim._started_at)
+                                new.claim.ref == old.claim.ref and
+                                new.pgid == old.pgid and
+                                new.claim._started_at == old.claim._started_at
                                 for new in refreshed
                             ):
                                 old.claim.start_renewer()
                                 refreshed.append(old)
+                        # A different live group under a superseded token
+                        # must stop before it can run beside the store's
+                        # current claim. Two handles for one PGID describe
+                        # one physical group: keep the store-backed handle.
+                        store_by_ref = ({w.claim.ref: w for w in current.store_workers}
+                                        if current is not None else {})
+                        for old in list(refreshed):
+                            authoritative = store_by_ref.get(old.claim.ref)
+                            if authoritative is None or authoritative is old:
+                                continue
+                            if (old.pgid == authoritative.pgid and
+                                    old.claim._started_at != authoritative.claim._started_at):
+                                old.claim.stop_renewer(timeout=2)
+                                refreshed.remove(old)
+                            elif (old.pgid != authoritative.pgid and
+                                  old.claim._started_at != authoritative.claim._started_at):
+                                old.claim._mark_lost("store has a different token for this job")
                         workers[:] = refreshed
-                        if current is not None and current.mode == "store":
+                        stop_lost_workers(workers, jn, host)
+                        if (current is not None and current.mode == "store" and
+                                not any(w.claim.lost for w in workers)):
                             reconcile_journal_runs(jn, hub, host, workers, label=label)
                             spawn_allowed = True
                             print(f"{label}[{host}] STORE BACK: authoritative "
