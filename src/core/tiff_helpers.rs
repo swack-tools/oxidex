@@ -3250,6 +3250,8 @@ pub(crate) struct ReachedIntegralEntry {
     pub count: u32,
     pub values: Vec<i64>,
     pub raw_value: Option<(u64, usize)>,
+    /// Model established before this physical entry was processed.
+    pub known_model: String,
 }
 
 /// Exif.pm:6763-6773 refuses values with more than 100,000 elements unless
@@ -3336,6 +3338,7 @@ fn scan_reached_integral_ifd_entries(
     }
 
     let mut reached = Vec::new();
+    let mut current_model = known_model.to_string();
     let mut warnings = 0u32;
     let mut completed = true;
     for index in 0..u64::from(count) {
@@ -3368,7 +3371,7 @@ fn scan_reached_integral_ifd_entries(
                 }
                 // Exif.pm:6475-6477 skips Sony ILCE's empty first entry only
                 // when Model was already known before this IFD was read.
-                if index == 0 && !known_model.starts_with("ILCE") {
+                if index == 0 && !current_model.starts_with("ILCE") {
                     completed = false;
                     break;
                 }
@@ -3411,6 +3414,16 @@ fn scan_reached_integral_ifd_entries(
             };
             (value, start)
         };
+        if tag_id == 0x0110 && field_type == 2 {
+            // Exif::Main's Model RawConv sets the member variable as this
+            // entry is visited. Subdirectories entered earlier cannot see it.
+            current_model = String::from_utf8_lossy(&bytes[..size as usize])
+                .split('\0')
+                .next()
+                .unwrap_or("")
+                .trim_end()
+                .to_string();
+        }
         if !requested_tags.contains(&tag_id) {
             continue;
         }
@@ -3429,6 +3442,7 @@ fn scan_reached_integral_ifd_entries(
                 count: value_count,
                 values: Vec::new(),
                 raw_value: Some((value_pos, size as usize)),
+                known_model: current_model.clone(),
             });
             continue;
         }
@@ -3457,6 +3471,7 @@ fn scan_reached_integral_ifd_entries(
             count: value_count,
             values: vec![value],
             raw_value: None,
+            known_model: current_model.clone(),
         });
     }
     (reached, completed)
@@ -3503,7 +3518,7 @@ fn followed_subdirectories(
     pointer_tags: &[u16],
     known_model: &str,
     directory_limit: u64,
-) -> Vec<(u16, u64)> {
+) -> Vec<(u16, u64, String)> {
     if !enterable_ifd(reader, ifd_offset, byte_order, directory_limit) {
         return Vec::new();
     }
@@ -3528,10 +3543,39 @@ fn followed_subdirectories(
             continue;
         }
         if enterable_ifd(reader, target, byte_order, directory_limit) {
-            followed.push((entry.tag_id, target));
+            followed.push((entry.tag_id, target, entry.known_model));
         }
     }
     followed
+}
+
+/// Resolve a preview ExifIFD only if its physical directory has not already
+/// been claimed by IFD0 or an earlier GPS pointer. Return the Model as it was
+/// known at that pointer, before any later IFD0 entries are processed.
+pub(crate) fn first_unvisited_exif_ifd(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    byte_order: ByteOrder,
+    directory_limit: u64,
+) -> Option<(u64, String)> {
+    let mut visited = vec![ifd0_offset];
+    for (tag_id, target, known_model) in followed_subdirectories(
+        reader,
+        ifd0_offset,
+        byte_order,
+        &[0x8825, 0x8769],
+        "",
+        directory_limit,
+    ) {
+        if visited.contains(&target) {
+            continue;
+        }
+        visited.push(target);
+        if tag_id == 0x8769 {
+            return Some((target, known_model));
+        }
+    }
+    None
 }
 
 /// Collects the offsets of the EXIF directories that have already been walked
@@ -3558,7 +3602,7 @@ fn visited_directory_offsets(
     const GPS_IFD_POINTER: u16 = 0x8825;
 
     let mut visited = vec![ifd0_offset];
-    for (tag_id, sub_offset) in followed_subdirectories(
+    for (tag_id, sub_offset, model_at_pointer) in followed_subdirectories(
         reader,
         ifd0_offset,
         byte_order,
@@ -3574,12 +3618,12 @@ fn visited_directory_offsets(
         if tag_id != EXIF_IFD_POINTER {
             continue;
         }
-        for (_, interop_offset) in followed_subdirectories(
+        for (_, interop_offset, _) in followed_subdirectories(
             reader,
             sub_offset,
             byte_order,
             &[INTEROPERABILITY_IFD_POINTER],
-            known_model,
+            &model_at_pointer,
             directory_limit,
         ) {
             if !visited.contains(&interop_offset) {

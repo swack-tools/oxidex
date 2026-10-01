@@ -1845,19 +1845,14 @@ fn extract_rw2_embedded_exif_tags(
         }
     }
 
-    let exif_ifd_offset = crate::core::tiff_helpers::reached_integral_ifd_entries(
-        &reader,
-        first_ifd_offset,
-        byte_order,
-        &[0x8769],
-    )
-    .into_iter()
-    .find(|entry| entry.count == 1)
-    .and_then(|entry| u64::try_from(entry.values[0]).ok())
-    // ExifTool refuses an ExifIFD pointer back to the already processed
-    // preview IFD0. Re-reading it here would assign IFD0 values to ExifIFD.
-    .filter(|offset| *offset != 0 && *offset != first_ifd_offset);
-    let Some(exif_ifd_offset) = exif_ifd_offset else {
+    let Some((exif_ifd_offset, preview_model)) =
+        crate::core::tiff_helpers::first_unvisited_exif_ifd(
+            &reader,
+            first_ifd_offset,
+            byte_order,
+            directory_limit,
+        )
+    else {
         return Ok(());
     };
 
@@ -1939,27 +1934,14 @@ fn extract_rw2_embedded_exif_tags(
     // Writable int16u describes serialization, while ProcessExif reads all
     // seven integral formats, including IFD/type 13 (Exif.pm:82-132, 6782).
     // Exif.pm:6475-6477 skips a bad first entry for Sony ILCE only when
-    // Model was already known before this ExifIFD was entered. Preview IFD0
-    // has now been read; its Model may activate that exception here, but not
-    // retroactively for the earlier IFD0 reachability scan.
-    let preview_model = ifd0_tags
-        .iter()
-        .find_map(|(tag_id, field_type, _, raw)| {
-            if *tag_id == 0x0110 && *field_type == 2 {
-                std::str::from_utf8(raw.as_ref())
-                    .ok()
-                    .and_then(|value| value.split('\0').next())
-            } else {
-                None
-            }
-        })
-        .unwrap_or("");
+    // Model was known when this ExifIFD was entered. The pointer walk captured
+    // the Model at ExifOffset, so a later IFD0 Model cannot activate it.
     for entry in crate::core::tiff_helpers::reached_integral_ifd_entries_with_known_model(
         &reader,
         exif_ifd_offset,
         byte_order,
         &[0xA411, 0xA412],
-        preview_model,
+        &preview_model,
         directory_limit,
     ) {
         let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")

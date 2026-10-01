@@ -406,6 +406,74 @@ fn preview_ilce_model_keeps_a411_after_bad_first_exif_entry() {
 }
 
 #[test]
+fn preview_model_after_exif_pointer_does_not_enable_ilce_exception() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let model = entry(&data, ifd0, 0x0110);
+    let model_at = tiff + read_u32(&data, model + 8) as usize;
+    data[model + 4..model + 8].copy_from_slice(&7u32.to_le_bytes());
+    data[model_at..model_at + 7].copy_from_slice(b"ILCE-T\0");
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    data[exif_ifd + 4..exif_ifd + 6].copy_from_slice(&99u16.to_le_bytes());
+    let shading = entry(&data, exif_ifd, 0xA405);
+    data[shading..shading + 12].copy_from_slice(&[0x11, 0xA4, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    // Move Model after ExifOffset without changing its value. ExifTool enters
+    // ExifIFD before it learns ILCE-T, stops at its bad first entry, and
+    // reports no ShadingCorrection (pinned source-derived RW2 oracle).
+    let later = entry(&data, ifd0, 0xC4A5);
+    for byte in 0..12 {
+        data.swap(model + byte, later + byte);
+    }
+    assert!(parse(&data).get("ExifIFD:ShadingCorrection").is_none());
+}
+
+#[test]
+fn preview_exif_pointer_does_not_revisit_prior_gps_directory() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    let shading = entry(&data, exif_ifd, 0xA405);
+    data[shading..shading + 12].copy_from_slice(&[0x11, 0xA4, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    // The earlier GPSInfo entry claims this physical directory first.
+    let gps = entry(&data, ifd0, 0x0213);
+    let pointer_bytes = data[exif_pointer..exif_pointer + 12].to_vec();
+    data[gps..gps + 12].copy_from_slice(&pointer_bytes);
+    data[gps..gps + 2].copy_from_slice(&0x8825u16.to_le_bytes());
+    // ExifTool warns about the repeated directory and emits no ExifIFD A411.
+    assert!(parse(&data).get("ExifIFD:ShadingCorrection").is_none());
+}
+
+#[test]
+fn preview_interop_reached_after_bad_entry_blocks_ifd1_alias() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let model = entry(&data, ifd0, 0x0110);
+    let model_at = tiff + read_u32(&data, model + 8) as usize;
+    data[model + 4..model + 8].copy_from_slice(&7u32.to_le_bytes());
+    data[model_at..model_at + 7].copy_from_slice(b"ILCE-T\0");
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    data[exif_ifd + 4..exif_ifd + 6].copy_from_slice(&99u16.to_le_bytes());
+    let shading = entry(&data, exif_ifd, 0xA405);
+    data[shading..shading + 12].copy_from_slice(&[0x11, 0xA4, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    let interop = entry(&data, exif_ifd, 0xA005);
+    let count = usize::from(read_u16(&data, ifd0));
+    let thumbnail_ifd = read_u32(&data, ifd0 + 2 + count * 12);
+    data[interop + 8..interop + 12].copy_from_slice(&thumbnail_ifd.to_le_bytes());
+    // ExifTool visits this location as InteropIFD, then refuses the IFD1
+    // link to the same address. It still reaches A411 after the ILCE skip.
+    let metadata = parse(&data);
+    assert_eq!(
+        metadata.get_string("ExifIFD:ShadingCorrection"),
+        Some("Yes")
+    );
+    assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+    assert!(metadata.get("IFD1:ThumbnailLength").is_none());
+}
+
+#[test]
 fn preview_ifd0_chain_uses_app1_boundary_not_jpeg_tail() {
     let mut data = source();
     let outer_ifd0 = read_u32(&data, 4) as usize;
