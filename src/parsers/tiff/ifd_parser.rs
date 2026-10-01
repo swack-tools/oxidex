@@ -239,10 +239,60 @@ pub fn parse_ifd(
     ifd_offset: u64,
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
+    parse_ifd_with_footer_requirement(
+        reader,
+        ifd_offset,
+        byte_order,
+        reader.size(),
+        true,
+        None,
+        None,
+    )
+}
+
+/// Parse selected values from an embedded subdirectory whose complete entry
+/// array may end without the optional next-IFD pointer (Exif.pm:6394-6400).
+/// The entry array and ordinary values stay within the enclosing APP1 payload.
+/// `eligible_indices` comes from the shared ProcessExif walk, which decides
+/// first-entry aborts, warning order and Model-sensitive continuation. Values
+/// that this caller will never emit are not copied out of the reader.
+pub(crate) fn parse_ifd_without_next_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    directory_limit: u64,
+    selected_tags: &[u16],
+    eligible_indices: &[usize],
+) -> Result<IfdEntries> {
+    parse_ifd_with_footer_requirement(
+        reader,
+        ifd_offset,
+        byte_order,
+        directory_limit,
+        false,
+        Some(selected_tags),
+        Some(eligible_indices),
+    )
+}
+
+fn parse_ifd_with_footer_requirement(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    directory_limit: u64,
+    require_next_offset: bool,
+    selected_tags: Option<&[u16]>,
+    eligible_indices: Option<&[usize]>,
+) -> Result<IfdEntries> {
     let file_size = reader.size();
+    if directory_limit > file_size {
+        return Err(ExifToolError::parse_error(
+            "IFD directory limit beyond file size",
+        ));
+    }
 
     // Validate IFD offset
-    if ifd_offset >= file_size {
+    if ifd_offset >= directory_limit {
         return Err(ExifToolError::parse_error_at(
             "IFD offset beyond file size",
             ifd_offset as usize,
@@ -256,11 +306,19 @@ pub fn parse_ifd(
         .u16_at(0)
         .ok_or_else(|| ExifToolError::parse_error("Failed to read IFD entry count"))?;
 
-    // Calculate IFD size: 2 bytes (count) + 12 bytes per entry + 4 bytes (next IFD offset)
-    let ifd_size = 2 + (entry_count as usize * 12) + 4;
+    // Embedded subdirectories can end after their entries; standalone IFDs
+    // still require the four-byte next-IFD field.
+    let ifd_size = 2 + (entry_count as usize * 12) + if require_next_offset { 4 } else { 0 };
 
-    // Validate IFD size doesn't exceed file
-    if ifd_offset + ifd_size as u64 > file_size {
+    // Validate IFD size doesn't exceed file. Exif.pm:6394-6400 accepts
+    // exactly zero or two bytes after a complete entry array when the normal
+    // four-byte pointer is absent; one or three bytes are malformed.
+    let bytes_after_entries = directory_limit
+        .checked_sub(ifd_offset)
+        .and_then(|available| available.checked_sub((2 + entry_count as usize * 12) as u64));
+    if ifd_offset + ifd_size as u64 > directory_limit
+        || (!require_next_offset && matches!(bytes_after_entries, Some(1 | 3)))
+    {
         return Err(ExifToolError::parse_error_at(
             format!("IFD size ({} bytes) exceeds file bounds", ifd_size),
             ifd_offset as usize,
@@ -307,9 +365,12 @@ pub fn parse_ifd(
     // here is to stop consuming entries while keeping `result`, not to error.
     let mut warn_count = 0u32;
 
-    for entry in ifd_entries {
+    for (index, entry) in ifd_entries.into_iter().enumerate() {
         if warn_count > 10 {
             break;
+        }
+        if eligible_indices.is_some_and(|indices| indices.binary_search(&index).is_err()) {
+            continue;
         }
 
         // Get type information. ExifTool skips entries with an unknown/invalid
@@ -321,17 +382,10 @@ pub fn parse_ifd(
         // harmless -- is skipped *without* spending warning budget. Only a
         // nonzero-but-unrecognised format counts.
         //
-        // Deliberate divergence, stated rather than implied: Exif.pm:6475-6477
-        // is stricter on the *first* entry --
-        // `next if $index or $$et{Model} =~ /^ILCE/; return 0;` -- so a bad
-        // format code at index 0 makes ExifTool abandon the whole directory
-        // ("assume corrupted IFD"), Sony ILCE excepted. We skip unconditionally
-        // instead. Nothing has been extracted at index 0, so ExifTool's
-        // `return 0` discards nothing and the two only differ in whether the
-        // remaining entries are attempted; skipping recovers more and still
-        // cannot fabricate a value, since a skipped entry is omitted outright.
-        // Matching ExifTool exactly would also need the Model, which is not
-        // resolved this early in the parse.
+        // Standalone parse_ifd skips an invalid first entry. Exif.pm:6475-6477
+        // instead abandons that directory unless Model already starts ILCE.
+        // The RW2 embedded path supplies eligible_indices from the shared
+        // ProcessExif walk, so this loop cannot emit entries after that abort.
         let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
             if entry.field_type != 0 {
                 warn_count += 1;
@@ -343,7 +397,11 @@ pub fn parse_ifd(
         let total_size = type_size * entry.value_count as usize;
 
         // Extract value bytes using Cow for zero-copy optimization
+        let selected = selected_tags.is_none_or(|tags| tags.contains(&entry.tag_id));
         let value_bytes = if total_size <= 4 {
+            if !selected {
+                continue;
+            }
             // Value is stored inline in the value_offset field
             // We need to create owned data since it's derived from the field value
             Cow::Owned(extract_inline_value(
@@ -376,6 +434,9 @@ pub fn parse_ifd(
             let end = value_offset.saturating_add(total_size as u64);
             if end > file_size {
                 warn_count += 1;
+                continue;
+            }
+            if !selected {
                 continue;
             }
 
@@ -598,6 +659,58 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn selected_embedded_ifd_does_not_materialize_unknown_large_value() {
+        use std::cell::Cell;
+
+        struct CountingReader {
+            data: Vec<u8>,
+            large_reads: Cell<usize>,
+        }
+        impl FileReader for CountingReader {
+            fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+                if length >= 100_000 {
+                    self.large_reads.set(self.large_reads.get() + 1);
+                }
+                let start = usize::try_from(offset)
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))?;
+                let end = start
+                    .checked_add(length)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof)?;
+                self.data
+                    .get(start..end)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof.into())
+            }
+
+            fn size(&self) -> u64 {
+                self.data.len() as u64
+            }
+        }
+
+        let mut data = vec![0u8; 101_000];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        data[10..22].copy_from_slice(&[0xAD, 0xDE, 7, 0, 0xA0, 0x86, 1, 0, 0xE8, 3, 0, 0]);
+        data[22..34].copy_from_slice(&[0x31, 1, 2, 0, 5, 0, 0, 0, 100, 0, 0, 0]);
+        data[100..105].copy_from_slice(b"GOOD\0");
+        let reader = CountingReader {
+            data,
+            large_reads: Cell::new(0),
+        };
+        let tags = parse_ifd_without_next_offset(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            reader.size(),
+            &[0x0131],
+            &[0, 1],
+        )
+        .expect("selected embedded IFD");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].3.as_ref(), b"GOOD\0");
+        assert_eq!(reader.large_reads.get(), 0);
+    }
 
     /// Creates a minimal TIFF IFD with 3 tags in little-endian format.
     ///
