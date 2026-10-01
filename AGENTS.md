@@ -3,7 +3,7 @@
 ## Overview
 Rust implementation of ExifTool - high-performance metadata parsing for 140+ formats.
 
-## Use rust uutils coreutils when you can like ripgrep and LSP's as well as claude-mem
+## Use rust uutils coreutils when you can like ripgrep and LSP's
 to decrease the amount of time grepping. We also have things like hyperfine.
 
 We have: coreutils bat eza fd ripgrep hyperfine dust bottom tokei procs sd zoxide starship gitui git-delta lsd tealdeer broot bandwhich grex xh just watchexec typos-cli nushell yazi atuin mprocs hurl
@@ -219,6 +219,201 @@ tree refuses to measure at all unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set,
 in which case the header says so. See `scripts/instrument.py`'s module
 docstring for the full rationale; `src/bin/jpeg-tag-matrix/instrument.rs`
 mirrors it for the one harness that isn't Python.
+
+## Before the first edit, and before the first remote command
+
+The rules above are about trusting a *measurement*. These are about trusting the
+*place you are working* — the same failure one layer down, and the cheapest of
+them to check. `tools/preflight.sh` performs the mechanical half; run it first.
+
+**Know which checkout you are in.** `tools/preflight.sh` prints the worktree
+root, whether it is the main checkout or a linked worktree, the branch, and the
+uncommitted-file count, and it exits non-zero on a protected branch (`main`,
+`refactor/tag-machinery`) or a dirty tree. Never edit the main checkout while
+operating from a worktree, and never edit a worktree another agent owns: several
+agents sharing one tree is not hypothetical here — a live acceptance run found
+its tree gone dirty 58 s in, from a sibling's staged edits, and everything
+measured after that point was measuring an unknown tree. One agent, one
+worktree, one branch:
+`git -C <repo> worktree add -b <branch> /Users/allen/git/<dir> <base>`.
+
+**Start from a base you have just verified, not one you were handed.** Before
+implementing: `tools/preflight.sh --upstream` (fetches origin and reports how far
+behind the base is), then re-confirm the defect still reproduces *at that HEAD*
+and measure its scope with a named instrument. Re-check before opening a PR. If
+upstream already contains the fix, stop and report it superseded — this is
+incident 4 above ("a stale supplied baseline") in its other form: there, an old
+baseline manufactured credit for someone else's work; here, a stale base
+manufactures work that no longer exists.
+
+**Leave a handoff at every milestone.** `HANDOFF.md` (repo root, untracked) is
+the one place a successor — or you, after a context reset — reads to resume:
+branch and base SHA, PR/CI state, what landed, what is still broken, what was
+validated with which instrument, and the exact next command. A session that ends
+without it has to be re-derived from git log and guesswork; sessions here have
+been interrupted mid-wave by outages, restarts and quota limits often enough
+that this is the difference between resuming and restarting.
+
+**Verify reach before remote work, and plan before destroying.**
+`tools/preflight.sh --host <h> --github --k8s` proves ssh reachability, GitHub
+identity and the current kube context *before* a command depends on them. For
+anything destructive — deleting refs, resources, or state; rewriting shared
+history; reinstalling units — produce a dry-run plan plus the dependency and
+reference checks first, and wait for the maintainer's approval. Dry-run-by-
+default is already the pattern in `tools/fleet/rollout/` (`install_hook.sh`,
+`seed_desired.py`, `rulesets.py` all require an explicit `--execute` and refuse
+when a precondition is missing); match it rather than inventing a new shape.
+
+**Config that a container owns must not be edited under it.** Stop the
+container, edit, restart, then confirm the change actually persisted — a running
+container may rewrite or simply outlive the edit, and the edit that vanished on
+restart looks exactly like the edit that was never made. Never delete a
+Kubernetes identity or RBAC object before listing the workloads that reference
+it. Reject any manifest still carrying a placeholder: a template applied
+verbatim fails in whichever direction is hardest to see.
+
+**Long runs must survive being interrupted.** Corpus sweeps, fleet checks and
+CI/PR polling: persist state to a file as you go, cap parallelism (this laptop
+has 10 cores; more than about two concurrent heavy waves degrades the timing-
+sensitive measurements everything else depends on, and a starved measurement is
+a corrupted instrument), isolate every worker in its own explicit worktree, and
+report a blocked item as blocked instead of retrying it forever. A 45-minute
+poll loop that could never exit, and a watcher that died with its ssh
+connection, are both in this repo's history.
+
+## How work lands
+
+1. One agent, one worktree, one branch off the **current tip of
+   `refactor/tag-machinery`** (see "Before the first edit" above).
+2. Verify with the named instrument for the change (corpus comparison for tag
+   work, the generated-table verifiers for generator work).
+3. Open a PR against `refactor/tag-machinery`. Keep each PR one independently
+   useful unit.
+4. Squash-merge only when every check on the **exact final head commit** is
+   green, every review comment (including inline bot findings) is answered,
+   and the base has been re-fetched immediately before merging. See "CI" below.
+
+**`main` is the maintainer's decision alone.** Never push to it, merge into it,
+or rebase onto it. `refactor/tag-machinery` is where refactor work lives and is
+far ahead of `main`; both carry active rulesets (`main`, `tip-guard`,
+`rescued-guard`, `proof-guard`) that reject a force-push or deletion.
+
+`just ci-standard` (justfile) runs the core checks CI does. Locally, at minimum:
+`cargo fmt --all --check && cargo clippy --release --all-features -- -D warnings
+&& cargo test --workspace`.
+
+## Parallel sessions / fast-moving tip
+
+Before starting, and again before merging, fetch and rebase onto
+`origin/refactor/tag-machinery` — **the tip, not `origin/main`**. Other sessions
+land competing changes frequently. If the branch's scope shrinks to near-zero
+after rebase, say so and stop rather than shipping an empty change. Re-verify
+that the defect still reproduces at that HEAD before implementing a fix; if
+upstream already contains it, report it superseded.
+
+## ExifTool parity
+
+ExifTool is pinned at **13.59** (`.exiftool-version`). Validate every tag change
+against the pinned oracle across the corpus — not just unit tests — and report
+before/after counts with the instrument named. Never invoke a bare `exiftool`;
+assert both probes first (`-ver` → 13.59, and the `OOXML.docx` capability probe
+→ `DOCX`). See "Closing an ExifTool coverage gap" above for why a matching
+`-ver` alone is not a working oracle.
+
+## Build gotchas
+
+`cargo test --workspace --release` **fails at base** with ~111–138 bogus
+"requires panic strategy `abort` vs `unwind`" / "multiple different versions of
+crate `chrono`" errors. It is an output filename collision at
+`target/release/deps/liboxidex.rlib`, tripped when `cargo clippy --all-features`
+and the test suite share one target dir. It reproduces on an unmodified base
+commit, so it is never your change. Clear it with:
+
+```
+cargo clean --release -p chrono -p oxidex
+```
+
+Working substitutes: `cargo test --workspace` and `cargo test --lib --release`.
+
+*Dormant (no live target as of 2026-08-28):* the Kubernetes rules above. Kept
+because they are incident-derived; the cluster they applied to is gone. Re-arm
+them before any future cluster work.
+
+## CI
+
+`.github/workflows/ci.yml` is the gate for every PR. Problems with the current
+design and candidate fixes are tracked in [CI-TODO.md](CI-TODO.md).
+
+**Runners.** Every workflow uses standard GitHub-hosted runners
+(`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-15`), which are free for this public
+repository. Do not add `warp-*` labels or GitHub "larger runner" labels: larger
+runners are billed even for public repositories. Measure before resizing
+anything; per-job sizing notes in `ci.yml` are historical WarpBuild
+measurements.
+
+**Check names are stable.** `ci.yml` treats `Lint & Audit` and `Build & Test`
+as required status checks. As of 2026-09-17, no ruleset actually requires them:
+the rulesets forbid deletion and force-push, and `main` also requires signed,
+squash-merged PRs. Keep those two job names anyway, so re-enabling required
+checks cannot strand PRs. Changing their `runs-on` or steps is safe; renaming or
+splitting the jobs is not. For the same reason, do not add `paths-ignore` to
+`ci.yml`: a required check that never reports leaves every PR unmergeable.
+Branch rules do not enforce green CI, so the merge checklist below must.
+
+**Verify Generated Tables is a fan-out**, reported as one final job named
+`Verify Generated Tables` that fails unless every part succeeded:
+
+| Job | Runs | Needs |
+| --- | --- | --- |
+| `capture` | native Perl captures in parallel (hydrated reader dump, full dump, processor inventory, Garmin FIT protocol), uploaded as the `verify-tables-capture` artifact | pinned ExifTool |
+| `source and tier 2` | catalog snapshot, `verify.py` / `verify_subdirs.py`, tier-2 regeneration and drift, Perl anchors | pinned ExifTool |
+| `catalog join` | hydrated audit, expression oracle, IFD replay, `join_catalog_hydrated.py` semantic check, observed receipts | capture |
+| `staleness and drift` | serial directory verifier, staleness fixtures, hand-enum drift | capture |
+| `tools k/8` | the `tools/exiftool-tables` unittest suite, sharded | capture |
+
+When a PR changes what this job checks:
+
+- **New or changed join input** (a ledger, Rust artifact or fact): add it to the
+  `catalog join` step. If it needs a fresh native capture, add that capture to
+  the `capture` job's concurrent block and restore it in
+  `.github/actions/verify-tables-capture/action.yml` (captured `*.json` files are
+  zstd-compressed, so decompress them there).
+- **New published observed receipt**: add it to the receipt loop in the
+  `catalog join` job.
+- **New committed fixture that `gen_staleness_facts.py` does not produce**: add
+  an `--exclude` to the `staleness and drift` diff.
+- **New test module** in `tools/exiftool-tables/`: nothing to do. The sharder
+  (`tools/ci/unittest_shard.py`) discovers every test id and puts each in
+  exactly one shard. Unknown tests get a default weight.
+- **A test that runs for minutes**: split it into one test per case, sharing any
+  expensive baseline through a class-level cache (see
+  `test_verify_native_inventory.CopiedSonyTag202aMutations`), so shards can
+  spread the cases. Optionally record its duration in
+  `tools/ci/unittest_weights.json` (seconds keyed by module or full test id,
+  taken from a CI shard log).
+- A new ExifTool fetch belongs in the `pinned-exiftool` composite action, not in
+  a job. Its version check treats `.exiftool-version` as untrusted input.
+
+**Before pushing a workflow change**, run `actionlint -shellcheck=` (clean) and
+the tests of every consumer of anything you changed, e.g.
+`python3 -m unittest discover -s tools/ci -p 'test_*.py'`.
+
+**When CI does not start.** GitHub sometimes does not fire the `pull_request`
+event for a push. Start it on the branch with
+`gh workflow run ci.yml --ref <branch>`; the resulting run reports the same
+check names. Workflows that are not on the default branch (`main`) cannot be
+dispatched from a branch at all.
+
+**Merge checklist.**
+
+- Every check on the exact head SHA passes (`gh pr checks <n>`).
+- Inline review comments are read through the API — the PR summary does not
+  show them: `gh api repos/swack-tools/oxidex/pulls/<n>/comments` and
+  `.../pulls/<n>/reviews`. Answer or fix each one.
+- Re-fetch `refactor/tag-machinery`; if it moved, rebase and wait for CI again.
+- Merge with `gh pr merge <n> --squash --match-head-commit <sha>`.
+- Nothing to do for the Actions cache: it is capped at 10 GB per repository and
+  a cold cache only costs time.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
