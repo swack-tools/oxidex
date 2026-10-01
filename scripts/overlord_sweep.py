@@ -448,12 +448,44 @@ def parse_verified_delta(value):
 
 
 def sum_verified_deltas(repo_root, shas, run_git):
-    """Sum of every commit's Verified-trailer delta -- reuses
+    """Sum of every DISTINCT commit's Verified-trailer delta -- reuses
     validate_fix_commit's own commit_message/parse_trailers (`git
-    interpret-trailers --parse`), not a second hand-rolled trailer
-    parser, per spec M4's "reuse validate_fix_commit.py machinery"."""
+    interpret-trailers --parse`), not a second hand-rolled trailer parser,
+    per spec M4's "reuse validate_fix_commit.py machinery".
+
+    DISTINCT is load-bearing, and it is keyed on PATCH-ID. This total is
+    the right-hand side of evaluate_post_merge's `measured_delta >=
+    verified_delta_sum` assertion, and the left-hand side is a MEASUREMENT
+    -- a gap closed twice still measures as one gap closed. Summing a claim
+    once per merged commit therefore compares a deduplicated quantity
+    against a duplicated one, and the sweep fails for over-delivering.
+
+    Measured 2026-07-27 on the live fleet:
+
+        measured gap delta                     40
+        sum(Verified) over all 41 commits     101   <- what this compared to
+        distinct patches                        9
+        sum(Verified) over distinct patches    27   <- actually deliverable
+
+    So the sweep closed 40 gaps against 27 claimed -- over-delivery, which
+    this gate explicitly calls "bonus yield, never a failure" -- and was
+    rejected as `measured gap delta 40 < sum(Verified)=101`. That aborted
+    every sweep and is why no sweep PR had opened.
+
+    The duplication had a cause (#150: several squads consuming the same
+    patch) and that is fixed at the source, but this assertion must be
+    robust on its own: the same patch reaching the sweep twice by any route
+    must never inflate what the sweep is held to."""
     total = 0
+    counted = set()
     for sha in shas:
+        # Same identity the quarantine ledger and the merger use, so "the
+        # same patch" means the same thing everywhere in the pipeline.
+        diff_text = validate_fix_commit.commit_diff(sha, repo_root, run_git)
+        key = validate_fix_commit.compute_patch_id(diff_text, repo_root, run_git) or sha
+        if key in counted:
+            continue
+        counted.add(key)
         message = validate_fix_commit.commit_message(sha, repo_root, run_git)
         trailers = validate_fix_commit.parse_trailers(message, repo_root, run_git)
         for value in trailers.get("Verified", []):
@@ -569,6 +601,26 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
 # Mechanical bisection (spec M4 step 5's failure path)
 # ---------------------------------------------------------------------------
 
+#: `git revert` exits NON-ZERO with "nothing to commit, working tree clean" when
+#: the revert produces an EMPTY diff -- the contribution is already absent from
+#: the branch. That is the opposite of a failure: there is nothing to remove.
+#:
+#: Measured 2026-07-27 on sweep/tags-2026-07-27-5: squads exif-core and
+#: panasonic-leica both contributed the SAME fix (identical patch-id
+#: e906c487dec2709f5203d30d5d7ddf6a3b65de20, "fix(rw2): wire 2 missing tags"),
+#: so the second merge added nothing and reverting it was a no-op. The handler
+#: read stderr -- which git leaves EMPTY for this case, putting the message on
+#: stdout -- and reported `could not revert ... ()`, aborting the whole sweep
+#: and blocking every other squad's verified work from publishing.
+_EMPTY_REVERT_MARKERS = ("nothing to commit", "nothing added to commit")
+
+
+def _revert_was_empty(out, err):
+    """True when git refused because the revert would change nothing."""
+    blob = f"{out or ''}\n{err or ''}".lower()
+    return any(m in blob for m in _EMPTY_REVERT_MARKERS)
+
+
 def revert_squad_contribution(repo_root, info, run_git):
     """Undo one squad's contribution to the sweep branch: a controlled
     merge reverts via `git revert -m 1 <merge_sha>` (mainline=1, the
@@ -587,10 +639,14 @@ def revert_squad_contribution(repo_root, info, run_git):
     cleanly (never leaves a conflicted revert sitting in the index) on
     failure. Returns (ok, message)."""
     if info["mode"] == "merge":
-        rc, _out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
+        rc, out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
         if rc != 0:
             run_git(["revert", "--abort"], repo_root)
-            return False, err.strip()
+            if _revert_was_empty(out, err):
+                # Already absent -- another squad contributed the identical
+                # patch first. Nothing to remove IS a successful removal.
+                return True, "nothing to revert (contribution already absent)"
+            return False, err.strip() or out.strip()
         return True, "reverted"
 
     commits = commits_in_range(repo_root, info["range_start"], info["range_end"], run_git)
@@ -602,10 +658,15 @@ def revert_squad_contribution(repo_root, info, run_git):
     if rc != 0:
         run_git(["revert", "--abort"], repo_root)
         return False, err.strip()
-    rc, _out, err = run_git(
+    rc, out, err = run_git(
         ["commit", "-m", f"Revert squad/{info['squad']} contribution {info['range_start'][:12]}..{info['range_end'][:12]}"],
         repo_root,
     )
+    if rc != 0 and _revert_was_empty(out, err):
+        # Same case on the fast-forward path: `revert --no-commit` staged an
+        # empty diff, so `git commit` refuses. The contribution is gone.
+        run_git(["reset", "--hard", "HEAD"], repo_root)
+        return True, "nothing to revert (contribution already absent)"
     if rc != 0:
         # git revert --no-commit itself finished cleanly (nothing to
         # abort there); a plain commit failing is an operational anomaly
