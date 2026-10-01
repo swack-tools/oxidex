@@ -171,6 +171,10 @@ class ServerHub:
         self.connect_timeout_s = float(connect_timeout_s)
         self.read_timeout_s = float(read_timeout_s)
         self.total_timeout_s = float(total_timeout_s) if total_timeout_s is not None else None
+        # Only the registration clone uses a total deadline. Keep at most one
+        # unresolved request if the system resolver ignores socket timeouts.
+        self._announcement_lock = threading.Lock()
+        self._announcement_inflight: Optional[threading.Event] = None
 
     def __repr__(self) -> str:  # no token, ever
         return f"ServerHub({self.base_url!r})"
@@ -408,7 +412,7 @@ class ServerHub:
 
     def health(self) -> dict:
         """`GET /v1/health` (SPEC §5.1; unauthenticated on the server)."""
-        status, body = self._request("GET", "/v1/health")
+        status, body = self._announcement_request("GET", "/v1/health")
         if status == 200 and isinstance(body, dict):
             return body
         if status == 200:
@@ -421,7 +425,7 @@ class ServerHub:
     def register(self, runner_id: str, body: dict) -> dict:
         """Announce a runner on the server-only route, never through CAS fallback."""
         path = f"/v1/runners/{urllib.parse.quote(str(runner_id), safe='')}/register"
-        status, reply = self._request("POST", path, body=body)
+        status, reply = self._announcement_request("POST", path, body=body)
         if (status == 200 and isinstance(reply, dict)
                 and isinstance(reply.get("boot_id"), str) and reply["boot_id"]):
             return reply
@@ -526,12 +530,55 @@ class ServerHub:
             headers.update(extra)
         return headers
 
+    def _announcement_request(
+        self, method: str, path: str, body: Optional[dict] = None,
+    ) -> Tuple[int, Union[dict, None]]:
+        """Bound the registration clone even when DNS ignores socket timeouts.
+
+        A timed-out resolver may remain blocked in libc. Reusing one daemon
+        worker per clone caps that cost at one thread; retries fail promptly
+        until it exits, and cancellation prevents a late registration send.
+        The ordinary CAS client has no total timeout and remains synchronous.
+        """
+        if self.total_timeout_s is None:
+            return self._request(method, path, body=body)
+        done = threading.Event()
+        cancelled = threading.Event()
+        outcome: dict = {}
+        with self._announcement_lock:
+            if self._announcement_inflight is not None and not self._announcement_inflight.is_set():
+                raise PrimaryFailure(
+                    f"{method} {self.base_url}{path}: previous announcement still resolving",
+                    request_sent=True,
+                )
+            self._announcement_inflight = done
+
+        def exchange() -> None:
+            try:
+                outcome["reply"] = self._request(method, path, body=body, cancelled=cancelled)
+            except Exception as exc:
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=exchange, name="keel-announcement", daemon=True).start()
+        if not done.wait(self.connect_timeout_s + self.total_timeout_s):
+            cancelled.set()
+            raise PrimaryFailure(
+                f"{method} {self.base_url}{path}: announcement deadline exceeded",
+                request_sent=True,
+            )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["reply"]
+
     def _request(
         self,
         method: str,
         path: str,
         body: Optional[dict] = None,
         headers: Optional[Dict[str, str]] = None,
+        cancelled: Optional[threading.Event] = None,
     ) -> Tuple[int, Union[dict, None]]:
         """One HTTP exchange on a fresh connection. Returns
         `(status, parsed-JSON-body-or-None)`; raises `PrimaryFailure`
@@ -552,6 +599,12 @@ class ServerHub:
                     f"({type(exc).__name__}: {exc})",
                     request_sent=False,
                 ) from exc
+
+            if cancelled is not None and cancelled.is_set():
+                raise PrimaryFailure(
+                    f"{method} {self.base_url}{path}: announcement deadline exceeded before send",
+                    request_sent=False,
+                )
 
             # Phase 2: the request goes out and the answer comes back.
             # From the first byte sent, a failure no longer proves the

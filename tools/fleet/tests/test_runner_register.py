@@ -819,6 +819,36 @@ class TestRegistrationLatencyBound(HermeticCase):
         self.assertLess(time.monotonic() - t0, 1.2,
                         "steady-state health probes need the same total deadline")
 
+    def test_dns_stall_is_bounded_without_starting_more_resolver_threads(self):
+        client = runner.server_client(self.hub)
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+        original = socket.getaddrinfo
+        def stalled_dns(*args, **kwargs):
+            calls.append(1)
+            entered.set()
+            release.wait(timeout=1.5)
+            return original(*args, **kwargs)
+        with mock.patch.object(client, "_headers", wraps=client._headers) as headers:
+            try:
+                with mock.patch.object(socket, "getaddrinfo", side_effect=stalled_dns):
+                    t0 = time.monotonic()
+                    self.assertIsNone(runner.register_once(client, self.host, {"id": self.host},
+                                                           lambda _m: None))
+                    self.assertTrue(entered.is_set(), "the test must reach DNS resolution")
+                    self.assertLess(time.monotonic() - t0, 1.2,
+                                    "DNS must not hold the reconcile thread past its total budget")
+                    t0 = time.monotonic()
+                    self.assertIsNone(runner.register_once(client, self.host, {"id": self.host},
+                                                           lambda _m: None))
+                    self.assertLess(time.monotonic() - t0, 0.3)
+                    self.assertEqual(len(calls), 1, "a stalled resolver must not spawn one thread per retry")
+            finally:
+                release.set()
+            self.assertTrue(client._announcement_inflight.wait(timeout=1.0))
+            headers.assert_not_called()  # canceled DNS must not send after the lease may have changed
+
     # -- the damping --------------------------------------------------- #
 
     def test_consecutive_failures_back_off_instead_of_paying_every_cycle(self):
