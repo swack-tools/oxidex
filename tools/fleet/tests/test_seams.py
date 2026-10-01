@@ -696,7 +696,7 @@ class SubprocessFleetd:
             return ""
 
 
-class TestSupervisedRunnerLookup(unittest.TestCase):
+class TestSupervisedRunnerLookup(HermeticCase):
     def test_runner_path_with_spaces_and_parent_filter(self):
         driver = object.__new__(SupervisedFleetd)
         driver.popen = mock.Mock(pid=123)
