@@ -544,9 +544,6 @@ impl TTFParser {
             let Some(base_key) = Self::font_group_key(record.name_id) else {
                 continue;
             };
-            let Some(charset) = Self::font_value_charset(record) else {
-                continue;
-            };
             let key = match Self::name_record_lang_with_fallback(
                 record,
                 format_one_tags.get(&record.language_id).map(String::as_str),
@@ -554,6 +551,13 @@ impl TTFParser {
                 NameLang::Unsuffixed => base_key.to_string(),
                 NameLang::Suffixed(suffix) => format!("{base_key}-{suffix}"),
                 NameLang::Omitted => continue,
+            };
+            let Some(charset) = Self::font_value_charset(record) else {
+                // Native name records replace earlier duplicates in order.
+                // An unreadable later value must not leave the earlier value
+                // looking like the final ExifTool value.
+                metadata.remove(&key);
+                continue;
             };
             if let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
                 && !value.is_empty()
@@ -564,6 +568,7 @@ impl TTFParser {
                 if matches!(charset, FontValueCharset::Ucs2BmpOnly)
                     && value.chars().any(|ch| ch.len_utf16() == 2)
                 {
+                    metadata.remove(&key);
                     continue;
                 }
                 metadata.insert(key, TagValue::String(value));
@@ -1481,6 +1486,48 @@ mod tests {
                 expected_value.as_ref(),
                 "platform {platform}, encoding {encoding}, language {language}"
             );
+        }
+    }
+
+    #[test]
+    fn unsupported_duplicate_clears_prior_font_value_in_name_order() {
+        // Native Font.pm's final no-NO value is "あ" when ShiftJIS is last,
+        // and "A" when the UCS2 record is last. This reader cannot decode
+        // ShiftJIS, so it must not leave an earlier "A" as the final value.
+        for unsupported_last in [true, false] {
+            let records: [(u16, &[u8]); 2] = if unsupported_last {
+                [(1, &[0, b'A']), (2, &[0x82, 0xa0])]
+            } else {
+                [(2, &[0x82, 0xa0]), (1, &[0, b'A'])]
+            };
+            let mut data = Vec::new();
+            data.extend_from_slice(&0u16.to_be_bytes()); // format
+            data.extend_from_slice(&2u16.to_be_bytes()); // two records
+            data.extend_from_slice(&30u16.to_be_bytes()); // string storage
+            let mut strings = Vec::new();
+            for &(encoding, bytes) in &records {
+                for field in [
+                    PLATFORM_WINDOWS,
+                    encoding,
+                    0x0414,
+                    NAME_FONT_FAMILY,
+                    bytes.len() as u16,
+                    strings.len() as u16,
+                ] {
+                    data.extend_from_slice(&field.to_be_bytes());
+                }
+                strings.extend_from_slice(bytes);
+            }
+            data.extend_from_slice(&strings);
+            let table = TableEntry {
+                tag: *b"name",
+                offset: 0,
+                length: data.len() as u32,
+            };
+            let reader = TestReader::new(data);
+            let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
+            let expected = (!unsupported_last).then(|| TagValue::String("A".to_string()));
+            assert_eq!(tags.get("Font:FontFamily-no-NO"), expected.as_ref());
         }
     }
 
