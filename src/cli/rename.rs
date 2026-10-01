@@ -187,6 +187,9 @@ fn format_tag_value(value: &TagValue, date_format: Option<&str>) -> Result<Strin
             }
         }
         TagValue::String(s) => Ok(s.clone()),
+        TagValue::TextBytes(_) => Err(ExifToolError::parse_error(
+            "Cannot use non-Unicode text tag in filename",
+        )),
         TagValue::Integer(i) => Ok(i.to_string()),
         TagValue::Float(f) => Ok(f.to_string()),
         TagValue::Rational {

@@ -367,7 +367,8 @@ impl TTFParser {
 
     /// Decode a Font.pm UCS2/UTF16 string after its BOM and NUL rules.
     /// Format-1 language tags need the source's loss-tolerant replacement;
-    /// name values use the strict path so guessed text is never published.
+    /// name values use `decode_font_name_bytes` so Perl's malformed raw
+    /// bytes survive until the output mode chooses how to render them.
     fn decode_font_utf16(data: &[u8], lossy: bool) -> Option<String> {
         let (body, little_endian) = match data.get(..2) {
             Some([0xfe, 0xff]) => (&data[2..], false),
@@ -398,6 +399,60 @@ impl TTFParser {
         Some(decoded)
     }
 
+    /// Charset.pm's fixed-width unpack followed by `pack('C0U*')`: UCS2
+    /// leaves each surrogate as a code point, while UTF16 combines pairs.
+    /// Perl's unpack ignores an incomplete final word. Recompose stops at
+    /// the first NUL code point, after consuming any BOM.
+    fn decode_font_name_bytes(data: &[u8], utf16: bool) -> Vec<u8> {
+        let (body, little_endian) = match data.get(..2) {
+            Some([0xfe, 0xff]) => (&data[2..], false),
+            Some([0xff, 0xfe]) => (&data[2..], true),
+            _ => (data, false),
+        };
+        let words: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|pair| {
+                if little_endian {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect();
+        let mut out = Vec::with_capacity(words.len() * 3);
+        let mut index = 0;
+        while index < words.len() {
+            let word = words[index];
+            if word == 0 {
+                break;
+            }
+            let point = if utf16
+                && (0xd800..=0xdbff).contains(&word)
+                && words
+                    .get(index + 1)
+                    .is_some_and(|next| (0xdc00..=0xdfff).contains(next))
+            {
+                index += 1;
+                0x10000 + ((u32::from(word) - 0xd800) << 10) + u32::from(words[index] - 0xdc00)
+            } else {
+                u32::from(word)
+            };
+            // `char::from_u32` excludes surrogates. Perl's pack does not.
+            if let Some(ch) = char::from_u32(point) {
+                let mut buffer = [0; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            } else {
+                out.extend_from_slice(&[
+                    0xe0 | ((point >> 12) as u8),
+                    0x80 | (((point >> 6) & 0x3f) as u8),
+                    0x80 | ((point & 0x3f) as u8),
+                ]);
+            }
+            index += 1;
+        }
+        out
+    }
+
     /// Decode a `Font:` value with Font.pm's charset boundary. The older
     /// bare-name extractor above intentionally keeps its existing behavior.
     fn extract_font_name_string(
@@ -405,11 +460,19 @@ impl TTFParser {
         table: &TableEntry,
         record: &NameRecord,
         string_offset: u16,
-    ) -> Result<Option<String>> {
+        charset: FontValueCharset,
+    ) -> Result<Option<TagValue>> {
         let start = table.offset as u64 + u64::from(string_offset) + u64::from(record.offset);
         let data = reader.read(start, record.length as usize)?;
+        if matches!(record.platform_id, PLATFORM_WINDOWS | PLATFORM_UNICODE) {
+            return Ok(Some(TagValue::new_text_bytes(
+                Self::decode_font_name_bytes(
+                    data,
+                    matches!(charset, FontValueCharset::FullyDecoded),
+                ),
+            )));
+        }
         let mut decoded = match record.platform_id {
-            PLATFORM_WINDOWS | PLATFORM_UNICODE => Self::decode_font_utf16(data, false),
             PLATFORM_MACINTOSH => match record.encoding_id {
                 MAC_ENCODING_ROMAN => Some(Self::decode_mac_roman(data)),
                 MAC_ENCODING_HEBREW => Some(Self::decode_mac_hebrew(data)),
@@ -431,7 +494,7 @@ impl TTFParser {
                 value.truncate(nul);
             }
         }
-        Ok(decoded)
+        Ok(decoded.map(TagValue::String))
     }
 
     /// The exact source-defined suffix for this platform and language ID.
@@ -681,21 +744,13 @@ impl TTFParser {
                 metadata.remove(&key);
                 continue;
             };
-            let Some(value) = Self::extract_font_name_string(reader, table, record, string_offset)?
+            let Some(value) =
+                Self::extract_font_name_string(reader, table, record, string_offset, charset)?
             else {
                 metadata.remove(&key);
                 continue;
             };
-            // UTF-16 combines surrogate pairs, but Font.pm's UCS2 decoder
-            // does not. A decoded empty string is still a present value;
-            // refuse only source-incompatible supplementary UCS2 text.
-            if matches!(charset, FontValueCharset::Ucs2BmpOnly)
-                && value.chars().any(|ch| ch.len_utf16() == 2)
-            {
-                metadata.remove(&key);
-                continue;
-            }
-            metadata.insert(key, TagValue::String(value));
+            metadata.insert(key, value);
         }
 
         Ok(metadata)
@@ -1757,11 +1812,120 @@ mod tests {
             };
             let reader = TestReader::new(data);
             let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
-            let expected_value = expected.map(|value| TagValue::String(value.to_string()));
+            let expected_value = if bytes == smile
+                && matches!(
+                    (platform, encoding),
+                    (PLATFORM_WINDOWS, 1) | (PLATFORM_UNICODE, 0)
+                ) {
+                Some(TagValue::TextBytes(vec![
+                    0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80,
+                ]))
+            } else {
+                expected.map(|value| TagValue::String(value.to_string()))
+            };
             assert_eq!(
                 tags.get(key),
                 expected_value.as_ref(),
                 "platform {platform}, encoding {encoding}, language {language}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_ucs2_name_records_are_retained() {
+        // Pinned 13.59 `Font.pm`/`Charset.pm` yields raw ED-prefixed UTF-8
+        // for each surrogate; the JSON writer later applies FixUTF8.
+        for (bytes, expected_present) in [
+            (&[0xd8, 0x00, 0x00, 0x41][..], true),
+            (&[0xdc, 0x00, 0x00, 0x41][..], true),
+            (&[0xd8, 0x3d, 0xde, 0x00][..], true),
+            (&[0x00, 0x41, 0x00][..], true),
+        ] {
+            let tags =
+                font_two_record_decode_case(PLATFORM_WINDOWS, 1, 1, 0x0409, &[0x00, 0x42], bytes);
+            assert_eq!(
+                tags.contains_key("Font:FontFamily-en-US"),
+                expected_present,
+                "bytes {bytes:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn font_fixed_width_name_bytes_and_json_follow_pinned_charset_boundary() {
+        use crate::cli::output_formatter::tag_value_to_json;
+
+        // Raw expected bytes from pinned Perl 5.38.2 + ExifTool 13.59
+        // `-b -FontFamily-en-US` (Unicode 4 uses `-FontFamily`); JSON values
+        // from `-j -G1` on the same single-record name-table files.
+        let cases: &[(u16, u16, &[u8], &[u8], &str)] = &[
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xd8, 0x00, 0x00, 0x41],
+                &[0xed, 0xa0, 0x80, b'A'],
+                "???A",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xdc, 0x00, 0x00, 0x41],
+                &[0xed, 0xb0, 0x80, b'A'],
+                "???A",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xd8, 0x3d, 0xde, 0x00],
+                &[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80],
+                "??????",
+            ),
+            (
+                PLATFORM_UNICODE,
+                4,
+                &[0xd8, 0x3d, 0xde, 0x00],
+                "😀".as_bytes(),
+                "😀",
+            ),
+            (PLATFORM_WINDOWS, 1, &[0xff, 0xfe, 0x41, 0x00], b"A", "A"),
+            (PLATFORM_WINDOWS, 1, &[0xfe, 0xff, 0x00, 0x41], b"A", "A"),
+            (PLATFORM_WINDOWS, 1, &[0, 0, 0xd8, 0], b"", ""),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                &[0xff, 0xff, 0, 0x41],
+                &[0xef, 0xbf, 0xbf, b'A'],
+                "???A",
+            ),
+            (PLATFORM_WINDOWS, 1, &[0, 0x41, 0], b"A", "A"),
+        ];
+        for &(platform, encoding, source, raw, json) in cases {
+            let language = if platform == PLATFORM_WINDOWS {
+                0x0409
+            } else {
+                0
+            };
+            let tags = font_two_record_decode_case(
+                platform,
+                encoding,
+                encoding,
+                language,
+                &[0, b'B'],
+                source,
+            );
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-en-US"
+            } else {
+                "Font:FontFamily"
+            };
+            let value = tags
+                .get(key)
+                .unwrap_or_else(|| panic!("missing {key}: {source:02x?}"));
+            assert_eq!(value.as_text_bytes(), Some(raw), "source {source:02x?}");
+            assert_eq!(
+                tag_value_to_json(Some(key), value),
+                serde_json::json!(json),
+                "source {source:02x?}"
             );
         }
     }
@@ -1851,13 +2015,16 @@ mod tests {
                 "empty encoding {encoding}"
             );
         }
-        for (encoding, length, payload) in [(1, 1, &[0][..]), (1, 2, &[0xd8, 0][..])] {
-            let refused = tags(encoding, length, 2, payload, None, 30);
-            assert!(
-                !refused.contains_key(key),
-                "encoding {encoding}, length {length}"
-            );
-        }
+        // Perl's `unpack('n*')` drops the odd byte; an isolated surrogate
+        // remains a three-byte non-Unicode text value. Both displace `A`.
+        assert_eq!(
+            tags(1, 1, 2, &[0], None, 30).get(key),
+            Some(&TagValue::new_string(""))
+        );
+        assert_eq!(
+            tags(1, 2, 2, &[0xd8, 0], None, 30).get(key),
+            Some(&TagValue::new_text_bytes(vec![0xed, 0xa0, 0x80]))
+        );
         for (declared_size, string_start) in [(20, 30), (34, 18), (34, 40)] {
             let invalid_header = tags(1, 2, 2, &[0, b'B'], Some(declared_size), string_start);
             assert!(!invalid_header.contains_key(key));

@@ -34,6 +34,9 @@ pub struct CliArgs {
     /// Output in JSON format
     pub json: bool,
 
+    /// Emit selected tag values as bytes (`-b`).
+    pub binary_output: bool,
+
     /// Output in CSV format
     pub csv: bool,
 
@@ -200,6 +203,8 @@ fn normalize_exiftool_option(arg: String) -> String {
 
     match arg.as_str() {
         "-json" => "--json".to_string(),
+        "-b" => "--raw-output-bytes".to_string(),
+        "-binary" => "--raw-output-bytes".to_string(),
         "-csv" => "--csv".to_string(),
         "-preserve-file-times" => "--preserve-file-times".to_string(),
         "-backup" => "--backup".to_string(),
@@ -387,6 +392,7 @@ const LONG_OPTIONS: &[&str] = &[
     "help",
     "version",
     "json",
+    "raw-output-bytes",
     "csv",
     "preserve-file-times",
     "backup",
@@ -526,6 +532,7 @@ impl CliArgs {
         // Initialize with default values
         let mut detector = DetectorMode::default();
         let mut json = false;
+        let mut binary_output = false;
         let mut csv = false;
         let mut short_level: u8 = 0;
         let mut all_tags = false;
@@ -732,6 +739,9 @@ impl CliArgs {
                 Short('j') | Long("json") => {
                     json = true;
                 }
+                Long("raw-output-bytes") => {
+                    binary_output = true;
+                }
                 // CSV output
                 Long("csv") => {
                     csv = true;
@@ -856,6 +866,7 @@ impl CliArgs {
         let parsed = CliArgs {
             detector,
             json,
+            binary_output,
             csv,
             short_level,
             all_tags,
@@ -874,6 +885,12 @@ impl CliArgs {
             args,
             literal_paths,
         };
+        if parsed.binary_output && (parsed.json || parsed.csv) {
+            return Err("-b with JSON or CSV output is not supported".into());
+        }
+        if parsed.binary_output && parsed.specific_tags().is_none() {
+            return Err("-b requires an explicit tag request".into());
+        }
         if exclusion_seen && parsed.filename_pattern().is_some() {
             return Err("tag exclusions in rename mode are not supported".into());
         }
@@ -1485,6 +1502,7 @@ mod tests {
         CliArgs {
             detector: DetectorMode::default(),
             json: false,
+            binary_output: false,
             csv: false,
             short_level: 2,
             all_tags: false,

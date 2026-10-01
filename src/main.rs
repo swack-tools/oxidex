@@ -14,6 +14,7 @@ use oxidex::cli::write_transaction::{
 };
 use oxidex::core::operations::read_metadata_report_with_detector_and_options;
 use oxidex::core::read_report::ParseStatus;
+use std::io::Write;
 use std::process;
 
 fn main() {
@@ -210,7 +211,7 @@ fn handle_multi_file_processing(
             let is_read_mode = modifications.is_empty();
             // Structured reads put ExifTool's summary on stderr so stdout
             // remains valid JSON/CSV.
-            if is_read_mode && (args.json || args.csv) {
+            if is_read_mode && (args.json || args.csv || args.binary_output) {
                 stats.print_structured_read_summary();
             } else {
                 stats.print();
@@ -501,6 +502,24 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             let status = report.status;
             let raw_metadata = report.metadata;
 
+            if args.binary_output {
+                let bytes = match oxidex::cli::tag_resolution::render_binary_requested_tags(
+                    &raw_metadata,
+                    args,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(message) => {
+                        eprintln!("Error: {message}");
+                        process::exit(1);
+                    }
+                };
+                if let Err(error) = std::io::stdout().lock().write_all(&bytes) {
+                    eprintln!("Error writing binary output: {error}");
+                    process::exit(1);
+                }
+                return;
+            }
+
             // Check if any metadata was found
             if raw_metadata.is_empty() {
                 PathLine::new("No metadata found in file: ")
@@ -528,6 +547,20 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
             match oxidex::cli::tag_resolution::resolve_file_output(&raw_metadata, args) {
                 oxidex::cli::tag_resolution::ResolvedFileOutput::Lines(output) => {
                     print!("{}", output);
+                }
+                oxidex::cli::tag_resolution::ResolvedFileOutput::Bytes(bytes) => {
+                    if tag_filter.is_none() && args.group_display.is_none() && args.short_level == 0
+                    {
+                        PathLine::new("File: ").path(file).print();
+                        println!(
+                            "Found {} metadata tag(s):\n",
+                            read_options.strip_extended_only(&raw_metadata).len()
+                        );
+                    }
+                    if let Err(error) = std::io::stdout().lock().write_all(&bytes) {
+                        eprintln!("Error writing text output: {error}");
+                        process::exit(1);
+                    }
                 }
                 oxidex::cli::tag_resolution::ResolvedFileOutput::Metadata(metadata) => {
                     print_resolved_metadata(file, &metadata, args, status, tag_filter.is_none());
@@ -601,7 +634,7 @@ fn handle_batch_processing(
             let is_read_mode = modifications.is_empty();
             // Structured reads put ExifTool's summary on stderr so stdout
             // remains valid JSON/CSV.
-            if is_read_mode && (args.json || args.csv) {
+            if is_read_mode && (args.json || args.csv || args.binary_output) {
                 stats.print_structured_read_summary();
             } else {
                 stats.print();
