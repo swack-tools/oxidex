@@ -892,20 +892,28 @@ fn parse_xmp_packet_in_directory(
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
-                        if collection_langs.iter().any(Option::is_some) {
-                            // lang-alt: one tag per language, x-default (or the
-                            // first entry) keeping the plain name.
-                            let default_index = collection_langs
-                                .iter()
-                                .position(|l| l.as_deref() == Some("x-default"))
-                                .unwrap_or(0);
+                        if if current_path.first().is_none_or(|(namespace, id)| {
+                            super::generated_priorities::xmp_table(namespace)
+                                .and_then(|table| table.tag(id))
+                                .is_none()
+                        }) {
+                            // FoundXMP fixes an unknown tag's list type from
+                            // its first item; later language attributes cannot
+                            // turn a plain list into lang-alt.
+                            collection_langs.first().is_some_and(Option::is_some)
+                        } else {
+                            collection_langs.iter().any(Option::is_some)
+                        } {
+                            // Only x-default owns the bare name. A missing
+                            // default never removes another language's suffix.
                             for (index, value) in collection_values.iter().enumerate() {
                                 let suffix =
                                     match collection_langs.get(index).and_then(Clone::clone) {
-                                        Some(lang) if index != default_index => format!("-{lang}"),
-                                        _ if index == default_index => String::new(),
-                                        None => continue,
-                                        _ => continue,
+                                        Some(lang) if lang.eq_ignore_ascii_case("x-default") => {
+                                            String::new()
+                                        }
+                                        Some(lang) => format!("-{lang}"),
+                                        None => String::new(),
                                     };
                                 let tag = format!("{prefixed_name}{suffix}");
                                 if current_default_namespace {
@@ -2633,7 +2641,13 @@ fn extract_list_struct_values_in_directory(
                             NamespaceResolver::extract_prefix(&tag_name)
                                 .and_then(|prefix| resolver.resolve_prefix(prefix))
                                 .is_some_and(|uri| LIST_STRUCT_REPEAT_SCHEMAS.contains(&uri));
-                        container_name = if is_flat_name_suppressed(&local) {
+                        container_name = if is_flat_name_suppressed(&local)
+                            && container_group
+                                .strip_prefix("XMP-")
+                                .and_then(super::generated_priorities::xmp_table)
+                                .and_then(|table| table.tag(&local))
+                                .is_some()
+                        {
                             String::new()
                         } else {
                             local
@@ -8562,6 +8576,79 @@ mod entry_tests {
         assert_eq!(
             find("XMP-xmp:CreateDate").tag_value(false),
             TagValue::new_string("2022")
+        );
+    }
+}
+
+#[cfg(test)]
+mod language_flatname_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn first_unlabelled_item_keeps_unknown_alt_as_list() {
+        let xml = std::str::from_utf8(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/no-default-language.xmp"
+        ))
+        .unwrap()
+        .replace(" xml:lang=\"fr\"", "");
+        let tags = parse_xmp(xml.as_bytes()).unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1") && v == "A & B, C & D")
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":BTestTagField1-en")));
+    }
+
+    #[test]
+    fn foreign_owner_name_does_not_inherit_plus_schema() {
+        let xml = std::str::from_utf8(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/plus-owner-flatname.xmp"
+        ))
+        .unwrap()
+        .replace(
+            "http://ns.useplus.org/ldf/xmp/1.0/",
+            "https://example.invalid/custom",
+        );
+        let tags = parse_xmp(xml.as_bytes()).unwrap();
+        assert!(
+            tags.iter().any(
+                |(k, v)| k.ends_with(":CopyrightOwnerCopyrightOwnerName") && v == "Phil Harvey"
+            )
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":CopyrightOwnerName")));
+    }
+
+    #[test]
+    fn no_default_language_keeps_both_suffixes() {
+        let tags = parse_xmp(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/no-default-language.xmp"
+        ))
+        .unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1-fr") && v == "A & B")
+        );
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1-en") && v == "C & D")
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":BTestTagField1")));
+    }
+
+    #[test]
+    fn plus_owner_uses_source_empty_flatname() {
+        let tags = parse_xmp(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/plus-owner-flatname.xmp"
+        ))
+        .unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k == "XMP-plus:CopyrightOwnerName" && v == "Phil Harvey")
+        );
+        assert!(
+            !tags
+                .iter()
+                .any(|(k, _)| k == "XMP-plus:CopyrightOwnerCopyrightOwnerName")
         );
     }
 }

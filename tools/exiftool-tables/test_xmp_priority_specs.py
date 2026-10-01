@@ -67,6 +67,32 @@ class XmpPrioritySpecTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 specs.validate(broken)
 
+    def test_generated_names_preserve_source_names_distinct_from_raw_ids(self):
+        rendered = specs.render(self.capture)
+        for section in ("namespaces", "special_tables"):
+            for table in self.capture[section].values():
+                for raw_id, fact in table["tags"].items():
+                    self.assertIn(
+                        f'XmpTagFact {{ id: "{raw_id}", name: "{fact["name"]}",',
+                        rendered,
+                    )
+        if specs.PIN == "13.59":
+            owner = self.capture["namespaces"]["plus"]["tags"]["CopyrightOwnerCopyrightOwnerName"]
+            self.assertEqual(owner["name"], "CopyrightOwnerName")
+
+    def test_generated_names_preserve_source_names_distinct_from_raw_ids(self):
+        rendered = specs.render(self.capture)
+        for section in ("namespaces", "special_tables"):
+            for table in self.capture[section].values():
+                for raw_id, fact in table["tags"].items():
+                    self.assertIn(
+                        f'XmpTagFact {{ id: "{raw_id}", name: "{fact["name"]}",',
+                        rendered,
+                    )
+        if specs.PIN == "13.59":
+            owner = self.capture["namespaces"]["plus"]["tags"]["CopyrightOwnerCopyrightOwnerName"]
+            self.assertEqual(owner["name"], "CopyrightOwnerName")
+
     def test_fixture_is_the_fresh_pinned_capture(self):
         missing = [name for name in FRESH_INPUTS if not os.environ.get(name)]
         if missing:

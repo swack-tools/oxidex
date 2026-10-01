@@ -146,6 +146,8 @@ def render(capture: dict) -> str:
         "pub struct XmpTagFact {",
         "    /// The tag ID exactly as the table keys it (case-sensitive).",
         "    pub id: &'static str,",
+        "    /// Selected Perl tagInfo Name after AddFlattenedTags.",
+        "    pub name: &'static str,",
         "    /// Effective FoundTag priority of a direct hit: `Priority`, else the",
         "    /// table `PRIORITY`, else 0 for `Avoid`, else 1.",
         "    pub priority: i8,",
@@ -191,7 +193,7 @@ def render(capture: dict) -> str:
                      f'priority: {_opt_i8(fact["table_priority"])}, avoid: {_opt_bool(fact["table_avoid"])}, tags: &[')
         for tag_id in sorted(fact["tags"]):
             tag = fact["tags"][tag_id]
-            lines.append(f'        XmpTagFact {{ id: "{tag_id}", priority: {tag["priority"]}, '
+            lines.append(f'        XmpTagFact {{ id: "{tag_id}", name: "{tag["name"]}", priority: {tag["priority"]}, '
                          f'own_priority: {_opt_i8(tag["own_priority"])}, avoid: {_opt_bool(tag["avoid"])}, '
                          f'structure: {STRUCT_KINDS[tag["struct"]]} }},')
         lines.append("    ] },")
@@ -205,7 +207,7 @@ def render(capture: dict) -> str:
                      f'priority: {_opt_i8(fact["table_priority"])}, avoid: {_opt_bool(fact["table_avoid"])}, tags: &[')
         for tag_id in sorted(fact["tags"]):
             tag = fact["tags"][tag_id]
-            lines.append(f'        XmpTagFact {{ id: "{tag_id}", priority: {tag["priority"]}, '
+            lines.append(f'        XmpTagFact {{ id: "{tag_id}", name: "{tag["name"]}", priority: {tag["priority"]}, '
                          f'own_priority: {_opt_i8(tag["own_priority"])}, avoid: {_opt_bool(tag["avoid"])}, '
                          f'structure: {STRUCT_KINDS[tag["struct"]]} }},')
         lines.append("    ] },")

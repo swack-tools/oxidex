@@ -572,7 +572,14 @@ fn flat_tag_name(stack: &[Frame], extra_segment: Option<&str>) -> Option<String>
     // The innermost xml:lang wins: it sits on the rdf:li of a lang-alt.
     let lang = stack.iter().rev().find_map(|f| f.lang.as_deref());
 
-    let name = apply_flat_name(root_uri.unwrap_or(""), &id);
+    // The selected source already resolves schema FlatName and field Name.
+    // Unknown raw IDs retain the existing namespace-aware fallback.
+    let name = group
+        .strip_prefix("XMP-")
+        .and_then(super::generated_priorities::xmp_table)
+        .and_then(|table| table.tag(&id))
+        .map(|tag| tag.name.to_string())
+        .unwrap_or_else(|| apply_flat_name(root_uri.unwrap_or(""), &id));
     if name.is_empty() {
         return None;
     }
