@@ -61,7 +61,44 @@ fn pointer_present_keeps_preview_ifd0_makernote_and_interop_reads() {
         metadata.get_string("InteropIFD:InteropIndex"),
         Some("R98 - DCF basic file (sRGB)")
     );
+    assert_eq!(
+        metadata.get_string("InteropIFD:InteropVersion"),
+        Some("0100")
+    );
+    assert!(metadata.get("EXIF:InteropVersion").is_none());
     assert_eq!(metadata.get_string("Panasonic:BatteryLevel"), Some("Full"));
+}
+
+#[test]
+fn preview_interop_version_trims_terminal_nul() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_ifd = tiff + read_u32(&data, entry(&data, ifd0, 0x8769) + 8) as usize;
+    let interop_ifd = tiff + read_u32(&data, entry(&data, exif_ifd, 0xA005) + 8) as usize;
+    let version = entry(&data, interop_ifd, 0x0002);
+    assert_eq!(&data[version + 8..version + 12], b"0100");
+    data[version + 11] = 0;
+
+    // Exif.pm InteropVersion RawConv strips terminal NUL bytes.
+    assert_eq!(
+        parse(&data).get_string("InteropIFD:InteropVersion"),
+        Some("010")
+    );
+}
+
+#[test]
+fn bad_first_preview_interop_entry_aborts_later_version() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_ifd = tiff + read_u32(&data, entry(&data, ifd0, 0x8769) + 8) as usize;
+    let interop_ifd = tiff + read_u32(&data, entry(&data, exif_ifd, 0xA005) + 8) as usize;
+    assert_eq!(read_u16(&data, interop_ifd + 2), 0x0001);
+    data[interop_ifd + 4..interop_ifd + 6].copy_from_slice(&99u16.to_le_bytes());
+
+    // ProcessExif abandons InteropIFD after the invalid first format.
+    let metadata = parse(&data);
+    assert!(metadata.get("InteropIFD:InteropIndex").is_none());
+    assert!(metadata.get("InteropIFD:InteropVersion").is_none());
 }
 
 #[test]
@@ -392,6 +429,7 @@ fn bad_first_preview_exififd_entry_aborts_later_exif_values() {
     assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
     assert!(metadata.get("ExifIFD:ColorSpace").is_none());
     assert!(metadata.get("Panasonic:BatteryLevel").is_none());
+    assert!(metadata.get("InteropIFD:InteropVersion").is_none());
 }
 
 #[test]

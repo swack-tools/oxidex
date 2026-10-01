@@ -2122,7 +2122,7 @@ fn extract_rw2_embedded_exif_tags(
     Ok(())
 }
 
-/// Emit InteropIFD tag 0x0001 (InteropIndex) with ExifTool's PrintConv.
+/// Emit selected InteropIFD tags with ExifTool's display values.
 ///
 /// Exif.pm, Image::ExifTool::Exif::Main InteropIFD table, verbatim:
 /// ```text
@@ -2159,7 +2159,7 @@ fn extract_interop_index(
         interop_offset,
         byte_order,
         directory_limit,
-        &[0x0001],
+        &[0x0001, 0x0002],
         &walk.eligible_indices,
     ) else {
         eprintln!("Warning: Failed to parse Interoperability IFD");
@@ -2184,14 +2184,18 @@ fn extract_interop_index(
                 );
             }
             // Exif.pm InteropIFD 0x0002: InteropVersion, UNDEFINED[4].
-            // ExifTool reports this preview-derived value in the EXIF group.
+            // ExifTool reports this preview-derived value in InteropIFD.
             0x0002 if *field_type == 7 && *value_count == 4 => {
                 let Some(version) = raw_bytes.get(..4) else {
                     continue;
                 };
                 metadata.insert(
-                    lookup_tag_name(*tag_id, "EXIF"),
-                    TagValue::new_string(String::from_utf8_lossy(version).into_owned()),
+                    lookup_tag_name(*tag_id, "InteropIFD"),
+                    TagValue::new_string(
+                        String::from_utf8_lossy(version)
+                            .trim_end_matches('\0')
+                            .to_string(),
+                    ),
                 );
             }
             _ => {}
