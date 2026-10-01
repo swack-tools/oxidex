@@ -1940,18 +1940,37 @@ def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str
     Stops at the first complete line reporting ``phase``, at EOF, or when
     ``timeout`` elapses; the caller decides what a missing phase means.
     """
-    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
-    buffered: bytes = getattr(child, "_oxidex_lineage_buffer", b"")
-
-    def parsed() -> list[dict[str, Any]]:
+    def parsed(buffered: bytes) -> list[dict[str, Any]]:
         try:
             return [json.loads(line) for line in buffered.split(b"\n")[:-1] if line.strip()]
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise OSError("owned command lineage report is malformed") from exc
 
     deadline = time.monotonic() + timeout
+    condition = getattr(child, "_oxidex_lineage_status_condition", None)
+    if condition is not None:
+        # After the exec handshake a reader drains the status pipe while the
+        # caller is inside communicate(). Otherwise a large, complete exit
+        # report can block the supervisor, which keeps communicate() waiting.
+        with condition:
+            while True:
+                reports = parsed(getattr(child, "_oxidex_lineage_buffer", b""))
+                if any(row.get("phase") == phase for row in reports):
+                    return reports
+                if getattr(child, "_oxidex_lineage_status_done", False):
+                    error = getattr(child, "_oxidex_lineage_status_error", None)
+                    if error is not None:
+                        raise OSError(f"owned command status reader failed: {error}")
+                    return reports
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return reports
+                condition.wait(remaining)
+
+    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    buffered: bytes = getattr(child, "_oxidex_lineage_buffer", b"")
     while type(descriptor) is int and descriptor >= 0:
-        if any(row.get("phase") == phase for row in parsed()):
+        if any(row.get("phase") == phase for row in parsed(buffered)):
             break
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1964,10 +1983,58 @@ def _lineage_reports(child: subprocess.Popen[Any], *, timeout: float, phase: str
             break
         buffered += chunk
         setattr(child, "_oxidex_lineage_buffer", buffered)
-    return parsed()
+    return parsed(buffered)
+
+
+def _start_lineage_status_reader(child: subprocess.Popen[Any]) -> None:
+    """Drain the post-handshake status pipe independently of command output."""
+    descriptor = getattr(child, "_oxidex_lineage_status_fd", -1)
+    condition = threading.Condition()
+    setattr(child, "_oxidex_lineage_status_condition", condition)
+    setattr(child, "_oxidex_lineage_status_done", False)
+
+    def drain() -> None:
+        error: str | None = None
+        try:
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                with condition:
+                    child._oxidex_lineage_buffer += chunk
+                    condition.notify_all()
+        except OSError as exc:
+            error = str(exc)
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                error = error or str(exc)
+            with condition:
+                child._oxidex_lineage_status_fd = -1
+                child._oxidex_lineage_status_error = error
+                child._oxidex_lineage_status_done = True
+                condition.notify_all()
+
+    reader = threading.Thread(target=drain, name="oxidex-lineage-status", daemon=True)
+    setattr(child, "_oxidex_lineage_status_reader", reader)
+    try:
+        reader.start()
+    except RuntimeError as exc:
+        delattr(child, "_oxidex_lineage_status_condition")
+        delattr(child, "_oxidex_lineage_status_reader")
+        raise OSError("owned command status reader could not start") from exc
 
 
 def _close_lineage_status(child: subprocess.Popen[Any]) -> None:
+    reader = getattr(child, "_oxidex_lineage_status_reader", None)
+    if reader is not None:
+        reader.join(timeout=_TERMINATION_GRACE_SECONDS)
+        if reader.is_alive():
+            raise OwnedChildCleanupIncomplete("owned command status reader did not reach EOF")
+        error = getattr(child, "_oxidex_lineage_status_error", None)
+        if error is not None:
+            raise OwnedChildCleanupIncomplete(f"owned command status reader failed: {error}")
     for name in ("_oxidex_lineage_status_fd", "_oxidex_lineage_control_fd"):
         descriptor = getattr(child, name, -1)
         if type(descriptor) is int and descriptor >= 0:
@@ -2069,13 +2136,13 @@ def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATI
             or any(type(pid) is not int for pid in finished["escaped"])):
         raise OwnedChildCleanupIncomplete(f"owned command lineage was not proven empty: {reports}")
     child.returncode = finished["returncode"]
-    setattr(child, "_oxidex_lineage_verified", True)
-    setattr(child, "_oxidex_lineage_finished", finished["escaped"])
     if isinstance(finished.get("descendants"), list):
         setattr(child, "_oxidex_lineage_diagnostics", finished["descendants"])
         setattr(child, "_oxidex_lineage_diagnostics_omitted",
                 finished.get("descendant_observations_omitted", 0))
     _close_lineage_status(child)  # the exit report is the supervisor's last line
+    setattr(child, "_oxidex_lineage_verified", True)
+    setattr(child, "_oxidex_lineage_finished", finished["escaped"])
     return finished["escaped"]
 
 
@@ -2097,8 +2164,8 @@ def _lineage_unverified(child: subprocess.Popen[Any]) -> str | None:
     finished = next((row for row in reports if row.get("phase") == "exit"), None)
     if (finished is not None and finished.get("verified") is True
             and type(finished.get("returncode")) is int):
-        setattr(child, "_oxidex_lineage_verified", True)
         _close_lineage_status(child)  # the exit report is the supervisor's last line
+        setattr(child, "_oxidex_lineage_verified", True)
         return None
     return "exited; its lineage supervisor never proved every descendant gone"
 
@@ -2111,6 +2178,25 @@ def _request_lineage_sweep(child: subprocess.Popen[Any]) -> None:
     deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS * 3
     while child.poll() is None and time.monotonic() < deadline:
         time.sleep(0.02)
+
+
+def _cleanup_after_status_reader_start_failure(child: subprocess.Popen[str]) -> None:
+    """Sweep a command already exec'd when its concurrent pipe reader cannot start.
+
+    The main thread drains status itself before waiting on the supervisor;
+    waiting first could deadlock on the same full status pipe we are repairing.
+    An absent ECHILD verdict leaves the child registered and cleanup unproven.
+    """
+    _send_sweep_request(child)
+    _lineage_reports(child, timeout=10 + _TERMINATION_GRACE_SECONDS * 3, phase="exit")
+    # Reap the supervisor before _finish_lineage adopts the primary command's
+    # exit code as Popen.returncode (which would make wait() skip the reap).
+    child.wait(timeout=_TERMINATION_GRACE_SECONDS * 3)
+    _finish_lineage(child)
+    _require_ownership_release(child, "status reader start failure")
+    for stream in (child.stdin, child.stdout, child.stderr):
+        if stream is not None:
+            stream.close()
 
 
 def _spawn_with_deferred_sigint(
@@ -2161,9 +2247,7 @@ def _spawn_with_deferred_sigint(
             try:
                 _await_supervised_exec(created)
             except OSError:
-                # Nothing was exec'd: once the supervisor's inherited writer
-                # is gone the child is provably finished; otherwise it stays
-                # registered and every later lock release fails closed.
+                # The exec handshake failed; the helper has requested a sweep.
                 read_fd = -1  # now owned by the probe attribute
                 try:
                     _wait_for_ownership_release(created)
@@ -2171,6 +2255,21 @@ def _spawn_with_deferred_sigint(
                     pass
                 _settle(created)
                 raise
+            try:
+                _start_lineage_status_reader(created)
+            except OSError as start_failure:
+                # Exec succeeded. Drain the status pipe and prove the sweep
+                # instead of treating this as an exec failure or dropping it.
+                read_fd = -1
+                try:
+                    _cleanup_after_status_reader_start_failure(created)
+                except BaseException as cleanup:
+                    _settle(created)  # keeps an unproven child registered
+                    raise OwnedChildCleanupIncomplete(
+                        "owned command status reader failed and cleanup remains unproven",
+                    ) from cleanup
+                _settle(created)
+                raise start_failure
         child = created
         owner[0] = child
     except BaseException as failure:
@@ -2252,9 +2351,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             if escaped:
                 # The lineage boundary killed descendants that outlived the
                 # command; its output cannot be accepted as complete work.
+                diagnostics = getattr(child, "_oxidex_lineage_diagnostics", None)
+                diagnostic_fields = ({"descendant_diagnostics": diagnostics[:_LINEAGE_DIAGNOSTIC_LIMIT],
+                                      "descendant_observations_omitted": getattr(
+                                          child, "_oxidex_lineage_diagnostics_omitted", 0)}
+                                     if isinstance(diagnostics, list) else {})
                 return {"argv": argv, "exit": child.returncode, "stdout": stdout or "",
                         "stderr": stderr or "", "state": "escaped_descendants",
-                        "escaped_descendants": escaped, **process_identity}
+                        "escaped_descendants": escaped, **diagnostic_fields, **process_identity}
         except (KeyboardInterrupt, SystemExit) as interruption:
             if (owner[0] is not None
                     and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):

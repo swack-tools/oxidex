@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -665,6 +666,11 @@ class ExecutorTests(unittest.TestCase):
             self.assertNotEqual(record["state"], "ok", record)
             self.assertEqual(record["state"], "escaped_descendants", record)
             self.assertIn(descendant_pid, record["escaped_descendants"])
+            details = next(row for row in record["descendant_diagnostics"]
+                           if row["pid"] == descendant_pid)
+            self.assertEqual(details["signal"], "sent")
+            self.assertIn("start_ticks", details)
+            self.assertEqual(record["descendant_observations_omitted"], 0)
             self.assertEqual(record["exit"], 0)
             self.assertFalse(executor._pid_live(descendant_pid),
                              "a detached descendant outlived the accepted command")
@@ -680,6 +686,104 @@ class ExecutorTests(unittest.TestCase):
                     os.kill(descendant_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_large_exit_report_drains_on_small_status_pipe(self):
+        """A full escaped-PID verdict and Unicode basenames cannot block communicate()."""
+        import fcntl
+        executable = shutil.which("sleep")
+        self.assertIsNotNone(executable)
+        copies = []
+        for index in range(16):
+            copy = self.root / ("é" * 62 + f"{index:02d}")
+            shutil.copyfile(executable, copy)
+            copy.chmod(0o700)
+            copies.append(str(copy))
+
+        actual_handshake = executor._await_supervised_exec
+
+        def shrink_status_pipe(child):
+            actual_handshake(child)
+            capacity = fcntl.fcntl(child._oxidex_lineage_status_fd,
+                                   fcntl.F_SETPIPE_SZ, 4096)
+            self.assertEqual(capacity, 4096)
+
+        program = ("import subprocess,sys,time\n"
+                   "for path in sys.argv[1:]:\n"
+                   " subprocess.Popen([path, '60'], stdin=subprocess.DEVNULL, "
+                   "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+                   "start_new_session=True, close_fds=True)\n"
+                   "time.sleep(0.5)\n")
+        with patch.object(executor, "_await_supervised_exec", side_effect=shrink_status_pipe), \
+             patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 8):
+            record = executor._run_record([sys.executable, "-c", program, *copies],
+                                          cwd=self.root, env=dict(os.environ),
+                                          run=subprocess.run)
+        self.assertEqual(record["state"], "escaped_descendants", record)
+        self.assertEqual(len(record["escaped_descendants"]), 16)
+        self.assertEqual(len(record["descendant_diagnostics"]), 16)
+        self.assertEqual(record["descendant_observations_omitted"], 0)
+        self.assertGreater(len(json.dumps(record["descendant_diagnostics"]).encode()), 4096)
+        self.assertEqual({row["exe"] for row in record["descendant_diagnostics"]},
+                         {Path(path).name for path in copies})
+        self.assertTrue(all(not executor._pid_live(pid)
+                            for pid in record["escaped_descendants"]))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_status_reader_start_failure_sweeps_already_execed_command(self):
+        """A failed reader thread cannot strand the command after its exec handshake."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        command_pid = None
+
+        def fail_after_command_started(_child):
+            nonlocal command_pid
+            command_pid = int(_read_reported_line(read_fd))
+            raise OSError("injected reader start failure")
+
+        try:
+            with patch.object(executor, "_start_lineage_status_reader",
+                              side_effect=fail_after_command_started):
+                record = executor._run_record(
+                    [sys.executable, "-c",
+                     "import os,sys,time; os.write(int(sys.argv[1]), "
+                     "f'{os.getpid()}\\n'.encode()); time.sleep(60)", str(write_fd)],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run)
+            self.assertEqual(record["state"], "spawn_failed", record)
+            self.assertIsNotNone(command_pid)
+            self.assertFalse(executor._pid_live(command_pid))
+            self.assertEqual(executor.unproven_children(), [])
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+            if command_pid is not None:
+                try:
+                    os.kill(command_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_stage_record_includes_bounded_descendant_snapshot(self):
+        child = SimpleNamespace(pid=123, returncode=0, communicate=lambda **_: ("", ""))
+
+        def finish(owned):
+            owned._oxidex_lineage_diagnostics = [
+                {"pid": 42, "state": "R", "exe": "git", "signal": "sent",
+                 "start_ticks": 100, "ppid": 123, "disappeared_before_signal": False}]
+            owned._oxidex_lineage_diagnostics_omitted = 2
+            return [42]
+
+        with patch.object(executor, "_spawn_with_deferred_sigint", return_value=child), \
+             patch.object(executor, "_finish_lineage", side_effect=finish), \
+             patch.object(executor, "_require_ownership_release"), \
+             patch.object(executor, "_settle"):
+            record = executor._run_record(["fake-command"], cwd=self.root,
+                                          env=dict(os.environ), run=subprocess.run)
+        self.assertEqual(record["state"], "escaped_descendants")
+        self.assertEqual(record["escaped_descendants"], [42])
+        self.assertEqual(record["descendant_diagnostics"][0]["exe"], "git")
+        self.assertEqual(record["descendant_observations_omitted"], 2)
 
     def test_reaped_leader_group_is_never_signalled_by_numeric_pgid(self):
         """After the leader is reaped its PGID may be reused; signal only verified members."""

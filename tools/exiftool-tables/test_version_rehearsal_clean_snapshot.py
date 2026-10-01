@@ -443,7 +443,18 @@ class CleanSnapshotTests(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertTrue(marker.is_file(), "the caller commit must execute the rejecting hook")
         marker.unlink()
-        qualification._preflight_owned_signing(self.owned, self.root)
+        original_run = qualification.executor._tracked_run
+        commands = []
+
+        def observed_run(argv, **kwargs):
+            commands.append(argv)
+            return original_run(argv, **kwargs)
+
+        with patch.object(qualification.executor, "_tracked_run", side_effect=observed_run):
+            qualification._preflight_owned_signing(self.owned, self.root)
+        commit = next(argv for argv in commands if "commit" in argv)
+        self.assertIn("maintenance.auto=false", commit)
+        self.assertEqual(sum("maintenance.auto=false" in argv for argv in commands), 1)
         self.assertFalse(marker.exists(), "the signing probe must override the caller hook")
         self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
 
