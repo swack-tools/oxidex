@@ -669,7 +669,8 @@ class ClaimRebuild(NamedTuple):
 
 def rebuild_claim(job: JobState, *, host: str, hub, ttl: Optional[float] = None,
                   renew_interval: Optional[float] = None,
-                  now: Optional[datetime] = None) -> ClaimRebuild:
+                  now: Optional[datetime] = None,
+                  start_renewer: bool = True) -> ClaimRebuild:
     """A renewing `Claim` for `job`, from journal fields alone.
 
     `Claim.adopt` cannot be used here: its very first act is
@@ -778,7 +779,8 @@ def rebuild_claim(job: JobState, *, host: str, hub, ttl: Optional[float] = None,
     on_now = anchor is None
     c._last_renew_ok = anchor if anchor is not None else now
     c._clear_lost()
-    c.start_renewer()
+    if start_renewer:
+        c.start_renewer()
     return ClaimRebuild(
         c,
         ("anchored on now (the journaled expires_at had already passed, so it "
@@ -878,6 +880,7 @@ def adopt_from_journal(
     ttl: Optional[float] = None,
     renew_interval: Optional[float] = None,
     now: Optional[datetime] = None,
+    renew_claims: bool = True,
 ) -> JournalAdoption:
     """Adopt this host's still-running work from LOCAL evidence only.
 
@@ -971,11 +974,21 @@ def adopt_from_journal(
         if own_pgid is not None and pgid == own_pgid:
             res.refused.append((job.job_key, f"pgid {pgid} is this runner's own group"))
             continue
-        if pgid not in live:
-            res.to_release.append(
-                OwedRelease(job.job_key, job.claim_ref, job.started_at,
-                            f"process group {pgid} is gone", job.prior_runs))
-            continue
+        missing_from_listing = pgid not in live
+        if missing_from_listing:
+            # A missing ps row is not proof that a live group disappeared.
+            # Confirm kernel absence before recording a deferred CAS delete;
+            # if the group exists, the identity check below still decides
+            # whether this is the journaled worker or a recycled PGID.
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                res.to_release.append(
+                    OwedRelease(job.job_key, job.claim_ref, job.started_at,
+                                f"process group {pgid} is gone", job.prior_runs))
+                continue
+            except OSError:
+                pass  # uncertain or EPERM: identity must decide
         if job.scope_token is not None and job.scope_token != scope_token:
             # The token is derived from the HUB URL (`fleet_scope_token`),
             # so a disagreement means this journal entry was written by a
@@ -1003,6 +1016,13 @@ def adopt_from_journal(
                 f"process identity listing unavailable ({exc}); releasing nothing")
             return res
         if member is None:
+            if missing_from_listing:
+                # Both listings may have omitted a live group. With the
+                # kernel reporting it alive, absence from ps is uncertainty,
+                # not authority to delete its lease later.
+                res.refused.append((job.job_key,
+                                    f"pgid {pgid} exists but identity listing omitted it"))
+                continue
             res.to_release.append(
                 OwedRelease(job.job_key, job.claim_ref, job.started_at,
                             f"recorded pgid {pgid} is not a scoped fleet worker "
@@ -1010,7 +1030,8 @@ def adopt_from_journal(
             )
             continue
         rebuilt = rebuild_claim(job, host=host, hub=hub, ttl=ttl,
-                                renew_interval=renew_interval, now=now)
+                                renew_interval=renew_interval, now=now,
+                                start_renewer=renew_claims)
         if rebuilt.claim is None:
             res.refused.append((job.job_key, rebuilt.why))
             continue
@@ -1192,6 +1213,7 @@ def adopt_at_startup(
     journal_adopt: Callable[..., JournalAdoption] = adopt_from_journal,
     ttl: Optional[float] = None,
     renew_interval: Optional[float] = None,
+    allow_store_adoption: bool = True,
     log: Callable[[str], None] = lambda msg: print(msg, file=sys.stderr, flush=True),
 ) -> StartupAdoption:
     """Rebuild `workers` at runner start. THE replacement for `fleetd.main`'s
@@ -1216,9 +1238,10 @@ def adopt_at_startup(
        reachable the hub claim is truth EXACTLY as today (SPEC §5.3);
        the journal contributes nothing to that decision, because a local
        file must never out-vote a CAS'd lease.
-    3. Only if that raises `HubError` -- which, through a `FallbackHub`,
-       means BOTH routes failed (SPEC §4.3) -- does the journal become
-       decisive, via `adopt_from_journal`.
+    3. If the store pass fails, or the caller has no host singleton yet,
+       the journal supplies local observation only. Without host ownership,
+       rebuilt worker claims do not start renewers; the caller applies the
+       ordinary lost-lease deadline until ownership can be established.
 
     The caller must honour `spawn_allowed` (False while offline) and
     retry the store every `OFFLINE_RETRY_S`, calling `release_pending`
@@ -1256,17 +1279,21 @@ def adopt_at_startup(
         kwargs["killer"] = _refuse
 
     try:
+        if not allow_store_adoption:
+            raise HubError("host singleton ownership is not established")
         res.hub_result = hub_adopt(hub, host, workers, **kwargs)
     except HubError as exc:
         # BOTH routes are down. This is the exit-5 path, and it is now an
         # adoption from local evidence instead of a refusal to start.
         res.mode = "journal"
         res.hub_error = exc
-        log(f"keel-runner[{host}] store unreachable at startup ({exc}); adopting "
+        source = "store unreachable" if allow_store_adoption else "host lease unowned"
+        log(f"keel-runner[{host}] {source} at startup ({exc}); adopting "
             f"from the local job journal instead of refusing to start")
         res.journal_result = journal_adopt(
             journal, host, workers, hub=hub, scan=scan, markers=markers,
             scope_token=scope_token, ttl=ttl, renew_interval=renew_interval,
+            renew_claims=allow_store_adoption,
         )
         if res.journal_result.refused_wholesale:
             log(f"keel-runner[{host}] {res.journal_result.refused_wholesale}")

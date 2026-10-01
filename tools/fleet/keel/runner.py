@@ -911,16 +911,20 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
     An exit write can fail after a worker leaves memory. The same state is
     reached after a crash when its claim has already expired or disappeared.
     Neither a journal record nor a process listing alone may authorize a
-    release: require the group to be absent from the kernel and let
-    release_pending compare the original ownership token and CAS the ref.
+    release: require kernel absence, or a recycled group with no matching
+    live claim or scoped worker identity. release_pending compares the
+    original ownership token and CASes the ref.
     """
     scan = jn.scan()
     if not scan.sweep_armed:
         return
     active = {w.job_key for w in workers if w.job_key}
     debt = journal_mod.JournalAdoption()
+    scope_token = fleet_scope_token(hub.url)
     for job in scan.open_jobs:
         if job.job_key in active or job.torn or job.holder_host not in (None, host):
+            continue
+        if job.scope_token is not None and job.scope_token != scope_token:
             continue
         if job.spawned:
             try:
@@ -931,7 +935,24 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
                 # EPERM and any other uncertainty mean the group may be live.
                 continue
             else:
-                continue
+                # A successful kernel probe proves the group exists, but ps
+                # can still omit its argv. The original claim's live token
+                # protects it even if both process listings are false.
+                payload = hub.read(job.claim_ref) if job.claim_ref else None
+                if (payload is not None and
+                        payload.get("holder_host") == host and
+                        payload.get("started_at") == job.started_at):
+                    continue
+                # With the old claim absent or superseded, a different
+                # process may have recycled the numeric group. Only a
+                # verified worker in this scope keeps the old run open.
+                if job.scope_token is None:
+                    continue
+                try:
+                    if _scoped_worker_in_group(job.pgid, None, scope_token) is not None:
+                        continue
+                except ProcessListingUnavailable:
+                    continue
         debt.to_release.append(journal_mod.OwedRelease(
             job.job_key, job.claim_ref, job.started_at,
             "recorded process group is gone", job.prior_runs))
@@ -1913,6 +1934,38 @@ def build_hub(
 # --------------------------------------------------------------------- #
 # Daemon shell: singleton + adoption + the bounded-failure loop
 # (verbatim from fleetd.main's body; fleetd.main now delegates here)
+
+
+def _recover_ambiguous_host_claim(hub, host: str, singleton: Claim,
+                                  attempt_window: tuple) -> tuple:
+    """Recognize only the claim this process may have created before losing its reply.
+
+    The local lock excludes another current runner, but a stale claim from
+    an earlier process must never be adopted by host name alone. PID, PGID
+    and the acquisition timestamp inside this call's window identify this
+    attempted create; Claim.adopt then verifies and renews its store token.
+    Returns (matched, adopted claim). A matched claim whose renewal fails
+    stays pending; it must not be reaped as a predecessor's claim.
+    """
+    payload = hub.read(singleton.ref)
+    if payload is None:
+        return False, None
+    try:
+        started = claim_mod._parse_iso(payload["started_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return False, None
+    if not (payload.get("holder_host") == host and
+            payload.get("work_kind") == "fleetd" and
+            payload.get("work_key") == host and
+            payload.get("pid") == os.getpid() and
+            payload.get("pgid") == os.getpgrp() and
+            attempt_window[0] <= started <= attempt_window[1]):
+        return False, None
+    singleton.stop_renewer(timeout=2)
+    adopted = Claim.adopt(
+        hub, singleton.ref, expected_host=host,
+        ttl=singleton.ttl, renew_interval=singleton.renew_interval)
+    return True, adopted
 # --------------------------------------------------------------------- #
 
 
@@ -2316,12 +2369,14 @@ def _run_daemon_locked(
                       holder_host=host,  # fleet identity, not hostname -- see start_gate
                       ttl=singleton_ttl_s())  # short TTL for the scheduler lease itself
     singleton_owned = False
+    singleton_ambiguous_window = None
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire
         # then locks the host out until the claim is manually reaped -- m5
         # spent 20 minutes in a KeepAlive spawn/refuse/exit loop this way.
         # A LIVE predecessor still refuses (the singleton guard stands).
+        acquire_started = time.time()
         singleton.acquire_or_reap()
         singleton_owned = True
     except claim_mod.ClaimHeldError:
@@ -2348,9 +2403,22 @@ def _run_daemon_locked(
             print(f"{label}: another instance holds refs/fleet/claims/host/{host}; exiting")
             return 3
     except HubUnreachableError as exc:
-        print(f"{label}[{host}] host singleton unavailable ({exc}); "
-              "local lock held, starts disabled until store ownership is acquired",
-              file=sys.stderr, flush=True)
+        # A create can succeed while its response is lost. Only the exact
+        # attempt's claim may be recovered; host name alone proves nothing.
+        singleton_ambiguous_window = (acquire_started - 1, time.time() + 1)
+        try:
+            matched, recovered = _recover_ambiguous_host_claim(
+                hub, host, singleton, singleton_ambiguous_window)
+        except HubError:
+            matched, recovered = False, None
+        if matched and recovered is not None:
+            singleton = recovered
+            singleton_owned = True
+            singleton_ambiguous_window = None
+        else:
+            print(f"{label}[{host}] host singleton unavailable ({exc}); "
+                  "local lock held, starts disabled until store ownership is acquired",
+                  file=sys.stderr, flush=True)
 
     # R6: rebuild `workers` before the first reconcile. The local lock
     # excludes another daemon here when the hub singleton is unavailable;
@@ -2359,7 +2427,9 @@ def _run_daemon_locked(
     # zero workers, think every slot free, and start a duplicate.
     jn = journal_mod.Journal()
     try:
-        adoption = journal_mod.adopt_at_startup(hub, host, workers, journal=jn)
+        adoption = journal_mod.adopt_at_startup(
+            hub, host, workers, journal=jn,
+            allow_store_adoption=singleton_owned)
         if adoption.mode == "store":
             reconcile_journal_runs(jn, hub, host, workers, label=label)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
@@ -2447,6 +2517,21 @@ def _run_daemon_locked(
             degraded: Optional[HubError] = None
             res = None
             try:
+                if not singleton_owned:
+                    # Journal adoption under a local lock cannot renew a
+                    # distributed worker lease while another machine may own
+                    # this host identity. Keep the ordinary grace deadline:
+                    # once no renewal can arrive before expiry, lost-lease
+                    # handling in reconcile stops the worker.
+                    for worker in workers:
+                        worker.claim._note_renew_failure(
+                            claim_mod._utcnow(),
+                            HubError("host singleton ownership unavailable"))
+                if singleton_owned:
+                    # A failed exit write leaves an open run after the worker
+                    # drops from memory. Retry closure before considering new
+                    # offers, and only under the host ownership guard.
+                    reconcile_journal_runs(jn, hub, host, workers, label=label)
                 res = reconcile(hub, host, workers, gate_command, log_dir,
                                 repo_root, warnings=host_warnings,
                                 spawn_allowed=spawn_allowed, journal=jn)
@@ -2455,24 +2540,48 @@ def _run_daemon_locked(
                 hub_failures += 1
             else:
                 hub_failures = 0
-                if owed_releases is not None and owed_releases.to_release:
+                if not singleton_owned and not singleton.lost:
+                    # The local lock permits offline observation only. Before
+                    # touching store-backed worker claims, establish the
+                    # distributed singleton, including an ambiguous create.
+                    try:
+                        matched = False
+                        recovered = None
+                        if singleton_ambiguous_window is not None:
+                            matched, recovered = _recover_ambiguous_host_claim(
+                                hub, host, singleton, singleton_ambiguous_window)
+                        if matched:
+                            if recovered is None:
+                                raise HubUnreachableError(
+                                    "matching host claim could not be renewed")
+                            singleton = recovered
+                        else:
+                            singleton.acquire_or_reap()
+                        singleton_owned = True
+                        singleton_ambiguous_window = None
+                    except claim_mod.ClaimHeldError:
+                        print(f"{label}[{host}] another runner holds the "
+                              "host singleton; exiting", file=sys.stderr, flush=True)
+                        rc = 3
+                        break
+                    except HubError as exc:
+                        print(f"{label}[{host}] host singleton still unavailable: "
+                              f"{exc}; starts remain disabled",
+                              file=sys.stderr, flush=True)
+                if singleton_owned and owed_releases is not None and owed_releases.to_release:
                     try:
                         release_outcomes = journal_mod.release_pending(
                             hub, host, owed_releases, journal=jn)
                     except journal_mod.JournalError as exc:
-                        # A remote CAS may already have succeeded. Keep the
-                        # captured debt and retry once the journal is writable.
                         release_outcomes = []
                         print(f"{label}[{host}] OWED RELEASE journal write failed: "
                               f"{exc}; will retry", file=sys.stderr, flush=True)
                     for ref, outcome in release_outcomes:
                         print(f"{label}[{host}] OWED RELEASE {ref}: {outcome}",
                               file=sys.stderr, flush=True)
-                if not spawn_allowed and not singleton.lost:
-                    # The first scan may have been unreadable, or `ps` may
-                    # have failed. A successful read cannot fill those
-                    # missing worker slots. Rebuild from the authoritative
-                    # claims before permitting any new start.
+                if not spawn_allowed and singleton_owned and not singleton.lost:
+                    # Store adoption can release claims and sweep orphans; it
+                    # is therefore only legal after host ownership is proved.
                     refreshed: list = []
                     try:
                         current = journal_mod.adopt_at_startup(
@@ -2484,24 +2593,6 @@ def _run_daemon_locked(
                         print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
                               "starts remain disabled", file=sys.stderr, flush=True)
                     else:
-                        if current.mode == "store" and not singleton_owned:
-                            try:
-                                singleton.acquire_or_reap()
-                            except claim_mod.ClaimHeldError:
-                                for extra in refreshed:
-                                    extra.claim.stop_renewer(timeout=2)
-                                print(f"{label}[{host}] another runner holds the "
-                                      "host singleton; exiting", file=sys.stderr, flush=True)
-                                rc = 3
-                                break
-                            except HubError as exc:
-                                for extra in refreshed:
-                                    extra.claim.stop_renewer(timeout=2)
-                                print(f"{label}[{host}] host singleton still unavailable: "
-                                      f"{exc}; starts remain disabled",
-                                      file=sys.stderr, flush=True)
-                                continue
-                            singleton_owned = True
                         if current.mode == "store":
                             for old in workers:
                                 old.claim.stop_renewer(timeout=2)

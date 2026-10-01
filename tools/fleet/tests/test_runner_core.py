@@ -316,6 +316,67 @@ class TestJournalWiring(RunnerFixture):
         finally:
             replacement.release()
 
+    def test_recycled_pgid_does_not_keep_dead_journal_run_open(self):
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                   self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        (self.tmp / f"stop-{worker.tag}").write_text("")
+        worker.popen.wait(timeout=10)
+        worker.claim.release()
+        with mock.patch.object(runner.os, "killpg", return_value=None), \
+                mock.patch.object(runner, "_scoped_worker_in_group", return_value=None):
+            runner.reconcile_journal_runs(journal, self.hub, self.host, [])
+        self.assertTrue(journal.read_job(worker.job_key).closed)
+
+    def test_false_offline_listing_does_not_queue_live_claim_release(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(self.hub, "staging/one", "live", [str(self.stub)],
+                                   self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        worker.claim.stop_renewer(timeout=2)
+        rebuilt = []
+        result = journal_mod.adopt_from_journal(
+            journal, self.host, rebuilt, hub=self.hub,
+            pgid_probe=lambda: set())
+        self.assertEqual(result.to_release, [])
+        self.assertEqual([(w.job_key, w.pgid) for w in rebuilt],
+                         [(worker.job_key, worker.pgid)])
+        self.assertEqual(journal_mod.release_pending(
+            self.hub, self.host, result, journal=journal), [])
+        self.assertIsNotNone(self.hub.sha(worker.claim.ref))
+        for adopted in rebuilt:
+            adopted.claim.stop_renewer(timeout=2)
+
+    def test_false_process_listing_and_identity_listing_cannot_release_live_group(self):
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(self.hub, "staging/one", "live", [str(self.stub)],
+                                   self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        result = journal_mod.adopt_from_journal(
+            journal, self.host, [], hub=self.hub, pgid_probe=lambda: set(),
+            identity_probe=lambda *_args: None)
+        self.assertEqual(result.to_release, [])
+        self.assertIsNotNone(self.hub.sha(worker.claim.ref))
+
+    def test_log_open_failure_releases_claim_and_closes_offer(self):
+        journal = journal_mod.Journal()
+        real_open = open
+
+        def fail_log(path, *args, **kwargs):
+            if str(path).endswith(".launch.log"):
+                raise PermissionError("log directory not writable")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=fail_log):
+            with self.assertRaises(PermissionError):
+                runner.start_gate(self.hub, "staging/one", "no-log",
+                                  [str(self.stub)], self.host, self.log_dir,
+                                  journal=journal)
+        self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
+        self.assertTrue(journal.read_job("gate-staging-one").closed)
+
     def test_local_lock_refuses_a_second_runner_before_store_access(self):
         lock_dir = journal_mod.Journal().root.parent / "runner-locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
@@ -347,6 +408,7 @@ class TestJournalWiring(RunnerFixture):
             return real_acquire(claim)
 
         def adopt(*args, **kwargs):
+            self.assertIsNotNone(self.hub.sha(claim_mod.claim_ref("host", self.host)))
             calls["adopt"] += 1
             if calls["adopt"] == 1:
                 raise HubUnreachableError("both routes down")
@@ -367,8 +429,84 @@ class TestJournalWiring(RunnerFixture):
                 self.hub, self.host, gate_command=[str(self.stub)],
                 log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0, reconcile=step)
         self.assertEqual(rc, 0)
-        self.assertEqual(allowed, [False, True])
+        self.assertEqual(allowed, [False, False, True])
         self.assertEqual(calls["singleton"], 2)
+
+    def test_offline_host_claim_never_renews_worker_before_ownership(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(
+            self.hub, "staging/one", "live", [str(self.stub)],
+            self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        worker.claim.stop_renewer(timeout=2)
+        worker_sha = self.hub.sha(worker.claim.ref)
+        foreign = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host="different-machine")
+        foreign.acquire()
+        self.addCleanup(foreign.release)
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        calls = {"host": 0}
+
+        def offline_then_held(claim):
+            if claim.kind == "host":
+                calls["host"] += 1
+                if calls["host"] == 1:
+                    raise HubUnreachableError("response lost")
+            return real_acquire(claim)
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", offline_then_held), \
+                mock.patch.object(self.hub, "update", wraps=self.hub.update) as update, \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0,
+                reconcile=lambda *_a, **_kw: fleetd.ReconcileResult())
+        self.assertEqual(rc, 3)
+        self.assertEqual(self.hub.sha(worker.claim.ref), worker_sha)
+        self.assertFalse(any(call.args[0] == worker.claim.ref
+                             for call in update.call_args_list))
+        self.assertTrue(worker.alive())
+        self.assertTrue(journal.read_job(worker.job_key).open)
+
+    def test_ambiguous_host_create_recovers_its_exact_claim(self):
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        real_adopt = fleetd.adopt_workers
+        calls = {"singleton": 0, "adopt": 0}
+        allowed = []
+
+        def ambiguous_once(claim):
+            if claim.kind == "host":
+                calls["singleton"] += 1
+                if calls["singleton"] == 1:
+                    real_acquire(claim)
+                    raise HubUnreachableError("response lost after create")
+            return real_acquire(claim)
+
+        def offline_then_store(*args, **kwargs):
+            calls["adopt"] += 1
+            if calls["adopt"] == 1:
+                raise HubUnreachableError("both routes down")
+            return real_adopt(*args, **kwargs)
+
+        def step(hub, host, _workers, *_args, **kw):
+            allowed.append(kw["spawn_allowed"])
+            if kw["spawn_allowed"]:
+                self.assertIsNotNone(hub.sha(claim_mod.claim_ref("host", host)))
+                os.kill(os.getpid(), signal_mod.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", ambiguous_once), \
+                mock.patch.object(fleetd, "adopt_workers", offline_then_store), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0, reconcile=step)
+        self.assertEqual(rc, 0)
+        self.assertEqual(allowed, [False, True])
 
     def test_false_startup_listing_keeps_live_journal_run_open(self):
         os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
