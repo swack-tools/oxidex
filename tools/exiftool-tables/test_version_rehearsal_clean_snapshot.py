@@ -433,14 +433,18 @@ class CleanSnapshotTests(unittest.TestCase):
         hooks = self.root / "rejecting-hooks"
         hooks.mkdir()
         pre_commit = hooks / "pre-commit"
-        pre_commit.write_text("#!/bin/sh\nexit 42\n")
+        marker = self.root / "caller-hook-ran"
+        pre_commit.write_text(f"#!/bin/sh\nprintf ran > {str(marker)!r}\nexit 42\n")
         pre_commit.chmod(0o700)
         git(self.owned, "config", "--local", "core.hooksPath", str(hooks))
         rejected = subprocess.run(
             ["git", "-C", str(self.owned), "commit", "--allow-empty", "-S",
              "-m", "hook should reject"], capture_output=True)
         self.assertNotEqual(rejected.returncode, 0)
+        self.assertTrue(marker.is_file(), "the caller commit must execute the rejecting hook")
+        marker.unlink()
         qualification._preflight_owned_signing(self.owned, self.root)
+        self.assertFalse(marker.exists(), "the signing probe must override the caller hook")
         self.assertFalse(list(self.root.glob(".task19-signing-probe-*")))
 
     def _detaching_signer(self, name: str, started: Path, escaped: Path) -> Path:

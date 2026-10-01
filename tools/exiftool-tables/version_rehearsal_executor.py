@@ -1154,7 +1154,8 @@ def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_outpu
         _require_ownership_release(child, "successful command completion")
         if escaped:
             raise OSError("owned command left descendants running after it exited; the lineage "
-                          "boundary killed them: " + ", ".join(str(pid) for pid in escaped))
+                          "boundary killed them: " + ", ".join(str(pid) for pid in escaped)
+                          + _lineage_diagnostic_message(child))
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     except (KeyboardInterrupt, SystemExit) as interruption:
         if (owner[0] is not None
@@ -1725,6 +1726,7 @@ def _emergency_cleanup_after_timeout_failure(
 # inherited descriptor stays outside the ownership proof (a documented
 # residual); the ownership probe still covers every descriptor holder.
 _LINEAGE_SUPERVISED = sys.platform.startswith("linux")
+_LINEAGE_DIAGNOSTIC_LIMIT = 16
 _LINUX_LINEAGE_SUPERVISOR = r"""
 import ctypes, json, os, select, signal, sys, time
 status_fd = int(sys.argv[1])
@@ -1778,13 +1780,22 @@ def children():
             found.add(int(name))
     return found
 
-def state(pid):
+def snapshot(pid):
+    # Read once before signaling. Never include argv, environment or the full
+    # executable path in a report: those can contain credentials.
+    row = {"pid": pid, "state": "?", "ppid": None, "start_ticks": None, "exe": None}
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
             raw = stat.read()
-        return raw[raw.rfind(")") + 2:].split()[0]
-    except (OSError, IndexError):
-        return "?"
+        fields = raw[raw.rfind(")") + 2:].split()
+        row.update(state=fields[0], ppid=int(fields[1]), start_ticks=int(fields[19]))
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        row["exe"] = os.path.basename(os.readlink(f"/proc/{pid}/exe"))[:64]
+    except OSError:
+        pass
+    return row
 
 def start_time(pid):
     # The kernel start time (clock ticks) from /proc/<pid>/stat field 22.
@@ -1798,15 +1809,30 @@ def start_time(pid):
 def sweep(primary, status):
     # SIGKILL and reap every child until waitpid reports ECHILD.
     escaped = set()
+    diagnostics = {}
+    observations_omitted = 0
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         for pid in children():
-            if pid != primary and state(pid) not in ("Z", "X", "x"):
-                escaped.add(pid)
+            row = snapshot(pid)
+            if pid != primary and pid not in diagnostics:
+                if len(diagnostics) < 16:
+                    diagnostics[pid] = row
+                else:
+                    observations_omitted = min(observations_omitted + 1, 9999)
             try:
                 os.kill(pid, signal.SIGKILL)
+                outcome = "sent"
             except ProcessLookupError:
-                pass
+                outcome = "vanished"
+            if pid in diagnostics and "signal" not in diagnostics[pid]:
+                diagnostics[pid]["signal"] = outcome
+                diagnostics[pid]["disappeared_before_signal"] = outcome == "vanished"
+            # An unreadable /proc state alone is not proof of exit. ESRCH
+            # distinguishes the specific read/kill disappearance race.
+            if (pid != primary and row["state"] not in ("Z", "X", "x")
+                    and not (row["state"] == "?" and outcome == "vanished")):
+                escaped.add(pid)
         try:
             while True:
                 pid, raw = os.waitpid(-1, os.WNOHANG)
@@ -1815,9 +1841,9 @@ def sweep(primary, status):
                 if pid == primary and status is None:
                     status = raw
         except ChildProcessError:
-            return True, escaped, status
+            return True, escaped, status, list(diagnostics.values()), observations_omitted
         time.sleep(0.01)
-    return False, escaped, status
+    return False, escaped, status, list(diagnostics.values()), observations_omitted
 
 primary = None
 try:
@@ -1860,8 +1886,9 @@ try:
         _, raw = os.waitpid(primary, 0)
         number, _, message = failure.decode(errors="replace").partition(":")
         report(phase="exec", errno=int(number), error=message)
-        verified, escaped, _ = sweep(primary, raw)
+        verified, escaped, _, diagnostics, omitted = sweep(primary, raw)
         report(phase="exit", verified=verified, requested=False, escaped=sorted(escaped),
+               descendants=diagnostics, descendant_observations_omitted=omitted,
                returncode=os.waitstatus_to_exitcode(raw))
         os._exit(0)
     report(phase="exec", ok=True, primary=primary, primary_start=start_time(primary))
@@ -1897,8 +1924,9 @@ except BaseException as exc:
     report(phase="error", error=repr(exc))
 # Whatever happened above, the lineage is swept before this process exits.
 try:
-    verified, escaped, status = sweep(primary, status)
+    verified, escaped, status, diagnostics, omitted = sweep(primary, status)
     report(phase="exit", verified=verified, requested=requested, escaped=sorted(escaped),
+           descendants=diagnostics, descendant_observations_omitted=omitted,
            returncode=None if status is None else os.waitstatus_to_exitcode(status))
 except BaseException as exc:
     report(phase="error", error=repr(exc))
@@ -2008,6 +2036,17 @@ def _await_supervised_exec(child: subprocess.Popen[Any]) -> None:
     raise OSError(f"owned command supervisor did not start the command: {reports}")
 
 
+def _lineage_diagnostic_message(child: subprocess.Popen[Any]) -> str:
+    """Append only the supervisor's bounded, nonsecret descendant snapshot."""
+    rows = getattr(child, "_oxidex_lineage_diagnostics", None)
+    if not isinstance(rows, list):  # Older exit reports have no diagnostics.
+        return ""
+    return "; descendant diagnostics: " + json.dumps(
+        {"descendants": rows[:_LINEAGE_DIAGNOSTIC_LIMIT],
+         "observations_omitted": getattr(child, "_oxidex_lineage_diagnostics_omitted", 0)},
+        sort_keys=True)[:4096]
+
+
 def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATION_GRACE_SECONDS) -> list[int]:
     """After a supervised command exits, adopt its status and escaped descendants.
 
@@ -2032,6 +2071,10 @@ def _finish_lineage(child: subprocess.Popen[Any], *, timeout: float = _TERMINATI
     child.returncode = finished["returncode"]
     setattr(child, "_oxidex_lineage_verified", True)
     setattr(child, "_oxidex_lineage_finished", finished["escaped"])
+    if isinstance(finished.get("descendants"), list):
+        setattr(child, "_oxidex_lineage_diagnostics", finished["descendants"])
+        setattr(child, "_oxidex_lineage_diagnostics_omitted",
+                finished.get("descendant_observations_omitted", 0))
     _close_lineage_status(child)  # the exit report is the supervisor's last line
     return finished["escaped"]
 
