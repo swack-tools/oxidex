@@ -1,8 +1,8 @@
 {
   "counts": {
     "emitted": 6117,
-    "reader_eligible": 4315,
-    "reader_omitted": 1802,
+    "reader_eligible": 4323,
+    "reader_omitted": 1794,
     "refused": 11715,
     "rows": 17832
   },
@@ -195005,11 +195005,9 @@
       "full_name": "Image::ExifTool::Exif::Main",
       "module": "Exif",
       "name": "SubSecTime",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "37520",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "b1a93dfcc40698054544c3091e49587cc5e7529d5f6822bdf6327bbd4322218a",
       "state": "emitted",
@@ -195021,11 +195019,9 @@
       "full_name": "Image::ExifTool::Exif::Main",
       "module": "Exif",
       "name": "SubSecTimeOriginal",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "37521",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "31ae29a96c13ae0d267ac1e84802bc8b75d6a9172430c1f78efd211bd8bdf320",
       "state": "emitted",
@@ -195037,11 +195033,9 @@
       "full_name": "Image::ExifTool::Exif::Main",
       "module": "Exif",
       "name": "SubSecTimeDigitized",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "37522",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "3839c4d5ca48e0ae681956e7786907b6fac61d89ca8ec8980b28768e8ff5f70f",
       "state": "emitted",
@@ -322192,11 +322186,9 @@
       "full_name": "Image::ExifTool::Panasonic::Leica6",
       "module": "Panasonic",
       "name": "LensType",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "771",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "5c86d90ad90fbf4c71c22f72ff5072a22e2d3a910ce7a875db2b370591e6aa41",
       "state": "emitted",
@@ -324284,11 +324276,9 @@
       "full_name": "Image::ExifTool::Panasonic::Main",
       "module": "Panasonic",
       "name": "LensType",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "81",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "5c86d90ad90fbf4c71c22f72ff5072a22e2d3a910ce7a875db2b370591e6aa41",
       "state": "emitted",
@@ -324316,11 +324306,9 @@
       "full_name": "Image::ExifTool::Panasonic::Main",
       "module": "Panasonic",
       "name": "LensSerialNumber",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "82",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "8b49db8eb164c25fd2022445daa255bac6b7a53045583d70994320002811d18a",
       "state": "emitted",
@@ -324332,11 +324320,9 @@
       "full_name": "Image::ExifTool::Panasonic::Main",
       "module": "Panasonic",
       "name": "AccessoryType",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "83",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "d522ed72997ed685d03332ba8f95689933977cc6b8870a0d11dfac94034a0438",
       "state": "emitted",
@@ -324348,11 +324334,9 @@
       "full_name": "Image::ExifTool::Panasonic::Main",
       "module": "Panasonic",
       "name": "AccessorySerialNumber",
-      "omissions": [
-        "value_conv"
-      ],
+      "omissions": [],
       "raw_key": "84",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "c28f0999a4cf44a1bd08104e1e954503b74d5afd0784116a5c78deddc6a7495d",
       "state": "emitted",
@@ -369232,9 +369216,9 @@
   ],
   "schema": "oxidex_ifd_identity_ledger_v1",
   "source": {
-    "expr_ledger_sha256": "29ee6493209dde9a11fbfbe20fc9c729e471c4193e1093e865fa02e00e1339c1",
+    "expr_ledger_sha256": "bfacb049d05e60365d17c7a10c0028e4dcf055458a12194467b05bb0d197bf22",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
-    "ifd_rust_sha256": "236097977cf606e2bddc6a49b3bfa240a1f1cec35f714903d84f2672a39ff8b0",
+    "ifd_rust_sha256": "d877ae4dd0f737f57341044a65e068dcc41d1490cdfd6e3ed201d562c8495823",
     "tables_json_sha256": "3f03a1669fe1dccf3aad64c99b8934858a537dba4c013599c4e931e23a3c9f3d"
   }
 }

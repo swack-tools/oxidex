@@ -4279,10 +4279,10 @@ def gen_expr_enum(used):
             render_str.append(f"            ExprId::{ident} => Some({body}),")
             value_str.append(f"            ExprId::{ident} => Some(ExprValue::String({body})),")
             # `string` fields reach ProcessBinaryData as unflagged Perl byte
-            # scalars.  The one source-approved string operation whose byte
-            # semantics we have independently pinned is trailing native-\s
-            # removal.  It must preserve the converted bytes for a following
-            # PrintConv or saved member; repairing UTF-8 here would change the
+            # scalars. Only oracle-approved trailing native-\s and literal-
+            # space removals can use the byte path. They must preserve the
+            # converted bytes for a following PrintConv or saved member;
+            # repairing UTF-8 here would change the
             # value the next native operation sees.  Other str-domain programs
             # remain deliberately unavailable to StringBytes.
             if exprs.is_trim_trailing_ws_form(expr):
@@ -4291,6 +4291,13 @@ def gen_expr_enum(used):
                 )
                 value_string_bytes.append(
                     f"            ExprId::{ident} => Some(ExprValue::Bytes(crate::exiftool_tables::exprs::trim_trailing_ws_bytes(val))),"
+                )
+            elif exprs.is_trim_trailing_spaces_form(expr):
+                render_string_bytes.append(
+                    f"            ExprId::{ident} => crate::exiftool_tables::runtime::fix_utf8(&crate::exiftool_tables::exprs::trim_trailing_spaces_bytes(val)),"
+                )
+                value_string_bytes.append(
+                    f"            ExprId::{ident} => Some(ExprValue::Bytes(crate::exiftool_tables::exprs::trim_trailing_spaces_bytes(val))),"
                 )
         elif domain == "list":
             # A fixed-count field's elements as `&[f64]` (see exprs.py

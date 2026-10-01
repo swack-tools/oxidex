@@ -500,6 +500,13 @@ STR_PROBES_TRIM = [
     "abc\x00", "", " ", "\t", " \t\n", "a", "SX151 ", "SX151",
     "2024:01:02 03:04:05 ", "abc.", "trailing dot. ",
 ]
+# ISO.pm BootSystem's `s/ +$//` differs from `s/\s+$//`: a trailing tab
+# fences spaces, and a final newline survives while spaces before it go.
+STR_PROBES_TRIM_SPACES = [
+    "", " ", "   ", "abc", "abc ", "abc  ", " abc  ", "a b ",
+    "abc\t", "abc \t", "abc\n", "abc  \n", "abc\t \n",
+    "abc\r", "abc  \r", "abc\x00 ", "abc \x00", "\x00  ",
+]
 BYTES_PROBES_SRC = ["Hello", "", "abc", "A", "Test String", "cafe"]
 # Raw byte buffers for the bytes-domain shapes that are NOT the UCS2 decode
 # (unpack("H*"), ASF::GetGUID): the empty buffer, one byte, the 16-byte GUID
@@ -527,6 +534,8 @@ def probes_for(domain, raw_expr, counts=None):
             return STR_PROBES_CDT
         if exprs.is_trim_trailing_ws_form(raw_expr):
             return STR_PROBES_TRIM
+        if exprs.is_trim_trailing_spaces_form(raw_expr):
+            return STR_PROBES_TRIM_SPACES
         return STR_PROBES_TR
     if "UCS2" not in raw_expr:
         return BYTES_PROBES_RAW
