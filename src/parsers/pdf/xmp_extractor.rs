@@ -26,7 +26,6 @@
 
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::xmp::parse_xmp_history;
 use crate::parsers::xmp::rdf_parser::{
     insert_xmp_entry_with_source, parse_xmp_entries_with_source_forms,
 };
@@ -76,13 +75,10 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         ExifToolError::parse_error(format!("XMP parsing failed: {}", e))
                     })?;
 
-                // Parse XMP history for forensic metadata
-                let xml_str = std::str::from_utf8(xmp_xml).unwrap_or("");
-                let history_tags = parse_xmp_history(xml_str).unwrap_or_default();
-
-                // Convert to MetadataMap
-                let total_tags = xmp_tags.len() + history_tags.len();
-                let mut metadata = MetadataMap::with_capacity(total_tags);
+                // The shared RDF parser already emits source-defined xmpMM
+                // HistoryAction/HistoryWhen fields. Do not add numbered forensic
+                // projections to the public metadata map.
+                let mut metadata = MetadataMap::with_capacity(xmp_tags.len());
 
                 for (entry, source) in xmp_tags.iter().zip(&gps_sources) {
                     insert_xmp_entry_with_source(
@@ -91,10 +87,6 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                         entry.tag_value(true),
                         source.as_deref(),
                     );
-                }
-
-                for (key, value) in history_tags {
-                    metadata.insert(key, crate::core::TagValue::new_string(value));
                 }
 
                 Ok(metadata)
