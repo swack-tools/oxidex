@@ -566,7 +566,10 @@ pub(crate) fn declared_non_apple_makernote_value(
     };
     let plan = read_plan(&located, None)?;
     // Exif.pm:6763-6773 refuses excessive non-string arrays for this row.
-    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+    if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+        plan.count,
+        matches!(plan.kind, Kind::Str | Kind::Undef),
+    ) {
         return None;
     }
     let decoded = decode_plan(&located, plan, order)?;
@@ -866,7 +869,10 @@ pub(crate) fn decode_reached_tiff_value(
     let plan = read_plan(&located, None)?;
     // Exif.pm:6763-6773 refuses excessive numeric arrays before ReadValue.
     // Undefined and string byte runs remain eligible at this count.
-    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+    if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+        plan.count,
+        matches!(plan.kind, Kind::Str | Kind::Undef),
+    ) {
         return None;
     }
     // ReadValue returns the strings `inf` or `undef` for a rational with a
@@ -1408,9 +1414,10 @@ fn walk_scoped(
         };
         // Exif.pm:6763-6773: "Ignoring ... with excessive count" (the
         // warning is minor, so the default options take the `next`).
-        if plan.count > 100_000
-            && !matches!(plan.kind, Kind::Str | Kind::Undef)
-            && !(tag.name == "TransferFunction" && plan.count == 196_608)
+        if crate::core::tiff_helpers::process_exif_refuses_excessive_count(
+            plan.count,
+            matches!(plan.kind, Kind::Str | Kind::Undef),
+        ) && !(tag.name == "TransferFunction" && plan.count == 196_608)
         {
             if let Some(reads) = decoded.as_deref_mut() {
                 reads.entries[index] = EntryRead::Refused;

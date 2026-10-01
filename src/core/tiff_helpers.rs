@@ -3251,6 +3251,17 @@ pub(crate) struct ReachedIntegralEntry {
     pub raw_value: Option<(u64, usize)>,
 }
 
+/// Exif.pm:6763-6773 refuses values with more than 100,000 elements unless
+/// their effective ReadValue format is `undef`, `string`, or `binary`.
+/// TransferFunction's 196,608-element exception is applied by its ordinary
+/// generated-table caller; none of the preview or pointer rows uses it.
+pub(crate) fn process_exif_refuses_excessive_count(
+    count: usize,
+    string_or_binary_format: bool,
+) -> bool {
+    count > 100_000 && !string_or_binary_format
+}
+
 /// Read requested integral values only from physical entries that ExifTool's
 /// classic-TIFF ProcessExif loop would reach (Exif.pm:6455-6680). This is a
 /// read-side boundary for both subdirectory pointers and the RW2 preview's
@@ -3364,6 +3375,14 @@ fn scan_reached_integral_ifd_entries(
             (value, start)
         };
         if !requested_tags.contains(&tag_id) {
+            continue;
+        }
+        // These requested rows have no read Format override. Type 7 with a
+        // single byte was promoted to int8u above; larger type-7 values stay
+        // undef and are exempt. This refusal comes after physical offset
+        // checks, as in ProcessExif, and does not increment its warning budget.
+        let string_or_binary = field_type == 2 || (field_type == 7 && value_count != 1);
+        if process_exif_refuses_excessive_count(value_count as usize, string_or_binary) {
             continue;
         }
         if matches!(tag_id, 0xA411 | 0xA412) {
@@ -3553,6 +3572,35 @@ mod followed_directory_tests {
             legal_ifd1_offset(&reader, 8, 1, ByteOrder::LittleEndian),
             None
         );
+    }
+
+    #[test]
+    fn excessive_count_gps_or_interop_pointer_does_not_hide_ifd1() {
+        for interop in [false, true] {
+            let mut data = vec![0u8; 200_250];
+            data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+            put16(&mut data, 8, 1);
+            if interop {
+                entry(&mut data, 10, 0x8769, 4, 1, 200);
+                put16(&mut data, 200, 1);
+                entry(&mut data, 202, 0xA005, 3, 100_001, 240);
+                put16(&mut data, 240, 100);
+                put16(&mut data, 242, 1);
+            } else {
+                entry(&mut data, 10, 0x8825, 3, 100_001, 200);
+                put16(&mut data, 200, 100);
+                put16(&mut data, 202, 1);
+            }
+            put32(&mut data, 22, 100);
+            thumbnail_ifd(&mut data, 100, 400);
+            data[400..404].copy_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]);
+            let reader = TestReader::new(data);
+            assert_eq!(
+                legal_ifd1_offset(&reader, 8, 1, ByteOrder::LittleEndian),
+                Some(100),
+                "interop={interop}"
+            );
+        }
     }
 
     #[test]
