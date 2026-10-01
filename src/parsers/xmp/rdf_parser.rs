@@ -926,15 +926,17 @@ fn parse_xmp_packet_in_directory(
                                 .collect();
                             for (index, value) in collection_values.iter().enumerate() {
                                 let suffix = &suffixes[index];
-                                if last.get(suffix.as_str()) != Some(&index) {
-                                    continue;
-                                }
                                 let tag = format!("{prefixed_name}{suffix}");
                                 if current_default_namespace {
                                     default_namespace_tags.insert(tag.clone());
                                 }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 legacy.push_priority(&legacy_tag, &tag, value, current_priority);
+                                // Keep every source occurrence for -a; only the
+                                // ordinary primary projection selects the last.
+                                if last.get(suffix.as_str()) != Some(&index) {
+                                    continue;
+                                }
                                 if !results.iter().any(|result| result.tag == tag) {
                                     results.push(
                                         ResultOccurrence::scalar(tag, value.clone())
@@ -8611,6 +8613,14 @@ mod language_flatname_recovery_tests {
                 .collect();
             assert_eq!(dc.len(), 1, "{lang}: {dc:?}");
             assert_eq!(dc[0].1, "B", "{lang}");
+            let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+            let values: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag.starts_with("XMP-dc:"))
+                .map(|entry| entry.value.clone().into_joined())
+                .collect();
+            assert_eq!(values.len(), 2, "{lang}: {values:?}");
+            assert!(values.contains(&"A".to_string()) && values.contains(&"B".to_string()));
         }
     }
 
