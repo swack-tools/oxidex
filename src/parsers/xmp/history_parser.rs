@@ -1,7 +1,9 @@
-//! XMP Edit History parser for forensic tamper detection
+//! XMP Edit History projection for forensic analysis
 //!
-//! This module extracts edit history metadata from XMP data, which is critical
-//! for detecting image manipulation in forensic analysis.
+//! This module offers an OxiDex-specific numbered view of edit history.
+//! Native ExifTool exposes xmpMM History as a sequence of flattened
+//! HistoryAction/HistoryWhen fields; callers must not insert this projection
+//! into ExifTool-compatible public metadata.
 //!
 //! # XMP History Structure
 //!

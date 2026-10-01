@@ -33,7 +33,6 @@
 
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
-use crate::parsers::xmp::parse_xmp_history;
 use crate::parsers::xmp::rdf_parser::{XmpEntry, XmpValue, parse_xmp_entries_with_source_forms};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
@@ -265,18 +264,6 @@ pub(crate) fn extract_xmp_from_segments_with_source_forms(
         all_xmp_tags.extend(xmp_tags);
         all_value_forms.extend(value_forms);
         all_gps_sources.extend(gps_sources);
-
-        // Parse XMP history for forensic metadata
-        let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
-        if let Ok(history_tags) = parse_xmp_history(xml_str) {
-            let history_len = history_tags.len();
-            all_xmp_tags.extend(
-                history_tags
-                    .into_iter()
-                    .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
-            );
-            all_gps_sources.extend(std::iter::repeat_n(None, history_len));
-        }
     }
 
     // ExtendedXMP: everything the writer could not fit in the 64 KB main
@@ -292,16 +279,6 @@ pub(crate) fn extract_xmp_from_segments_with_source_forms(
             all_xmp_tags.extend(xmp_tags);
             all_value_forms.extend(value_forms);
             all_gps_sources.extend(gps_sources);
-        }
-        let xml_str = std::str::from_utf8(xml_payload).unwrap_or("");
-        if let Ok(history_tags) = parse_xmp_history(xml_str) {
-            let history_len = history_tags.len();
-            all_xmp_tags.extend(
-                history_tags
-                    .into_iter()
-                    .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
-            );
-            all_gps_sources.extend(std::iter::repeat_n(None, history_len));
         }
     }
 
@@ -378,7 +355,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry.key == "XMP-xmpMM:History1Action")
+                .any(|entry| entry.tag == "XMP-xmpMM:HistoryAction")
         );
         let gps: Vec<_> = entries
             .iter()
