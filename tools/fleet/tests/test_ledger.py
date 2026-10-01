@@ -273,13 +273,14 @@ class TestResolveOxidexBinary(HermeticCase):
 
 
 class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(HermeticCase):
-    """Locks in the exact trap `measure_format` exists to avoid: KyoceraRAW
-    has no `FileFormat::KyoceraRAW` token in format_dispatch.rs at all.
-    """
+    """A name hit can be a comment, not evidence of a routed parser."""
 
-    def test_kyocera_raw_has_no_format_dispatch_hit(self):
+    def test_kyocera_raw_dispatch_hit_is_only_a_comment(self):
         hits = ledger.grep_dispatch_evidence(REPO_ROOT, "KyoceraRAW")
-        self.assertNotIn("src/core/format_dispatch.rs", hits)
+        dispatch_hits = hits["src/core/format_dispatch.rs"]
+        self.assertTrue(dispatch_hits)
+        self.assertTrue(all(line.startswith(("//", "/*", "*")) for line in dispatch_hits))
+        self.assertFalse(any("FileFormat::KyoceraRAW" in line for line in dispatch_hits))
 
     def test_kyocera_raw_is_found_via_detection_module(self):
         hits = ledger.grep_dispatch_evidence(REPO_ROOT, "Kyocera")
@@ -306,14 +307,14 @@ class TestMeasureFormat(LedgerTestCase):
                 self.assertEqual(result.missing, 0, result.reason)
                 self.assertGreater(result.compared, 0)
 
-    def test_kyocera_raw_is_covered_despite_no_format_dispatch_grep_hit(self):
+    def test_kyocera_raw_is_covered_despite_comment_only_dispatch_grep_hit(self):
         # The direct proof this check is behavioral, not textual: the same
-        # format that has zero format_dispatch.rs hits (see
+        # format that has only a comment in format_dispatch.rs (see
         # TestGrepDispatchEvidenceIsNeverAuthoritativeAlone) still measures
         # as fully covered, because coverage was decided by running the
         # binary, not by grepping for the format's name.
         result = ledger.measure_format(REPO_ROOT, self.binary, ledger.ORACLE_SCRIPT, "KyoceraRAW")
-        self.assertNotIn("src/core/format_dispatch.rs", result.dispatch_hits)
+        self.assertIn("src/core/format_dispatch.rs", result.dispatch_hits)
         self.assertTrue(result.covered, result.reason)
         self.assertEqual(result.missing, 0)
 
