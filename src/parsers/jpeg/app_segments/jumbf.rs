@@ -903,6 +903,31 @@ mod tests {
         );
     }
 
+    // Pinned ExifTool 13.59 emits JSON:End=true and JSON:Sibling=7 for
+    // this nested layout; the parser stores these under its internal group.
+    #[test]
+    fn nested_zero_length_json_stops_at_directory_end() {
+        let mut zero = 0u32.to_be_bytes().to_vec();
+        zero.extend_from_slice(b"json");
+        zero.extend_from_slice(br#"{"end":true}"#);
+        let mut body = make_box(b"jumb", &zero);
+        body.extend_from_slice(&make_box(b"json", br#"{"sibling":7}"#));
+        let payload = make_app11(&make_box(b"jumb", &body), 1);
+        let metadata = parse_jumbf(&[&payload]).expect("parse nested zero-length box");
+        assert_eq!(metadata.get_string("JUMBF:End").as_deref(), Some("true"));
+        assert_eq!(metadata.get_integer("JUMBF:Sibling"), Some(7));
+    }
+
+    #[test]
+    fn zero_length_outer_chunk_does_not_publish_json() {
+        let mut zero = 0u32.to_be_bytes().to_vec();
+        zero.extend_from_slice(b"json");
+        zero.extend_from_slice(br#"{"end":true}"#);
+        let payload = make_app11(&zero, 1);
+        let metadata = parse_jumbf(&[&payload]).expect("ignore invalid outer chunk");
+        assert!(metadata.get("JUMBF:End").is_none());
+    }
+
     #[test]
     fn flattens_a_json_box() {
         let mut body = jumd(b"json", Some("cai.location.broad"));
