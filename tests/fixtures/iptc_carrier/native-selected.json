@@ -140,5 +140,14 @@
       "Bob"
     ],
     "IPTC:ObjectName": "Between"
+  },
+  "eps-false-second-marker.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-embedded-second-block.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-single-percent-mixed-case.eps": {
+    "IPTC:By-line": "Alice"
   }
 }

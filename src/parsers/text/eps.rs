@@ -351,30 +351,57 @@ impl EPSParser {
     /// digits per line (each line commented out with a leading `%`). This
     /// mirrors ExifTool's `PostScript.pm` handling of the same block.
     fn extract_photoshop_blocks(data: &[u8]) -> Vec<Vec<u8>> {
-        const BEGIN_MARKER: &[u8] = b"BeginPhotoshop";
-        const END_MARKER: &[u8] = b"EndPhotoshop";
+        // PostScript.pm enters a Photoshop data mode only for a DSC token at
+        // the beginning of a line: one or two '%', case-insensitive. The
+        // corresponding End token must have the same percent prefix. The
+        // default reader skips embedded %%BeginDocument sections.
+        fn dsc_prefix(line: &[u8], token: &[u8]) -> Option<usize> {
+            let percent_count = if line.starts_with(b"%%") {
+                2
+            } else if line.starts_with(b"%") {
+                1
+            } else {
+                return None;
+            };
+            line[percent_count..]
+                .get(..token.len())
+                .filter(|value| value.eq_ignore_ascii_case(token))
+                .map(|_| percent_count)
+        }
 
         let mut blocks = Vec::new();
-        let mut pos = 0;
-        while let Some(begin_offset) = find_subsequence(&data[pos..], BEGIN_MARKER) {
-            let block_start = pos + begin_offset + BEGIN_MARKER.len();
-            let Some(end_offset) = find_subsequence(&data[block_start..], END_MARKER) else {
-                break;
-            };
-            let block_end = block_start + end_offset;
-            let block_str = String::from_utf8_lossy(&data[block_start..block_end]);
-            let mut hex_chars = String::new();
-            for (i, line) in block_str.split(['\r', '\n']).enumerate() {
-                if i == 0 {
-                    // First line declares the byte length; it is not data.
-                    continue;
+        let mut document_depth = 0u32;
+        let mut active: Option<(usize, String)> = None;
+        for line in data.split(|byte| *byte == b'\r' || *byte == b'\n') {
+            if let Some((begin_prefix, hex_chars)) = active.as_mut() {
+                if dsc_prefix(line, b"EndPhotoshop") == Some(*begin_prefix) {
+                    if let Ok(decoded) = hex::decode(hex_chars) {
+                        blocks.push(decoded);
+                    }
+                    active = None;
+                } else {
+                    hex_chars.extend(
+                        line.iter()
+                            .copied()
+                            .filter(u8::is_ascii_hexdigit)
+                            .map(char::from),
+                    );
                 }
-                hex_chars.extend(line.chars().filter(char::is_ascii_hexdigit));
+                continue;
             }
-            if let Ok(decoded) = hex::decode(hex_chars) {
-                blocks.push(decoded);
+            if dsc_prefix(line, b"BeginDocument").is_some() {
+                document_depth = document_depth.saturating_add(1);
+                continue;
             }
-            pos = block_end + END_MARKER.len();
+            if dsc_prefix(line, b"EndDocument").is_some() {
+                document_depth = document_depth.saturating_sub(1);
+                continue;
+            }
+            if document_depth == 0
+                && let Some(prefix) = dsc_prefix(line, b"BeginPhotoshop")
+            {
+                active = Some((prefix, String::new()));
+            }
         }
         blocks
     }

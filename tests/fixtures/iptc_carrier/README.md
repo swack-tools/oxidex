@@ -9,3 +9,5 @@ The converted controls in every carrier distinguish PrintConv-only enum labels f
 Leading-zero controls use EditorialUpdate `01`, Urgency `05`, and Category `0042`: normal output keeps their source PrintConv labels, while raw output retains the exact strings `01`, `05`, and `0042` in all four carriers.
 
 EPS representation controls follow PostScript.pm: raw 8BIM bytes outside a `%%BeginPhotoshop` DSC block are ignored, a raw-plus-hex replay contributes one physical occurrence, and two separate Photoshop DSC blocks with equal IPTC payloads remain two occurrences. `eps-one-hex-sort.eps` checks copy-aware group ordering; `eps-interleaved-list.eps` checks that a By-line list spanning a scalar stays at its first IIM record position under G1, G1:4, and G4.
+
+DSC recognition controls reject a marker embedded in another comment and Photoshop blocks inside `%%BeginDocument`/`%%EndDocument`; they accept a single-percent mixed-case `BeginPhotoshop`/matching `EndPhotoshop` pair. These follow pinned PostScript.pm line-anchored, case-insensitive token handling.
