@@ -19,6 +19,7 @@ use crate::core::tiff_helpers::parse_ifd_chain;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
+use crate::parsers::DetectorMode;
 use crate::parsers::detection::detect_format;
 use crate::parsers::jpeg::segment_parser::parse_segments;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
@@ -80,6 +81,52 @@ use std::path::Path;
 /// - File format is unsupported (UnsupportedFormat)
 /// - File contains invalid or truncated metadata (ParseError)
 pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
+    read_metadata_with_detector(path, DetectorMode::Signature)
+}
+
+/// Detect file format using the specified detection mode.
+///
+/// This helper function wraps format detection to support both signature-based
+/// and AI-powered (Magika) detection methods.
+fn detect_format_with_mode(reader: &dyn FileReader, mode: DetectorMode) -> Result<FileFormat> {
+    match mode {
+        DetectorMode::Signature => {
+            // Convert io::Error to ExifToolError
+            detect_format(reader).map_err(ExifToolError::from)
+        }
+        #[cfg(feature = "magika")]
+        DetectorMode::Magika => {
+            use crate::parsers::magika_detector::detect_with_magika;
+            let size = reader.size();
+            let data = reader.read(0, size as usize)?;
+            // Convert io::Error to ExifToolError
+            detect_with_magika(&data).map_err(ExifToolError::from)
+        }
+        #[cfg(not(feature = "magika"))]
+        DetectorMode::Magika => Err(ExifToolError::unsupported_format(
+            "Magika AI detection not available (build with --features magika)",
+        )),
+    }
+}
+
+/// Reads metadata from a file with specified detection mode.
+///
+/// This function extends `read_metadata` to support both signature-based and
+/// AI-powered file format detection. Use this when you want to enable Magika
+/// AI detection via the `--detector=magika` CLI flag.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to analyze
+/// * `detector_mode` - Detection mode (Signature or Magika)
+///
+/// # Returns
+///
+/// A MetadataMap containing all extracted metadata
+pub fn read_metadata_with_detector(
+    path: &Path,
+    detector_mode: DetectorMode,
+) -> Result<MetadataMap> {
     // Step 1: Extract file system metadata (File:FileName, File:FileSize, etc.)
     // This is done first and independently of the file format
     let mut metadata = match crate::core::file_metadata::extract_file_metadata(path) {
@@ -94,8 +141,8 @@ pub fn read_metadata(path: &Path) -> Result<MetadataMap> {
     // Step 2: Open file with MMapReader for zero-copy access
     let reader = MMapReader::new(path)?;
 
-    // Step 3: Detect format via magic bytes
-    let mut format = detect_format(&reader)?;
+    // Step 3: Detect format using specified detector mode
+    let mut format = detect_format_with_mode(&reader, detector_mode)?;
 
     // Step 3b: Check for camera raw formats using filename + magic bytes
     // Many raw formats are TIFF-based and need filename context for proper detection
