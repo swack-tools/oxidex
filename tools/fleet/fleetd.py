@@ -80,6 +80,7 @@ and doing nothing. See that constant for the argument in both directions.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -196,7 +197,17 @@ def _worker_tag(host: str, slug: str) -> str:
     a fresh UUID also prevents an old run's artifacts being reused after
     the process that created them is gone.
     """
-    return f"{host}-{slug}-{uuid.uuid4().hex}"
+    # The tag is embedded in several single filename components. Keep the
+    # readable parts ASCII and bounded by bytes, even for a valid long or
+    # Unicode branch; the digest distinguishes names with the same prefix.
+    def readable(value: str, limit: int) -> str:
+        return "".join(c if c.isascii() and (c.isalnum() or c in "_-") else "_"
+                       for c in value)[:limit] or "x"
+
+    source = f"{host}\0{slug}".encode("utf-8")
+    fingerprint = hashlib.sha256(source).hexdigest()[:12]
+    return (f"{readable(host, 24)}-{readable(slug, 40)}-"
+            f"{fingerprint}-{uuid.uuid4().hex}")
 
 
 @dataclass

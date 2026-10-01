@@ -757,6 +757,37 @@ class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
     def _reasons(self, entries):
         return [r[0] for r in entries]
 
+    def test_long_staging_slug_starts_and_releases_its_claim(self):
+        """A valid long branch name must still fit the gate launch log."""
+        slug = "x" * 200
+        env = scrub_env()
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        f"HEAD:refs/heads/staging/{slug}"], check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        ":refs/heads/staging/one"], check=True, env=env)
+        self.set_desired(gates=1)
+
+        try:
+            started = self.reconcile()
+        except OSError as exc:
+            self.fail(f"gate did not start: {exc}; claims="
+                      f"{self.hub.list('refs/fleet/claims/gate/')}")
+        self.assertEqual(len(started.started), 1, started)
+        tag = started.started[0]
+        self.assertTrue(any(w.tag == tag and w.alive() for w in self.workers))
+        self.finish_worker(tag)
+        self.set_desired(gates=0)
+        reaped = self.reconcile()
+        self.assertIn(tag, reaped.finished)
+        self.assertEqual(self.hub.list("refs/fleet/claims/gate/"), {})
+
+    def test_worker_tag_bounds_unicode_components_by_bytes(self):
+        tag = fleetd._worker_tag("h" * 100 + "é", "é" * 200)
+        self.assertTrue(tag.isascii(), tag)
+        self.assertLessEqual(len(f"fleetd-gate-{tag}.launch.log".encode()), 255)
+        self.assertLessEqual(len(f"fleetd-agent-{tag}.log".encode()), 255)
+        self.assertLessEqual(len(f"gate-{tag}.verdict-store-failed".encode()), 255)
+
     def test_replacement_gate_gets_new_identity_with_frozen_clock(self):
         """A reaped gate's stop file and failure marker belong to that run.
 
