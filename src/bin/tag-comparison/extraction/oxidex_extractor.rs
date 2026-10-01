@@ -358,6 +358,7 @@ impl OxiDexExtractor {
     fn format_value(value: &TagValue) -> String {
         match value {
             TagValue::String(s) => s.clone(),
+            TagValue::TextBytes(bytes) => oxidex::cli::non_utf8::fix_utf8(bytes),
             TagValue::Integer(i) => i.to_string(),
             TagValue::Float(f) => {
                 let formatted = format!("{:.5}", f);

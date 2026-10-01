@@ -226,6 +226,7 @@ pub(crate) fn read_record(group: &str, data: &[u8], fields: &[Field]) -> Metadat
 ///
 /// `JPEG::Main`'s APP3 `ImagingData` (JPEG.pm:119) is such a tag, so ExifTool
 /// prints the byte count rather than the bytes.
+#[cfg(test)]
 pub(crate) fn binary_data_placeholder(len: usize) -> TagValue {
     TagValue::String(format!(
         "(Binary data {} bytes, use -b option to extract)",

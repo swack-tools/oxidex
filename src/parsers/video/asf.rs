@@ -578,13 +578,7 @@ fn parse_extended_content(
                 if name == "WM/Picture" && value_data.len() > 10 {
                     parse_wm_picture(&value_data, metadata);
                 } else {
-                    metadata.insert(
-                        tag_name,
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            value_data.len()
-                        )),
-                    );
+                    metadata.insert_available_binary_with_display(tag_name, value_data.to_vec());
                 }
             }
             2 => {
@@ -1044,7 +1038,11 @@ fn parse_metadata_object(
             _ => continue,
         };
 
-        metadata.insert(tag_name, value);
+        if data_type == 1 && value_data.len() != 16 {
+            metadata.insert_unavailable_binary_display(tag_name, value, "");
+        } else {
+            metadata.insert(tag_name, value);
+        }
     }
 
     Ok(())
@@ -1111,13 +1109,7 @@ fn parse_wm_picture(data: &[u8], metadata: &mut MetadataMap) {
     }
 
     // Picture data follows
-    metadata.insert(
-        "ASF:Picture".to_string(),
-        TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            pic_size
-        )),
-    );
+    metadata.insert_unavailable_binary("ASF:Picture", pic_size as usize, "");
 }
 
 /// Map WM/* tag names to ASF: tag names

@@ -257,6 +257,14 @@ echo "=========================================================="
 python3 "$ROOT/src/parsers/font/mac_charset/generate_tables.py" \
     "$LIB/Image/ExifTool/Charset"
 
+# Font.pm's %ttLang is runtime lookup data, not a tag declaration. Capture
+# it separately so a release bump refreshes all platform-specific suffixes.
+FONT_LANG_CAPTURE="$CACHE/font-languages-$PIN.json"
+"$PERL" "$HERE/capture_font_languages.pl" "$LIB" > "$FONT_LANG_CAPTURE"
+python3 "$HERE/font_language_specs.py" --capture "$FONT_LANG_CAPTURE" \
+    --fixture-out "$(artifact_path font-language-capture)" \
+    --rust-out "$(artifact_path font-language-rust)"
+
 echo "=========================================================="
 echo ">> TIER 2f: GeoTIFF, DICOM and lens alternatives"
 echo "=========================================================="

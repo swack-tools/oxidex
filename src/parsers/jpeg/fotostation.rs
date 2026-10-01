@@ -94,7 +94,15 @@ pub fn parse_fotostation_trailer_grouped(
                 TAG_IPTC => {
                     let group1 = iptc_groups.next_group();
                     for (name, value) in extract_iptc_from_block(record) {
-                        metadata.insert_with_group1(name, TagValue::new_string(value), &group1);
+                        if name == "IPTC:ObjectPreviewData" {
+                            metadata.insert_unavailable_binary_display(
+                                name,
+                                TagValue::new_string(value),
+                                &group1,
+                            );
+                        } else {
+                            metadata.insert_with_group1(name, TagValue::new_string(value), &group1);
+                        }
                     }
                 }
                 _ => {}

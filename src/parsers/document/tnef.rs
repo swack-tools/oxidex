@@ -676,7 +676,13 @@ fn emit(table: &[PropTag], tag: &str, value: Value, metadata: &mut MetadataMap) 
         },
         _ => value.render(),
     };
-    metadata.insert(format!("File:{name}"), TagValue::new_string(rendered));
+    let key = format!("File:{name}");
+    let display = TagValue::new_string(rendered);
+    if matches!(value, Value::Binary(_)) {
+        metadata.insert_unavailable_binary_display(key, display, "");
+    } else {
+        metadata.insert(key, display);
+    }
 }
 
 /// [`emit`] for the length-prefixed types, where the declared conversion also
@@ -708,7 +714,15 @@ fn emit_binary_aware(
         PropConv::Binary => Value::Binary(payload.len()).render(),
         PropConv::None | PropConv::AttachMethod => value.render(),
     };
-    metadata.insert(format!("File:{name}"), TagValue::new_string(rendered));
+    let key = format!("File:{name}");
+    let display = TagValue::new_string(rendered);
+    if matches!(conv, PropConv::Binary | PropConv::Rtf)
+        || matches!(value, Value::Binary(_)) && !matches!(conv, PropConv::Deref)
+    {
+        metadata.insert_unavailable_binary_display(key, display, "");
+    } else {
+        metadata.insert(key, display);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -802,7 +816,13 @@ pub fn parse_tnef_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
                     code_page = le_u32(payload, 0);
                 }
                 if let Some(value) = main_value(*conv, payload) {
-                    metadata.insert(format!("File:{name}"), TagValue::new_string(value.render()));
+                    let key = format!("File:{name}");
+                    let display = TagValue::new_string(value.render());
+                    if matches!(value, Value::Binary(_)) {
+                        metadata.insert_unavailable_binary_display(key, display, "");
+                    } else {
+                        metadata.insert(key, display);
+                    }
                 }
             }
 

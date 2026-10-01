@@ -92,6 +92,8 @@ class VerifyTablesRecipeTests(unittest.TestCase):
                     print("DOCX")
                 elif any(arg.endswith("dump_tables.pl") for arg in args):
                     print("{}")
+                elif any(arg.endswith("capture_font_languages.pl") for arg in args):
+                    print("{}")
                 else:
                     raise SystemExit(64)
                 """
@@ -197,6 +199,10 @@ class VerifyTablesRecipeTests(unittest.TestCase):
         release = by_script["tools/ci/release_oracle.py"]
         self.assertEqual(release["argv"][release["argv"].index("--repo") + 1], ".")
         verify = by_script["tools/exiftool-tables/verify.py"]
+        font = by_script["tools/exiftool-tables/font_language_specs.py"]
+        self.assertIn("--check", font["argv"])
+        self.assertTrue(any(call["argv"] and call["argv"][0].endswith("capture_font_languages.pl")
+                            for call in perl_calls))
         self.assertEqual(verify["argv"][2], str(self.tree / "lib"))
         subdirs = by_script["tools/exiftool-tables/verify_subdirs.py"]
         self.assertEqual(subdirs["argv"][2], str(self.tree / "lib"))

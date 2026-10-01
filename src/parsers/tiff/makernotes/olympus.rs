@@ -1139,6 +1139,8 @@ fn append_zoomed_preview_datatag(
             priority: 1,
             is_list: false,
             order: 0,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             origin: Provenance {
                 module: Some("Olympus"),
                 table: Some("Main"),
@@ -1269,6 +1271,8 @@ fn walk_main_through_engine(
                     priority: i16::from(!(tag.low_priority || tag.avoid)),
                     is_list: tag.is_list,
                     order: 0,
+                    binary_payload_unavailable: false,
+                    binary_extract_from_stored: false,
                     origin: Provenance {
                         module: Some(tag.module),
                         table: Some(tag.table),
@@ -1673,12 +1677,7 @@ fn extract_olympus_preview_from(
             );
         }
         None => {
-            metadata.insert(
-                "MakerNotes:PreviewImage",
-                TagValue::new_string(format!(
-                    "(Binary data {total} bytes, use -b option to extract)"
-                )),
-            );
+            metadata.insert_unavailable_binary("MakerNotes:PreviewImage", total, "");
         }
     }
     true

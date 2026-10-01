@@ -96,6 +96,8 @@ pub struct IccTag {
     pub name: String,
     pub value: TagValue,
     pub group1: &'static str,
+    /// Unformatted bytes retained for source-declared binary tag payloads.
+    pub binary_payload: Option<Vec<u8>>,
 }
 
 /// Extracts ICC profile metadata from a PDF file.
@@ -141,13 +143,18 @@ pub fn parse_icc_profile_data(data: &[u8]) -> Result<Vec<IccTag>> {
 /// every ICC-bearing format now goes through (see the module doc comment).
 pub fn insert_icc_tags(metadata: &mut MetadataMap, tags: Vec<IccTag>) {
     for tag in tags {
-        metadata.insert_occurrence(
-            format!("ICC_Profile:{}", tag.name),
-            tag.value,
-            SHIM_DEFAULT_PRIORITY,
-            tag.group1,
-            Instance::default(),
-        );
+        let key = format!("ICC_Profile:{}", tag.name);
+        if let Some(bytes) = tag.binary_payload {
+            metadata.insert_available_binary_with_display_and_group1(key, bytes, tag.group1);
+        } else {
+            metadata.insert_occurrence(
+                key,
+                tag.value,
+                SHIM_DEFAULT_PRIORITY,
+                tag.group1,
+                Instance::default(),
+            );
+        }
     }
 }
 
@@ -204,14 +211,14 @@ fn parse_icc_profile(data: &[u8]) -> Result<Vec<IccTag>> {
     if data.len() > 128 {
         // Table order, which ExifTool reads the entries in; a `HashMap` here
         // handed them to `insert_icc_tags` in a different order every run.
-        let mut tag_map = crate::core::OrderedTags::new();
-        tags::parse_tags_registry(data, &mut tag_map)?;
-        out.extend(tag_map.into_iter().map(|(name, value)| {
-            let group1 = tags::icc_output_group1(&name);
+        let tag_records = tags::parse_tags_registry_with_payloads(data)?;
+        out.extend(tag_records.into_iter().map(|row| {
+            let group1 = tags::icc_output_group1(&row.name);
             IccTag {
-                name,
-                value,
+                name: row.name,
+                value: row.value,
                 group1,
+                binary_payload: row.binary_payload,
             }
         }));
     }
@@ -251,6 +258,7 @@ fn header_tags(header: &[u8]) -> Vec<IccTag> {
             name: tag.name.to_string(),
             value: tag.value,
             group1: "ICC-header",
+            binary_payload: None,
         })
         .collect()
 }

@@ -359,9 +359,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // Extract ICC profile metadata
         match extract_icc_profile(reader) {
             Ok(icc_metadata) => {
-                for (key, value) in icc_metadata.iter() {
-                    metadata.insert(key.clone(), value.clone());
-                }
+                // The ICC parser owns each binary payload and its family-1
+                // group. Replay occurrences instead of flattening displays.
+                metadata.merge(icc_metadata);
             }
             Err(_) => {
                 // ICC profile is optional - silently continue if not present

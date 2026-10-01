@@ -185,14 +185,9 @@ pub fn parse_xisf_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
         }
 
         let mut metadata = MetadataMap::new();
-        // XISF.pm:130, `$et->FoundTag(XML => $buff)` -- the whole header block,
-        // reported by ordinary output as a byte count.
-        metadata.insert(
-            "XML:XML",
-            TagValue::new_string(format!(
-                "(Binary data {header_len} bytes, use -b option to extract)"
-            )),
-        );
+        // XISF.pm:130, `$et->FoundTag(XML => $buff)` -- the whole header
+        // block. Keep its bytes beside the ordinary binary summary.
+        metadata.insert_available_binary_with_display_and_group1("XML:XML", header.to_vec(), "XML");
 
         let options = XmlWalkOptions {
             // `%Image::ExifTool::XISF::Main`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`
@@ -216,13 +211,16 @@ pub fn parse_xisf_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
                 .iter()
                 .find(|(path, _)| *path == property.name)
                 .map_or(property.name.as_str(), |(_, renamed)| *renamed);
+            if BINARY_TAGS.contains(&name) {
+                metadata.insert_available_binary_with_display_and_group1(
+                    format!("{}:{name}", property.group1),
+                    property.raw.as_bytes().to_vec(),
+                    &property.group1,
+                );
+                continue;
+            }
             let value = if XMP_DATE_TAGS.contains(&property.name.as_str()) {
                 convert_xmp_date(&property.raw)
-            } else if BINARY_TAGS.contains(&name) {
-                format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    property.raw.len()
-                )
             } else {
                 property.value.clone()
             };

@@ -58,6 +58,8 @@ fn occurrence(case: &Case) -> TagOccurrence {
         value: Some(case.value.clone()),
         print: Some(case.print.clone()),
         stored: Some(case.raw.clone()),
+        binary_payload_unavailable: false,
+        binary_extract_from_stored: false,
         priority: 1,
         is_list: false,
         order: 0,

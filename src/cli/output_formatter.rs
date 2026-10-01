@@ -535,7 +535,7 @@ fn json_string_value(s: &str) -> JsonNode {
     } else {
         // EscapeJSON (exiftool:3819) deletes NULs only after its typing
         // checks. "12\0" must stay a quoted "12", not become a number.
-        JsonNode::String(s.replace('\0', ""))
+        JsonNode::String(super::non_utf8::fix_utf8(s.replace('\0', "").as_bytes()))
     }
 }
 
@@ -588,6 +588,10 @@ pub(crate) fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> Jso
             // JSON boolean for these two literal strings, not a quoted one.
             json_string_value(s)
         }
+        // EscapeJSON applies XMP::FixUTF8 to the *bytes* after the parser
+        // has decoded the source charset. A surrogate is three invalid
+        // bytes and becomes three literal question marks.
+        TagValue::TextBytes(bytes) => json_string_value(&super::non_utf8::fix_utf8(bytes)),
         TagValue::Integer(i) => JsonNode::number(*i),
         // ExifTool never holds a Rust f64: its value is a Perl NV, which
         // stringifies as `%.15g` (`90`, not serde's `90.0`; `Inf`, not
@@ -875,6 +879,7 @@ pub(crate) fn format_tag_value_short_with_mode(
         // printed the untrimmed `"RGB "` before this fix. `.trim_end()`
         // only, matching Perl's `\s+$` (trailing only, not leading).
         TagValue::String(s) => printable_text_value(s),
+        TagValue::TextBytes(bytes) => printable_text_value(&super::non_utf8::fix_utf8(bytes)),
         TagValue::Integer(i) => i.to_string(),
         // Perl's default numeric stringification (`sprintf("%.15g", $val)`),
         // not a fixed 2-decimal truncation: `-s` shortens tag *names*, never
@@ -1008,6 +1013,7 @@ pub(crate) fn format_tag_value_with_mode(
         // `$val =~ s/\s+$//;`) applies to every non-JSON, non-XML format,
         // not just `-s`.
         TagValue::String(s) => printable_text_value(s),
+        TagValue::TextBytes(bytes) => printable_text_value(&super::non_utf8::fix_utf8(bytes)),
         TagValue::Integer(i) => i.to_string(),
         TagValue::Float(f) if no_print_conv => {
             crate::core::formatters::numeric_precision::perl_number(*f)

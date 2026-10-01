@@ -17,7 +17,7 @@ use crate::exiftool_tables::{Ctx, decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
-use crate::parsers::jpeg::app_segments::infiray::{binary_data_placeholder, read_record};
+use crate::parsers::jpeg::app_segments::infiray::read_record;
 use crate::parsers::jpeg::app_segments::infiray_tables as infiray;
 use crate::parsers::jpeg::app_segments::{
     parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
@@ -558,7 +558,15 @@ fn process_ifd0_tags(
             for (tag_name, value) in
                 crate::parsers::jpeg::iptc_parser::extract_iptc_from_block(bytes)
             {
-                metadata.insert(tag_name, TagValue::new_string(value));
+                if tag_name == "IPTC:ObjectPreviewData" {
+                    metadata.insert_unavailable_binary_display(
+                        tag_name,
+                        TagValue::new_string(value),
+                        "",
+                    );
+                } else {
+                    metadata.insert(tag_name, TagValue::new_string(value));
+                }
             }
             continue;
         }
@@ -740,7 +748,11 @@ pub fn process_iptc_segments(
             // it as int/float here would strip exactly what that pipeline
             // produced -- e.g. a `digits[N]`-format field's leading zeros.
             for (tag_name, value) in iptc_tags {
-                metadata.insert(tag_name, value);
+                if tag_name == "IPTC:ObjectPreviewData" {
+                    metadata.insert_unavailable_binary_display(tag_name, value, "");
+                } else {
+                    metadata.insert(tag_name, value);
+                }
             }
         }
         Err(e) => {
@@ -860,10 +872,7 @@ pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
             .get(index + 1)
             .is_some_and(|next| next.marker == APP3_MARKER)
         {
-            metadata.insert(
-                "APP3:ThermalData".to_string(),
-                binary_data_placeholder(thermal_len),
-            );
+            metadata.insert_unavailable_binary("APP3:ThermalData", thermal_len, "");
             thermal_len = 0;
         }
     }
@@ -2284,10 +2293,7 @@ pub fn process_dji_thermal_segments(
             .get(index + 1)
             .is_some_and(|next| next.marker == APP3_MARKER && !is_other_app3_payload(next.data));
         if !run_continues {
-            metadata.insert(
-                "APP3:ThermalData".to_string(),
-                binary_data_placeholder(thermal_data_len),
-            );
+            metadata.insert_unavailable_binary("APP3:ThermalData", thermal_data_len, "");
             thermal_data_len = 0;
         }
     }
@@ -2303,10 +2309,7 @@ pub fn process_dji_thermal_segments(
                     .windows(b"ssuniqueid\0".len())
                     .any(|w| w == b"ssuniqueid\0")
         }) {
-            metadata.insert(
-                "APP5:ThermalCalibration".to_string(),
-                binary_data_placeholder(segment.data.len()),
-            );
+            metadata.insert_unavailable_binary("APP5:ThermalCalibration", segment.data.len(), "");
         }
     }
 
@@ -2405,9 +2408,9 @@ fn process_infiray_imaging_data(segments: &[Segment], metadata: &mut MetadataMap
             .get(index + 1)
             .is_some_and(|next| next.marker == APP3_MARKER);
         if !run_continues {
-            metadata.insert_with_group1(
+            metadata.insert_unavailable_binary(
                 "APP3:ImagingData",
-                binary_data_placeholder(run_len),
+                run_len,
                 crate::parsers::jpeg::app_segments::infiray::INFIRAY_GROUP1,
             );
         }

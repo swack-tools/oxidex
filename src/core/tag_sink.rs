@@ -324,6 +324,8 @@ impl TagSink {
         // The print and stored forms likewise stand for the old `raw`.
         self.occurrences[idx].print = None;
         self.occurrences[idx].stored = None;
+        self.occurrences[idx].binary_payload_unavailable = false;
+        self.occurrences[idx].binary_extract_from_stored = false;
         Some(&mut self.occurrences[idx].raw)
     }
 

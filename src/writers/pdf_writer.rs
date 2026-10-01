@@ -477,6 +477,11 @@ fn serialize_pdf_field(buffer: &mut Vec<u8>, field_name: &str, value: &TagValue)
             }
             serialize_pdf_text_string(buffer, s);
         }
+        TagValue::TextBytes(_) => {
+            return Err(ExifToolError::parse_error(
+                "Non-Unicode text cannot be written as a PDF text string",
+            ));
+        }
         TagValue::Integer(i) => {
             buffer.extend_from_slice(i.to_string().as_bytes());
         }

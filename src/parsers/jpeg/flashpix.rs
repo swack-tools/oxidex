@@ -255,13 +255,13 @@ impl FpxrState {
             }
             "\u{5}Screen Nail" => {
                 let value = strip_stream_header(stream);
-                metadata.insert("FlashPix:ScreenNail", binary_placeholder(value.len()));
+                metadata.insert_unavailable_binary("FlashPix:ScreenNail", value.len(), "");
                 // Held back: the composite PreviewImage is the JPEG inside it.
                 self.screen_nail = Some(value.to_vec());
             }
             "Audio Stream" => {
                 let value = strip_stream_header(stream);
-                metadata.insert("FlashPix:AudioStream", binary_placeholder(value.len()));
+                metadata.insert_unavailable_binary("FlashPix:AudioStream", value.len(), "");
             }
             "Property" => insert_preview_info(stream, metadata),
             "Preview" => {
@@ -270,7 +270,11 @@ impl FpxrState {
                 if stream.len() > FUJI_PREVIEW_HEADER_LEN {
                     let value = &stream[FUJI_PREVIEW_HEADER_LEN..];
                     if value.starts_with(&JPEG_SOI) {
-                        metadata.insert("FlashPix:PreviewImage", binary_placeholder(value.len()));
+                        metadata.insert_unavailable_binary(
+                            "FlashPix:PreviewImage",
+                            value.len(),
+                            "",
+                        );
                     }
                 }
             }
@@ -295,7 +299,7 @@ impl FpxrState {
 
         if !self.fuji_preview.is_empty() {
             let preview = std::mem::take(&mut self.fuji_preview);
-            metadata.insert("FlashPix:PreviewImage", binary_placeholder(preview.len()));
+            metadata.insert_unavailable_binary("FlashPix:PreviewImage", preview.len(), "");
         }
     }
 
@@ -309,7 +313,7 @@ impl FpxrState {
             return;
         };
         let len = screen_nail.len() - start;
-        metadata.insert("FlashPix:PreviewImage", binary_placeholder(len));
+        metadata.insert_unavailable_binary("FlashPix:PreviewImage", len, "");
     }
 }
 
@@ -330,6 +334,7 @@ fn insert_preview_info(stream: &[u8], metadata: &mut MetadataMap) {
 }
 
 /// ExifTool's stand-in for binary values that `-b` was not requested for.
+#[cfg(test)]
 fn binary_placeholder(len: usize) -> TagValue {
     TagValue::String(format!(
         "(Binary data {} bytes, use -b option to extract)",

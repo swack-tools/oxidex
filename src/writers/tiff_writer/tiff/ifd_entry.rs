@@ -238,6 +238,9 @@ pub fn convert_tag_value_to_entry(
                 bytes,
             )))
         }
+        TagValue::TextBytes(_) => Err(ExifToolError::parse_error(
+            "Non-Unicode text cannot be written as a TIFF string",
+        )),
 
         TagValue::Integer(i) => convert_integer_to_entry(tag_id, *i, byte_order),
 
