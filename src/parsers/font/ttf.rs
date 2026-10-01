@@ -363,6 +363,65 @@ impl TTFParser {
         Ok(decoded)
     }
 
+    /// Decode a `Font:` value with Font.pm's charset boundary. The older
+    /// bare-name extractor above intentionally keeps its existing behavior.
+    fn extract_font_name_string(
+        reader: &dyn FileReader,
+        table: &TableEntry,
+        record: &NameRecord,
+        string_offset: u16,
+    ) -> Result<Option<String>> {
+        let start = table.offset as u64 + u64::from(string_offset) + u64::from(record.offset);
+        let data = reader.read(start, record.length as usize)?;
+        let mut decoded = match record.platform_id {
+            PLATFORM_WINDOWS | PLATFORM_UNICODE => {
+                // Charset::Decompose consumes the initial UCS2/UTF16 byte-order
+                // mark and changes the word order when it is little-endian.
+                // Font.pm's no-BOM TTF order is big-endian.
+                let (body, little_endian) = match data.get(..2) {
+                    Some([0xfe, 0xff]) => (&data[2..], false),
+                    Some([0xff, 0xfe]) => (&data[2..], true),
+                    _ => (data, false),
+                };
+                if !body.len().is_multiple_of(2) {
+                    return Ok(None);
+                }
+                let words: Vec<u16> = body
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        if little_endian {
+                            u16::from_le_bytes([pair[0], pair[1]])
+                        } else {
+                            u16::from_be_bytes([pair[0], pair[1]])
+                        }
+                    })
+                    .collect();
+                String::from_utf16(&words).ok()
+            }
+            PLATFORM_MACINTOSH => match record.encoding_id {
+                MAC_ENCODING_ROMAN => Some(Self::decode_mac_roman(data)),
+                MAC_ENCODING_HEBREW => Some(Self::decode_mac_hebrew(data)),
+                encoding => mac_charset::for_mac_encoding(encoding)
+                    .map(|charset| mac_charset::decode(data, charset)),
+            },
+            _ => None,
+        };
+        if let Some(value) = decoded.as_mut() {
+            if record.platform_id == PLATFORM_MACINTOSH
+                && record.encoding_id != 1
+                && data.iter().all(|byte| *byte < 0x80)
+            {
+                // ExifTool::Decode skips conversion in this case. The final
+                // tag value drops NULs but keeps later ASCII characters.
+                value.retain(|ch| ch != '\0');
+            } else if let Some(nul) = value.find('\0') {
+                // Recompose truncates a converted value at its first NUL.
+                value.truncate(nul);
+            }
+        }
+        Ok(decoded)
+    }
+
     /// The exact source-defined suffix for this platform and language ID.
     fn language_suffix(record: &NameRecord) -> Option<&'static str> {
         generated_languages::font_language(record.platform_id, record.language_id)
@@ -576,17 +635,16 @@ impl TTFParser {
                 metadata.remove(&key);
                 continue;
             };
-            let Some(value) = Self::extract_name_string(reader, table, record, string_offset)?
+            let Some(value) = Self::extract_font_name_string(reader, table, record, string_offset)?
             else {
                 metadata.remove(&key);
                 continue;
             };
-            // UTF-16BE combines surrogate pairs, but Font.pm's UCS2 decoder
-            // does not. An undecodable nonempty in-bounds record replaces an
-            // earlier primary value; omit it instead of leaving a stale one.
-            if value.is_empty()
-                || (matches!(charset, FontValueCharset::Ucs2BmpOnly)
-                    && value.chars().any(|ch| ch.len_utf16() == 2))
+            // UTF-16 combines surrogate pairs, but Font.pm's UCS2 decoder
+            // does not. A decoded empty string is still a present value;
+            // refuse only source-incompatible supplementary UCS2 text.
+            if matches!(charset, FontValueCharset::Ucs2BmpOnly)
+                && value.chars().any(|ch| ch.len_utf16() == 2)
             {
                 metadata.remove(&key);
                 continue;
@@ -1659,6 +1717,146 @@ mod tests {
                 tags.get(key),
                 Some(&TagValue::String(String::new())),
                 "platform {platform}, last encoding {last_encoding}"
+            );
+        }
+    }
+
+    fn font_two_record_decode_case(
+        platform: u16,
+        initial_encoding: u16,
+        second_encoding: u16,
+        language: u16,
+        initial: &[u8],
+        second: &[u8],
+    ) -> MetadataMap {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&2u16.to_be_bytes());
+        data.extend_from_slice(&30u16.to_be_bytes());
+        for (encoding, length, offset) in [
+            (initial_encoding, initial.len() as u16, 0),
+            (second_encoding, second.len() as u16, initial.len() as u16),
+        ] {
+            for field in [
+                platform,
+                encoding,
+                language,
+                NAME_FONT_FAMILY,
+                length,
+                offset,
+            ] {
+                data.extend_from_slice(&field.to_be_bytes());
+            }
+        }
+        data.extend_from_slice(initial);
+        data.extend_from_slice(second);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+    }
+
+    #[test]
+    fn font_unicode_bom_and_decoded_nul_match_source() {
+        // Pinned native values: decode-boundary-native-matrix.json and
+        // nul-boundary-native-matrix.json.
+        for (platform, initial_encoding, encoding, language, bytes, expected) in [
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0, b'B'][..], "B"),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0xfe, 0xff, 0, b'B'][..],
+                "B",
+            ),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0xff, 0xfe, b'B', 0][..],
+                "B",
+            ),
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0xff, 0xfe][..], ""),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0xff, 0xfe, b'B', 0][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xfe, 0xff, 0, b'B'][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xff, 0xfe, b'B', 0][..], "B"),
+            (PLATFORM_UNICODE, 4, 4, 0, &[0xff, 0xfe][..], ""),
+            (PLATFORM_WINDOWS, 1, 1, 0x0414, &[0, 0, 0, b'B'][..], ""),
+            (
+                PLATFORM_WINDOWS,
+                1,
+                1,
+                0x0414,
+                &[0, b'A', 0, 0, 0, b'B'][..],
+                "A",
+            ),
+            (PLATFORM_UNICODE, 4, 0, 0, &[0, 0, 0, b'B'][..], ""),
+            (
+                PLATFORM_UNICODE,
+                4,
+                4,
+                0,
+                &[0, b'A', 0, 0, 0, b'B'][..],
+                "A",
+            ),
+        ] {
+            let initial = &[0, b'A'];
+            let tags = font_two_record_decode_case(
+                platform,
+                initial_encoding,
+                encoding,
+                language,
+                initial,
+                bytes,
+            );
+            let key = if platform == PLATFORM_WINDOWS {
+                "Font:FontFamily-no-NO"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(expected.to_string())),
+                "platform {platform}, encoding {encoding}, bytes {bytes:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn font_macintosh_decoded_empty_and_nul_match_source() {
+        // MacJapanese converts even ASCII; the other supported Macintosh
+        // charsets skip conversion for ASCII-only strings. Source conversion
+        // truncates at NUL, while the fast path removes NUL and keeps text.
+        for (encoding, language, bytes, expected) in [
+            (0, 0, &[0, b'A'][..], "A"),
+            (0, 0, &[0, 0x80][..], ""),
+            (0, 0, &[b'A', 0, b'B'][..], "AB"),
+            (5, 0, &[0, b'A'][..], "A"),
+            (5, 0, &[0, 0x80][..], ""),
+            (1, 12, &[0, b'A'][..], ""),
+            (1, 12, &[0, 0x80][..], ""),
+            (2, 0, &[0, b'A'][..], "A"),
+            (2, 0, &[0, 0x80][..], ""),
+            (3, 0, &[0, b'A'][..], "A"),
+            (3, 0, &[0, 0x80][..], ""),
+            (25, 0, &[0, b'A'][..], "A"),
+            (25, 0, &[0, 0x80][..], ""),
+        ] {
+            let tags =
+                font_two_record_decode_case(PLATFORM_MACINTOSH, 0, encoding, language, b"A", bytes);
+            let key = if language == 12 {
+                "Font:FontFamily-ar"
+            } else {
+                "Font:FontFamily"
+            };
+            assert_eq!(
+                tags.get(key),
+                Some(&TagValue::String(expected.to_string())),
+                "Macintosh encoding {encoding}, bytes {bytes:02x?}"
             );
         }
     }
