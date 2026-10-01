@@ -3212,12 +3212,13 @@ fn next_ifd_offset(
     ifd_offset: u64,
     _entry_count: usize,
     byte_order: ByteOrder,
+    directory_limit: u64,
 ) -> Option<u64> {
     // Callers may supply the number of decoded entries, but parse_ifd skips
     // bad formats and unreadable values. Only the physical count locates the
     // pointer after the complete entry array. Keep the existing helper/API
     // arguments while deriving this structural fact from the directory.
-    if ifd_offset.checked_add(2)? > reader.size() {
+    if ifd_offset.checked_add(2)? > directory_limit {
         return None;
     }
     let entry_count = u64::from(ifd_entry_count(reader, ifd_offset, byte_order)?);
@@ -3225,7 +3226,7 @@ fn next_ifd_offset(
         .checked_add(2)?
         .checked_add(entry_count.checked_mul(12)?)?;
 
-    if pointer_offset.checked_add(4)? > reader.size() {
+    if pointer_offset.checked_add(4)? > directory_limit {
         return None;
     }
 
@@ -3273,7 +3274,15 @@ pub(crate) fn reached_integral_ifd_entries(
     byte_order: ByteOrder,
     requested_tags: &[u16],
 ) -> Vec<ReachedIntegralEntry> {
-    scan_reached_integral_ifd_entries(reader, ifd_offset, byte_order, requested_tags, "").0
+    scan_reached_integral_ifd_entries(
+        reader,
+        ifd_offset,
+        byte_order,
+        requested_tags,
+        "",
+        reader.size(),
+    )
+    .0
 }
 
 /// Return both reached values and whether ProcessExif completed the IFD loop.
@@ -3285,7 +3294,14 @@ fn scan_reached_integral_ifd_entries(
     byte_order: ByteOrder,
     requested_tags: &[u16],
     known_model: &str,
+    directory_limit: u64,
 ) -> (Vec<ReachedIntegralEntry>, bool) {
+    if ifd_offset
+        .checked_add(2)
+        .is_none_or(|end| end > directory_limit)
+    {
+        return (Vec::new(), false);
+    }
     let Some(count) = ifd_entry_count(reader, ifd_offset, byte_order) else {
         return (Vec::new(), false);
     };
@@ -3295,7 +3311,7 @@ fn scan_reached_integral_ifd_entries(
     else {
         return (Vec::new(), false);
     };
-    if dir_end > reader.size() {
+    if dir_end > directory_limit {
         return (Vec::new(), false);
     }
 
@@ -3427,7 +3443,12 @@ fn scan_reached_integral_ifd_entries(
 }
 
 /// Enumerate only parseable subdirectories that ExifTool would actually enter.
-fn enterable_ifd(reader: &dyn FileReader, offset: u64, byte_order: ByteOrder) -> bool {
+fn enterable_ifd(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    directory_limit: u64,
+) -> bool {
     let Some(count) = ifd_entry_count(reader, offset, byte_order) else {
         return false;
     };
@@ -3438,7 +3459,7 @@ fn enterable_ifd(reader: &dyn FileReader, offset: u64, byte_order: ByteOrder) ->
     let Some(dir_end) = entries_start.checked_add(entries_len as u64) else {
         return false;
     };
-    let Some(bytes_from_end) = reader.size().checked_sub(dir_end) else {
+    let Some(bytes_from_end) = directory_limit.checked_sub(dir_end) else {
         return false;
     };
     if matches!(bytes_from_end, 0 | 2) {
@@ -3446,7 +3467,13 @@ fn enterable_ifd(reader: &dyn FileReader, offset: u64, byte_order: ByteOrder) ->
         // next-IFD field (or only two trailing bytes). parse_ifd requires it.
         return reader.read(entries_start, entries_len).is_ok();
     }
-    parse_ifd(reader, offset, byte_order).is_ok()
+    crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        reader,
+        offset,
+        byte_order,
+        directory_limit,
+    )
+    .is_ok()
 }
 
 fn followed_subdirectories(
@@ -3455,14 +3482,21 @@ fn followed_subdirectories(
     byte_order: ByteOrder,
     pointer_tags: &[u16],
     known_model: &str,
+    directory_limit: u64,
 ) -> Vec<(u16, u64)> {
-    if !enterable_ifd(reader, ifd_offset, byte_order) {
+    if !enterable_ifd(reader, ifd_offset, byte_order, directory_limit) {
         return Vec::new();
     }
     let mut followed = Vec::new();
-    for entry in
-        scan_reached_integral_ifd_entries(reader, ifd_offset, byte_order, pointer_tags, known_model)
-            .0
+    for entry in scan_reached_integral_ifd_entries(
+        reader,
+        ifd_offset,
+        byte_order,
+        pointer_tags,
+        known_model,
+        directory_limit,
+    )
+    .0
     {
         if entry.tag_id == 0x8769 && entry.count != 1 {
             continue;
@@ -3473,7 +3507,7 @@ fn followed_subdirectories(
         if target == 0 {
             continue;
         }
-        if enterable_ifd(reader, target, byte_order) {
+        if enterable_ifd(reader, target, byte_order, directory_limit) {
             followed.push((entry.tag_id, target));
         }
     }
@@ -3498,6 +3532,7 @@ fn visited_directory_offsets(
     ifd0_offset: u64,
     byte_order: ByteOrder,
     known_model: &str,
+    directory_limit: u64,
 ) -> Vec<u64> {
     const EXIF_IFD_POINTER: u16 = 0x8769;
     const GPS_IFD_POINTER: u16 = 0x8825;
@@ -3509,6 +3544,7 @@ fn visited_directory_offsets(
         byte_order,
         &[EXIF_IFD_POINTER, GPS_IFD_POINTER],
         known_model,
+        directory_limit,
     ) {
         if visited.contains(&sub_offset) {
             continue;
@@ -3524,6 +3560,7 @@ fn visited_directory_offsets(
             byte_order,
             &[INTEROPERABILITY_IFD_POINTER],
             known_model,
+            directory_limit,
         ) {
             if !visited.contains(&interop_offset) {
                 visited.push(interop_offset);
@@ -3672,7 +3709,14 @@ mod followed_directory_tests {
             "a later Model must not retroactively activate the exception"
         );
         assert_eq!(
-            legal_ifd1_offset_with_known_model(&reader, 8, 2, ByteOrder::LittleEndian, "ILCE-TEST"),
+            legal_ifd1_offset_with_known_model(
+                &reader,
+                8,
+                2,
+                ByteOrder::LittleEndian,
+                "ILCE-TEST",
+                reader.size(),
+            ),
             Some(50)
         );
     }
@@ -4092,7 +4136,34 @@ pub(crate) fn legal_ifd1_offset(
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
 ) -> Option<u64> {
-    legal_ifd1_offset_with_known_model(reader, ifd0_offset, ifd0_entry_count, byte_order, "")
+    legal_ifd1_offset_with_known_model(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        "",
+        reader.size(),
+    )
+}
+
+/// Resolve an embedded TIFF's IFD1 while checking structural addresses only
+/// against its enclosing APP1 payload. Out-of-line entry values may still be
+/// read through the full reader, as ExifTool does for RW2 previews.
+pub(crate) fn legal_ifd1_offset_with_directory_limit(
+    reader: &dyn FileReader,
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    directory_limit: u64,
+) -> Option<u64> {
+    legal_ifd1_offset_with_known_model(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        "",
+        directory_limit,
+    )
 }
 
 /// `known_model` must come from metadata established before this IFD0 was
@@ -4104,15 +4175,37 @@ fn legal_ifd1_offset_with_known_model(
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
     known_model: &str,
+    directory_limit: u64,
 ) -> Option<u64> {
     // ProcessExif returns before the linked IFD when IFD0 aborts on its first
     // invalid entry, warning limit, or unreadable value (Exif.pm:6475, 7197).
-    if !scan_reached_integral_ifd_entries(reader, ifd0_offset, byte_order, &[], known_model).1 {
+    if !scan_reached_integral_ifd_entries(
+        reader,
+        ifd0_offset,
+        byte_order,
+        &[],
+        known_model,
+        directory_limit,
+    )
+    .1
+    {
         return None;
     }
-    let ifd1_offset = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)?;
-    if visited_directory_offsets(reader, ifd0_offset, byte_order, known_model)
-        .contains(&ifd1_offset)
+    let ifd1_offset = next_ifd_offset(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        directory_limit,
+    )?;
+    if visited_directory_offsets(
+        reader,
+        ifd0_offset,
+        byte_order,
+        known_model,
+        directory_limit,
+    )
+    .contains(&ifd1_offset)
     {
         return None;
     }
@@ -4216,6 +4309,7 @@ pub(crate) fn parse_ifd1_with_session(
         ifd0_entry_count,
         byte_order,
         known_model,
+        reader.size(),
     ) else {
         return;
     };
@@ -4767,12 +4861,17 @@ pub fn parse_ifd2_preview_image(
     tiff_base: u64,
     metadata: &mut MetadataMap,
 ) {
-    let Some(ifd1_offset) = next_ifd_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
-    else {
+    let Some(ifd1_offset) = next_ifd_offset(
+        reader,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        reader.size(),
+    ) else {
         return;
     };
 
-    let mut visited = visited_directory_offsets(reader, ifd0_offset, byte_order, "");
+    let mut visited = visited_directory_offsets(reader, ifd0_offset, byte_order, "", reader.size());
     if visited.contains(&ifd1_offset) {
         return;
     }
@@ -4791,9 +4890,13 @@ pub fn parse_ifd2_preview_image(
     let Some(ifd1_entry_count) = ifd_entry_count(reader, ifd1_offset, byte_order) else {
         return;
     };
-    let Some(ifd2_offset) =
-        next_ifd_offset(reader, ifd1_offset, ifd1_entry_count as usize, byte_order)
-    else {
+    let Some(ifd2_offset) = next_ifd_offset(
+        reader,
+        ifd1_offset,
+        ifd1_entry_count as usize,
+        byte_order,
+        reader.size(),
+    ) else {
         return;
     };
 

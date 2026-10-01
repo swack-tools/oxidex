@@ -375,6 +375,53 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 }
 
 #[test]
+fn preview_ifd0_chain_uses_app1_boundary_not_jpeg_tail() {
+    let mut data = source();
+    let outer_ifd0 = read_u32(&data, 4) as usize;
+    let jpg_from_raw = entry(&data, outer_ifd0, 0x002e);
+    assert_eq!(read_u16(&data, jpg_from_raw + 2), 7);
+
+    // This APP1 ends after a complete IFD0 ResolutionUnit entry. The next
+    // four JPEG bytes are EOI plus padding: ff d9 00 00. If mistaken for a
+    // little-endian IFD link, they point at 0xd9ff, where a directory-shaped
+    // trailer deliberately carries thumbnail tags. Pinned ExifTool reads
+    // ResolutionUnit but no IFD1 thumbnail from this source-derived RW2.
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&0x0128u16.to_le_bytes());
+    tiff.extend_from_slice(&3u16.to_le_bytes());
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    tiff.extend_from_slice(&2u32.to_le_bytes());
+    assert_eq!(tiff.len(), 22);
+    let mut preview = vec![0xff, 0xd8, 0xff, 0xe1];
+    preview.extend_from_slice(&u16::try_from(8 + tiff.len()).unwrap().to_be_bytes());
+    preview.extend_from_slice(b"Exif\0\0");
+    preview.extend_from_slice(&tiff);
+    preview.extend_from_slice(&[0xff, 0xd9, 0, 0]);
+    preview.resize(12 + 0xd9ff, 0);
+    preview.extend_from_slice(&2u16.to_le_bytes());
+    for (tag, value) in [(0x0201u16, 120u32), (0x0202, 4)] {
+        preview.extend_from_slice(&tag.to_le_bytes());
+        preview.extend_from_slice(&4u16.to_le_bytes());
+        preview.extend_from_slice(&1u32.to_le_bytes());
+        preview.extend_from_slice(&value.to_le_bytes());
+    }
+    preview.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(preview.len(), 55849);
+    let preview_offset = u32::try_from(data.len()).unwrap();
+    data[jpg_from_raw + 4..jpg_from_raw + 8]
+        .copy_from_slice(&u32::try_from(preview.len()).unwrap().to_le_bytes());
+    data[jpg_from_raw + 8..jpg_from_raw + 12].copy_from_slice(&preview_offset.to_le_bytes());
+    data.extend_from_slice(&preview);
+
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("inches"));
+    assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+    assert!(metadata.get("IFD1:ThumbnailLength").is_none());
+}
+
+#[test]
 fn cyclic_preview_exififd_does_not_relabel_ifd0_shading_correction() {
     let mut data = source();
     let (tiff, ifd0) = preview_ifd0(&data);

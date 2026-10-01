@@ -1673,7 +1673,13 @@ fn extract_rw2_embedded_exif_tags(
     // beyond APP1. Keep the TIFF-relative base, but expose those bytes to
     // the reader instead of ending it at the APP1 payload boundary.
     let reader = SliceReader::new(&jpeg[tiff_start_in_jpeg..]);
-    let ifd0_tags = parse_ifd(&reader, first_ifd_offset, byte_order)?;
+    let directory_limit = tiff_data.len() as u64;
+    let ifd0_tags = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        &reader,
+        first_ifd_offset,
+        byte_order,
+        directory_limit,
+    )?;
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
         let bytes = raw_bytes.as_ref();
@@ -1777,16 +1783,22 @@ fn extract_rw2_embedded_exif_tags(
     // `ifd0_tags` may omit malformed entries) and refuses pointers back to
     // IFD0 or an already visited Exif/GPS/Interop directory. Otherwise this
     // preview path could relabel a previous directory as thumbnail metadata.
-    let thumbnail_ifd_offset = crate::core::tiff_helpers::legal_ifd1_offset(
+    let thumbnail_ifd_offset = crate::core::tiff_helpers::legal_ifd1_offset_with_directory_limit(
         &reader,
         first_ifd_offset,
         ifd0_tags.len(),
         byte_order,
+        directory_limit,
     );
 
     if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
         && thumbnail_ifd_offset != 0
-        && let Ok(thumbnail_tags) = parse_ifd(&reader, thumbnail_ifd_offset, byte_order)
+        && let Ok(thumbnail_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+            &reader,
+            thumbnail_ifd_offset,
+            byte_order,
+            directory_limit,
+        )
     {
         let mut thumbnail_offset = None;
         let mut thumbnail_length = None;
@@ -1855,7 +1867,7 @@ fn extract_rw2_embedded_exif_tags(
         &reader,
         exif_ifd_offset,
         byte_order,
-        tiff_data.len() as u64,
+        directory_limit,
     ) else {
         return Ok(());
     };
@@ -2057,7 +2069,13 @@ fn extract_rw2_embedded_exif_tags(
                 }
             })
     {
-        extract_interop_index(&reader, interop_offset, byte_order, metadata);
+        extract_interop_index(
+            &reader,
+            interop_offset,
+            byte_order,
+            directory_limit,
+            metadata,
+        );
     }
 
     Ok(())
@@ -2083,9 +2101,15 @@ fn extract_interop_index(
     reader: &SliceReader<'_>,
     interop_offset: u64,
     byte_order: ByteOrder,
+    directory_limit: u64,
     metadata: &mut MetadataMap,
 ) {
-    let Ok(interop_tags) = parse_ifd(reader, interop_offset, byte_order) else {
+    let Ok(interop_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        reader,
+        interop_offset,
+        byte_order,
+        directory_limit,
+    ) else {
         eprintln!("Warning: Failed to parse Interoperability IFD");
         return;
     };
