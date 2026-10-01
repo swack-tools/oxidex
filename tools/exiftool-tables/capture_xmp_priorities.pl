@@ -66,6 +66,7 @@ for my $key (sort(Image::ExifTool::TagTableKeys($main))) {
                     ? 'variable' : 'fixed';
             my %this = (
                 name => $$tagInfo{Name},
+                lang_alt => (($$tagInfo{Writable} || "") eq "lang-alt" ? JSON::PP::true : JSON::PP::false),
                 priority => 0 + $priority,
                 own_priority => num($$tagInfo{Priority}),
                 avoid => flag($$tagInfo{Avoid}),
@@ -121,6 +122,7 @@ for my $short (qw(SVG otherSVG XML)) {
             $priority = 1 unless defined $priority;
             my %this = (
                 name => $$tagInfo{Name},
+                lang_alt => (($$tagInfo{Writable} || "") eq "lang-alt" ? JSON::PP::true : JSON::PP::false),
                 priority => 0 + $priority,
                 own_priority => num($$tagInfo{Priority}),
                 avoid => flag($$tagInfo{Avoid}),

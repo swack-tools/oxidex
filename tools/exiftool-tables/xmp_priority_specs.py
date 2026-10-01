@@ -29,7 +29,7 @@ RUST = ROOT / "src/parsers/xmp/generated_priorities.rs"
 SCHEMA_KEYS = {"exiftool_version", "namespaces", "xmp_ns", "special_tables"}
 NAMESPACE_KEYS = {"table", "namespace", "table_priority", "table_avoid", "tags"}
 SPECIAL_KEYS = {"group0", "namespace", "table_priority", "table_avoid", "tags"}
-TAG_KEYS = {"name", "priority", "own_priority", "avoid", "struct"}
+TAG_KEYS = {"lang_alt", "name", "priority", "own_priority", "avoid", "struct"}
 STRUCT_KINDS = {"none": "XmpStruct::None", "fixed": "XmpStruct::Fixed", "variable": "XmpStruct::Variable"}
 PRINTABLE = re.compile(r"[\x20-\x7e]+")
 
@@ -116,6 +116,8 @@ def validate(capture: dict) -> None:
             _check_priority(tag["priority"], nullable=False)
             _check_priority(tag["own_priority"], nullable=True)
             _check_flag(tag["avoid"])
+            if type(tag["lang_alt"]) is not bool:
+                raise ValueError("lang_alt must be boolean")
 
 
 def _opt_i8(value) -> str:
@@ -146,6 +148,9 @@ def render(capture: dict) -> str:
         "pub struct XmpTagFact {",
         "    /// The tag ID exactly as the table keys it (case-sensitive).",
         "    pub id: &'static str,",
+        "    /// Selected Perl tagInfo Name after AddFlattenedTags.",
+        "    pub name: &'static str,",
+        "    pub lang_alt: bool,",
         "    /// Effective FoundTag priority of a direct hit: `Priority`, else the",
         "    /// table `PRIORITY`, else 0 for `Avoid`, else 1.",
         "    pub priority: i8,",
@@ -191,7 +196,7 @@ def render(capture: dict) -> str:
                      f'priority: {_opt_i8(fact["table_priority"])}, avoid: {_opt_bool(fact["table_avoid"])}, tags: &[')
         for tag_id in sorted(fact["tags"]):
             tag = fact["tags"][tag_id]
-            lines.append(f'        XmpTagFact {{ id: "{tag_id}", priority: {tag["priority"]}, '
+            lines.append(f'        XmpTagFact {{ id: "{tag_id}", name: "{tag["name"]}", lang_alt: {str(tag["lang_alt"]).lower()}, priority: {tag["priority"]}, '
                          f'own_priority: {_opt_i8(tag["own_priority"])}, avoid: {_opt_bool(tag["avoid"])}, '
                          f'structure: {STRUCT_KINDS[tag["struct"]]} }},')
         lines.append("    ] },")
@@ -205,7 +210,7 @@ def render(capture: dict) -> str:
                      f'priority: {_opt_i8(fact["table_priority"])}, avoid: {_opt_bool(fact["table_avoid"])}, tags: &[')
         for tag_id in sorted(fact["tags"]):
             tag = fact["tags"][tag_id]
-            lines.append(f'        XmpTagFact {{ id: "{tag_id}", priority: {tag["priority"]}, '
+            lines.append(f'        XmpTagFact {{ id: "{tag_id}", name: "{tag["name"]}", lang_alt: {str(tag["lang_alt"]).lower()}, priority: {tag["priority"]}, '
                          f'own_priority: {_opt_i8(tag["own_priority"])}, avoid: {_opt_bool(tag["avoid"])}, '
                          f'structure: {STRUCT_KINDS[tag["struct"]]} }},')
         lines.append("    ] },")
