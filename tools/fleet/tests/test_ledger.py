@@ -36,6 +36,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -86,7 +87,8 @@ def _ensure_binary_built(timeout: int = 420) -> Path:
     clone doesn't have one yet. Not a fixture -- the ledger's subject is
     this repo's own binary, so there is nothing to fake here.
     """
-    candidate = REPO_ROOT / "target" / "release" / "oxidex"
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or "target")
+    candidate = REPO_ROOT / target_dir / "release" / "oxidex"
     if candidate.is_file():
         return candidate
     result = subprocess.run(
@@ -248,6 +250,25 @@ class TestFindSampleForFormat(HermeticCase):
 
 
 class TestResolveOxidexBinary(HermeticCase):
+    def test_explicit_target_dir_reuses_the_binary_cargo_wrote(self):
+        # A successful Cargo build in CARGO_TARGET_DIR must not be graded as
+        # missing merely because this checkout's default target/ is empty.
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            for target_value, target_root in (
+                (str(Path(td) / "external-target"), Path(td) / "external-target"),
+                ("relative-target", repo / "relative-target"),
+            ):
+                with self.subTest(target_value=target_value):
+                    binary = target_root / "release" / "oxidex"
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.touch()
+                    with patch.dict(os.environ, {"CARGO_TARGET_DIR": target_value}), \
+                         patch(__name__ + ".REPO_ROOT", repo), \
+                         patch("subprocess.run", side_effect=AssertionError("unexpected rebuild")):
+                        self.assertEqual(_ensure_binary_built(), binary)
+
     def test_missing_binary_raises_ledger_error(self):
         with tempfile.TemporaryDirectory() as td:
             empty_repo = Path(td)
@@ -267,9 +288,14 @@ class TestResolveOxidexBinary(HermeticCase):
     @unittest.skipUnless(_not_hermetic(), f"{HERMETIC_ENV}=1: skips the real release-binary build/resolve")
     def test_resolves_real_release_binary(self):
         binary = _ensure_binary_built()
-        resolution = ledger.resolve_oxidex_binary(REPO_ROOT)
+        if os.environ.get("CARGO_TARGET_DIR"):
+            resolution = ledger.resolve_oxidex_binary(REPO_ROOT, override=str(binary))
+            expected_candidate = str(binary)
+        else:
+            resolution = ledger.resolve_oxidex_binary(REPO_ROOT)
+            expected_candidate = "target/release/oxidex"
         self.assertEqual(resolution.path, binary.resolve())
-        self.assertEqual(resolution.candidate, "target/release/oxidex")
+        self.assertEqual(resolution.candidate, expected_candidate)
 
 
 class TestGrepDispatchEvidenceIsNeverAuthoritativeAlone(HermeticCase):
