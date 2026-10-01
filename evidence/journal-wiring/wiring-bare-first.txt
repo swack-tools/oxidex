@@ -1,0 +1,47 @@
+test_default_journal_stays_inside_fixture_home (test_runner_core.TestJournalWiring.test_default_journal_stays_inside_fixture_home) ... ok
+test_failed_journal_offer_never_acquires_or_spawns (test_runner_core.TestJournalWiring.test_failed_journal_offer_never_acquires_or_spawns) ... ok
+test_failed_spawn_record_kills_group_and_releases_claim (test_runner_core.TestJournalWiring.test_failed_spawn_record_kills_group_and_releases_claim) ... ok
+test_gate_records_offer_claim_spawn_and_exit (test_runner_core.TestJournalWiring.test_gate_records_offer_claim_spawn_and_exit) ... ok
+test_offline_daemon_adopts_only_the_open_verified_run (test_runner_core.TestJournalWiring.test_offline_daemon_adopts_only_the_open_verified_run) ... keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=['gate-staging-one'] refused=0 SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmph75xqe69/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+FAIL
+test_offline_dead_run_replays_owed_release_after_store_answers (test_runner_core.TestJournalWiring.test_offline_dead_run_replays_owed_release_after_store_answers) ... keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=['gate-staging-one'] refused=0 SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpcr__509z/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] OWED RELEASE refs/fleet/claims/gate/staging-one: released
+keel-runner[testhost] STORE BACK: starts can be CAS arbitrated again
+keel-runner[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+ok
+test_open_run_refuses_a_second_offer_without_erasing_first (test_runner_core.TestJournalWiring.test_open_run_refuses_a_second_offer_without_erasing_first) ... ok
+
+======================================================================
+FAIL: test_offline_daemon_adopts_only_the_open_verified_run (test_runner_core.TestJournalWiring.test_offline_daemon_adopts_only_the_open_verified_run)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allen/oxidex-ops/worktrees/keel-journal-wiring-recovery/tools/fleet/tests/test_runner_core.py", line 215, in test_offline_daemon_adopts_only_the_open_verified_run
+    rc = runner.run_daemon(self.hub, self.host, gate_command=[str(self.stub)],
+                           log_dir=self.log_dir, repo_root=REPO_ROOT,
+                           once=True, reconcile=scripted)
+  File "/Users/allen/oxidex-ops/worktrees/keel-journal-wiring-recovery/tools/fleet/keel/runner.py", line 2357, in run_daemon
+    res = reconcile(hub, host, workers, gate_command, log_dir,
+                    repo_root, warnings=host_warnings,
+                    spawn_allowed=spawn_allowed, journal=jn)
+  File "/Users/allen/oxidex-ops/worktrees/keel-journal-wiring-recovery/tools/fleet/tests/test_runner_core.py", line 209, in scripted
+    self.assertEqual([item.pgid for item in workers], [w.pgid])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != [3560]
+
+Second list contains 1 additional elements.
+First extra element 0:
+3560
+
+- []
++ [3560]
+
+----------------------------------------------------------------------
+Ran 7 tests in 14.110s
+
+FAILED (failures=1)

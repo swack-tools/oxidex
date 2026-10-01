@@ -45,6 +45,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -54,6 +55,7 @@ from _fixtures import make_hub  # noqa: E402
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
 import keel.runner as runner  # noqa: E402
+from keel import journal as journal_mod  # noqa: E402
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 from keel.fallbackhub import FallbackHub  # noqa: E402
 from keel.serverhub import ServerHub  # noqa: E402
@@ -104,6 +106,7 @@ class RunnerFixture(HermeticCase):
     def setUp(self):
         super().setUp()
         self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         self.tmp = Path(self.tmpdir.name)
         self.bare, self.seed = make_fixture_hub(self.tmp)
         self.hub = make_hub(self, str(self.bare), workdir=self.tmp / "hubcache")
@@ -131,7 +134,10 @@ class RunnerFixture(HermeticCase):
                     w.popen.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     pass
-        self.tmpdir.cleanup()
+            try:
+                w.claim.release()
+            except HubError:
+                pass
 
     def set_desired(self, gates: int, enabled: bool = True):
         doc = {
@@ -144,6 +150,261 @@ class RunnerFixture(HermeticCase):
             self.assertTrue(self.hub.create(fleetd.DESIRED_REF, doc))
         else:
             self.assertTrue(self.hub.update(fleetd.DESIRED_REF, doc, cur))
+
+
+class TestJournalWiring(RunnerFixture):
+    def test_open_run_refuses_a_second_offer_without_erasing_first(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        w = runner.start_gate(self.hub, "staging/one", "first", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        before = j.read_job(w.job_key)
+        with self.assertRaisesRegex(journal_mod.JournalError, "previous journal run"):
+            runner.start_gate(self.hub, "staging/one", "second", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.assertEqual(j.read_job(w.job_key), before)
+        self.assertIsNotNone(self.hub.sha(w.claim.ref))
+
+    def test_torn_first_record_refuses_new_offer(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        path = j.path_for("gate-staging-one")
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b'{"v":2,"event":"offer"')
+        with self.assertRaisesRegex(journal_mod.JournalError, "torn journal"):
+            runner.start_gate(self.hub, "staging/one", "blocked", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
+        self.assertEqual(path.read_bytes(), b'{"v":2,"event":"offer"')
+
+    def test_default_journal_stays_inside_fixture_home(self):
+        j = journal_mod.Journal()
+        self.assertEqual(j.root, Path(os.environ["KEEL_HOME"]) / "journal")
+        self.assertEqual(scrub_env()["KEEL_HOME"], os.environ["KEEL_HOME"])
+
+    def test_gate_records_offer_claim_spawn_and_exit(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        w = runner.start_gate(self.hub, "staging/one", "journal-gate", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.assertIsNotNone(w)
+        self.workers.append(w)
+        self.assertEqual(w.job_key, "gate-staging-one")
+        state = j.read_job(w.job_key)
+        self.assertEqual(state.events, ("offer", "claim", "spawn"))
+        self.assertEqual(state.pgid, w.pgid)
+        self.assertEqual(state.started_at, self.hub.read(w.claim.ref)["started_at"])
+        (self.tmp / f"stop-{w.tag}").write_text("")
+        w.popen.wait(timeout=10)
+        self.set_desired(gates=0)
+        workers = [w]
+        fleetd.reconcile_once(self.hub, self.host, workers, [str(self.stub)],
+                              self.log_dir, REPO_ROOT, disk_probe=lambda: 100,
+                              mem_probe=lambda: 100, journal=j)
+        self.assertEqual(workers, [])
+        self.assertTrue(j.read_job(w.job_key).closed)
+
+    def test_failed_journal_offer_never_acquires_or_spawns(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        with mock.patch.object(j, "offer", side_effect=journal_mod.JournalWriteError("full")):
+            with self.assertRaises(journal_mod.JournalWriteError):
+                runner.start_gate(self.hub, "staging/one", "failed-offer", [str(self.stub)],
+                                  self.host, self.log_dir, journal=j)
+        self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
+
+    def test_offline_daemon_adopts_only_the_open_verified_run(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "first", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        w.claim.stop_renewer(timeout=2)
+        captured = []
+
+        def scripted(_hub, _host, workers, *_args, **kw):
+            captured.extend(workers)
+            self.assertFalse(kw["spawn_allowed"])
+            self.assertEqual([item.pgid for item in workers], [w.pgid])
+            self.assertEqual(workers[0].job_key, w.job_key)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(fleetd, "adopt_workers",
+                               side_effect=HubUnreachableError("offline")):
+            rc = runner.run_daemon(self.hub, self.host, gate_command=[str(self.stub)],
+                                   log_dir=self.log_dir, repo_root=REPO_ROOT,
+                                   once=True, reconcile=scripted)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(captured), 1)
+        captured[0].claim.stop_renewer(timeout=2)
+        self.assertTrue(j.read_job(w.job_key).open)
+
+    def test_offline_dead_run_replays_owed_release_after_store_answers(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "dead", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        w.claim.stop_renewer(timeout=2)
+        os.killpg(w.pgid, signal_mod.SIGKILL)
+        w.popen.wait(timeout=10)
+        self.assertIsNotNone(self.hub.sha(w.claim.ref))
+
+        def scripted(_hub, _host, workers, *_args, **kw):
+            self.assertEqual(workers, [])
+            self.assertFalse(kw["spawn_allowed"])
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(fleetd, "adopt_workers",
+                               side_effect=HubUnreachableError("offline")):
+            rc = runner.run_daemon(self.hub, self.host, gate_command=[str(self.stub)],
+                                   log_dir=self.log_dir, repo_root=REPO_ROOT,
+                                   once=True, reconcile=scripted)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(self.hub.sha(w.claim.ref))
+        self.assertTrue(j.read_job(w.job_key).closed)
+
+    def test_old_journal_token_cannot_release_same_hosts_new_claim(self):
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        os.killpg(w.pgid, signal_mod.SIGKILL)
+        w.popen.wait(timeout=10)
+        old_token = j.read_job(w.job_key).started_at
+        w.claim.release()
+        replacement = claim_mod.Claim(self.hub, kind="gate", key="staging-one",
+                                      work_kind="gate", work_key="staging/one",
+                                      holder_host=self.host)
+        replacement.acquire()
+        try:
+            self.assertNotEqual(self.hub.read(replacement.ref)["started_at"], old_token)
+
+            def scripted(_hub, _host, workers, *_args, **kw):
+                self.assertFalse(kw["spawn_allowed"])
+                self.assertEqual(workers, [])
+                return fleetd.ReconcileResult()
+
+            with mock.patch.object(fleetd, "adopt_workers",
+                                   side_effect=HubUnreachableError("offline")):
+                self.assertEqual(runner.run_daemon(
+                    self.hub, self.host, gate_command=[str(self.stub)], log_dir=self.log_dir,
+                    repo_root=REPO_ROOT, once=True, reconcile=scripted), 0)
+            self.assertIsNotNone(self.hub.sha(replacement.ref))
+            self.assertEqual(self.hub.read(replacement.ref)["started_at"],
+                             claim_mod._iso(replacement._started_at))
+        finally:
+            replacement.release()
+
+    def test_unavailable_process_listing_cannot_turn_open_run_into_release(self):
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "live", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        w.claim.stop_renewer(timeout=2)
+
+        def scripted(_hub, _host, workers, *_args, **kw):
+            self.assertFalse(kw["spawn_allowed"])
+            self.assertEqual(workers, [])
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(fleetd, "adopt_workers",
+                               side_effect=HubUnreachableError("offline")), \
+             mock.patch.object(fleetd, "live_pgids",
+                               side_effect=runner.ProcessListingUnavailable("ps failed")):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)], log_dir=self.log_dir,
+                repo_root=REPO_ROOT, once=True, reconcile=scripted), 0)
+        self.assertIsNotNone(self.hub.sha(w.claim.ref))
+        self.assertTrue(j.read_job(w.job_key).open)
+        self.assertIsNone(w.popen.poll())
+
+    def test_store_return_rebuilds_workers_before_reenabling_starts(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "live", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        w.claim.stop_renewer(timeout=2)
+        real_adopt = fleetd.adopt_workers
+        calls = []
+        refreshed = []
+
+        def adopt(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise HubUnreachableError("initial listing down")
+            result = real_adopt(*args, **kwargs)
+            refreshed.extend(args[2])
+            return result
+
+        def scripted(_hub, _host, workers, *_args, **kw):
+            self.assertEqual(workers, [])
+            self.assertFalse(kw["spawn_allowed"])
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(fleetd, "adopt_workers", side_effect=adopt), \
+             mock.patch.object(fleetd, "live_pgids",
+                               side_effect=runner.ProcessListingUnavailable("initial ps down")):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)], log_dir=self.log_dir,
+                repo_root=REPO_ROOT, once=True, reconcile=scripted), 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([item.pgid for item in refreshed], [w.pgid])
+        refreshed[0].claim.stop_renewer(timeout=2)
+        self.assertTrue(j.read_job(w.job_key).open)
+
+    def test_hub_startup_closes_a_run_after_releasing_its_dead_claim(self):
+        j = journal_mod.Journal()
+        w = runner.start_gate(self.hub, "staging/one", "dead", [str(self.stub)],
+                              self.host, self.log_dir, journal=j)
+        self.workers.append(w)
+        w.claim.stop_renewer(timeout=2)
+        os.killpg(w.pgid, signal_mod.SIGKILL)
+        w.popen.wait(timeout=10)
+
+        def scripted(_hub, _host, workers, *_args, **kw):
+            self.assertTrue(kw["spawn_allowed"])
+            self.assertEqual(workers, [])
+            return fleetd.ReconcileResult()
+
+        self.assertEqual(runner.run_daemon(
+            self.hub, self.host, gate_command=[str(self.stub)], log_dir=self.log_dir,
+            repo_root=REPO_ROOT, once=True, reconcile=scripted), 0)
+        self.assertIsNone(self.hub.sha(w.claim.ref))
+        self.assertTrue(j.read_job(w.job_key).closed)
+
+    def test_foreign_cas_claim_refuses_and_closes_only_this_offer(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        foreign = claim_mod.Claim(self.hub, kind="gate", key="staging-one",
+                                  work_kind="gate", work_key="staging/one",
+                                  holder_host="another-host")
+        foreign.acquire()
+        self.addCleanup(foreign.release)
+        self.assertIsNone(runner.start_gate(
+            self.hub, "staging/one", "refused", [str(self.stub)],
+            self.host, self.log_dir, journal=j))
+        state = j.read_job("gate-staging-one")
+        self.assertEqual(state.events, ("offer", "exit"))
+        self.assertTrue(state.closed)
+        self.assertEqual(self.hub.read(foreign.ref)["holder_host"], "another-host")
+
+    def test_failed_spawn_record_kills_group_and_releases_claim(self):
+        j = journal_mod.Journal(self.tmp / "journal")
+        spawned = []
+        real_spawn = subprocess.Popen
+
+        def record_spawn(*args, **kwargs):
+            p = real_spawn(*args, **kwargs)
+            if args and args[0] and args[0][0] == str(self.stub):
+                spawned.append(p)
+            return p
+
+        with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
+             mock.patch.object(runner.subprocess, "Popen", side_effect=record_spawn):
+            with self.assertRaises(journal_mod.JournalWriteError):
+                runner.start_gate(self.hub, "staging/one", "failed-spawn", [str(self.stub)],
+                                  self.host, self.log_dir, journal=j)
+        self.assertEqual(len(spawned), 1)
+        spawned[0].wait(timeout=10)
+        self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
 
 
 # --------------------------------------------------------------------- #

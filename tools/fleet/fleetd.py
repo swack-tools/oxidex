@@ -163,6 +163,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     write_heartbeat,
 )
 import keel.runner as keel_runner  # noqa: E402
+from keel import journal as journal_mod  # noqa: E402
 from keel.fallbackhub import FallbackHub  # noqa: E402
 
 # --------------------------------------------------------------------- #
@@ -584,6 +585,7 @@ def dispatch_agents(
     log_dir: Path,
     repo_root: Path,
     res: "ReconcileResult",
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> None:
     """Fill up to `slots` agent slots, buying nothing that cannot pay off
     (ARCH-FIX-SPEC.md R5). Appends started workers to `workers` in place.
@@ -697,8 +699,9 @@ def dispatch_agents(
         w = None
         spawn_failed = False
         try:
-            w = start_agent(hub, branch, tag, host, log_dir, repo_root)
-        except OSError as e:
+            w = start_agent(hub, branch, tag, host, log_dir, repo_root,
+                            journal=journal)
+        except (OSError, journal_mod.JournalError) as e:
             spawn_failed = True
             res.refused.append(("agent-spawn-failed", f"{branch}: {e}"))
         if w is None:
@@ -744,6 +747,18 @@ _AGENT_RC_OUTCOMES = {
 }
 
 
+def _journal_close(journal: "journal_mod.Journal", worker: Worker, *,
+                   rc: Optional[int], outcome: str, host: str) -> None:
+    """Close a completed local run without interrupting the reap on I/O failure."""
+    if not getattr(worker, "job_key", None):
+        return
+    try:
+        journal.exit(job_key=worker.job_key, rc=rc, outcome=outcome)
+    except journal_mod.JournalError as exc:
+        print(f"fleetd[{host}] journal exit failed for {worker.tag}: {exc}; "
+              "the run remains open on disk", file=sys.stderr, flush=True)
+
+
 def reconcile_once(
     hub: Hub,
     host: str,
@@ -755,6 +770,8 @@ def reconcile_once(
     mem_probe: Callable[[], float] = free_mem_gb,
     pgid_probe: Callable[[], set] = live_pgids,
     warnings: Optional["HostWarnings"] = None,
+    spawn_allowed: bool = True,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> ReconcileResult:
     """One reconcile step. Mutates `workers` in place (removing finished
     and killed ones) and returns what changed. Over-target and disabled
@@ -796,6 +813,7 @@ def reconcile_once(
     survives the raise.
     """
     res = ReconcileResult()
+    jn = journal if journal is not None else journal_mod.Journal()
 
     # ---- (1) LOCAL FIRST. No hub call precedes this loop. ------------ #
     # Reap finished/dead workers, and kill any worker whose lease is lost.
@@ -825,6 +843,7 @@ def reconcile_once(
                       f"{w.tag} (expires on TTL): {e}", file=sys.stderr, flush=True)
             workers.remove(w)
             res.finished.append(w.tag)
+            reaped_rc = w.popen.returncode if w.popen is not None else None
             if w.kind == "gate":
                 # R4: gate.sh's `store_verdict()` swallows a hub-push
                 # failure so its own PASS/FAIL is never wrong because the
@@ -859,7 +878,10 @@ def reconcile_once(
                                else "converged")
                 else:
                     outcome = _AGENT_RC_OUTCOMES.get(rc, f"exit-{rc}")
+                _journal_close(jn, w, rc=reaped_rc, outcome=outcome, host=host)
                 _record_outcome(hub, w.branch, host, outcome)
+            else:
+                _journal_close(jn, w, rc=reaped_rc, outcome="finished", host=host)
             continue
 
         if w.claim.lost:
@@ -895,6 +917,7 @@ def reconcile_once(
             outcome = kill_worker(w)
             workers.remove(w)
             res.killed.append((w.tag, reason))
+            _journal_close(jn, w, rc=None, outcome="killed-lost-lease", host=host)
             print(
                 f"fleetd[{host}] LOST LEASE {w.claim.ref} kind={w.kind} "
                 f"branch={w.branch} tag={w.tag} pgid={w.pgid}: {reason} "
@@ -962,6 +985,9 @@ def reconcile_once(
 
     running = len([w for w in workers if w.kind == "gate"])
 
+    if not spawn_allowed:
+        res.refused.append(("offline-no-spawn", "store unavailable at startup; "
+                            "waiting for a successful store read before new work"))
     if not desired_readable:
         pass  # already recorded as hub-unreadable; nothing to start
     elif unknown_host:
@@ -979,7 +1005,7 @@ def reconcile_once(
         if running == 0:
             pass  # fully drained
         res.refused.append(("disabled", my_desired.get("reason") or ""))
-    else:
+    elif spawn_allowed:
         deficit = want_gates - running
         if deficit > 0 and pgids is not None:
             reason = _limits_ok(limits, disk_probe(), mem_probe())
@@ -1065,8 +1091,9 @@ def reconcile_once(
                         branch = _branch(q[slug])
                         tag = f"{host}-{slug}-{int(time.time()) % 100000}"
                         try:
-                            w = start_gate(hub, branch, tag, gate_command, host, log_dir)
-                        except OSError as e:
+                            w = start_gate(hub, branch, tag, gate_command, host, log_dir,
+                                           journal=jn)
+                        except (OSError, journal_mod.JournalError) as e:
                             res.refused.append(("spawn-failed", f"{branch}: {e}"))
                             continue
                         if w is None:
@@ -1087,7 +1114,7 @@ def reconcile_once(
         # host that is idle entirely by desired-state design. `target-zero`
         # names that design choice so it reads as intentional, not broken.
         res.refused.append(("target-zero", f"gates {want_gates} / agents {want_agents}"))
-    if enabled and slots > 0 and pgids is not None:
+    if enabled and slots > 0 and pgids is not None and spawn_allowed:
         try:
             import agentworker as _aw
             has_cli = bool(_aw.available_clis())
@@ -1096,7 +1123,8 @@ def reconcile_once(
         if not has_cli:
             res.refused.append(("no-agent-cli", "neither claude nor codex on this host"))
         else:
-            dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res)
+            dispatch_agents(hub, host, workers, slots, log_dir, repo_root, res,
+                            journal=jn)
 
     # T3: durable warnings, swept from the log directory rather than from
     # `workers` -- see `HostWarnings`. A caller that passes no store gets a

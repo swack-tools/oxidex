@@ -27,6 +27,7 @@ import cli
 import claim as claim_mod
 import fleetd
 from keel import runner as runner_mod
+from keel import journal as journal_mod
 from fleetlib import Hub
 
 HUB_TIP_REF = "refs/heads/refactor/tag-machinery"
@@ -271,7 +272,7 @@ class TestProcessListingFailure(FleetdBase):
             if adopted not in self.workers:
                 self.workers.append(adopted)
 
-    def test_negative_control_empty_listing_reaps_live_gate_and_duplicates(self):
+    def test_negative_control_empty_listing_reaps_but_journal_blocks_duplicate(self):
         adopted = self.make_adopted_gate()
         try:
             result = fleetd.reconcile_once(
@@ -281,8 +282,10 @@ class TestProcessListingFailure(FleetdBase):
                 pgid_probe=lambda: set(), warnings=self.host_warnings)
             self.assertIn(adopted.tag, result.finished)
             self.assertTrue(adopted.alive(), "the reaped gate is still running")
-            self.assertEqual(len(result.started), 1, "the old answer frees a slot")
-            self.assertTrue(any(w.branch == adopted.branch for w in self.workers))
+            self.assertEqual(result.started, [], "the open journal blocks a duplicate")
+            self.assertTrue(any(reason == "spawn-failed" for reason, _ in result.refused))
+            self.assertIsNone(self.hub.sha(adopted.claim.ref),
+                              "the false listing still caused the bad release")
         finally:
             if adopted not in self.workers:
                 self.workers.append(adopted)
@@ -329,7 +332,7 @@ class TestProcessListingFailure(FleetdBase):
                 pgid_probe=lambda: (_ for _ in ()).throw(
                     runner_mod.ProcessListingUnavailable("ps timeout")), **kwargs)
 
-        with mock.patch.object(runner_mod, "adopt_workers", side_effect=adopt), \
+        with mock.patch.object(fleetd, "adopt_workers", side_effect=adopt), \
              mock.patch.object(runner_mod, "check_toolchain_agreement",
                                return_value=(True, "")):
             rc = runner_mod.run_daemon(
@@ -1184,11 +1187,16 @@ class TestAgentSlots(FleetdBase):
             res = self.reconcile()
             self.assertEqual(len(res.started), 1, f"agent should start: {res.refused}")
             self.assertEqual(self.workers[0].kind, "agent")
+            job_key = self.workers[0].job_key
+            self.assertEqual(job_key, "agent-staging-one")
+            self.assertEqual(journal_mod.Journal().read_job(job_key).events,
+                             ("offer", "claim", "spawn"))
             self.assertEqual(len(self.hub.list("refs/fleet/claims/agent/")), 1)
             # worker exits (stub pushes nothing -> exit 7); next reconcile reaps
             self.workers[0].popen.wait(timeout=WAIT_BUDGET_S)
             res2 = self.reconcile()
             self.assertEqual(len(res2.finished), 1)
+            self.assertTrue(journal_mod.Journal().read_job(job_key).closed)
             # cooldown: the no-progress branch is NOT respawned this loop
             # (each spawn is a paid CLI run), so its claim stays released
             self.assertEqual(res2.started, [])

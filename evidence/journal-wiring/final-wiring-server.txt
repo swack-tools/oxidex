@@ -1,0 +1,50 @@
+.....fleetd[testhost] RELEASED orphaned claim refs/fleet/claims/gate/staging-one: process group 2921 is gone
+keel-runner[testhost] adoption: mode=store adopted=[] released=['refs/fleet/claims/gate/staging-one'] orphans_killed=[] skipped=0
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp28632yit/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=4b8ceb51cb3b42e1b1d98b61f30750bc settle_until=None lease_expires_at=None live_workers=0
+.keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] adoption: mode=journal journal-adopted=['gate-staging-one#3333'] to_release=[] refused=0 SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpppbw8eci/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] gates=1 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=ce9218d4db4e4733a8072d28dff6647a settle_until=None lease_expires_at=None live_workers=1
+.keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=['gate-staging-one'] refused=0 SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmp4e564kmg/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] OWED RELEASE refs/fleet/claims/gate/staging-one: released
+keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=8a80318a3ec142d784d8cac1ec3f65cb settle_until=None lease_expires_at=None live_workers=0
+.keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=['gate-staging-one'] refused=0 SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmppqkkp_3s/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] OWED RELEASE refs/fleet/claims/gate/staging-one: re-acquired at '2026-10-01T13:55:24.630995+00:00' (ours was '2026-10-01T13:55:23.840402+00:00'); left alone
+keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=f0d9d2a0689f4e9694d054ba0cb705d0 settle_until=None lease_expires_at=None live_workers=0
+..keel-runner[testhost] store unreachable at startup (initial listing down); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] process listing unavailable (initial ps down); adopting nothing and releasing nothing
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=[] refused=0 UNREADABLE(process listing unavailable (initial ps down); adopting nothing and releasing nothing) SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpm_7b1pso/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] STORE BACK: authoritative adoption completed; starts can be CAS arbitrated again
+keel-runner[testhost] gates=1 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=57276bb6b69c4e018be65c98f905ca62 settle_until=None lease_expires_at=None live_workers=1
+..keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] process listing unavailable (ps failed); adopting nothing and releasing nothing
+keel-runner[testhost] adoption: mode=journal journal-adopted=[] to_release=[] refused=0 UNREADABLE(process listing unavailable (ps failed); adopting nothing and releasing nothing) SWEEP-SKIPPED(journal adoption never sweeps)
+keel-runner[testhost] OFFLINE START: adopting only identity-verified journaled work; starts disabled until the store answers
+keel-runner[testhost] TOOLCHAIN: could not compute the gate's platform_id to compare against this scheduler's 04e302d2f88f...: gate toolchain resolver not found at /var/folders/gx/2s9j3tj918q0m2j3ns56pz7h0000gn/T/tmpct4iabxu/units/fleet-toolchain.sh. Until this is resolved, nothing proves the runner and gate.sh address the same verdict-cache slot
+keel-runner[testhost] store unreachable at startup (offline); adopting from the local job journal instead of refusing to start
+keel-runner[testhost] process listing unavailable (ps failed); adopting nothing and releasing nothing
+keel-runner[testhost] gates=0 started=[] finished=[] killed=[] refused=[] hb=False
+keel-runner[testhost] REGISTERED (first) boot_id=6fa88bad9ff54a108165e254b4cbca38 settle_until=None lease_expires_at=None live_workers=0
+..
+----------------------------------------------------------------------
+Ran 14 tests in 37.275s
+
+OK

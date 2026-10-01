@@ -109,6 +109,7 @@ for _p in (_FLEET_DIR, _KEEL_DIR):
         sys.path.insert(0, str(_p))
 
 import claim as claim_mod  # noqa: E402
+from keel import journal as journal_mod  # noqa: E402
 import config  # noqa: E402
 import toolchain  # noqa: E402  -- L1: the ONE rustc resolver + id formula
 from claim import Claim  # noqa: E402
@@ -326,6 +327,7 @@ class Worker:
     claim: Claim
     popen: Optional[subprocess.Popen] = None
     kind: str = "gate"
+    job_key: Optional[str] = None
 
     def alive(self, pgids: Optional[set] = None) -> bool:
         # For workers we spawned, poll() is the truth AND reaps the child:
@@ -802,6 +804,124 @@ def _spawn_env(hub: Hub) -> dict:
     return env
 
 
+def journal_job_key(kind: str, claim_key: str) -> str:
+    """The journal's identity for one job: `<kind>-<claim key>`.
+
+    NOT the bare claim key, which is what `journal.file_stem`'s docstring
+    assumes ("claim keys are already filesystem-shaped"). The claim key
+    alone is NOT injective across kinds: `start_gate` builds it as
+    `branch.replace("/", "-")` and `start_agent` as
+    `branch.replace("/", "-").replace(":", "-")`, so a gate and an agent
+    on `staging/one` produce the same key `staging-one` under two
+    DIFFERENT claim refs (`refs/fleet/claims/gate/staging-one` and
+    `.../agent/staging-one`). One journal file per job is the module's
+    whole file layout, and folding two live jobs' records into one file
+    would hand adoption a single JobState carrying the second job's pgid
+    against the first job's claim ref -- an adoption that renews the
+    wrong lease.
+
+    The prefix keeps the two namespaces disjoint by construction: no
+    `gate-...` string is ever an `agent-...` string, whatever the branch
+    is called.
+
+    IT IDENTIFIES A BRANCH, NOT A RUN, and it stays that way on purpose:
+    `fleetd.adopt_workers` DERIVES this same key for a hub-adopted worker
+    from (kind, claim key) alone -- it has neither the tag nor, at
+    `offer` time, a `started_at` -- so folding either into the key would
+    make the two derivations disagree and a hub-adopted worker would
+    close a file its predecessor never opened. One file therefore
+    accumulates every run this host makes on a branch, and it is
+    `journal._runs`/`_fold` that separate them: the fold takes the
+    trailing run only, so a completed run's `exit` neither closes the
+    file for ever nor lends its `rc`/`outcome`/`started_at` to the live
+    run that follows it.
+    """
+    return f"{kind}-{claim_key}"
+
+
+def _close_failed_offer(jn, job_key: str, outcome: str) -> None:
+    """Close an `offer` whose acquire did not complete, without raising.
+
+    `start_gate`/`start_agent` write the `offer` BEFORE the CAS, and used
+    to catch only `ClaimHeldError`. Any other failure out of
+    `acquire_or_reap` -- `HubUnreachableError`, an ambiguous write --
+    propagates through `reconcile_once` (which catches `OSError` and
+    `JournalError` only) and left the job OPEN with a `claim_ref` and no
+    `claim` record: an owed release forever, re-read by every later
+    startup pass. `release_pending` now REFUSES such an entry (it has no
+    ownership token to prove with), so this is hygiene rather than
+    safety -- but a job that can never be acted on must not stay in
+    `open_jobs`, or `prune` never collects the file.
+
+    Swallows `JournalError` deliberately: the caller is already on its
+    way out with a real failure, and replacing that exception with a
+    journal one would hide the reason the start failed.
+    """
+    try:
+        jn.exit(job_key=job_key, outcome=outcome)
+    except journal_mod.JournalError:
+        pass
+
+
+def journal_claim_record(jn, job_key: str, c: Claim, *, kind: str,
+                         work_key: str) -> None:
+    """The `claim` record for a lease just acquired, written from the
+    Claim object's OWN state -- never re-derived.
+
+    `c.handle()` is the public accessor for the ownership token, and it
+    formats `started_at`/`expires_at` through `claim._iso`, which is the
+    exact spelling `claim._owns` compares as literal text and the exact
+    one `journal.rebuild_claim` re-checks for round-tripping. Re-deriving
+    the timestamp here with a second formatter -- `keel/cli.py`'s
+    `strftime("%Y-%m-%dT%H:%M:%SZ")`, say -- would produce a claim record
+    a rebuilt claim cannot recognize as its own.
+
+    `_resolved_rustc_id()`/`_resolved_platform_id()` are MEMO HITS at this
+    point, not measurements: `acquire_or_reap` has already built the
+    payload once, which resolves both. They are recorded because
+    `rebuild_claim` restores them into the rebuilt claim rather than
+    re-measuring them under the runner's PATH instead of the gate's
+    (invariant I15).
+    """
+    h = c.handle()
+    if h is None:  # pragma: no cover -- acquire_or_reap succeeded above
+        raise journal_mod.JournalWriteError(
+            f"{job_key}: the claim reports no ownership token after acquire")
+    jn.claim(job_key=job_key, claim_ref=h.ref, claim_sha=h.sha,
+             holder_host=c.holder_host, started_at=h.started_at,
+             expires_at=h.expires_at, kind=kind, work_key=work_key,
+             gate_version=c.gate_version,
+             rustc_id=c._resolved_rustc_id(),
+             platform_id=c._resolved_platform_id())
+
+
+def _check_journal_slot(jn, job_key: str) -> None:
+    """A new offer must not close or overwrite an unfinished run's evidence."""
+    previous = jn.read_job(job_key)
+    if previous is not None and (previous.open or previous.torn):
+        raise journal_mod.JournalError(
+            f"{job_key}: previous journal run is open or torn; refusing new offer")
+
+
+def _close_hub_released_runs(jn, adoption, host: str, label: str) -> None:
+    """Retire local runs whose claims the authoritative hub pass released."""
+    if adoption.mode != "store" or not adoption.scan.sweep_armed:
+        return
+    released = dict(adoption.hub_result.released)
+    for job in adoption.scan.open_jobs:
+        if job.claim_ref not in released or job.holder_host != host:
+            continue
+        reason = released[job.claim_ref]
+        if not (reason == f"process group {job.pgid} is gone" or
+                (not job.spawned and reason.startswith("no adoptable process group"))):
+            continue
+        try:
+            jn.exit(job_key=job.job_key, outcome="hub-released-at-startup")
+        except journal_mod.JournalError as exc:
+            print(f"{label}[{host}] journal exit failed for {job.job_key}: {exc}",
+                  file=sys.stderr, flush=True)
+
+
 def start_gate(
     hub: Hub,
     branch: str,
@@ -809,6 +929,7 @@ def start_gate(
     gate_command: list,
     host: str,
     log_dir: Path,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> Optional[Worker]:
     """Claim the branch, then launch the gate in its OWN process group
     (os.setsid via start_new_session -- portable to macOS, which has no
@@ -827,15 +948,71 @@ def start_gate(
     # matched nothing.
     c = Claim(hub, kind="gate", key=branch.replace("/", "-"), work_kind="gate",
               work_key=branch, holder_host=host)
+    # Keel 3R-2 step 5 -- WRITE BEFORE SPAWN (SPEC SS5.3). The order is
+    # offer -> acquire_or_reap -> claim -> Popen -> spawn, and every one
+    # of those arrows is load-bearing:
+    #
+    #   * `offer` precedes the CAS because the runner can die between
+    #     taking the lease and recording it, and a lease with no local
+    #     record is a claim nothing will ever release offline.
+    #   * `spawn` follows `Popen` immediately and precedes the post-spawn
+    #     `renew` that persists the real pgid into the payload, so the
+    #     window in which a process exists that nothing has written down
+    #     is one `write()+fsync` wide.
+    #
+    # A `JournalWriteError` is therefore FATAL to this start and is not
+    # caught here: `JournalWriteError`'s own docstring states the rule --
+    # "THE CALLER MUST NOT SPAWN" -- because a process this runner cannot
+    # journal is a process it can never adopt, which after a restart is a
+    # live group with no local record and no pgid in the payload yet, the
+    # exact shape the orphan sweep kills. `reconcile_once` turns the raise
+    # into a `spawn-failed` refusal for this branch and keeps gating.
+    jn = journal if journal is not None else journal_mod.Journal()
+    job_key = journal_job_key("gate", c.key)
+    _check_journal_slot(jn, job_key)
+    jn.offer(job_key=job_key, kind="gate", work_key=branch, tag=tag,
+             claim_ref=c.ref)
     try:
         # acquire_or_reap: an EXPIRED claim (crashed holder, TTL passed)
         # must not block the branch forever -- reap it CAS'd and proceed.
         # A live claim still refuses, which is the double-gate guard.
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
+        # CLOSE the job. An `offer` left open with no `claim` and no
+        # `spawn` is read by `adopt_from_journal` as "never spawned" and,
+        # because the offer carries a `claim_ref`, is recorded as an OWED
+        # RELEASE -- a deferred CAS-delete of a ref we never held. Against
+        # a claim held by another host `release_pending` re-verifies and
+        # leaves it alone, but against one held by THIS host (an adopted
+        # worker, an `autonomous_when_serverless` gate) the journaled
+        # `started_at` is None, so the started_at re-check is skipped and
+        # the delete would drop a live gate's lease. The exit record makes
+        # the job closed: never adopted, never released, never swept.
+        jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log = open(log_dir / f"fleetd-gate-{tag}.launch.log", "ab")
+    except Exception:
+        # Not "someone else holds it" -- the CAS itself failed (the store
+        # went away, the write was ambiguous). No lease is recorded here
+        # either way, so close the offer before the exception leaves.
+        _close_failed_offer(jn, job_key, "claim-failed")
+        raise
+    try:
+        journal_claim_record(jn, job_key, c, kind="gate", work_key=branch)
+    except journal_mod.JournalError:
+        # The lease is held and the record that would make it recoverable
+        # cannot be written. Give the lease back rather than leave the
+        # branch blocked for a full TTL by a job that will never start,
+        # then re-raise for `reconcile_once` to record as `spawn-failed`.
+        c.release()
+        _close_failed_offer(jn, job_key, "claim-record-failed")
+        raise
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = open(log_dir / f"fleetd-gate-{tag}.launch.log", "ab")
+    except OSError:
+        c.release()
+        _close_failed_offer(jn, job_key, "spawn-failed")
+        raise
     try:
         # The trailing scope token is inert to gate.sh (it reads $1/$2 only)
         # but visible in `ps -eo command=`, which is what entitles this
@@ -851,10 +1028,28 @@ def start_gate(
         )
     except OSError:
         c.release()
+        jn.exit(job_key=job_key, outcome="spawn-failed")
         raise
     finally:
         log.close()
-    worker = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen)
+    try:
+        jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
+                 scope_token=fleet_scope_token(hub.url), argv0=str(gate_command[0]))
+    except journal_mod.JournalError:
+        # A process exists that this runner cannot write down. Compare the
+        # two directions of being wrong, the way the lost-lease kill does:
+        # killing it costs one retryable gate run, while letting it live
+        # leaves a group holding a claim that no future startup pass can
+        # adopt -- it has no journal record, and until the post-spawn
+        # `renew` below lands it has no pgid in the payload either, which
+        # is exactly the shape the orphan sweep kills, later, with no
+        # verdict and no trace. Kill the group and give the lease back.
+        kill_process_group(popen.pid)
+        c.release()
+        _close_failed_offer(jn, job_key, "spawn-record-failed")
+        raise
+    worker = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen,
+                    job_key=job_key)
     # Persist the real pgid into the claim payload: renew() rewrites the
     # payload from the object's fields, so setting the attribute and
     # renewing once records it durably (claim-before-launch means the
@@ -866,7 +1061,8 @@ def start_gate(
 
 
 def start_agent(
-    hub: Hub, branch: str, tag: str, host: str, log_dir: Path, repo_root: Path
+    hub: Hub, branch: str, tag: str, host: str, log_dir: Path, repo_root: Path,
+    journal: Optional["journal_mod.Journal"] = None,
 ) -> Optional[Worker]:
     """Claim the branch for an agent and launch agentworker.py in its own
     process group. Same discipline as gates: claim-before-launch, pgid
@@ -875,12 +1071,35 @@ def start_agent(
     # holder_host=host: see the identical comment in start_gate above.
     c = Claim(hub, kind="agent", key=branch.replace("/", "-").replace(":", "-"),
               work_kind="agent", work_key=branch, holder_host=host)  # see start_gate
+    # Write-before-spawn, identical discipline to `start_gate` -- see the
+    # long comment there for why each arrow in offer -> acquire -> claim
+    # -> Popen -> spawn points the way it does.
+    jn = journal if journal is not None else journal_mod.Journal()
+    job_key = journal_job_key("agent", c.key)
+    _check_journal_slot(jn, job_key)
+    jn.offer(job_key=job_key, kind="agent", work_key=branch, tag=tag,
+             claim_ref=c.ref)
     try:
         c.acquire_or_reap()
     except claim_mod.ClaimHeldError:
+        jn.exit(job_key=job_key, outcome="claimed-elsewhere")
         return None
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log = open(log_dir / f"fleetd-agent-{tag}.log", "ab")
+    except Exception:
+        _close_failed_offer(jn, job_key, "claim-failed")  # see `start_gate`
+        raise
+    try:
+        journal_claim_record(jn, job_key, c, kind="agent", work_key=branch)
+    except journal_mod.JournalError:
+        c.release()  # see the identical comment in `start_gate`
+        _close_failed_offer(jn, job_key, "claim-record-failed")
+        raise
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = open(log_dir / f"fleetd-agent-{tag}.log", "ab")
+    except OSError:
+        c.release()
+        _close_failed_offer(jn, job_key, "spawn-failed")
+        raise
     mode_args = (["--intent", intent_slug] if intent_slug else ["--branch", branch])
     try:
         popen = subprocess.Popen(
@@ -903,10 +1122,20 @@ def start_agent(
         )
     except OSError:
         c.release()
+        jn.exit(job_key=job_key, outcome="spawn-failed")
         raise
     finally:
         log.close()
-    w = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen, kind="agent")
+    try:
+        jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
+                 scope_token=fleet_scope_token(hub.url), argv0=sys.executable)
+    except journal_mod.JournalError:
+        kill_process_group(popen.pid)  # see the identical comment in `start_gate`
+        c.release()
+        _close_failed_offer(jn, job_key, "spawn-record-failed")
+        raise
+    w = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen, kind="agent",
+               job_key=job_key)
     c.pid = popen.pid
     c.pgid = popen.pid
     c.renew()
@@ -1439,6 +1668,7 @@ def adopt_workers(
                     claim=c,
                     popen=None,  # not our child: `alive()` falls back to pgids
                     kind=payload.get("work_kind") or kind,
+                    job_key=journal_job_key(kind, c.key),
                 )
             )
             adopted_pgids.add(pgid)
@@ -2060,10 +2290,12 @@ def run_daemon(
     # to be after the singleton (only one daemon per host may adopt) and
     # before reconcile_once (which would otherwise see zero workers, think
     # every slot free, and start a duplicate of everything still running).
+    jn = journal_mod.Journal()
     try:
-        adoption = adopt_workers(hub, host, workers)
+        adoption = journal_mod.adopt_at_startup(hub, host, workers, journal=jn)
+        _close_hub_released_runs(jn, adoption, host, label)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
-    except (HubError, ProcessListingUnavailable) as e:
+    except (HubError, journal_mod.JournalError, ProcessListingUnavailable) as e:
         # An unreachable hub at startup is not a reason to run with an
         # empty worker list -- that is the state that starts duplicate
         # gates. Refuse to start; the supervisor will retry.
@@ -2071,6 +2303,12 @@ def run_daemon(
               f"refusing to start rather than risk duplicate work", file=sys.stderr)
         singleton.release()
         return 5
+    spawn_allowed = adoption.spawn_allowed
+    owed_releases = adoption.journal_result
+    if not spawn_allowed:
+        print(f"{label}[{host}] OFFLINE START: adopting only identity-verified "
+              "journaled work; starts disabled until the store answers",
+              file=sys.stderr, flush=True)
 
     # T3: one warning store for the daemon's whole lifetime, so a warning
     # survives every reconcile until its marker file is gone. Owned by
@@ -2137,12 +2375,54 @@ def run_daemon(
             res = None
             try:
                 res = reconcile(hub, host, workers, gate_command, log_dir,
-                                repo_root, warnings=host_warnings)
+                                repo_root, warnings=host_warnings,
+                                spawn_allowed=spawn_allowed, journal=jn)
             except HubError as exc:
                 degraded = exc
                 hub_failures += 1
             else:
                 hub_failures = 0
+                if owed_releases is not None and owed_releases.to_release:
+                    try:
+                        release_outcomes = journal_mod.release_pending(
+                            hub, host, owed_releases, journal=jn)
+                    except journal_mod.JournalError as exc:
+                        # A remote CAS may already have succeeded. Keep the
+                        # captured debt and retry once the journal is writable.
+                        release_outcomes = []
+                        print(f"{label}[{host}] OWED RELEASE journal write failed: "
+                              f"{exc}; will retry", file=sys.stderr, flush=True)
+                    for ref, outcome in release_outcomes:
+                        print(f"{label}[{host}] OWED RELEASE {ref}: {outcome}",
+                              file=sys.stderr, flush=True)
+                if not spawn_allowed and not singleton.lost:
+                    # The first scan may have been unreadable, or `ps` may
+                    # have failed. A successful read cannot fill those
+                    # missing worker slots. Rebuild from the authoritative
+                    # claims before permitting any new start.
+                    refreshed: list = []
+                    try:
+                        current = journal_mod.adopt_at_startup(
+                            hub, host, refreshed, journal=jn)
+                    except (HubError, journal_mod.JournalError,
+                            ProcessListingUnavailable) as exc:
+                        for extra in refreshed:
+                            extra.claim.stop_renewer(timeout=2)
+                        print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
+                              "starts remain disabled", file=sys.stderr, flush=True)
+                    else:
+                        if current.mode == "store":
+                            for old in workers:
+                                old.claim.stop_renewer(timeout=2)
+                            workers[:] = refreshed
+                            _close_hub_released_runs(jn, current, host, label)
+                            spawn_allowed = True
+                            print(f"{label}[{host}] STORE BACK: authoritative "
+                                  "adoption completed; starts can be CAS "
+                                  "arbitrated again", file=sys.stderr, flush=True)
+                        else:
+                            for extra in refreshed:
+                                extra.claim.stop_renewer(timeout=2)
                 line = (
                     f"{label}[{host}] gates={len(workers)} started={res.started} "
                     f"finished={res.finished} killed={res.killed} refused={res.refused} "

@@ -56,6 +56,8 @@ red under a deliberately poisoned environment and requires green.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import unittest
 from typing import Dict, Iterable, Mapping, Optional
 
@@ -92,6 +94,8 @@ GIT_IDENTITY: Dict[str, str] = {
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
 }
 
+_FIXTURE_KEEL_HOME: Optional[str] = None
+
 
 def is_scrubbed(name: str) -> bool:
     """True if `name` is removed by `scrub_env` (before `extra` is applied)."""
@@ -105,7 +109,9 @@ def scrubbed_keys(env: Optional[Mapping[str, str]] = None) -> list:
     sorted -- what a fixture can print when it wants to say WHICH leak it
     is refusing."""
     src = os.environ if env is None else env
-    return sorted(k for k in src if is_scrubbed(k))
+    return sorted(k for k in src if is_scrubbed(k) and not (
+        k == "KEEL_HOME" and _FIXTURE_KEEL_HOME is not None and
+        src[k] == _FIXTURE_KEEL_HOME))
 
 
 def scrub_env(base: Optional[Mapping[str, str]] = None, **extra: str) -> Dict[str, str]:
@@ -121,6 +127,8 @@ def scrub_env(base: Optional[Mapping[str, str]] = None, **extra: str) -> Dict[st
     src = os.environ if base is None else base
     out = {k: v for k, v in src.items() if not is_scrubbed(k)}
     out.update(GIT_IDENTITY)
+    if _FIXTURE_KEEL_HOME is not None:
+        out["KEEL_HOME"] = _FIXTURE_KEEL_HOME
     out.update({k: str(v) for k, v in extra.items()})
     return out
 
@@ -132,12 +140,20 @@ def apply_to_os_environ() -> "callable":
     For fixtures that cannot inherit `HermeticEnvMixin` (module-level
     setup, a `setUpClass`). Test classes should use the mixin instead.
     """
+    global _FIXTURE_KEEL_HOME
     saved = dict(os.environ)
+    saved_home = _FIXTURE_KEEL_HOME
     for name in scrubbed_keys():
         os.environ.pop(name, None)
     os.environ.update(GIT_IDENTITY)
+    keel_home = tempfile.mkdtemp(prefix="keel-home-")
+    os.environ["KEEL_HOME"] = keel_home
+    _FIXTURE_KEEL_HOME = keel_home
 
     def restore() -> None:
+        global _FIXTURE_KEEL_HOME
+        _FIXTURE_KEEL_HOME = saved_home
+        shutil.rmtree(keel_home, ignore_errors=True)
         os.environ.clear()
         os.environ.update(saved)
 

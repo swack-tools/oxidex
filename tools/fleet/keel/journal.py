@@ -323,10 +323,13 @@ def _utcnow() -> datetime:
 
 
 class Journal:
-    """Append-only per-job records under `root` (`~/.keel/journal`)."""
+    """Append-only per-job records under `root` (`$KEEL_HOME/journal` by default)."""
 
     def __init__(self, root: "str | os.PathLike[str] | None" = None):
-        self.root = Path(root) if root is not None else DEFAULT_ROOT
+        # Resolve at construction time: test fixtures set KEEL_HOME after
+        # importing this module and must never touch the operator's journal.
+        self.root = (Path(root) if root is not None else
+                     Path(os.environ.get("KEEL_HOME", Path.home() / ".keel")) / "journal")
 
     # -- writing -------------------------------------------------------- #
 
@@ -511,6 +514,8 @@ class Journal:
         except _RecordError as exc:
             raise JournalError(f"{path}: {exc}") from exc
         if not records:
+            if dropped:
+                raise JournalError(f"{path}: torn journal has no complete record")
             return None
         return _fold(records, path=path, torn=bool(dropped))
 
@@ -854,6 +859,7 @@ def _default_worker_factory(*, job: JobState, claim: Claim):
         claim=claim,
         popen=None,  # not our child: `alive()` falls back to the pgid listing
         kind=job.kind or "gate",
+        job_key=job.job_key,
     )
 
 
