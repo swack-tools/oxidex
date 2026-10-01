@@ -772,6 +772,7 @@ fn parse_xmp_packet_in_directory(
     let mut depth = 0;
     let mut property_depth = 0;
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
+    let mut collection_is_alt = false;
     let mut collection_values: Vec<String> = Vec::new(); // Collect rdf:li values
     // `xml:lang` of each collected `rdf:li`, parallel to `collection_values`.
     // A lang-alt is not one comma-joined value: ExifTool reports the
@@ -844,6 +845,8 @@ fn parse_xmp_packet_in_directory(
                     // Check if this is a Bag/Seq/Alt container
                     if is_collection_container(&tag_name, &resolver) {
                         inside_collection = true;
+                        collection_is_alt =
+                            NamespaceResolver::extract_local_name(&tag_name) == "Alt";
                         collection_values.clear();
                         collection_langs.clear();
                         current_value.clear();
@@ -892,27 +895,52 @@ fn parse_xmp_packet_in_directory(
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
-                        if collection_langs.iter().any(Option::is_some) {
-                            // lang-alt: one tag per language, x-default (or the
-                            // first entry) keeping the plain name.
-                            let default_index = collection_langs
+                        let known_tag = current_path.first().and_then(|(namespace, id)| {
+                            super::generated_priorities::xmp_table(namespace)
+                                .and_then(|table| table.tag(id))
+                        });
+                        let language_alternatives = known_tag.map_or_else(
+                            || {
+                                collection_is_alt
+                                    && collection_langs.first().is_some_and(Option::is_some)
+                            },
+                            |tag| tag.lang_alt,
+                        );
+                        if language_alternatives {
+                            // FoundTag promotes an existing priority-zero value
+                            // to one; equal nonzero priorities prefer the later value.
+                            // Unlabelled entries and x-default share
+                            // the bare name; each other language has its own slot.
+                            let suffixes: Vec<String> = collection_langs
                                 .iter()
-                                .position(|l| l.as_deref() == Some("x-default"))
-                                .unwrap_or(0);
+                                .map(|lang| match lang.as_deref() {
+                                    Some(lang) if !lang.eq_ignore_ascii_case("x-default") => {
+                                        format!("-{lang}")
+                                    }
+                                    _ => String::new(),
+                                })
+                                .collect();
+                            let mut winners = std::collections::HashMap::new();
+                            for (index, suffix) in suffixes.iter().enumerate() {
+                                if current_priority == 0 {
+                                    winners.entry(suffix.as_str()).or_insert(index);
+                                } else {
+                                    winners.insert(suffix.as_str(), index);
+                                }
+                            }
                             for (index, value) in collection_values.iter().enumerate() {
-                                let suffix =
-                                    match collection_langs.get(index).and_then(Clone::clone) {
-                                        Some(lang) if index != default_index => format!("-{lang}"),
-                                        _ if index == default_index => String::new(),
-                                        None => continue,
-                                        _ => continue,
-                                    };
+                                let suffix = &suffixes[index];
                                 let tag = format!("{prefixed_name}{suffix}");
                                 if current_default_namespace {
                                     default_namespace_tags.insert(tag.clone());
                                 }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 legacy.push_priority(&legacy_tag, &tag, value, current_priority);
+                                // Keep every source occurrence for -a; only the
+                                // ordinary primary projection arbitrates by source priority.
+                                if winners.get(suffix.as_str()) != Some(&index) {
+                                    continue;
+                                }
                                 if !results.iter().any(|result| result.tag == tag) {
                                     results.push(
                                         ResultOccurrence::scalar(tag, value.clone())
@@ -2633,7 +2661,13 @@ fn extract_list_struct_values_in_directory(
                             NamespaceResolver::extract_prefix(&tag_name)
                                 .and_then(|prefix| resolver.resolve_prefix(prefix))
                                 .is_some_and(|uri| LIST_STRUCT_REPEAT_SCHEMAS.contains(&uri));
-                        container_name = if is_flat_name_suppressed(&local) {
+                        container_name = if is_flat_name_suppressed(&local)
+                            && container_group
+                                .strip_prefix("XMP-")
+                                .and_then(super::generated_priorities::xmp_table)
+                                .and_then(|table| table.tag(&local))
+                                .is_some()
+                        {
                             String::new()
                         } else {
                             local
@@ -8562,6 +8596,149 @@ mod entry_tests {
         assert_eq!(
             find("XMP-xmp:CreateDate").tag_value(false),
             TagValue::new_string("2022")
+        );
+    }
+}
+
+#[cfg(test)]
+mod language_flatname_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_language_alternatives_keep_last_value() {
+        for lang in ["", " xml:lang=\"fr\"", " xml:lang=\"x-default\""] {
+            let xml = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li{lang}>A</rdf:li><rdf:li{lang}>B</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF>"#
+            );
+            let tags = parse_xmp(xml.as_bytes()).unwrap();
+            let dc: Vec<_> = tags
+                .iter()
+                .filter(|(key, _)| key.starts_with("XMP-dc:"))
+                .collect();
+            assert_eq!(dc.len(), 1, "{lang}: {dc:?}");
+            assert_eq!(dc[0].1, "B", "{lang}");
+            let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+            let values: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag.starts_with("XMP-dc:"))
+                .map(|entry| entry.value.clone().into_joined())
+                .collect();
+            assert_eq!(values.len(), 2, "{lang}: {values:?}");
+            assert!(values.contains(&"A".to_string()) && values.contains(&"B".to_string()));
+        }
+    }
+
+    #[test]
+    fn priority_zero_language_duplicates_keep_first_and_all_occurrences() {
+        for lang in ["fr", "x-default"] {
+            let xml = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:UserComment><rdf:Alt><rdf:li xml:lang="{lang}">A</rdf:li><rdf:li xml:lang="{lang}">B</rdf:li></rdf:Alt></exif:UserComment></rdf:Description></rdf:RDF>"#
+            );
+            let tags = parse_xmp(xml.as_bytes()).unwrap();
+            let values: Vec<_> = tags
+                .iter()
+                .filter(|(key, _)| key.starts_with("XMP-exif:UserComment"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(values, vec!["A"], "{lang}");
+            let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+            let all: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag.starts_with("XMP-exif:UserComment"))
+                .map(|entry| entry.value.clone().into_joined())
+                .collect();
+            assert_eq!(all, vec!["A", "B"], "{lang}");
+        }
+    }
+
+    #[test]
+    fn known_language_alternatives_follow_source_schema() {
+        for container in ["Bag", "Alt", "Seq"] {
+            for (property, expected) in
+                [("subject", "XMP-dc:Subject"), ("title", "XMP-dc:Title-fr")]
+            {
+                let xml = format!(
+                    r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:{property}><rdf:{container}><rdf:li xml:lang="fr">A</rdf:li></rdf:{container}></dc:{property}></rdf:Description></rdf:RDF>"#
+                );
+                let tags = parse_xmp(xml.as_bytes()).unwrap();
+                let dc: Vec<_> = tags
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("XMP-dc:"))
+                    .collect();
+                assert_eq!(
+                    dc,
+                    vec![&(expected.to_string(), "A".to_string())],
+                    "{property}/{container}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn first_unlabelled_item_keeps_unknown_alt_as_list() {
+        let xml = std::str::from_utf8(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/no-default-language.xmp"
+        ))
+        .unwrap()
+        .replace(" xml:lang=\"fr\"", "");
+        let tags = parse_xmp(xml.as_bytes()).unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1") && v == "A & B, C & D")
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":BTestTagField1-en")));
+    }
+
+    #[test]
+    fn foreign_owner_name_does_not_inherit_plus_schema() {
+        let xml = std::str::from_utf8(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/plus-owner-flatname.xmp"
+        ))
+        .unwrap()
+        .replace(
+            "http://ns.useplus.org/ldf/xmp/1.0/",
+            "https://example.invalid/custom",
+        );
+        let tags = parse_xmp(xml.as_bytes()).unwrap();
+        assert!(
+            tags.iter().any(
+                |(k, v)| k.ends_with(":CopyrightOwnerCopyrightOwnerName") && v == "Phil Harvey"
+            )
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":CopyrightOwnerName")));
+    }
+
+    #[test]
+    fn no_default_language_keeps_both_suffixes() {
+        let tags = parse_xmp(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/no-default-language.xmp"
+        ))
+        .unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1-fr") && v == "A & B")
+        );
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k.ends_with(":BTestTagField1-en") && v == "C & D")
+        );
+        assert!(!tags.iter().any(|(k, _)| k.ends_with(":BTestTagField1")));
+    }
+
+    #[test]
+    fn plus_owner_uses_source_empty_flatname() {
+        let tags = parse_xmp(include_bytes!(
+            "../../../tests/fixtures/xmp_priority/plus-owner-flatname.xmp"
+        ))
+        .unwrap();
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k == "XMP-plus:CopyrightOwnerName" && v == "Phil Harvey")
+        );
+        assert!(
+            !tags
+                .iter()
+                .any(|(k, _)| k == "XMP-plus:CopyrightOwnerCopyrightOwnerName")
         );
     }
 }
