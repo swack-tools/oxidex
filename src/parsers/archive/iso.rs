@@ -172,11 +172,13 @@ impl ISOParser {
     }
 
     /// Walks complete descriptors as `ProcessISO` does in pinned ISO.pm.
-    /// Returns primary descriptor offsets in file order. Pinned `ProcessISO`
+    /// Visits primary descriptor offsets in file order. Pinned `ProcessISO`
     /// processes each one; later defined fields can replace earlier values.
-    fn find_primary_descriptors(reader: &dyn FileReader) -> Result<Vec<u64>> {
+    fn visit_primary_descriptors(
+        reader: &dyn FileReader,
+        mut visit: impl FnMut(u64) -> Result<()>,
+    ) -> Result<()> {
         let mut offset = DESCRIPTOR_START;
-        let mut primary_offsets = Vec::new();
         while offset
             .checked_add(DESCRIPTOR_SIZE)
             .is_some_and(|end| end <= reader.size())
@@ -186,14 +188,23 @@ impl ISOParser {
                 break;
             }
             match head[0] {
-                1 => primary_offsets.push(offset),
+                1 => visit(offset)?,
                 DESCRIPTOR_TERMINATOR => break,
                 0 | 2 | 3 => {}
                 _ => break,
             }
             offset += DESCRIPTOR_SIZE;
         }
-        Ok(primary_offsets)
+        Ok(())
+    }
+
+    // Keep only the latest value for each field, ordered by its last occurrence.
+    // A missing field in a later descriptor leaves its earlier value intact.
+    fn replace_primary_winners(values: &mut Vec<(String, TagValue)>, descriptor: &MetadataMap) {
+        for (key, occurrence) in descriptor.winners_in_file_order() {
+            values.retain(|(prior, _)| prior != key);
+            values.push((key.clone(), occurrence.raw.clone()));
+        }
     }
 
     /// Reads `BootSystem` from the source-described boot record, if present.
@@ -357,12 +368,15 @@ impl FormatParser for ISOParser {
             // its predecessor, while an absent field leaves the earlier value.
             // Publish only the ISO-group winners; earlier physical copies have
             // a Copy1 family-4 identity this map cannot represent.
-            let mut primary_values = MetadataMap::new();
-            for pvd_offset in Self::find_primary_descriptors(reader)? {
-                Self::extract_pvd_metadata(reader, &mut primary_values, pvd_offset)?;
-            }
-            for (key, occurrence) in primary_values.winners_in_file_order() {
-                metadata.insert(key.clone(), occurrence.raw.clone());
+            let mut primary_values: Vec<(String, TagValue)> = Vec::new();
+            Self::visit_primary_descriptors(reader, |pvd_offset| {
+                let mut descriptor = MetadataMap::new();
+                Self::extract_pvd_metadata(reader, &mut descriptor, pvd_offset)?;
+                Self::replace_primary_winners(&mut primary_values, &descriptor);
+                Ok(())
+            })?;
+            for (key, value) in primary_values {
+                metadata.insert(key, value);
             }
 
             // The boot record lives in a later descriptor sector, if at all.
@@ -635,6 +649,28 @@ mod tests {
             1,
             "earlier descriptor is a Copy1 group, not another ISO occurrence"
         );
+    }
+
+    #[test]
+    fn primary_winners_stay_bounded_and_preserve_absent_fields() {
+        let mut winners = Vec::new();
+        let mut first = MetadataMap::new();
+        first.insert(
+            "ISO:Publisher".to_string(),
+            TagValue::String("retained".into()),
+        );
+        ISOParser::replace_primary_winners(&mut winners, &first);
+        for index in 0..4096 {
+            let mut descriptor = MetadataMap::new();
+            descriptor.insert(
+                "ISO:VolumeName".to_string(),
+                TagValue::String(index.to_string()),
+            );
+            ISOParser::replace_primary_winners(&mut winners, &descriptor);
+            assert_eq!(winners.len(), 2);
+        }
+        assert_eq!(winners[0].1, TagValue::String("retained".into()));
+        assert_eq!(winners[1].1, TagValue::String("4095".into()));
     }
 
     #[test]
