@@ -9169,6 +9169,30 @@ tables:
         name: "TargetTypeValue"
         writable: false
         description: "TargetTypeValue tag"
+      - id: "0x0014"
+        name: "Scene/Subtrack"
+        writable: false
+        description: "Scene/Subtrack tag"
+      - id: "0x001E"
+        name: "Chapter/Track"
+        writable: false
+        description: "Chapter/Track tag"
+      - id: "0x0028"
+        name: "Session"
+        writable: false
+        description: "Session tag"
+      - id: "0x0032"
+        name: "Movie/Album"
+        writable: false
+        description: "Movie/Album tag"
+      - id: "0x003C"
+        name: "Season/Edition"
+        writable: false
+        description: "Season/Edition tag"
+      - id: "0x0046"
+        name: "Collection"
+        writable: false
+        description: "Collection tag"
       - id: "0x23CA"
         name: "TargetType"
         writable: false
@@ -20893,6 +20917,10 @@ tables:
         name: "Rotate 90 CW"
         writable: false
         description: "Rotate 90 CW tag"
+      - id: "0x0001"
+        name: "Horizontal"
+        writable: false
+        description: "Horizontal tag"
   - name: QuickTime::Keys
     tags:
       - id: "0xED36"
@@ -20978,6 +21006,10 @@ tables:
         writable: true
         type: int32s
         description: "XiaomiHDR10 tag"
+      - id: "0x62E1"
+        name: "AndroidTimeZone"
+        writable: false
+        description: "AndroidTimeZone tag"
       - id: "0x3B7E"
         name: "VideoOrientation"
         writable: false
@@ -21017,6 +21049,36 @@ tables:
         name: "SceneIlluminance"
         writable: false
         description: "SceneIlluminance tag"
+      - id: "0xA7B1"
+        name: "SmartstyleRenderingVersion"
+        writable: false
+        type: 0
+        description: "SmartstyleRenderingVersion tag"
+      - id: "0x1A18"
+        name: "SmartstyleTone"
+        writable: false
+        type: 0
+        description: "SmartstyleTone tag"
+      - id: "0x937D"
+        name: "SmartstyleColor"
+        writable: false
+        type: 0
+        description: "SmartstyleColor tag"
+      - id: "0xDF4D"
+        name: "SmartstyleIntensity"
+        writable: false
+        type: 0
+        description: "SmartstyleIntensity tag"
+      - id: "0xCD2D"
+        name: "SmartstyleBypassed"
+        writable: false
+        type: 0
+        description: "SmartstyleBypassed tag"
+      - id: "0x2BE5"
+        name: "SmartstyleCast"
+        writable: false
+        type: 0
+        description: "SmartstyleCast tag"
   - name: QuickTime::Main
     tags:
       - id: "0x67E4"
