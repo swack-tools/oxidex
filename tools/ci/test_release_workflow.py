@@ -1022,9 +1022,16 @@ class DockerWorkflowTests(unittest.TestCase):
 
     def test_docker_builds_use_native_architecture_runners(self):
         build = job_block(self.text, "build")
-        self.assertIn('runs-on: [self-hosted, Linux, "${{ matrix.runner_arch }}", docker]', build)
-        self.assertIn('"runner_arch":"X64"', build)
-        self.assertIn('"runner_arch":"ARM64"', build)
+        self.assertIn('runs-on: ${{ matrix.runner }}', build)
+        for arch, runner in (("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")):
+            self.assertRegex(
+                build,
+                rf"- arch: {arch}\n\s+platform: linux/{arch}\n\s+runner: {re.escape(runner)}\n",
+            )
+        for job in ('verify-tag-on-main', 'merge'):
+            self.assertIn('runs-on: ubuntu-24.04', job_block(self.text, job))
+        self.assertNotIn('self-hosted', self.text)
+        self.assertNotIn('runs-on: docker', self.text)
 
 
 class TagRecipeTests(unittest.TestCase):
