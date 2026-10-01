@@ -38,6 +38,10 @@ const LANGUAGE_SPANISH_MACINTOSH: u16 = 6;
 const LANGUAGE_FINNISH_MACINTOSH: u16 = 13;
 const LANGUAGE_FRENCH_MACINTOSH: u16 = 1;
 const LANGUAGE_ITALIAN_MACINTOSH: u16 = 3;
+const LANGUAGE_JAPANESE_MACINTOSH: u16 = 11;
+const LANGUAGE_KOREAN_MACINTOSH: u16 = 23;
+const LANGUAGE_DUTCH_MACINTOSH: u16 = 4;
+const LANGUAGE_NORWEGIAN_MACINTOSH: u16 = 12;
 const LANGUAGE_DANISH_WINDOWS: u16 = 0x0406;
 const LANGUAGE_GERMAN_WINDOWS: u16 = 0x0407;
 const LANGUAGE_HEBREW_WINDOWS: u16 = 0x040d;
@@ -45,6 +49,10 @@ const LANGUAGE_SPANISH_WINDOWS: u16 = 0x0c0a;
 const LANGUAGE_FINNISH_WINDOWS: u16 = 0x040b;
 const LANGUAGE_FRENCH_WINDOWS: u16 = 0x040c;
 const LANGUAGE_ITALIAN_WINDOWS: u16 = 0x0410;
+const LANGUAGE_JAPANESE_WINDOWS: u16 = 0x0411;
+const LANGUAGE_KOREAN_WINDOWS: u16 = 0x0412;
+const LANGUAGE_DUTCH_WINDOWS: u16 = 0x0413;
+const LANGUAGE_NORWEGIAN_WINDOWS: u16 = 0x0414;
 const LANGUAGE_ENGLISH_WINDOWS: u16 = 0x0409;
 
 /// Name IDs for name table records
@@ -244,7 +252,8 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_GERMAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_GERMAN_WINDOWS) => Some("de"),
             (PLATFORM_MACINTOSH, LANGUAGE_HEBREW_MACINTOSH)
-            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
+            | (PLATFORM_WINDOWS, LANGUAGE_HEBREW_WINDOWS)
+            | (PLATFORM_UNICODE, LANGUAGE_HEBREW_WINDOWS) => Some("he"),
             (PLATFORM_MACINTOSH, LANGUAGE_SPANISH_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_SPANISH_WINDOWS) => Some("es"),
             (PLATFORM_MACINTOSH, LANGUAGE_FINNISH_MACINTOSH)
@@ -253,6 +262,14 @@ impl TTFParser {
             | (PLATFORM_WINDOWS, LANGUAGE_FRENCH_WINDOWS) => Some("fr"),
             (PLATFORM_MACINTOSH, LANGUAGE_ITALIAN_MACINTOSH)
             | (PLATFORM_WINDOWS, LANGUAGE_ITALIAN_WINDOWS) => Some("it"),
+            (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_JAPANESE_WINDOWS) => Some("ja"),
+            (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_KOREAN_WINDOWS) => Some("ko"),
+            (PLATFORM_MACINTOSH, LANGUAGE_DUTCH_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_DUTCH_WINDOWS) => Some("nl-NL"),
+            (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH)
+            | (PLATFORM_WINDOWS, LANGUAGE_NORWEGIAN_WINDOWS) => Some("no"),
             _ => None,
         }
     }
@@ -342,6 +359,7 @@ impl TTFParser {
                 NAME_FONT_FAMILY => Some("Font:FontFamily"),
                 NAME_FULL_FONT_NAME => Some("Font:FontName"),
                 NAME_FONT_SUBFAMILY => Some("Font:FontSubfamily"),
+                NAME_POSTSCRIPT_NAME => Some("Font:FontName"),
                 _ => None,
             };
             let Some(base_key) = base_key else {
@@ -585,6 +603,10 @@ mod tests {
             (7, "da"),  // 7 => 'da'
             (10, "he"), // 10 => 'he'
             (13, "fi"), // 13 => 'fi'
+            (11, "ja"), // 11 => 'ja'
+            (23, "ko"), // 23 => 'ko'
+            (4, "nl-NL"), // 4 => 'nl-NL'
+            (12, "no"), // 12 => 'no'
         ] {
             let record = mac_record(id);
             assert_eq!(
@@ -602,8 +624,6 @@ mod tests {
     #[test]
     fn unclaimed_macintosh_language_ids_stay_unmapped() {
         for id in [
-            4,  /* nl-NL */
-            12, /* ar */
             5,  /* sv */
             8,  /* pt */
         ] {
