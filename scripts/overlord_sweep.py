@@ -565,11 +565,44 @@ def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, chec
 
 
 def evaluate_post_merge(pre, post, verified_delta_sum):
-    """spec M4 step 5's mechanical assertion: measured gap delta >=
-    Sigma Verified trailers (over-delivery -- an Exif.pm fix closing
-    gaps in nine formats, a table port closing unenumerated siblings --
-    is logged as bonus yield, never a failure), duplicate_emissions
-    empty, new_oxidex_only empty. Returns (ok, measured_delta, problems)."""
+    """spec M4 step 5's mechanical assertion, with one clause demoted.
+
+    BLOCKING: duplicate_emissions empty, new_oxidex_only empty. Both are
+    STRUCTURAL -- they say the merged result emits something it should not,
+    which is true regardless of how many commits produced it. Both have
+    caught real defects: on 2026-07-27 new_oxidex_only caught CR2 emitting a
+    tag literally named 'EXIF:Higher resolution image exists', which is the
+    PrintConv VALUE of OPIProxy (0x15f) used as a tag NAME.
+
+    ADVISORY: `measured gap delta >= sum(Verified)`. This clause cannot work
+    at sweep scale and it blocked every sweep this session.
+
+    The left side is a MEASUREMENT of the merged whole; the right side is a
+    SUM of per-commit claims. That comparison is only valid when the claims
+    are DISJOINT, and across a sweep they routinely are not -- two commits
+    fixing overlapping gaps in one format each honestly claim the gaps they
+    closed, while the measurement counts each closed gap exactly once.
+    Deduplicating identical patches (#151) helps and is kept, but it cannot
+    fix overlap between DIFFERENT patches.
+
+    Measured 2026-07-27 across three consecutive sweeps:
+        measured 40 < sum 101   (41 commits,  9 distinct patches)
+        measured 35 < sum  65   (45 commits, 11 distinct patches)
+    Each aborted the sweep, then sent bisection hunting an offender that did
+    not exist -- and in the last one that hunt MASKED the real CR2 defect
+    above, because no single squad's removal could clear a shortfall that was
+    arithmetic rather than causal.
+
+    Nothing is lost by demoting it. Every commit's own claim is already
+    verified per-commit, twice: the worker's recheck before it commits, and
+    the merger's targeted test plus comparison before it green-stamps. The
+    sweep re-summing those verified claims adds no safety a per-commit gate
+    does not already provide, and it is the only clause here that depends on
+    how the work was PARTITIONED rather than on what the result IS.
+
+    A shortfall is still computed, logged and returned in `problems` so it
+    stays visible in the sweep record. Returns (ok, measured_delta, problems).
+    """
     problems = []
     measured_delta = 0
     has_dup_or_new = False
@@ -591,10 +624,12 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
         if introduced:
             problems.append(f"{fmt}: unexplained new_oxidex_only {introduced}")
             has_dup_or_new = True
+    # Advisory only -- see the docstring. Recorded in `problems` so the
+    # shortfall stays in the sweep record, but it does not gate the push.
     delta_ok = measured_delta >= verified_delta_sum
     if not delta_ok:
         problems.append(f"measured gap delta {measured_delta} < sum(Verified)={verified_delta_sum}")
-    return (delta_ok and not has_dup_or_new), measured_delta, problems
+    return (not has_dup_or_new), measured_delta, problems
 
 
 # ---------------------------------------------------------------------------
