@@ -77,7 +77,7 @@ for _p in (_FLEET_DIR, _KEEL_DIR):
         sys.path.insert(0, str(_p))
 
 import workqueue  # noqa: E402
-from claim import CLAIMS_PREFIX, claim_ref, is_expired  # noqa: E402
+from claim import CLAIMS_PREFIX, _iso as claim_iso, claim_ref, is_expired  # noqa: E402
 from fleetlib import Hub, HubError, HubUnreachableError  # noqa: E402
 
 # Qualified `keel.<name>` imports, not bare ones -- see serverhub.py's
@@ -612,8 +612,8 @@ def cmd_server_rehost(args: argparse.Namespace) -> int:
     payload = {
         "holder_host": socket.gethostname(),
         "pid": os.getpid(),
-        "started_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expires_at": (now + timedelta(seconds=SERVER_CLAIM_TTL_S)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": claim_iso(now),
+        "expires_at": claim_iso(now + timedelta(seconds=SERVER_CLAIM_TTL_S)),
         "advertise_urls": [],
         "boot_id": uuid.uuid4().hex,
         "keel_version": KEEL_VERSION,
