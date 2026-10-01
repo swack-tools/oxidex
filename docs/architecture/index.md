@@ -106,12 +106,11 @@ original design.
 
 ### Tag definitions are not tag coverage
 
-The six `oxidex-tags-*` crates hold 32,271 tag definitions, synced from
-`exiftool -f -listx`. That is ExifTool's *documentation* view: name, ID,
-type, writability and description, with no layout, `SubDirectory`,
-`Condition` or conversion. The definitions say a tag exists, not that OxiDex
-reads it. A rising definition count is not rising coverage. Only a
-comparison run measures coverage. See [Tag database](/architecture/tag-database).
+The six `oxidex-tags-*` crates hold 32,256 tag definitions projected from
+pinned ExifTool Perl tables. The source dump also records layout and conversion
+facts, but a registry definition does not activate a reader. A rising
+definition count is not rising coverage. Only a comparison run measures
+coverage. See [Tag database](/architecture/tag-database).
 
 ## Writing
 

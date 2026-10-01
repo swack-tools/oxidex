@@ -10,8 +10,8 @@
     },
     "native_writable_unique_names": 7068,
     "tag_crates": 6,
-    "tag_definitions": 16683,
-    "tag_tables": 931
+    "tag_definitions": 32256,
+    "tag_tables": 1420
   },
   "exiftool": "13.59",
   "floors": {
@@ -246,11 +246,11 @@
   "generation": {
     "artifacts": {
       "by_tier": {
-        "1": 244,
+        "1": 250,
         "2": 29
       },
       "rust": 245,
-      "total": 273
+      "total": 279
     },
     "expressions": {
       "helper_subs": 157,
