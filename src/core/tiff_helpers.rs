@@ -4248,9 +4248,9 @@ pub(crate) fn legal_ifd1_offset(
     )
 }
 
-/// Resolve an embedded TIFF's IFD1 while checking structural addresses only
-/// against its enclosing APP1 payload. Out-of-line entry values may still be
-/// read through the full reader, as ExifTool does for RW2 previews.
+/// Resolve an embedded TIFF's IFD1 while checking structural addresses
+/// against its enclosing APP1 payload. The caller chooses the value reader;
+/// RW2 previews also keep ordinary out-of-line values inside that payload.
 pub(crate) fn legal_ifd1_offset_with_directory_limit(
     reader: &dyn FileReader,
     ifd0_offset: u64,
