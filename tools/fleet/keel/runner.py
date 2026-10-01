@@ -1732,10 +1732,15 @@ def live_workers_payload(workers: Sequence["Worker"]) -> list:
 
 
 def registration_payload(host: str, workers: Sequence["Worker"], repo_root: Path,
-                         scope_token: str) -> dict:
+                         scope_token: str, observed_capabilities: Optional[dict] = None) -> dict:
     """The body of `POST /v1/runners/{id}/register`: what this host is
     (`capabilities`) and what it is running (`live_workers[]`, top level,
     per SPEC SS5.3's shape).
+
+    Optional capabilities come from this reconcile step's heartbeat
+    snapshot, not fresh probes. Missing measurements stay null so a slow
+    oracle, disk, memory, or toolchain probe cannot withhold the server's
+    liveness witness. `scope_token` remains known from daemon setup.
 
     NAME COLLISION, on purpose and worth knowing: `doctor.py` already has
     a `registration_payload`, whose docstring says it exists so "a runner's
@@ -1760,24 +1765,25 @@ def registration_payload(host: str, workers: Sequence["Worker"], repo_root: Path
     timeout) per registration inside that same loop to learn nothing new.
     Omitted and said so rather than approximated.
     """
-    mem = free_mem_gb()
+    # Registration is the server's liveness witness, not a new capability
+    # measurement. A slow local probe must never consume its whole deadline.
+    # The completed reconcile step supplies its observed heartbeat values;
+    # without one, unknown values remain null rather than being fabricated.
+    observed = observed_capabilities or {}
+    free_mem = observed.get("free_mem_gb")
+    if isinstance(free_mem, (int, float)) and free_mem < 0:
+        free_mem = None
     return {
         "id": host,
         "capabilities": {
-            "owning_user": owning_user(),
-            # `claim`'s copies, not `toolchain`'s directly and not
-            # `verdict.compute_ids` -- the same two functions `fleetd`'s
-            # heartbeat payload calls, so this host's registered number and
-            # its heartbeat number are computed by literally one code path.
-            "platform_id": claim_mod.compute_platform_id(),
-            "rustc_id": claim_mod.compute_rustc_id(),
-            "cores": os.cpu_count(),
-            "free_disk_gb": round(free_disk_gb(), 1),
-            # -1.0 is `free_mem_gb`'s "unknowable" answer (macOS without
-            # psutil); it must not be reported as a real measurement.
-            "free_mem_gb": round(mem, 1) if mem >= 0 else None,
-            "oracle_ok": _oracle_ok(),
-            "gate_version": _gate_version(repo_root),
+            "owning_user": observed.get("owning_user"),
+            "platform_id": observed.get("platform_id"),
+            "rustc_id": observed.get("rustc_id"),
+            "cores": observed.get("cores"),
+            "free_disk_gb": observed.get("free_disk_gb"),
+            "free_mem_gb": free_mem,
+            "oracle_ok": observed.get("oracle_ok"),
+            "gate_version": observed.get("gate_version"),
             "scope_token": scope_token,
         },
         "live_workers": live_workers_payload(workers),
@@ -2128,6 +2134,7 @@ def run_daemon(
             # or a MemoryError must still take the process down loudly
             # rather than be retried fifteen seconds later forever.
             degraded: Optional[HubError] = None
+            res = None
             try:
                 res = reconcile(hub, host, workers, gate_command, log_dir,
                                 repo_root, warnings=host_warnings)
@@ -2198,7 +2205,10 @@ def run_daemon(
             # A failed announcement does not alter the completed reconcile step.
             register_cycle(
                 reg_client, host, reg_session,
-                lambda: registration_payload(host, workers, repo_root, reg_scope_token),
+                lambda: registration_payload(
+                    host, workers, repo_root, reg_scope_token,
+                    getattr(res, "heartbeat_capabilities", None),
+                ),
                 _reg_log, reg_backoff,
             )
             if once or stop["flag"]:

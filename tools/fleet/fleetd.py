@@ -201,6 +201,9 @@ class ReconcileResult:
     awaiting_train: list = field(default_factory=list)  # PASS -- ARCH-FIX R4
     needs_author: list = field(default_factory=list)  # FAIL -- ARCH-FIX R4
     heartbeat_written: bool = False
+    # Observed during this step; registration reuses these values without
+    # re-running potentially slow optional local capability probes.
+    heartbeat_capabilities: Optional[dict] = None
     tip_generation: Optional[int] = None
     # T3: DURABLE host conditions, unlike `refused` above which is this
     # loop's scheduling answer. Re-derived every reconcile by
@@ -1147,6 +1150,16 @@ def reconcile_once(
         "warnings": res.warnings,
         "live_workers": live_workers_payload(workers),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    res.heartbeat_capabilities = {
+        "owning_user": hb["owning_user"],
+        "platform_id": hb["platform_id"],
+        "rustc_id": hb["rustc_id"],
+        "cores": os.cpu_count(),
+        "free_disk_gb": hb["free_gb"],
+        "free_mem_gb": hb["free_mem_gb"] if hb["free_mem_gb"] >= 0 else None,
+        "oracle_ok": hb["oracle_ok"],
+        "gate_version": hb["gate_version"],
     }
     if isinstance(hub, FallbackHub):
         hb["fallback"] = hub.status()

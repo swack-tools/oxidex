@@ -421,6 +421,20 @@ class TestRegistrationPayload(ServerFixture):
         self.assertTrue(lw["started_at"].endswith("Z") or "+" in lw["started_at"],
                         f"started_at must be claim._iso's spelling: {lw['started_at']!r}")
 
+    def test_unknown_capabilities_are_null_without_running_probes(self):
+        for owner, name in ((runner, "_oracle_ok"), (runner, "free_disk_gb"),
+                            (runner, "free_mem_gb"), (runner, "owning_user"),
+                            (claim_mod, "compute_platform_id"),
+                            (claim_mod, "compute_rustc_id")):
+            patch = mock.patch.object(owner, name, side_effect=AssertionError(name))
+            patch.start()
+            self.addCleanup(patch.stop)
+        caps = self.payload()["capabilities"]
+        for name in ("owning_user", "platform_id", "rustc_id", "cores",
+                     "free_disk_gb", "free_mem_gb", "oracle_ok", "gate_version"):
+            self.assertIsNone(caps[name], f"{name} must be explicitly unknown")
+        self.assertEqual(caps["scope_token"], runner.fleet_scope_token(self.hub.url))
+
     def test_live_workers_comes_from_the_in_memory_list_not_a_hub_listing(self):
         """SPEC's fresh-claims invariant, one layer up: `CachedHub.list()`
         over the claims namespace is index-served with no freshness test,
@@ -436,10 +450,11 @@ class TestRegistrationPayload(ServerFixture):
         self.assertEqual(self.payload([])["live_workers"], [])
 
     def test_an_unknowable_free_mem_is_null_not_minus_one(self):
-        real = runner.free_mem_gb
-        runner.free_mem_gb = lambda: -1.0
-        self.addCleanup(setattr, runner, "free_mem_gb", real)
-        self.assertIsNone(self.payload()["capabilities"]["free_mem_gb"])
+        p = runner.registration_payload(
+            self.host, [], REPO_ROOT, runner.fleet_scope_token(self.hub.url),
+            {"free_mem_gb": -1.0},
+        )
+        self.assertIsNone(p["capabilities"]["free_mem_gb"])
 
 
 # --------------------------------------------------------------------- #
@@ -548,6 +563,37 @@ class TestRunDaemonRegistration(ServerFixture):
         status = self.client._request("GET", "/v1/status")[1]
         self.assertIn(self.host, status["server"]["registered_runners"],
                       "one --once run must leave a registration behind")
+
+    def test_slow_optional_probe_cannot_prevent_healthy_server_registration(self):
+        self.attach_election()
+        self.assertTrue(self.hub.create(fleetd.DESIRED_REF, {
+            "generation": 1,
+            "hosts": {self.host: {"gates": 0, "agents": 0, "enabled": True}},
+            "limits": {"min_free_gb": 14, "min_free_mem_gb": 8},
+        }))
+        old_connect = runner.REGISTER_CONNECT_TIMEOUT_S
+        old_read = runner.REGISTER_READ_TIMEOUT_S
+        self.addCleanup(setattr, runner, "REGISTER_CONNECT_TIMEOUT_S", old_connect)
+        self.addCleanup(setattr, runner, "REGISTER_READ_TIMEOUT_S", old_read)
+        runner.REGISTER_CONNECT_TIMEOUT_S = 0.3
+        runner.REGISTER_READ_TIMEOUT_S = 0.3
+        called = []
+        def slow_oracle():
+            called.append(1)
+            time.sleep(1.0)  # longer than the complete announcement budget
+            return False
+        with mock.patch.object(fleetd, "_oracle_ok", side_effect=slow_oracle), \
+                mock.patch.object(runner, "_oracle_ok", side_effect=AssertionError("probe rerun")):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT,
+                interval=0, once=True, reconcile=fleetd.reconcile_once,
+            )
+        self.assertEqual(rc, 0)
+        status = self.client._request("GET", "/v1/status")[1]
+        self.assertIn(self.host, status["server"]["registered_runners"],
+                      "a healthy server must receive liveness despite slow optional probes")
+        self.assertEqual(called, [1], "heartbeat measured once; registration reused its snapshot")
 
     def test_a_dead_server_still_completes_a_reconcile(self):
         """Registration is strictly non-fatal. This is the whole contract:
@@ -1079,6 +1125,33 @@ class TestHeartbeatEnrichment(ServerFixture):
                     "fallback_writes", "ambiguous_writes", "last_primary_error"):
             self.assertIn(key, hb["fallback"])
         self.assertEqual(hb["fallback"]["route"], "primary")
+
+    def test_registration_reuses_truthful_heartbeat_capabilities(self):
+        self._seed_desired()
+        with mock.patch.object(fleetd, "_oracle_ok", return_value=False) as oracle:
+            res = fleetd.reconcile_once(
+                self.hub, self.host, [], [str(_stub_gate(self.tmp))],
+                self.tmp / "logs", REPO_ROOT,
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                pgid_probe=lambda: set(),
+            )
+        self.assertEqual(oracle.call_count, 1)
+        hb = self.hub.read(runner.HOSTS_PREFIX + self.host)
+        with mock.patch.object(runner, "_oracle_ok", side_effect=AssertionError("reran oracle")):
+            caps = runner.registration_payload(
+                self.host, [], REPO_ROOT, runner.fleet_scope_token(self.hub.url),
+                res.heartbeat_capabilities,
+            )["capabilities"]
+        for cap, heart in (("owning_user", "owning_user"),
+                           ("platform_id", "platform_id"),
+                           ("rustc_id", "rustc_id"),
+                           ("free_disk_gb", "free_gb"),
+                           ("free_mem_gb", "free_mem_gb"),
+                           ("oracle_ok", "oracle_ok"),
+                           ("gate_version", "gate_version")):
+            self.assertEqual(caps[cap], hb[heart])
+        self.assertIs(caps["oracle_ok"], False,
+                      "a measured failure is false, not unknown or fabricated true")
 
     def test_heartbeat_records_failover_caused_by_its_own_write(self):
         self._seed_desired()
