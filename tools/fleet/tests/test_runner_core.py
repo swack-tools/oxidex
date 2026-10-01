@@ -490,6 +490,49 @@ class TestJournalWiring(RunnerFixture):
         self.assertEqual([tag for tag, _reason in stopped], [worker.tag])
         self.assertTrue(journal.read_job(worker.job_key).closed)
 
+    def test_retained_adopted_worker_rechecks_identity_before_retry_signal(self):
+        journal = journal_mod.Journal()
+        child = runner.start_gate(self.hub, "staging/one", "live", [str(self.stub)],
+                                  self.host, self.log_dir, journal=journal)
+        self.workers.append(child)
+        adopted = runner.Worker(child.branch, child.tag, child.pgid, child.claim,
+                                job_key=child.job_key)
+        tracked = [adopted]
+        child.claim._mark_lost("lease gone")
+        with mock.patch.object(runner, "_journal_group_identity", return_value="missing"), \
+                mock.patch.object(runner, "kill_worker") as killer:
+            self.assertEqual(runner.stop_lost_workers(tracked, journal, self.host), [])
+            killer.assert_not_called()
+        self.assertEqual(tracked, [adopted])
+        self.assertTrue(journal.read_job(child.job_key).open)
+        with mock.patch.object(runner, "_journal_group_identity", return_value="other"), \
+                mock.patch.object(runner, "kill_worker") as killer:
+            runner.stop_lost_workers(tracked, journal, self.host)
+            killer.assert_not_called()
+        self.assertEqual(tracked, [])
+        self.assertTrue(journal.read_job(child.job_key).closed)
+
+    def test_timed_out_same_group_renewer_never_signals_authoritative_group(self):
+        journal = journal_mod.Journal()
+        old = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                self.host, self.log_dir, journal=journal)
+        self.workers.append(old)
+        replacement_claim = claim_mod.Claim(
+            self.hub, kind="gate", key="staging-one", holder_host=self.host)
+        authoritative = runner.Worker(old.branch, "authoritative", old.pgid,
+                                      replacement_claim, job_key=old.job_key)
+        tracked = [old, authoritative]
+        with mock.patch.object(old.claim, "stop_renewer"), \
+                mock.patch.object(old.claim, "renewer_running", return_value=True):
+            self.assertFalse(runner.stop_superseded_workers(
+                tracked, [authoritative], journal, self.host))
+        self.assertTrue(old.superseded_same_group)
+        old.claim._mark_lost("late renewal saw replacement token")
+        with mock.patch.object(runner, "kill_worker") as killer:
+            self.assertEqual(runner.stop_lost_workers(tracked, journal, self.host), [])
+            killer.assert_not_called()
+        self.assertIsNone(old.popen.poll())
+
     def test_log_open_failure_releases_claim_and_closes_offer(self):
         journal = journal_mod.Journal()
         real_open = open
@@ -1206,12 +1249,112 @@ class TestJournalWiring(RunnerFixture):
 
         with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
              mock.patch.object(runner.subprocess, "Popen", side_effect=record_spawn):
-            with self.assertRaises(journal_mod.JournalWriteError):
+            with self.assertRaises(journal_mod.JournalError) as caught:
                 runner.start_gate(self.hub, "staging/one", "failed-spawn", [str(self.stub)],
                                   self.host, self.log_dir, journal=j)
         self.assertEqual(len(spawned), 1)
         spawned[0].wait(timeout=10)
+        # SIGKILL completion can lag the return from kill_process_group.
+        # A pending child is retained until this local reap proves absence.
+        if isinstance(caught.exception, runner.SpawnCleanupPending):
+            pending = caught.exception.worker
+            self.workers.append(pending)
+            runner.stop_lost_workers([pending], j, self.host)
         self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
+
+    def test_failed_spawn_record_signal_refusal_retains_gate_and_agent(self):
+        for kind in ("gate", "agent"):
+            with self.subTest(kind=kind):
+                j = journal_mod.Journal(self.tmp / f"journal-{kind}")
+                launched = []
+                real_popen = subprocess.Popen
+
+                def spawn(*args, **kwargs):
+                    command = args[0] if args else []
+                    if kind == "agent" and any("agentworker.py" in str(a)
+                                               for a in command):
+                        p = real_popen([str(self.stub), "staging/one", f"{kind}-park"],
+                                       start_new_session=True,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                        launched.append(p)
+                        return p
+                    p = real_popen(*args, **kwargs)
+                    if command and command[0] == str(self.stub):
+                        launched.append(p)
+                    return p
+
+                def refuse(pgid, **_kwargs):
+                    return "injected signal refusal"
+
+                with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
+                        mock.patch.object(runner.subprocess, "Popen", side_effect=spawn), \
+                        mock.patch.object(runner, "kill_process_group", side_effect=refuse):
+                    with self.assertRaises(runner.SpawnCleanupPending) as caught:
+                        if kind == "gate":
+                            runner.start_gate(self.hub, "staging/one", "gate-park",
+                                              [str(self.stub)], self.host,
+                                              self.log_dir, journal=j)
+                        else:
+                            runner.start_agent(self.hub, "staging/one", "agent-park",
+                                               self.host, self.log_dir, REPO_ROOT,
+                                               journal=j)
+                worker = caught.exception.worker
+                self.assertEqual(len(launched), 1)
+                self.assertEqual(worker.pgid, launched[0].pid)
+                self.assertTrue(worker.cleanup_pending)
+                self.assertFalse(worker.claim.lost)
+                self.assertTrue(worker.claim.renew(),
+                                "a surviving child must retain its live lease")
+                self.assertEqual(self.hub.read(worker.claim.ref)["pgid"], worker.pgid)
+                self.assertIsNone(launched[0].poll())
+                self.assertTrue(j.read_job(worker.job_key).open)
+                self.assertIsNotNone(self.hub.sha(worker.claim.ref))
+                replacement_token = None
+                if kind == "agent":
+                    payload = self.hub.read(worker.claim.ref)
+                    replacement_token = claim_mod._iso(
+                        claim_mod._utcnow() + claim_mod.timedelta(seconds=2))
+                    payload["started_at"] = replacement_token
+                    payload["expires_at"] = claim_mod._iso(
+                        claim_mod._utcnow() + claim_mod.timedelta(seconds=600))
+                    self.assertTrue(self.hub.update(
+                        worker.claim.ref, payload,
+                        expect_sha=self.hub.sha(worker.claim.ref)))
+                    self.assertFalse(worker.claim.renew())
+                    self.assertTrue(worker.claim.lost)
+                self.workers.append(worker)
+                (self.tmp / f"stop-{worker.tag}").write_text("")
+                launched[0].wait(timeout=10)
+                tracked = [worker]
+                runner.stop_lost_workers(tracked, j, self.host)
+                self.assertEqual(tracked, [])
+                self.assertTrue(j.read_job(worker.job_key).closed)
+                if replacement_token is not None:
+                    self.assertEqual(self.hub.read(worker.claim.ref)["started_at"],
+                                     replacement_token,
+                                     "old cleanup must not delete the new token")
+
+    def test_reconcile_keeps_failed_spawn_child_and_starts_no_second_gate(self):
+        j = journal_mod.Journal(self.tmp / "journal-reconcile")
+        self.set_desired(gates=2)
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        "HEAD:refs/heads/staging/two"], check=True, env=scrub_env())
+        with mock.patch.object(j, "spawn", side_effect=journal_mod.JournalWriteError("full")), \
+                mock.patch.object(runner, "kill_process_group",
+                                  return_value="injected signal refusal"):
+            result = fleetd.reconcile_once(
+                self.hub, self.host, self.workers, [str(self.stub)], self.log_dir,
+                REPO_ROOT, disk_probe=lambda: 100, mem_probe=lambda: 32,
+                journal=j)
+        self.assertEqual(result.started, [])
+        self.assertEqual(len(self.workers), 1)
+        pending = self.workers[0]
+        self.assertTrue(pending.cleanup_pending)
+        self.assertIsNone(pending.popen.poll())
+        self.assertTrue(j.read_job(pending.job_key).open)
+        self.assertIn("spawn-cleanup-pending", [code for code, _ in result.refused])
+        self.assertEqual(len(self.hub.list("refs/fleet/claims/gate/")), 1)
 
 
 # --------------------------------------------------------------------- #

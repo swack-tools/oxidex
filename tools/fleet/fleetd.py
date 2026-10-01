@@ -723,6 +723,12 @@ def dispatch_agents(
         try:
             w = start_agent(hub, branch, tag, host, log_dir, repo_root,
                             journal=journal)
+        except keel_runner.SpawnCleanupPending as e:
+            workers.append(e.worker)
+            res.refused.append(("agent-spawn-cleanup-pending", f"{branch}: {e}"))
+            # A launched child still exists. It was paid for and must be
+            # stopped before another dispatch, not counted as NOT_PAID.
+            break
         except (OSError, journal_mod.JournalError) as e:
             spawn_failed = True
             res.refused.append(("agent-spawn-failed", f"{branch}: {e}"))
@@ -842,6 +848,11 @@ def reconcile_once(
     # run it here. Its signal precedes any claim cleanup I/O.
     res.killed.extend(keel_runner.stop_lost_workers(
         workers, jn, host, killer=kill_worker))
+    # A refused or inconclusive local stop is an outstanding safety
+    # obligation, including for callers that invoke one step directly.
+    spawn_allowed = spawn_allowed and not any(
+        w.claim.lost or w.superseded_same_group or w.cleanup_pending
+        for w in workers)
 
     # ---- (1) LOCAL FIRST. No hub call precedes this loop. ------------ #
     # Reap finished/dead workers, and kill any worker whose lease is lost.
@@ -857,7 +868,7 @@ def reconcile_once(
               "retaining adopted workers and starting no new work this pass",
               file=sys.stderr, flush=True)
     for w in list(workers):
-        if w.claim.lost:
+        if w.claim.lost or w.cleanup_pending:
             # A failed local termination remains open for the next retry.
             continue
         if (pgids is not None and w.popen is None and w.pgid not in pgids
@@ -1101,6 +1112,12 @@ def reconcile_once(
                         try:
                             w = start_gate(hub, branch, tag, gate_command, host, log_dir,
                                            journal=jn)
+                        except keel_runner.SpawnCleanupPending as e:
+                            workers.append(e.worker)
+                            res.refused.append(("spawn-cleanup-pending", f"{branch}: {e}"))
+                            # No more starts in this step while the child
+                            # still needs local termination.
+                            break
                         except (OSError, journal_mod.JournalError) as e:
                             res.refused.append(("spawn-failed", f"{branch}: {e}"))
                             continue
@@ -1122,7 +1139,9 @@ def reconcile_once(
         # host that is idle entirely by desired-state design. `target-zero`
         # names that design choice so it reads as intentional, not broken.
         res.refused.append(("target-zero", f"gates {want_gates} / agents {want_agents}"))
-    if enabled and slots > 0 and pgids is not None and spawn_allowed:
+    if enabled and slots > 0 and pgids is not None and spawn_allowed and not any(
+            w.claim.lost or w.cleanup_pending or w.superseded_same_group
+            for w in workers):
         try:
             import agentworker as _aw
             has_cli = bool(_aw.available_clis())

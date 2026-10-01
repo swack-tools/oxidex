@@ -237,6 +237,10 @@ class FleetdBase(WaitsForProcesses, HermeticCase):
 
 class TestProcessListingFailure(FleetdBase):
     def make_adopted_gate(self):
+        # The fixture command is intentionally not named gate.sh. Declare it
+        # as this host's worker marker so identity probes see the same
+        # positive scope evidence a deployed gate provides.
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
         self.set_desired(gates=1)
         self.assertEqual(len(self.reconcile().started), 1)
         child = self.workers[0]
@@ -296,15 +300,16 @@ class TestProcessListingFailure(FleetdBase):
         adopted = self.make_adopted_gate()
         adopted.claim._mark_lost("lease no longer ours")
         try:
-            with mock.patch.object(fleetd, "kill_worker", return_value="killed") as killer, \
-                    mock.patch.object(runner_mod, "_pgid_alive", return_value=False):
-                result = fleetd.reconcile_once(
-                    self.hub, self.host, self.workers, [str(self.stub)],
-                    self.tmp / "logs", Path(__file__).resolve().parents[3],
-                    disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
-                    pgid_probe=lambda: set(), warnings=self.host_warnings)
-            self.assertEqual([tag for tag, _ in result.killed], [adopted.tag])
-            killer.assert_called_once_with(adopted)
+            result = fleetd.reconcile_once(
+                self.hub, self.host, self.workers, [str(self.stub)],
+                self.tmp / "logs", Path(__file__).resolve().parents[3],
+                disk_probe=lambda: 100.0, mem_probe=lambda: 32.0,
+                pgid_probe=lambda: set(), warnings=self.host_warnings)
+            self.adopted_child.popen.wait(timeout=WAIT_BUDGET_S)
+            runner_mod.stop_lost_workers(self.workers, journal_mod.Journal(), self.host)
+            self.assertNotIn(adopted, self.workers)
+            self.assertFalse(adopted.alive())
+            self.assertEqual(result.started, [])
         finally:
             if adopted not in self.workers:
                 self.workers.append(adopted)
@@ -470,9 +475,9 @@ class TestProcessListingFailure(FleetdBase):
                 pgid_probe=lambda: (_ for _ in ()).throw(
                     runner_mod.ProcessListingUnavailable("ps failed")),
                 warnings=self.host_warnings)
-        # Signal is mandatory in this pass; an unreaped adopted group can
-        # remain kernel-visible, so durable exit waits for a later pass.
-        self.assertEqual(result.killed, [])
+        # Lost work stops even when the independent listing probe fails.
+        # It may be removed immediately when kernel absence is confirmed,
+        # or after the child has been reaped on the next local pass.
         self.adopted_child.popen.wait(timeout=WAIT_BUDGET_S)
         self.assertFalse(adopted.alive(), "the fixture gate's group was stopped")
         runner_mod.stop_lost_workers(self.workers, journal_mod.Journal(), self.host)
@@ -1611,6 +1616,21 @@ class TestLostLeaseIsKilledWhileTheHubIsUnreachable(FleetdBase):
         w = self.workers[0]
         self.assertTrue(w.alive(), "stub gate should be parked and alive")
         return w
+
+    def test_refused_lost_worker_stop_disables_other_gate_starts(self):
+        worker = self.start_one_gate()
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q",
+                        str(self.bare), "HEAD:refs/heads/staging/two"],
+                       check=True, env=scrub_env())
+        self.set_desired(gates=2)
+        worker.claim._mark_lost("lease gone")
+        with mock.patch.object(fleetd, "kill_worker", return_value="signal refused"), \
+                mock.patch.object(fleetd, "start_gate") as start:
+            res = self.reconcile()
+            start.assert_not_called()
+        self.assertEqual(res.started, [])
+        self.assertIn(worker, self.workers)
+        self.assertIsNone(worker.popen.poll())
 
     def test_a_lost_lease_is_killed_in_one_reconcile_with_the_hub_down(self):
         from fleetlib import HubError

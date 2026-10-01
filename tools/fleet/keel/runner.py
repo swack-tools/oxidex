@@ -329,6 +329,12 @@ class Worker:
     popen: Optional[subprocess.Popen] = None
     kind: str = "gate"
     job_key: Optional[str] = None
+    # A redundant handle for the same physical group must never dispatch a
+    # termination signal, even if its blocked renewer later reports loss.
+    superseded_same_group: bool = False
+    # A spawn journal write failed after Popen. Keep the child supervised
+    # until its termination is proved, even though its spawn record is absent.
+    cleanup_pending: bool = False
 
     def alive(self, pgids: Optional[set] = None) -> bool:
         # For workers we spawned, poll() is the truth AND reaps the child:
@@ -338,6 +344,14 @@ class Worker:
         if self.popen is not None:
             return self.popen.poll() is None
         return self.pgid in (pgids if pgids is not None else live_pgids())
+
+
+class SpawnCleanupPending(journal_mod.JournalError):
+    """A child survived failed spawn recording and must remain supervised."""
+
+    def __init__(self, worker: Worker, cause: journal_mod.JournalError):
+        super().__init__(f"{cause}; spawned group {worker.pgid} still requires cleanup")
+        self.worker = worker
 
 
 def default_gate_command(repo_root: Path) -> list:
@@ -823,15 +837,40 @@ def stop_lost_workers(workers: list, journal, host: str,
     """
     killed = []
     for worker in list(workers):
-        if not worker.claim.lost:
+        if (not worker.claim.lost and not worker.cleanup_pending) or worker.superseded_same_group:
             continue
-        reason = worker.claim.lost_reason or "renewal failed (no reason recorded)"
-        outcome = killer(worker)
-        if _pgid_alive(worker.pgid):
+        reason = (worker.claim.lost_reason or "renewal failed (no reason recorded)"
+                  if worker.claim.lost else "spawn record failed; cleanup pending")
+        # A retained numeric PGID is not a permanent identity. An adopted
+        # worker needs positive scope evidence before each retry; a direct
+        # child is positively identified while its Popen is still running.
+        child_live = worker.popen is not None and worker.popen.poll() is None
+        identity = "scoped" if child_live else "missing"
+        group_live = _pgid_alive(worker.pgid)
+        if not child_live and group_live:
+            try:
+                identity = _journal_group_identity(
+                    worker.pgid, fleet_scope_token(worker.claim.hub.url))
+            except ProcessListingUnavailable:
+                identity = "missing"
+        if identity == "missing" and group_live:
+            print(f"fleetd[{host}] LOST LEASE {worker.claim.ref} pgid={worker.pgid}: "
+                  "identity inconclusive; retaining run without signal",
+                  file=sys.stderr, flush=True)
+            continue
+        outcome = ("positive replacement; signal skipped" if identity == "other"
+                   else "kernel group absent; signal skipped" if not group_live
+                   else killer(worker))
+        if identity != "other" and _pgid_alive(worker.pgid):
             print(f"fleetd[{host}] LOST LEASE {worker.claim.ref} pgid={worker.pgid}: "
                   f"termination unconfirmed ({outcome}); retaining run for retry",
                   file=sys.stderr, flush=True)
             continue
+        if identity == "other" or not group_live:
+            try:
+                worker.claim.release()
+            except HubError:
+                pass
         workers.remove(worker)
         killed.append((worker.tag, reason))
         if _journal_run_matches_worker(journal, worker):
@@ -842,6 +881,8 @@ def stop_lost_workers(workers: list, journal, host: str,
                 print(f"fleetd[{host}] journal exit failed for {worker.tag}: "
                       f"{exc}; the run remains open on disk",
                       file=sys.stderr, flush=True)
+        elif worker.cleanup_pending:
+            _close_failed_offer(journal, worker.job_key, "spawn-record-failed")
         print(
             f"fleetd[{host}] LOST LEASE {worker.claim.ref} kind={worker.kind} "
             f"branch={worker.branch} tag={worker.tag} pgid={worker.pgid}: "
@@ -879,6 +920,7 @@ def stop_superseded_workers(workers: list, store_workers: list,
         if authoritative is None or authoritative is old:
             continue
         if old.pgid == authoritative.pgid:
+            old.superseded_same_group = True
             old.claim.stop_renewer(timeout=2)
             if not old.claim.renewer_running():
                 workers.remove(old)
@@ -1001,6 +1043,26 @@ def _close_failed_offer(jn, job_key: str, outcome: str) -> None:
         jn.exit(job_key=job_key, outcome=outcome)
     except journal_mod.JournalError:
         pass
+
+
+def _failed_spawn_record(jn, job_key: str, worker: Worker,
+                         cause: journal_mod.JournalError) -> None:
+    """A failed journal append cannot erase a child that still exists."""
+    kill_process_group(worker.pgid)
+    if _pgid_alive(worker.pgid):
+        worker.cleanup_pending = True
+        # The claim payload may be the only durable PGID evidence if the
+        # journal device is unwritable. Never let a failed renew discard the
+        # in-memory stop obligation carried by the exception.
+        worker.claim.pid = worker.pgid
+        worker.claim.pgid = worker.pgid
+        worker.claim.renew()
+        # Keep a still-owned claim renewing while the child is live. The
+        # cleanup_pending bit independently schedules local stop retries.
+        raise SpawnCleanupPending(worker, cause) from cause
+    worker.claim.release()
+    _close_failed_offer(jn, job_key, "spawn-record-failed")
+    raise cause
 
 
 def journal_claim_record(jn, job_key: str, c: Claim, *, kind: str,
@@ -1223,7 +1285,7 @@ def start_gate(
     try:
         jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
                  scope_token=fleet_scope_token(hub.url), argv0=str(gate_command[0]))
-    except journal_mod.JournalError:
+    except journal_mod.JournalError as exc:
         # A process exists that this runner cannot write down. Compare the
         # two directions of being wrong, the way the lost-lease kill does:
         # killing it costs one retryable gate run, while letting it live
@@ -1232,10 +1294,10 @@ def start_gate(
         # `renew` below lands it has no pgid in the payload either, which
         # is exactly the shape the orphan sweep kills, later, with no
         # verdict and no trace. Kill the group and give the lease back.
-        kill_process_group(popen.pid)
-        c.release()
-        _close_failed_offer(jn, job_key, "spawn-record-failed")
-        raise
+        _failed_spawn_record(
+            jn, job_key,
+            Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c,
+                   popen=popen, job_key=job_key), exc)
     worker = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen,
                     job_key=job_key)
     # Persist the real pgid into the claim payload: renew() rewrites the
@@ -1317,11 +1379,11 @@ def start_agent(
     try:
         jn.spawn(job_key=job_key, pid=popen.pid, pgid=popen.pid,
                  scope_token=fleet_scope_token(hub.url), argv0=sys.executable)
-    except journal_mod.JournalError:
-        kill_process_group(popen.pid)  # see the identical comment in `start_gate`
-        c.release()
-        _close_failed_offer(jn, job_key, "spawn-record-failed")
-        raise
+    except journal_mod.JournalError as exc:
+        _failed_spawn_record(
+            jn, job_key,
+            Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c,
+                   popen=popen, kind="agent", job_key=job_key), exc)
     w = Worker(branch=branch, tag=tag, pgid=popen.pid, claim=c, popen=popen, kind="agent",
                job_key=job_key)
     c.pid = popen.pid
