@@ -634,22 +634,38 @@ fn extract_rw2_embedded_exif_tags(jpeg: &[u8], metadata: &mut MetadataMap) -> Re
     for (tag_id, field_type, value_count, raw_bytes) in
         parse_ifd(&reader, exif_ifd_offset, byte_order)?
     {
-        if !matches!(tag_id, 0x9101 | 0x9102 | 0xA001 | 0xA302 | 0xA408) {
+        // Filter to the exact set of EXIF tags that ExifTool extracts from
+        // the RW2 JpgFromRaw preview EXIF IFD.
+        if !matches!(
+            tag_id,
+            0x9101 // ComponentsConfiguration
+                | 0x9102 // CompressedBitsPerPixel
+                | 0xA000 // FlashpixVersion
+                | 0xA001 // ColorSpace
+                | 0xA002 // ExifImageWidth
+                | 0xA003 // ExifImageHeight
+                | 0xA302 // CFAPattern
+                | 0xA401 // CustomRendered
+                | 0xA402 // ExposureMode
+                | 0xA404 // DigitalZoomRatio
+                | 0xA408 // Contrast
+        ) {
             continue;
         }
 
-        if let Some(value) = format_exif_display_value(
+        let tag_name = lookup_tag_name(tag_id, "ExifIFD");
+        let tag_value = if let Some(value) = format_exif_display_value(
             tag_id,
             raw_bytes.as_ref(),
             field_type,
             value_count,
             byte_order,
         ) {
-            metadata.insert(
-                lookup_tag_name(tag_id, "ExifIFD"),
-                TagValue::new_string(value),
-            );
-        }
+            TagValue::new_string(value)
+        } else {
+            raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
+        };
+        metadata.insert(tag_name, tag_value);
     }
 
     Ok(())
@@ -840,6 +856,30 @@ fn format_exif_display_value(
         },
         // CFAPattern: UNDEFINED with two endian-dependent u16 dimensions.
         0xA302 if field_type == 7 => decode_exif_cfa_pattern(bytes, byte_order),
+        // FlashpixVersion: UNDEFINED 4 bytes printed as e.g. "0100".
+        0xA000 if field_type == 7 => {
+            let count = usize::try_from(value_count).ok()?;
+            let ver_bytes = bytes.get(..count.min(4))?;
+            Some(String::from_utf8_lossy(ver_bytes).into_owned())
+        }
+        // CustomRendered: SHORT[1].
+        0xA401 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Normal".to_string()),
+            1 => Some("Custom".to_string()),
+            _ => None,
+        },
+        // ExposureMode: SHORT[1].
+        0xA402 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
+            0 => Some("Auto".to_string()),
+            1 => Some("Manual".to_string()),
+            2 => Some("Auto bracket".to_string()),
+            _ => None,
+        },
+        // DigitalZoomRatio: RATIONAL[1].
+        0xA404 if field_type == 5 && value_count >= 1 => {
+            // Reuse the same rational formatting as CompressedBitsPerPixel (0x9102).
+            format_rational_as_string(bytes, byte_order)
+        }
         // Contrast: SHORT[1].
         0xA408 if field_type == 3 && value_count >= 1 => match read_tiff_u16(bytes, byte_order)? {
             0 => Some("Normal".to_string()),
@@ -849,6 +889,19 @@ fn format_exif_display_value(
         },
         _ => None,
     }
+}
+
+/// Format a RATIONAL pair whose value_count >= 1.
+fn format_rational_as_string(bytes: &[u8], byte_order: ByteOrder) -> Option<String> {
+    let numerator = read_tiff_u32(bytes.get(..4)?, byte_order)?;
+    let denominator = read_tiff_u32(bytes.get(4..8)?, byte_order)?;
+    if denominator == 0 {
+        return None;
+    }
+    if numerator % denominator == 0 {
+        return Some((numerator / denominator).to_string());
+    }
+    Some(format!("{}", f64::from(numerator) / f64::from(denominator)))
 }
 
 /// Format PanasonicRaw tag 0x0009 (CFAPattern).

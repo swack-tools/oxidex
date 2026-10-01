@@ -188,6 +188,7 @@ Usage:
 """
 import argparse
 import datetime
+import difflib
 import email.utils
 import fcntl
 import functools
@@ -994,27 +995,157 @@ def _call_model_once(messages, base_url, api_key, model, max_tokens, reasoning_e
         return "".join(chunks), usage
 
 
-def git_apply(diff_text, repo_root):
-    """Apply a unified diff to the working tree. Returns (success, message).
+#: The git-apply tolerance ladder, tried strictly least-tolerant first; the
+#: FIRST rung that applies wins and the rest are never run.
+#:
+#: Why a ladder at all: a real RW2 worker transcript (deepseek-v4-pro,
+#: 2026-07-26T21:23) burned an entire attempt on two consecutive
+#: "did not apply" rejections -- a plan+diff at turn 21 and a VERIFY diff at
+#: turn 23 -- for a model diff whose content was right but whose context had
+#: drifted. There was no second chance: `git apply --recount` either matches
+#: 3 lines of context verbatim or fails, and a model that has only seen an
+#: excerpt of a file cannot reliably reproduce the surrounding whitespace.
+#: Every rung below still requires the change to be LOCATABLE -- there is
+#: deliberately no `patch --fuzz` fallback, which can silently apply a hunk
+#: in the wrong place and produce a plausible-looking but wrong edit.
+#:
+#: --recount (every rung) tells git to ignore each hunk's stated
+#: @@ -a,b +c,d @@ line counts and recompute them from the actual +/-/context
+#: lines instead -- models routinely emit diffs with an off-by-one in that
+#: header despite otherwise-correct content, which git rejects outright as
+#: "corrupt patch" without this flag. Harmless for a diff whose counts were
+#: already right.
+#:
+#: NOTE the deliberate absence of --reject, which every rung before this
+#: ladder used to pass. --reject makes `git apply` NON-ATOMIC: it applies
+#: whatever hunks it can, writes the rest to .rej files, and still exits 1.
+#: Measured directly (scratch repo, 2026-07-26): a 2-file patch failing on
+#: file A left file B fully modified plus an A.rej on disk. That is fatal for
+#: a ladder -- rung N+1 would then be matching its context against a tree
+#: rung N already half-patched, so a "success" at a looser rung could mean a
+#: doubly-applied or interleaved edit. Without --reject, `git apply` checks
+#: every hunk before writing anything and leaves the tree byte-identical on
+#: failure (also measured), which is exactly the precondition each next rung
+#: needs. Nothing in the fleet ever consumed a .rej file: attempt_build calls
+#: git_checkout_clean immediately after a failed apply, whose `git clean -fd`
+#: both deleted the partially-applied state and printed the "Removing
+#: <file>.rej" lines seen in worker logs. That clean still runs and still
+#: sweeps .rej files left behind by anything else; this ladder simply stops
+#: creating them.
+GIT_APPLY_LADDER = (
+    # 1. Exact: the pre-ladder behavior (minus --reject), and still the rung
+    #    the overwhelming majority of diffs land on.
+    ("exact", ["git", "apply", "--recount", "-"]),
+    # 2. Indentation slips -- a model re-typing a Rust block from memory gets
+    #    the code right and the leading spaces/tabs wrong.
+    ("ignore-whitespace", ["git", "apply", "--recount", "--ignore-whitespace", "-"]),
+    # 3. Context drift -- the file moved on (another worker's landed fix, or
+    #    the model only ever saw an excerpt). -C1 requires 1 line of context
+    #    instead of 3; the -/+ lines themselves must still match exactly.
+    ("context1", ["git", "apply", "--recount", "-C1", "-"]),
+    # 4. Both at once.
+    ("context1-ignore-whitespace",
+     ["git", "apply", "--recount", "-C1", "--ignore-whitespace", "-"]),
+    # 5. Real 3-way merge. Only possible when the diff carries `index
+    #    <old>..<new>` blob lines AND that old blob is in this repo's object
+    #    store -- most model-authored diffs have neither, so this rung usually
+    #    fails instantly with "does not have a valid blob information". Try it
+    #    anyway (it costs one exec) but do not rely on it. See
+    #    _restore_after_three_way below for the state it can leave behind.
+    ("3way", ["git", "apply", "--3way", "--recount", "-"]),
+)
+
+#: Rung 5's name, referenced in both the success and failure paths below.
+_THREE_WAY_RUNG = "3way"
+
+
+def _restore_after_three_way(repo_root, applied):
+    """Undo the index side-effects `git apply --3way` has and the other
+    rungs don't. Measured in a scratch repo, 2026-07-26:
+
+      - On SUCCESS --3way implies --index, so the change comes back STAGED
+        ("M  f.txt"). That silently breaks git_checkout_clean: its
+        `git checkout -- .` restores the worktree FROM THE INDEX, so a
+        3way-applied change would survive the revert that follows a failed
+        build and leak into the next round's diff (and into `git add -A`).
+      - On FAILURE with a real conflict it exits 1 having written conflict
+        markers into the file and left an UNMERGED index entry ("UU f.txt").
+        `git checkout -- .` on an unmerged path is an error, and
+        git_checkout_clean runs it with check=True -- i.e. that would have
+        raised CalledProcessError and killed the worker outright.
+
+    `git reset -q -- <paths>` puts those index entries back to HEAD; on the
+    failure path a following `git checkout -- <paths>` then throws away the
+    conflict-markered worktree content. Scoped to the paths the 3way itself
+    touched (staged or unmerged -- rungs 1-4 stage nothing, so anything
+    staged here is ours) rather than the whole tree, so this can never
+    discard unrelated work.
+    """
+    paths = set()
+    for argv in (
+        ["git", "diff", "--cached", "--name-only"],
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+    ):
+        probe = subprocess.run(argv, capture_output=True, text=True, cwd=repo_root)  # nosec B603
+        paths.update(line for line in probe.stdout.splitlines() if line.strip())
+    if not paths:
+        return
+    ordered = sorted(paths)
+    subprocess.run(  # nosec B603
+        ["git", "reset", "-q", "--"] + ordered, capture_output=True, text=True, cwd=repo_root,
+    )
+    if not applied:
+        subprocess.run(  # nosec B603
+            ["git", "checkout", "--"] + ordered, capture_output=True, text=True, cwd=repo_root,
+        )
+
+
+def git_apply_with_rung(diff_text, repo_root):
+    """Apply a unified diff to the working tree, walking GIT_APPLY_LADDER
+    until one rung succeeds. Returns (success, message, rung_used) --
+    rung_used is the GIT_APPLY_LADDER name that applied, or None on total
+    failure. git_apply() below is the 2-tuple wrapper every existing caller
+    keeps using; only the callers that want to LOG which rung was needed
+    (see logging_git_apply) call this one.
 
     List-argv only, no shell=True anywhere in this file -- repo_root is a
     local path this process already trusts (the repo it's running in), and
     diff_text is passed via stdin, never interpolated into the argv list.
-
-    --recount tells git to ignore each hunk's stated @@ -a,b +c,d @@ line
-    counts and recompute them from the actual +/-/context lines instead --
-    models routinely emit diffs with an off-by-one in that header despite
-    otherwise-correct content, which git rejects outright as "corrupt
-    patch" without this flag. Harmless for a diff whose counts were
-    already right.
     """
-    result = subprocess.run(  # nosec B603
-        ["git", "apply", "--reject", "--recount", "-"],
-        input=diff_text, capture_output=True, text=True, cwd=repo_root,
-    )
-    if result.returncode == 0:
-        return True, "applied"
-    return False, result.stderr
+    first_error = None
+    for rung, argv in GIT_APPLY_LADDER:
+        result = subprocess.run(  # nosec B603
+            argv, input=diff_text, capture_output=True, text=True, cwd=repo_root,
+        )
+        applied = result.returncode == 0
+        if rung == _THREE_WAY_RUNG:
+            _restore_after_three_way(repo_root, applied)
+        if applied:
+            # "applied" verbatim for the exact rung: that exact string is
+            # what the manifest and every existing test have recorded since
+            # this function existed, and a looser rung is the only
+            # interesting case to call out.
+            message = "applied" if rung == GIT_APPLY_LADDER[0][0] else f"applied at rung {rung!r}"
+            return True, message, rung
+        if first_error is None:
+            first_error = result.stderr
+    # Report the STRICT rung's stderr, not the last one's: it's the message
+    # that names the context git searched for, which is what a model needs to
+    # correct its diff. The suffix tells it not to waste its retry on a
+    # whitespace/indentation tweak -- that was already tried for it.
+    looser = ", ".join(rung for rung, _ in GIT_APPLY_LADDER[1:])
+    return False, f"{first_error}(also retried at looser rungs: {looser} -- none applied)", None
+
+
+def git_apply(diff_text, repo_root):
+    """Apply a unified diff to the working tree. Returns (success, message).
+
+    Thin 2-tuple wrapper over git_apply_with_rung so every existing caller
+    (attempt_build's git_apply_fn contract, and the test fakes injected for
+    it) is unaffected by the ladder's extra return value.
+    """
+    success, message, _rung = git_apply_with_rung(diff_text, repo_root)
+    return success, message
 
 
 def git_checkout_clean(repo_root):
@@ -2076,7 +2207,7 @@ STRATEGY: bias toward attempting a real patch early rather than open-ended explo
 
 Every reply must be exactly one of these four shapes:
 
-1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add :<start>-<end> after a source path (e.g. REQUEST: src/parsers/x.rs:40-120) to get just that 1-indexed line range -- prefer a range for anything large.
+1. REQUEST: <path> -- see a source file or a sample file (a bare line, nothing else in the reply). Add a 1-indexed line range after a source path -- prefer one for anything large. All four shapes work: `:40-120` (that range), `:400-` (line 400 to end of file), `:-120` (start through line 120), `:400` (a window around line 400). You have a limited number of REQUEST turns per attempt and each answer tells you how many are left; when none are left you MUST reply with a diff.
 2. VERIFY -- trial-compile a candidate change without committing to it: the line "VERIFY" followed by exactly ONE ```diff fenced block. The diff is applied, `cargo check` runs, the tail of its output comes back, and the change is REVERTED -- your final diff must still contain the complete change.
 3. PATCH 1/N -- if your finished diff would exceed roughly {max_prompt_tokens} tokens (~{max_prompt_tokens * 4} characters) in one reply, split it into N consecutive chunks and send the first as the line "PATCH 1/N" followed by ONE ```diff fenced chunk; you'll be prompted for each next chunk. Chunks are concatenated in order before applying, so split anywhere (mid-hunk is fine) -- never repeat or skip lines across a boundary.
 4. Plan + diff -- first, 2-3 sentences: which tag(s) you're fixing, where in the code, what you learned from the previous turn's output, and (on a retry) what you're doing differently from the failed attempt(s) above and why. Then exactly ONE ```diff fenced block containing the complete unified diff.
@@ -3632,6 +3763,54 @@ DEFAULT_MAX_VERIFY_TURNS = 10   # trial-compile turns per attempt_build invocati
 DEFAULT_MAX_CHECK_OUTPUT_CHARS = 3000  # tail-trim: Rust errors summarize at the end
 
 
+def render_request_budget_footer(turns_used, max_turns):
+    """The one-line investigation-budget notice appended to the END of every
+    REQUEST answer. `turns_used` is the count INCLUDING the turn being
+    answered.
+
+    Two rules encoded here, both learned the hard way:
+
+    1. It must be a footer, never a header. Every user message in this
+       conversation sits inside the region the provider's prompt cache
+       reuses (see PROMPT_SECTION_ORDER for the same principle on the
+       prompt side): a counter that changes every turn near the TOP would
+       invalidate the cached prefix for every subsequent call in the
+       attempt. At the very end it only ever invalidates itself.
+
+    2. On the LAST allowed turn it stops being a counter and becomes a
+       pre-emptive instruction. The old `nudged_to_stop_investigating`
+       message only arrived AFTER the budget was already spent -- in the
+       RW2 transcript (2026-07-26T21:23) the model, never told what its
+       budget was, spent turn 24 of 25 on another REQUEST. A model that
+       cannot see the budget cannot ration it.
+    """
+    remaining = max_turns - turns_used
+    if remaining > 0:
+        return f"(investigation turn {turns_used} of {max_turns} -- {remaining} left)"
+    return (
+        f"(investigation turn {turns_used} of {max_turns} -- this was your LAST. "
+        "No investigation turns remain: another REQUEST will be discarded unanswered. "
+        "Your next reply must be your best-effort diff -- a plan plus one ```diff "
+        "block, or VERIFY plus one ```diff block -- based on what you have already "
+        "seen, even if you are not fully certain.)"
+    )
+
+
+#: The one forced retry attempt_build allows itself when a model replies
+#: REQUEST with no investigation turns left. Deliberately absolute: by this
+#: point the model has already been told, on its previous turn, that this
+#: exact thing would happen. Anything softer ("...or a REQUEST if you must")
+#: is how the transcript ended up spending its last turns on investigation.
+FORCED_DIFF_DEMAND = (
+    "Your investigation budget is gone and that REQUEST was DISCARDED unanswered -- "
+    "no file contents are coming. This is your final turn of this attempt: reply with "
+    "a diff and nothing else. Send 2-3 sentences of plan followed by exactly ONE "
+    "```diff fenced block containing your best-effort change, however uncertain. "
+    "Another REQUEST, VERIFY or PATCH reply ends the attempt with no fix at all, so a "
+    "guess that might be wrong is strictly better than another question."
+)
+
+
 def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
     """Render up to max_bytes of data as classic 16-bytes-per-line hex+ASCII,
     the way a human would inspect an unfamiliar binary segment."""
@@ -3646,10 +3825,38 @@ def hex_dump(data, max_bytes=DEFAULT_HEXDUMP_BYTES):
 
 
 REQUEST_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+#: "path:400-" -- from line 400 to end of file. The RW2 worker transcript
+#: (deepseek-v4-pro, 2026-07-26T21:23) opened with exactly this form:
+#: "REQUEST: src/parsers/xmp/rdf_parser.rs:400-", a perfectly sensible "show
+#: me the rest of the file". The START-END-only regex above didn't match, so
+#: ":400-" was treated as part of the FILENAME and the model got a
+#: could-not-resolve rejection it had no way to diagnose -- it never asked
+#: for a range again that attempt.
+REQUEST_OPEN_END_RANGE_RE = re.compile(r"^(.*?):(\d+)-$")
+#: "path:-120" -- start of file through line 120.
+REQUEST_OPEN_START_RANGE_RE = re.compile(r"^(.*?):-(\d+)$")
+#: "path:400" -- a bare line number, the shape a model produces when it's
+#: quoting a line from a compiler error or a grep hit.
+REQUEST_SINGLE_LINE_RE = re.compile(r"^(.*?):(\d+)$")
+
+#: Window served for a bare "path:N". Weighted forward rather than centered:
+#: a bare line number nearly always comes from an error/grep pointing at the
+#: START of something the model wants to read (a fn, a match arm), so it
+#: needs the body after N more than the code before it. The few lines before
+#: are there for the signature/attribute line above the hit.
+REQUEST_SINGLE_LINE_CONTEXT_BEFORE = 20
+REQUEST_SINGLE_LINE_CONTEXT_AFTER = 100
 
 
 def parse_request_range(path_str):
-    """Split a "path:START-END" request into (path, start, end).
+    """Split a "path:RANGE" request into (path, start, end).
+
+    Accepted range shapes (all 1-indexed, all inclusive):
+      "path:40-120"  -> (path, 40, 120)
+      "path:400-"    -> (path, 400, None)  -- None end means "to EOF"
+      "path:-120"    -> (path, 1, 120)
+      "path:400"     -> a window around/after 400 (see the two
+                        REQUEST_SINGLE_LINE_CONTEXT_* constants)
 
     Returns (path, None, None) when there's no numeric range suffix. A
     range-shaped suffix with start < 1 or start > end strips the suffix
@@ -3659,13 +3866,119 @@ def parse_request_range(path_str):
     and fails resolution with the normal could-not-resolve message.
     """
     stripped = path_str.strip()
+
     m = REQUEST_RANGE_RE.match(stripped)
-    if not m:
-        return stripped, None, None
-    start, end = int(m.group(2)), int(m.group(3))
-    if start < 1 or end < start:
-        return m.group(1), None, None
-    return m.group(1), start, end
+    if m:
+        start, end = int(m.group(2)), int(m.group(3))
+        if start < 1 or end < start:
+            return m.group(1), None, None
+        return m.group(1), start, end
+
+    m = REQUEST_OPEN_END_RANGE_RE.match(stripped)
+    if m:
+        start = int(m.group(2))
+        if start < 1:
+            return m.group(1), None, None
+        return m.group(1), start, None
+
+    m = REQUEST_OPEN_START_RANGE_RE.match(stripped)
+    if m:
+        end = int(m.group(2))
+        if end < 1:
+            return m.group(1), None, None
+        return m.group(1), 1, end
+
+    m = REQUEST_SINGLE_LINE_RE.match(stripped)
+    if m:
+        line = int(m.group(2))
+        if line < 1:
+            return m.group(1), None, None
+        return (
+            m.group(1),
+            max(1, line - REQUEST_SINGLE_LINE_CONTEXT_BEFORE),
+            line + REQUEST_SINGLE_LINE_CONTEXT_AFTER,
+        )
+
+    return stripped, None, None
+
+
+#: How many sibling names a could-not-resolve rejection lists. 40 short Rust
+#: filenames is a few hundred tokens -- cheap next to the turn (~17K tokens
+#: of conversation, one model call) that a blind retry costs.
+REQUEST_DIR_LISTING_LIMIT = 40
+
+
+def describe_missing_path(path_part, repo_root, samples_dir, max_entries=REQUEST_DIR_LISTING_LIMIT):
+    """Build the "here is what's ACTUALLY there" half of a could-not-resolve
+    rejection: the real entries of the nearest existing ancestor directory of
+    the path the model asked for, plus a did-you-mean when one of them is a
+    near miss on the name it invented.
+
+    Why: in the RW2 transcript (2026-07-26T21:23) the model asked for
+    src/parsers/xmp/artwork_parser.rs -- a plausible name that does not
+    exist; the directory really holds history_parser.rs, mod.rs,
+    namespace_mapping.rs, namespace_resolver.rs, namespaces/ and
+    rdf_parser.rs. The old rejection said "try a path from the list shown",
+    but by then the prompt's file list was thousands of tokens back in a
+    ~17K-token conversation, so "the list shown" pointed at nothing the
+    model could still see, and it burned the next turn guessing again.
+
+    Returns "" when nothing useful can be said (no ancestor inside either
+    root), so the caller can fall back to the bare rejection.
+    """
+    requested = Path(path_part)
+    lines = []
+    for root, label in (
+        (repo_root, "repo root"),
+        (Path(samples_dir) if samples_dir is not None else None, "samples dir"),
+    ):
+        if root is None:
+            continue
+        try:
+            root_resolved = Path(root).resolve()
+            target = (root_resolved / requested).resolve()
+        except OSError:
+            continue
+        # Containment is checked on the RESOLVED target, never on the
+        # lexical one: "../../../etc/passwd" under root has root itself in
+        # its lexical .parents chain, so a lexical check would happily list
+        # /etc for an escape attempt. resolve_request's own candidate loop
+        # refuses to SERVE such a path; this must not describe it either.
+        if root_resolved != target and root_resolved not in target.parents:
+            continue
+        # Walk up from the requested path's own parent to the nearest
+        # ancestor that exists -- a typo'd directory ("src/parsr/x.rs") is
+        # just as common as a typo'd filename, and listing the grandparent
+        # is still far better than listing nothing.
+        for ancestor in target.parents:
+            if root_resolved != ancestor and root_resolved not in ancestor.parents:
+                continue  # past the top of this root
+            if not ancestor.is_dir():
+                continue
+            try:
+                entries = sorted(
+                    entry.name + ("/" if entry.is_dir() else "")
+                    for entry in ancestor.iterdir()
+                    if not entry.name.startswith(".")
+                )
+            except OSError:
+                break
+            rel = ancestor.relative_to(root_resolved)
+            shown = entries[:max_entries]
+            suffix = ""
+            if len(entries) > max_entries:
+                suffix = f" ... (+{len(entries) - max_entries} more)"
+            where = f"{rel}/" if str(rel) != "." else f"the {label}"
+            lines.append(f"{where} actually contains: {', '.join(shown)}{suffix}" if shown
+                         else f"{where} is empty.")
+            close = difflib.get_close_matches(
+                requested.name, [entry.rstrip("/") for entry in entries], n=3, cutoff=0.6
+            )
+            if close:
+                prefix = f"{rel}/" if str(rel) != "." else ""
+                lines.append("Did you mean: " + ", ".join(f"{prefix}{name}" for name in close) + "?")
+            break
+    return "\n".join(lines)
 
 
 def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
@@ -3673,9 +3986,15 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
     resolves under samples_dir (real binary sample data), the raw text if
     it resolves under repo_root (more source to read), or a rejection
     message otherwise. Path traversal outside both roots is refused.
-    A "path:START-END" suffix on a source file returns just that 1-indexed
-    inclusive line range, numbered; samples always get the whole-file hex
-    dump.
+    A range suffix on a source file returns just that 1-indexed inclusive
+    line range, numbered -- see parse_request_range for the four accepted
+    shapes ("path:40-120", "path:400-", "path:-120", "path:400"). Samples
+    always get the whole-file hex dump.
+
+    The rejection is deliberately self-correcting rather than a bare "no":
+    it lists the real contents of the nearest existing ancestor directory
+    (see describe_missing_path), because a model that guessed a filename
+    cannot un-guess it from a message that shows it nothing.
     """
     path_part, range_start, range_end = parse_request_range(path_str)
     candidates = []
@@ -3704,11 +4023,14 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
         if range_start is not None:
             lines = content.splitlines()
             if range_start > len(lines):
+                asked = f"{range_start}-{range_end}" if range_end is not None else f"{range_start}-EOF"
                 return (
                     f"{path_part} has only {len(lines)} lines -- the requested range "
-                    f"{range_start}-{range_end} starts past the end. Request a range within the file."
+                    f"{asked} starts past the end. Request a range within the file."
                 )
-            clamped_end = min(range_end, len(lines))
+            # range_end None is the "path:400-" open-ended form: everything
+            # from start to EOF.
+            clamped_end = len(lines) if range_end is None else min(range_end, len(lines))
             numbered = "\n".join(
                 f"{i}: {line}"
                 for i, line in enumerate(lines[range_start - 1:clamped_end], start=range_start)
@@ -3716,7 +4038,11 @@ def resolve_request(path_str, repo_root, samples_dir, max_text_bytes=20_000):
             return f"Lines {range_start}-{clamped_end} of {path_part}:\n{numbered}"
         return f"Contents of {path_part}:\n{content[:max_text_bytes]}"
 
-    return f"Could not resolve {path_part!r} under the samples dir or repo root -- try a path from the list shown."
+    rejection = f"Could not resolve {path_part!r} under the samples dir or repo root."
+    listing = describe_missing_path(path_part, repo_root, samples_dir)
+    if listing:
+        return f"{rejection}\n{listing}"
+    return f"{rejection} Try a path from the list shown earlier in this conversation."
 
 
 def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_fn,
@@ -3726,7 +4052,11 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     config["max_request_turns"] turns where the model can ask to see more
     context (REQUEST: <path> -- see resolve_request) before it must submit
     a diff, then up to 2 diff attempts (initial + one apply/build repair
-    round-trip). Extends the given messages conversation in place. Returns
+    round-trip). Every REQUEST answer ends with the remaining investigation
+    budget (render_request_budget_footer), the last one pre-emptively
+    demanding a diff; a REQUEST sent after the budget is gone buys exactly
+    one forced-diff retry (FORCED_DIFF_DEMAND) and never more. Extends the
+    given messages conversation in place. Returns
     (built, reason, diff, messages) -- reason is None when built is True;
     diff is the successfully-applied diff (None if not built).
 
@@ -3765,7 +4095,7 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
     verify_turns_used = 0
     verify_rejections = 0
     diff_attempts_used = 0
-    nudged_to_stop_investigating = False
+    forced_diff_retry_used = False
     patch_chunks = {}
     patch_turns_used = 0
     current_phase = "explore" if len(messages) == 1 else "patch"
@@ -3816,37 +4146,38 @@ def attempt_build(messages, *, call_model_fn, git_apply_fn, git_checkout_clean_f
                     # Dead-end: the same path over and over. Re-serving
                     # identical content burns budget without advancing
                     # anything -- course-correct instead.
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
-                            "it was already provided in full and re-reading it will not change anything. "
-                            "Pivot: request a DIFFERENT file, narrow to a line range "
-                            "(REQUEST: path:START-END), or submit your best diff now."
-                        ),
-                    })
+                    body = (
+                        f"You've now requested {normalized!r} {request_counts[normalized]} times -- "
+                        "it was already provided in full and re-reading it will not change anything. "
+                        "Pivot: request a DIFFERENT file, narrow to a line range "
+                        "(REQUEST: path:START-END), or submit your best diff now."
+                    )
                     current_phase = "patch"
                 else:
-                    answer = resolve_request(request_match.group(1), repo_root, samples_dir)
-                    messages.append({"role": "user", "content": answer})
+                    body = resolve_request(request_match.group(1), repo_root, samples_dir)
                     current_phase = "explore"
+                # Budget footer on BOTH branches, and always LAST in the
+                # message -- see render_request_budget_footer for why it's a
+                # footer and why the final turn's wording is pre-emptive.
+                footer = render_request_budget_footer(request_turns_used, max_request_turns)
+                messages.append({"role": "user", "content": f"{body}\n\n{footer}"})
                 continue
-            if not nudged_to_stop_investigating:
+            if not forced_diff_retry_used:
                 # Previously fell straight through to extract_diff on this
                 # same REQUEST-shaped reply and failed immediately with "no
                 # diff in model response" -- silently wasting the whole
-                # attempt on investigation without ever telling the model
-                # to actually submit something. One explicit nudge first.
-                nudged_to_stop_investigating = True
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "You've used all your allowed investigation turns for this attempt. "
-                        "No more file requests -- submit your best diff now (in a ```diff "
-                        "fenced block) based on what you've already seen, even if you're not "
-                        "fully certain."
-                    ),
-                })
+                # attempt on investigation without ever telling the model to
+                # actually submit something.
+                #
+                # This is now one FORCED retry rather than a suggestion: the
+                # model was already warned, on the turn before, that a
+                # REQUEST here would be discarded, so the only useful thing
+                # left to say is "a diff, nothing else" (FORCED_DIFF_DEMAND).
+                # Strictly one: the flag is never cleared, so a model that
+                # requests yet again falls through to the return below
+                # instead of earning itself unbounded extra calls.
+                forced_diff_retry_used = True
+                messages.append({"role": "user", "content": FORCED_DIFF_DEMAND})
                 current_phase = "patch"
                 continue
             return False, "no diff in model response (exhausted request budget)", None, messages
@@ -6817,11 +7148,19 @@ def main(argv=None):
         # the manifest then pointed at a file holding the OTHER worker's
         # diff.
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        applied, msg = git_apply(diff_text, repo_root)
+        # git_apply_with_rung, not git_apply: rung is the whole point of the
+        # tolerance ladder being measurable. "rung=exact" vs "rung=context1"
+        # in the manifest is what tells us, over the next few thousand
+        # diffs, whether the looser rungs are earning their keep or quietly
+        # rescuing diffs that should have been rejected.
+        applied, msg, rung = git_apply_with_rung(diff_text, repo_root)
         diff_path = diff_log_dir / f"{ts}-{worker_label}-{'applied' if applied else 'rejected'}.diff"
         diff_path.write_text(diff_text)
         with manifest_path.open("a") as f:
-            f.write(f"{ts} worker={worker_label} applied={applied} file={diff_path.name} apply_msg={msg[:200]!r}\n")
+            f.write(
+                f"{ts} worker={worker_label} applied={applied} rung={rung} "
+                f"file={diff_path.name} apply_msg={msg[:200]!r}\n"
+            )
         return applied, msg
 
     def timestamped_log(msg):

@@ -816,6 +816,16 @@ class ProcessGroupAliveTests(unittest.TestCase):
         mock_killpg.side_effect = ProcessLookupError()
         self.assertFalse(_process_group_alive(123))
 
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_false_when_pgid_was_recycled_by_another_owner(self, mock_killpg):
+        # EPERM: the pgid exists but belongs to someone else, so OUR worker's
+        # processes are gone. Returning True here would spin until force_after
+        # and then aim SIGKILL at a stranger's process group; RAISING here took
+        # the whole dispatcher down on 2026-07-27 (32 workers lost to one
+        # recycled pgid), which is the regression this pins.
+        mock_killpg.side_effect = PermissionError(1, "Operation not permitted")
+        self.assertFalse(_process_group_alive(123))
+
 
 class KillProcessGroupTests(unittest.TestCase):
     @patch("parallel_model_fix_loop.os.killpg")
@@ -826,6 +836,14 @@ class KillProcessGroupTests(unittest.TestCase):
     @patch("parallel_model_fix_loop.os.killpg")
     def test_ignores_already_dead_group(self, mock_killpg):
         mock_killpg.side_effect = ProcessLookupError()
+        _kill_process_group(123)  # must not raise
+
+    @patch("parallel_model_fix_loop.os.killpg")
+    def test_ignores_group_we_do_not_own(self, mock_killpg):
+        # A pgid we cannot signal is not ours. Swallowing EPERM is what keeps
+        # us from delivering SIGKILL to an unrelated process group that merely
+        # inherited the number.
+        mock_killpg.side_effect = PermissionError(1, "Operation not permitted")
         _kill_process_group(123)  # must not raise
 
 
