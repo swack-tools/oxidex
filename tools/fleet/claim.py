@@ -494,6 +494,7 @@ class Claim:
         ref: str,
         *,
         expected_host: Optional[str] = None,
+        expected_started_at: Optional[str] = None,
         ttl: Optional[float] = None,
         renew_interval: Optional[float] = None,
     ) -> Optional["Claim"]:
@@ -549,6 +550,12 @@ class Claim:
             return None
 
         host = expected_host if expected_host is not None else socket.gethostname()
+        if (expected_started_at is not None and
+                payload.get("started_at") != expected_started_at):
+            # The ref changed after an earlier ownership observation.
+            # Never renew another acquisition just because its logical
+            # host name is the same.
+            return None
         if payload.get("holder_host") != host:
             # Another host's lease. Not ours to renew, release or reason
             # about -- the single most important thing this method does NOT
@@ -642,20 +649,25 @@ class Claim:
                         "(reaped as expired, or deleted)"
                     )
                     return False
-                if current != self._sha:
-                    payload = self.hub.read(self.ref)
-                    if not self._owns(payload):
-                        holder = (payload or {}).get("holder_host", "?")
-                        started = (payload or {}).get("started_at", "?")
-                        self._mark_lost(
-                            f"{self.ref} is now held by {holder} (started_at "
-                            f"{started}); our acquisition was superseded"
-                        )
-                        return False
-                    # Still ours -- our own earlier write, whose sha we
-                    # never got to observe. Adopt it and carry on.
-                    self._sha = current
-                ok = self.hub.update(self.ref, self._payload(now), expect_sha=self._sha)
+                # Read ownership after the sha, even when it equals our
+                # cached sha. During adoption the initial payload read and
+                # sha read are separate operations: a replacement between
+                # them can leave us holding the replacement's sha with the
+                # old acquisition's token. The second read catches that
+                # race; a replacement after it loses the CAS update.
+                payload = self.hub.read(self.ref)
+                if not self._owns(payload):
+                    holder = (payload or {}).get("holder_host", "?")
+                    started = (payload or {}).get("started_at", "?")
+                    self._mark_lost(
+                        f"{self.ref} is now held by {holder} (started_at "
+                        f"{started}); our acquisition was superseded"
+                    )
+                    return False
+                # Still ours -- our own earlier write may have succeeded
+                # without a readback. Carry its current sha into the CAS.
+                self._sha = current
+                ok = self.hub.update(self.ref, self._payload(now), expect_sha=current)
             except HubError as exc:
                 # HubError, not just HubUnreachableError. A renewal can
                 # also fail for entirely local reasons -- the object cache

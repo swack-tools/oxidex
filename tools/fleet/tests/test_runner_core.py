@@ -325,9 +325,64 @@ class TestJournalWiring(RunnerFixture):
         worker.popen.wait(timeout=10)
         worker.claim.release()
         with mock.patch.object(runner.os, "killpg", return_value=None), \
-                mock.patch.object(runner, "_scoped_worker_in_group", return_value=None):
+                mock.patch.object(runner, "_journal_group_identity", return_value="other"):
             runner.reconcile_journal_runs(journal, self.hub, self.host, [])
         self.assertTrue(journal.read_job(worker.job_key).closed)
+
+    def test_missing_identity_rows_keep_kernel_live_old_run_open(self):
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                   self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        (self.tmp / f"stop-{worker.tag}").write_text("")
+        worker.popen.wait(timeout=10)
+        worker.claim.release()
+        with mock.patch.object(runner.os, "killpg", return_value=None), \
+                mock.patch.object(runner, "_journal_group_identity", return_value="missing"):
+            runner.reconcile_journal_runs(journal, self.hub, self.host, [])
+        self.assertTrue(journal.read_job(worker.job_key).open)
+        with mock.patch.object(runner.os, "killpg", return_value=None), \
+                mock.patch.object(runner, "_journal_group_identity", return_value="other"):
+            runner.reconcile_journal_runs(journal, self.hub, self.host, [])
+        self.assertTrue(journal.read_job(worker.job_key).closed)
+
+    def test_ambiguous_host_claim_rejects_replaced_token_before_renewal(self):
+        host_claim = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host=self.host)
+        host_claim.acquire()
+        self.addCleanup(host_claim.release)
+        first = self.hub.read(host_claim.ref)
+        second = dict(first, started_at="2020-01-01T00:00:00+00:00")
+        started = claim_mod._parse_iso(first["started_at"]).timestamp()
+        with mock.patch.object(self.hub, "read", side_effect=[first, second]) as reads, \
+                mock.patch.object(self.hub, "update", wraps=self.hub.update) as update:
+            matched, adopted = runner._recover_ambiguous_host_claim(
+                self.hub, self.host, host_claim, (started - 1, started + 1))
+        self.assertTrue(matched)
+        self.assertIsNone(adopted)
+        self.assertEqual(reads.call_count, 2)
+        update.assert_not_called()
+
+    def test_ambiguous_host_claim_rejects_replacement_after_sha_read(self):
+        host_claim = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host=self.host)
+        host_claim.acquire()
+        self.addCleanup(host_claim.release)
+        first = self.hub.read(host_claim.ref)
+        replacement = dict(first, started_at="2020-01-01T00:00:00+00:00")
+        started = claim_mod._parse_iso(first["started_at"]).timestamp()
+        with mock.patch.object(self.hub, "read",
+                               side_effect=[first, first, replacement]) as reads, \
+                mock.patch.object(self.hub, "sha", return_value="f" * 40), \
+                mock.patch.object(self.hub, "update", wraps=self.hub.update) as update:
+            matched, adopted = runner._recover_ambiguous_host_claim(
+                self.hub, self.host, host_claim, (started - 1, started + 1))
+        self.assertTrue(matched)
+        self.assertIsNone(adopted)
+        self.assertEqual(reads.call_count, 3)
+        update.assert_not_called()
 
     def test_false_offline_listing_does_not_queue_live_claim_release(self):
         os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
@@ -470,6 +525,148 @@ class TestJournalWiring(RunnerFixture):
                              for call in update.call_args_list))
         self.assertTrue(worker.alive())
         self.assertTrue(journal.read_job(worker.job_key).open)
+
+    def test_host_retry_precedes_a_failing_reconcile_read(self):
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        calls = {"host": 0, "reconcile": 0}
+
+        def acquire(claim):
+            if claim.kind == "host":
+                calls["host"] += 1
+                if calls["host"] == 1:
+                    raise HubUnreachableError("first route down")
+            return real_acquire(claim)
+
+        def failing_step(*_args, **_kwargs):
+            calls["reconcile"] += 1
+            self.assertEqual(calls["host"], 2)
+            raise HubUnreachableError("unrelated desired read failed")
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", acquire), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT,
+                once=True, reconcile=failing_step)
+        self.assertEqual(rc, 6)
+        self.assertEqual(calls, {"host": 2, "reconcile": 1})
+
+    def test_lost_worker_signal_precedes_host_retry_store_call(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(
+            self.hub, "staging/one", "live", [str(self.stub)],
+            self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        worker.claim.stop_renewer(timeout=2)
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        real_adopt = journal_mod.adopt_at_startup
+        real_kill = runner.kill_process_group
+        events = []
+        host_attempts = 0
+
+        def acquire(claim):
+            nonlocal host_attempts
+            if claim.kind == "host":
+                host_attempts += 1
+                if host_attempts == 1:
+                    raise HubUnreachableError("offline")
+                self.assertIn("signal", events)
+                events.append("host-retry")
+            return real_acquire(claim)
+
+        def adopt(*args, **kwargs):
+            result = real_adopt(*args, **kwargs)
+            for adopted in args[2]:
+                adopted.claim._mark_lost("test lost lease")
+            return result
+
+        def kill(pgid, **kwargs):
+            events.append("signal")
+            kwargs["grace"] = 0
+            return real_kill(pgid, **kwargs)
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", acquire), \
+                mock.patch.object(journal_mod, "adopt_at_startup", adopt), \
+                mock.patch.object(runner, "kill_process_group", kill), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
+                reconcile=lambda *_a, **_kw: fleetd.ReconcileResult())
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[:2], ["signal", "host-retry"])
+        self.assertFalse(worker.alive())
+
+    def test_lost_worker_during_host_retry_is_stopped_before_held_exit(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        worker = runner.start_gate(
+            self.hub, "staging/one", "live", [str(self.stub)],
+            self.host, self.log_dir, journal=journal)
+        self.workers.append(worker)
+        worker.claim.stop_renewer(timeout=2)
+        foreign = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host="different-machine")
+        foreign.acquire()
+        self.addCleanup(foreign.release)
+        adopted = []
+        real_acquire = claim_mod.Claim.acquire_or_reap
+        real_adopt = journal_mod.adopt_at_startup
+        host_attempts = 0
+
+        def acquire(claim):
+            nonlocal host_attempts
+            if claim.kind == "host":
+                host_attempts += 1
+                if host_attempts == 1:
+                    raise HubUnreachableError("offline")
+                for item in adopted:
+                    item.claim._mark_lost("lost during host retry")
+            return real_acquire(claim)
+
+        def adopt(*args, **kwargs):
+            result = real_adopt(*args, **kwargs)
+            adopted.extend(args[2])
+            return result
+
+        with mock.patch.object(claim_mod.Claim, "acquire_or_reap", acquire), \
+                mock.patch.object(journal_mod, "adopt_at_startup", adopt), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0,
+                reconcile=lambda *_a, **_kw: fleetd.ReconcileResult())
+        self.assertEqual(rc, 3)
+        self.assertEqual(host_attempts, 2)
+        self.assertFalse(worker.alive())
+        self.assertTrue(journal.read_job(worker.job_key).closed)
+
+    def test_remote_journal_failure_follows_local_reconcile(self):
+        calls = []
+
+        def step(*_args, **_kwargs):
+            calls.append("local-reconcile")
+            return fleetd.ReconcileResult()
+
+        def fail_after_start(*_args, **_kwargs):
+            calls.append("journal-cleanup")
+            if len(calls) > 1:
+                raise HubUnreachableError("journal claim read failed")
+
+        with mock.patch.object(runner, "reconcile_journal_runs", side_effect=fail_after_start), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            rc = runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT,
+                once=True, reconcile=step)
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["journal-cleanup", "local-reconcile", "journal-cleanup"])
 
     def test_ambiguous_host_create_recovers_its_exact_claim(self):
         real_acquire = claim_mod.Claim.acquire_or_reap

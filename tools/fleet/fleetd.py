@@ -815,6 +815,12 @@ def reconcile_once(
     res = ReconcileResult()
     jn = journal if journal is not None else journal_mod.Journal()
 
+    # The same local lost-lease phase also runs at daemon-loop entry,
+    # before host recovery can block on a remote read. Direct step callers
+    # run it here. Its signal precedes any claim cleanup I/O.
+    res.killed.extend(keel_runner.stop_lost_workers(
+        workers, jn, host, killer=kill_worker))
+
     # ---- (1) LOCAL FIRST. No hub call precedes this loop. ------------ #
     # Reap finished/dead workers, and kill any worker whose lease is lost.
     # A worker whose process group is gone releases its claim here; a
@@ -897,48 +903,6 @@ def reconcile_once(
             else:
                 _journal_close(jn, w, rc=reaped_rc, outcome="finished", host=host)
             continue
-
-        if w.claim.lost:
-            # ---- KILL. Do not drain. ------------------------------- #
-            # Everywhere else in this daemon the rule is drain, never
-            # kill: over-target drains, disabled drains, shutdown drains,
-            # because a half-finished gate wastes an hour of CPU and a
-            # running gate hurts nobody. A LOST LEASE inverts that rule,
-            # and the inversion is deliberate.
-            #
-            # `lost` means the hub no longer records this host as the
-            # holder of this work. Some other host may already have
-            # reaped the claim and started the same branch -- that is
-            # precisely the event leases exist to prevent. Two gates on
-            # one branch corrupt the shared verdict cache (two verdicts
-            # for one (tree, gate_version, platform) pair), race for the
-            # same target directory, and can drive two merges of the same
-            # tree onto the tip.
-            #
-            # So compare the two directions of being wrong. Killing a
-            # worker that still legitimately held its lease costs one
-            # retryable gate run. Letting an unleased worker run to
-            # completion risks a duplicate merge race, which is not
-            # retryable and not detectable after the fact. The safe
-            # direction is the kill, and it is safe only because it is
-            # the group (M8): cargo and rustc children go with it.
-            #
-            # Every input to this decision is LOCAL: `w.claim.lost` is an
-            # in-memory flag the renewer thread set, and `pgids` came from
-            # `ps`. Nothing here needs the hub, which is the whole reason
-            # this loop now runs before the reads -- see the docstring.
-            reason = w.claim.lost_reason or "renewal failed (no reason recorded)"
-            outcome = kill_worker(w)
-            workers.remove(w)
-            res.killed.append((w.tag, reason))
-            _journal_close(jn, w, rc=None, outcome="killed-lost-lease", host=host)
-            print(
-                f"fleetd[{host}] LOST LEASE {w.claim.ref} kind={w.kind} "
-                f"branch={w.branch} tag={w.tag} pgid={w.pgid}: {reason} "
-                f"-- killed process group: {outcome}",
-                file=sys.stderr,
-                flush=True,
-            )
 
     # A failed exit append survives the in-memory reap. Retry it before
     # scheduling, with kernel liveness and store ownership checked anew.
