@@ -699,15 +699,35 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     metadata: &mut MetadataMap,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut iptc_blocks = crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks::default();
+    process_tiff_ifd_tags_with_iptc_blocks(
+        tags,
+        ifd_name,
+        byte_order,
+        engine.as_deref_mut(),
+        metadata,
+        &mut iptc_blocks,
+    )
+}
+
+/// Processes an IFD while retaining the physical IPTC block count supplied
+/// by its enclosing directory chain (ordinary TIFF or BigTIFF).
+pub(crate) fn process_tiff_ifd_tags_with_iptc_blocks<'a>(
+    tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    ifd_name: &str,
+    byte_order: ByteOrder,
+    engine: Option<&mut exif_dir_engine::DirEngineRows>,
+    metadata: &mut MetadataMap,
+    iptc_blocks: &mut crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks,
+) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     process_tiff_ifd_tags_indexed(
         tags,
         None,
         ifd_name,
         byte_order,
-        engine.as_deref_mut(),
+        engine,
         metadata,
         None,
-        &mut iptc_blocks,
+        iptc_blocks,
     )
 }
 

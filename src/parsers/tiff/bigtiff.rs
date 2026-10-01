@@ -45,10 +45,11 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/BigTIFF.pm`
 
-use crate::core::tiff_helpers::{get_ifd_name, process_tiff_ifd_tags};
+use crate::core::tiff_helpers::{get_ifd_name, process_tiff_ifd_tags_with_iptc_blocks};
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::common::exif_types::ExifType;
+use crate::parsers::jpeg::iptc_parser::CarrierIptcBlocks;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use std::borrow::Cow;
 
@@ -108,6 +109,7 @@ pub fn parse_bigtiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             .ok_or_else(|| ExifToolError::parse_error("short header"))?;
 
         let mut metadata = MetadataMap::new();
+        let mut iptc_blocks = CarrierIptcBlocks::default();
         let mut index = 0usize;
         while ifd_offset != 0 && index < MAX_IFDS {
             // BigTIFF.pm:43-46: offsets past 2 GB need LargeFileSupport, which is
@@ -120,12 +122,13 @@ pub fn parse_bigtiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             };
             // The exif/gps/makernote pointers this returns are deliberately not
             // followed -- see the module docs.
-            let _ = process_tiff_ifd_tags(
+            let _ = process_tiff_ifd_tags_with_iptc_blocks(
                 &entries,
                 get_ifd_name(index),
                 byte_order,
                 None,
                 &mut metadata,
+                &mut iptc_blocks,
             );
             ifd_offset = next;
             index += 1;

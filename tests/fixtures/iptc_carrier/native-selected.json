@@ -184,5 +184,56 @@
   },
   "eps-binary-mixed-last-segment.eps": {
     "IPTC:By-line": "Visible"
-  }
+  },
+  "bigtiff-linked-two-blocks.btf": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Carol"
+  },
+  "eps-primary-cr-crlf-binary.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-lf-skip1.eps": {},
+  "eps-binary-lf-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-cr-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-lf-crlf-skip1.eps": {},
+  "eps-binary-cr-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-lf-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-cr-skip1.eps": {},
+  "eps-binary-cr-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-cr-crlf-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-lf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-lf-skip1.eps": {},
+  "eps-binary-crlf-cr-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-cr-skip1.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-crlf-skip0.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-binary-crlf-crlf-skip1.eps": {}
 }

@@ -437,11 +437,16 @@ impl EPSParser {
                 pos += 1;
             }
             let line = &data[line_start..pos];
+            let mut seek_base = pos;
             if pos < data.len() {
                 let newline = data[pos];
                 pos += 1;
+                seek_base = pos;
                 if newline == b'\r' && data.get(pos) == Some(&b'\n') {
                     pos += 1;
+                    if primary_newline == b'\n' {
+                        seek_base = pos;
+                    }
                 }
                 if newline == primary_newline || data.get(pos - 1) == Some(&primary_newline) {
                     primary_chunk_start = pos;
@@ -548,7 +553,10 @@ impl EPSParser {
                             && chunk_end > line_start
                             && data[chunk_end - 1] == alternate_newline;
                         if alternate_count == 0 || terminal_pair {
-                            pos = pos.saturating_add(count).min(data.len());
+                            // The RAF seek begins at the primary newline
+                            // boundary, which may be before the LF of a CRLF
+                            // pair when CR is the file's record separator.
+                            pos = seek_base.saturating_add(count).min(data.len());
                             primary_chunk_start = pos;
                         }
                     }

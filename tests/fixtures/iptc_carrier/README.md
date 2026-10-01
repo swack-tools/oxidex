@@ -28,3 +28,7 @@ The EPS admission matrix pins these PostScript.pm boundaries with native normal 
 | `eps-binary-mixed-last-segment.eps` | BeginBinary on the last buffered segment may seek after the queue empties | Visible |
 | `eps-hex-odd-line.eps` | odd hex nibbles are padded per line before the next line | Alice |
 | `eps-stray-xpacket-mode-hidden.eps` | a stray XMP packet hides Photoshop-looking lines, then scanning resumes after xpacket-end | Visible |
+
+Linked BigTIFF uses the same physical IPTC counter across IFD0 and IFD1 as ordinary TIFF. The primary-CR EPS control keeps a single-percent Photoshop block intact when a later `BeginBinary: 1` line ends in CRLF: the seek consumes the LF rather than the marker's first percent sign.
+
+The `eps-binary-{lf,cr,crlf}-{lf,cr,crlf}-skip{0,1}.eps` grid tests all 18 combinations of the initial record separator, the local `BeginBinary` line ending, and a zero- or one-byte seek. Its normal and raw golden dictionaries were obtained from pinned ExifTool 13.59; full native commands and fixture hashes are in `eps-newline-crossproduct/native-current-crossproduct.json` under the evidence directory. This grid guards the seek origin at the primary newline boundary, including the later-CRLF case above.
