@@ -53,11 +53,20 @@ for my $pair ([1, 'EnvelopeRecord', 14], [2, 'ApplicationRecord', 70]) {
         my $list = ($flags =~ /(?:^|\s)List(?:\s|\z)/ || $tag->{List}) ? JSON::PP::true : JSON::PP::false;
         my $conversion = (defined($tag->{PrintConv}) || defined($tag->{ValueConv}) || defined($tag->{RawConv}))
             ? JSON::PP::true : JSON::PP::false;
+        my $print_map;
+        if (ref($tag->{PrintConv}) eq 'HASH') {
+            $print_map = [ map {
+                die "unsupported $table PrintConv value $id\n"
+                    unless defined($tag->{PrintConv}{$_}) && !ref($tag->{PrintConv}{$_});
+                [ "$_", "$tag->{PrintConv}{$_}" ]
+            } sort keys %{$tag->{PrintConv}} ];
+        }
         push @rows, {
             record => 0 + $record, dataset => 0 + $id, name => $tag->{Name},
             format => $tag->{Format}, list => $list, conversion => $conversion,
             print_conv => (defined($tag->{PrintConv}) ? JSON::PP::true : JSON::PP::false),
             value_conv => (defined($tag->{ValueConv}) ? JSON::PP::true : JSON::PP::false),
+            print_map => $print_map,
         };
     }
 }

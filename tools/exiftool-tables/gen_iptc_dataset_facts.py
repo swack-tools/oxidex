@@ -44,6 +44,7 @@ def render(data: dict) -> str:
         "    pub conversion: bool,\n",
         "    pub print_conv: bool,\n",
         "    pub value_conv: bool,\n",
+        "    pub print_map: Option<&'static [(&'static str, &'static str)]>,\n",
         "}\n\n",
         "pub(super) fn find(record: u8, dataset: u8) -> Option<&'static DatasetFact> {\n",
         "    let key = (record, dataset);\n",
@@ -62,6 +63,19 @@ def render(data: dict) -> str:
                 or not isinstance(row.get("print_conv"), bool)
                 or not isinstance(row.get("value_conv"), bool)):
             raise ValueError(f"unsupported IPTC dataset row: {row}")
+        print_map = row.get("print_map")
+        if print_map is not None:
+            if (not isinstance(print_map, list) or not print_map
+                    or any(not isinstance(pair, list) or len(pair) != 2
+                           or not all(isinstance(item, str) for item in pair)
+                           for pair in print_map)
+                    or [pair[0] for pair in print_map] != sorted(set(pair[0] for pair in print_map))):
+                raise ValueError(f"unsupported IPTC PrintConv map: {row}")
+            rust_map = "Some(&[" + ", ".join(
+                f"({json.dumps(key, ensure_ascii=False)}, {json.dumps(value, ensure_ascii=False)})"
+                for key, value in print_map) + "])"
+        else:
+            rust_map = "None"
         kind = ("Int" if fmt.startswith("int") else "Str" if fmt.startswith("string")
                 else "Digits" if fmt.startswith("digits") else "Undef")
         parts.append(
@@ -69,7 +83,8 @@ def render(data: dict) -> str:
             f"format: IptcFormat::{kind}, list: {str(row['list']).lower()}, "
             f"conversion: {str(row['conversion']).lower()}, "
             f"print_conv: {str(row['print_conv']).lower()}, "
-            f"value_conv: {str(row['value_conv']).lower()} }}),\n"
+            f"value_conv: {str(row['value_conv']).lower()}, "
+            f"print_map: {rust_map} }}),\n"
         )
     parts.append("];\n")
     formatted = subprocess.run(

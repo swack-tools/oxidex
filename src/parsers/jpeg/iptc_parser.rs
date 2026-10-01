@@ -8,9 +8,7 @@ use crate::core::{MetadataMap, TagValue};
 
 #[path = "generated_iptc_dataset_facts.rs"]
 mod generated_iptc_dataset_facts;
-use crate::core::value_formatter::{
-    format_iptc_coded_charset, format_iptc_date, format_iptc_time, format_iptc_urgency,
-};
+use crate::core::value_formatter::{format_iptc_coded_charset, format_iptc_date, format_iptc_time};
 use crate::error::Result;
 use crate::parsers::jpeg::segment_parser::Segment;
 use nom::{
@@ -230,55 +228,6 @@ pub fn dataset_format(record_number: u8, dataset_number: u8) -> IptcFormat {
         .map_or(IptcFormat::Auto, |fact| fact.format)
 }
 
-/// ExifTool's `%fileFormat` PrintConv (IPTC.pm:56-86), shared by the Envelope
-/// record's FileFormat (1:20) and the Application record's
-/// ObjectPreviewFileFormat (2:200).
-fn file_format_print_conv(value: &str) -> Option<&'static str> {
-    Some(match value {
-        "0" => "No ObjectData",
-        "1" => "IPTC-NAA Digital Newsphoto Parameter Record",
-        "2" => "IPTC7901 Recommended Message Format",
-        "3" => "Tagged Image File Format (Adobe/Aldus Image data)",
-        "4" => "Illustrator (Adobe Graphics data)",
-        "5" => "AppleSingle (Apple Computer Inc)",
-        "6" => "NAA 89-3 (ANPA 1312)",
-        "7" => "MacBinary II",
-        "8" => "IPTC Unstructured Character Oriented File Format (UCOFF)",
-        "9" => "United Press International ANPA 1312 variant",
-        "10" => "United Press International Down-Load Message",
-        "11" => "JPEG File Interchange (JFIF)",
-        "12" => "Photo-CD Image-Pac (Eastman Kodak)",
-        "13" => "Bit Mapped Graphics File [.BMP] (Microsoft)",
-        "14" => "Digital Audio File [.WAV] (Microsoft & Creative Labs)",
-        "15" => "Audio plus Moving Video [.AVI] (Microsoft)",
-        "16" => "PC DOS/Windows Executable Files [.COM][.EXE]",
-        "17" => "Compressed Binary File [.ZIP] (PKWare Inc)",
-        "18" => "Audio Interchange File Format AIFF (Apple Computer Inc)",
-        "19" => "RIFF Wave (Microsoft Corporation)",
-        "20" => "Freehand (Macromedia/Aldus)",
-        "21" => "Hypertext Markup Language [.HTML] (The Internet Society)",
-        "22" => "MPEG 2 Audio Layer 2 (Musicom), ISO/IEC",
-        "23" => "MPEG 2 Audio Layer 3, ISO/IEC",
-        "24" => "Portable Document File [.PDF] Adobe",
-        "25" => "News Industry Text Format (NITF)",
-        "26" => "Tape Archive [.TAR]",
-        "27" => "Tidningarnas Telegrambyra NITF version (TTNITF DTD)",
-        "28" => "Ritzaus Bureau NITF version (RBNITF DTD)",
-        "29" => "Corel Draw [.CDR]",
-        _ => return None,
-    })
-}
-
-/// ExifTool's ObjectCycle PrintConv (IPTC.pm:456-463).
-fn object_cycle_print_conv(value: &str) -> Option<&'static str> {
-    Some(match value {
-        "a" => "Morning",
-        "p" => "Evening",
-        "b" => "Both Morning and Evening",
-        _ => return None,
-    })
-}
-
 /// Renders ExifTool's PrintConv-miss fallback, `Unknown (VALUE)`.
 fn unknown_print_conv(value: &str) -> String {
     format!("Unknown ({})", value)
@@ -395,15 +344,16 @@ pub fn dataset_value_to_string(record_number: u8, dataset_number: u8, data: &[u8
         _ => {}
     }
 
+    if let Some(table) = generated_iptc_dataset_facts::find(record_number, dataset_number)
+        .and_then(|fact| fact.print_map)
+    {
+        return table
+            .iter()
+            .find(|(source, _)| *source == value)
+            .map(|(_, printed)| (*printed).to_string())
+            .unwrap_or_else(|| unknown_print_conv(&value));
+    }
     match (record_number, dataset_number) {
-        (1, 20) | (2, 200) => file_format_print_conv(&value)
-            .map(str::to_string)
-            .unwrap_or_else(|| unknown_print_conv(&value)),
-        // EnvelopePriority (1:60) and Urgency (2:10) share one PrintConv table.
-        (1, 60) | (2, 10) => format_iptc_urgency(&value),
-        (2, 75) => object_cycle_print_conv(&value)
-            .map(str::to_string)
-            .unwrap_or_else(|| unknown_print_conv(&value)),
         (2, 221) => prefs_print_conv(&value),
         _ => value,
     }
@@ -639,7 +589,10 @@ fn carrier_value_before_printconv(
         && data.len() <= 8
         && (fact.format == IptcFormat::Int
             || (fact.format == IptcFormat::Digits && fact.print_conv))
-        && value.bytes().all(|byte| byte.is_ascii_digit());
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        // Perl's JSON writer retains a digits-format scalar as text when
+        // its leading zero is meaningful: "01" is not the number 1.
+        && (value == "0" || !value.starts_with('0'));
     if numeric {
         value
             .parse::<i64>()

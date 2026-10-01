@@ -38,5 +38,29 @@
   "tiff-linked-two-blocks.tif": {
     "IPTC:By-line": "Alice",
     "IPTC2:Copy1:By-line": "Bob"
+  },
+  "leading-zero-within-block.eps": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.pdf": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.psd": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
+  },
+  "leading-zero-within-block.tif": {
+    "IPTC:EditorialUpdate": "01",
+    "IPTC:Urgency": "05",
+    "IPTC:Category": "0042",
+    "IPTC:By-line": "Alice"
   }
 }
