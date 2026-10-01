@@ -1956,8 +1956,9 @@ fn extract_rw2_embedded_exif_tags(
             continue;
         };
         // A Perl hash keyed by integer 1 also matches the exact string "1".
-        // NUL bytes inside undef/utf8 values survive the hash lookup but are
-        // trimmed by the JSON output path, so retain their miss before trim.
+        // NUL bytes inside undef/utf8 values survive the Perl hash lookup.
+        // Keep the full scalar through PrintConv, then apply the CLI output
+        // projection so bytes after an embedded NUL are not discarded.
         let decoded = match decoded {
             crate::exiftool_tables::DecodedValue::StringBytes(bytes) => {
                 let canonical = std::str::from_utf8(&bytes).ok().and_then(|text| {
@@ -1970,26 +1971,12 @@ fn extract_rw2_embedded_exif_tags(
                     None => crate::exiftool_tables::DecodedValue::StringBytes(bytes),
                 }
             }
-            crate::exiftool_tables::DecodedValue::String(value) if !value.contains('\0') => {
-                match value.parse::<i64>() {
-                    Ok(number) if number.to_string() == value => {
-                        crate::exiftool_tables::DecodedValue::Integer(number)
-                    }
-                    _ => crate::exiftool_tables::DecodedValue::String(value),
+            crate::exiftool_tables::DecodedValue::String(value) => match value.parse::<i64>() {
+                Ok(number) if number.to_string() == value => {
+                    crate::exiftool_tables::DecodedValue::Integer(number)
                 }
-            }
-            crate::exiftool_tables::DecodedValue::String(value) => {
-                crate::exiftool_tables::DecodedValue::String(
-                    value.split('\0').next().unwrap_or("").to_string(),
-                )
-            }
-            crate::exiftool_tables::DecodedValue::Undefined(bytes) => {
-                let end = bytes
-                    .iter()
-                    .position(|byte| *byte == 0)
-                    .unwrap_or(bytes.len());
-                crate::exiftool_tables::DecodedValue::Undefined(bytes[..end].to_vec())
-            }
+                _ => crate::exiftool_tables::DecodedValue::String(value),
+            },
             other => other,
         };
         let Some(display) = crate::exiftool_tables::runtime::render(row.print_conv, &decoded)
@@ -1998,7 +1985,7 @@ fn extract_rw2_embedded_exif_tags(
         };
         metadata.insert(
             format!("ExifIFD:{}", row.name),
-            TagValue::new_string(display),
+            TagValue::new_string(display.replace('\0', "")),
         );
     }
 

@@ -449,3 +449,46 @@ fn preview_a411_a412_arrays_use_generated_unknown_fallback() {
         );
     }
 }
+
+#[test]
+fn preview_a411_preserves_embedded_nuls_and_zero_denominator_rationals() {
+    let original = source();
+    let (tiff, ifd0) = preview_ifd0(&original);
+    let pointer = entry(&original, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&original, pointer + 8) as usize;
+    let slot = entry(&original, exif_ifd, 0xA405);
+
+    for (field_type, count, inline, expected) in [
+        (7u16, 2u32, [0, 1, 0, 0], "Unknown (\u{1})"),
+        (129, 3, [b'1', 0, b'x', 0], "Unknown (1x)"),
+    ] {
+        let mut data = original.clone();
+        data[slot..slot + 2].copy_from_slice(&0xA411u16.to_le_bytes());
+        data[slot + 2..slot + 4].copy_from_slice(&field_type.to_le_bytes());
+        data[slot + 4..slot + 8].copy_from_slice(&count.to_le_bytes());
+        data[slot + 8..slot + 12].copy_from_slice(&inline);
+        let metadata = parse(&data);
+        assert_eq!(
+            metadata.get_string("ExifIFD:ShadingCorrection"),
+            Some(expected)
+        );
+    }
+
+    for (numerator, expected) in [(1u32, "Unknown (inf)"), (0, "Unknown (undef)")] {
+        for field_type in [5u16, 10] {
+            let mut data = original.clone();
+            data[slot..slot + 2].copy_from_slice(&0xA411u16.to_le_bytes());
+            data[slot + 2..slot + 4].copy_from_slice(&field_type.to_le_bytes());
+            data[slot + 4..slot + 8].copy_from_slice(&1u32.to_le_bytes());
+            data[slot + 8..slot + 12].copy_from_slice(&9000u32.to_le_bytes());
+            data[tiff + 9000..tiff + 9004].copy_from_slice(&numerator.to_le_bytes());
+            data[tiff + 9004..tiff + 9008].copy_from_slice(&0u32.to_le_bytes());
+            let metadata = parse(&data);
+            assert_eq!(
+                metadata.get_string("ExifIFD:ShadingCorrection"),
+                Some(expected),
+                "type={field_type} numerator={numerator}"
+            );
+        }
+    }
+}

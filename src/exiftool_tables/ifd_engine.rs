@@ -864,7 +864,32 @@ pub(crate) fn decode_reached_tiff_value(
         ty,
     };
     let plan = read_plan(&located, None)?;
-    Some(round_rationals(decode_plan(&located, plan, order)?))
+    // Exif.pm:6763-6773 refuses excessive numeric arrays before ReadValue.
+    // Undefined and string byte runs remain eligible at this count.
+    if plan.count > 100_000 && !matches!(plan.kind, Kind::Str | Kind::Undef) {
+        return None;
+    }
+    // ReadValue returns the strings `inf` or `undef` for a rational with a
+    // zero denominator. The ordinary IFD walker retains the pair until its
+    // output boundary; this entry point hands a decoded scalar to a hash
+    // PrintConv, which must see those ReadValue strings before lookup.
+    fn zero_denominator_text(value: DecodedValue) -> DecodedValue {
+        match value {
+            DecodedValue::UnsignedRational(n, 0) => {
+                DecodedValue::String(runtime::perl_rational64(f64::from(n), 0.0))
+            }
+            DecodedValue::SignedRational(n, 0) => {
+                DecodedValue::String(runtime::perl_rational64(f64::from(n), 0.0))
+            }
+            DecodedValue::Array(values) => {
+                DecodedValue::Array(values.into_iter().map(zero_denominator_text).collect())
+            }
+            other => other,
+        }
+    }
+    Some(zero_denominator_text(round_rationals(decode_plan(
+        &located, plan, order,
+    )?)))
 }
 
 /// Project the bytes selected by `ReadValue` into the stored channel before
@@ -4286,6 +4311,19 @@ mod tests {
         );
         let other = DecodedValue::String("s".to_string());
         assert_eq!(round_rationals(other.clone()), other);
+    }
+
+    #[test]
+    fn reached_value_decoder_respects_process_exif_excessive_count() {
+        let oversized_numeric = vec![0u8; 100_001 * 2];
+        assert!(
+            decode_reached_tiff_value(&oversized_numeric, 3, 100_001, ByteOrder::Little,).is_none()
+        );
+        let oversized_undefined = vec![0u8; 100_001];
+        assert!(
+            decode_reached_tiff_value(&oversized_undefined, 7, 100_001, ByteOrder::Little,)
+                .is_some()
+        );
     }
 
     // -- A hash PrintConv keyed by a fixed-count value (ExifTool.pm:6330, 3616) ---
