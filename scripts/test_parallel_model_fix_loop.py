@@ -331,6 +331,101 @@ class CreateWorktreeTests(unittest.TestCase):
             self.assertIn(["git", "worktree", "add", "-b", "model-fix-parallel-nef", str(worktree), "main"], argvs)
 
 
+class ConsumeHandshakeTests(unittest.TestCase):
+    """Spec M2/M5: create_worktree's optional squad_status_path guard on
+    the reuse-in-place `checkout -B` call. Every scenario here reaches
+    the SAME branch-exists/commits-fully-contained state the pre-existing
+    test_resets_a_reused_branch_whose_commits_are_all_contained fixture
+    uses (M5's own no-discard check passes, so WITHOUT the new guard a
+    plain `checkout -B` would run) -- only squad_status_path and the
+    branch's recorded head sha vary.
+    """
+    BRANCH = "model-fix-parallel-nef"
+
+    def _fake_run(self, head_sha):
+        def fake_run(argv, **kwargs):
+            if argv == ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{self.BRANCH}"]:
+                return MagicMock(returncode=0, stdout="abc123\n", stderr="")
+            if argv[:3] == ["git", "rev-list", "--count"]:
+                return MagicMock(returncode=0, stdout="0\n", stderr="")  # nothing undiscardable
+            if argv == ["git", "rev-parse", "--verify", "--quiet", self.BRANCH]:
+                return MagicMock(returncode=0, stdout=f"{head_sha}\n", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return fake_run
+
+    def _create(self, tmp, mock_run, head_sha, squad_status_path=None):
+        mock_run.side_effect = self._fake_run(head_sha)
+        worktree = tmp / "worktree"
+        worktree.mkdir()
+        create_worktree(
+            tmp, worktree, self.BRANCH, "main", config_path=tmp / "no-config.toml",
+            squad_status_path=squad_status_path,
+        )
+        return [c.args[0] for c in mock_run.call_args_list]
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_blocks_reset_when_head_sha_not_recorded(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"
+            status_path.parent.mkdir()
+            status_path.write_text(json.dumps({"heads": {"some-other-sha": {"status": "consumed"}}}))
+
+            argvs = self._create(tmp, mock_run, "unresolved-sha", squad_status_path=status_path)
+
+            self.assertNotIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+            self.assertIn(["git", "checkout", self.BRANCH], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_allows_reset_when_head_recorded_consumed(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"
+            status_path.parent.mkdir()
+            status_path.write_text(json.dumps({"heads": {"resolved-sha": {"status": "consumed"}}}))
+
+            argvs = self._create(tmp, mock_run, "resolved-sha", squad_status_path=status_path)
+
+            self.assertIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_allows_reset_when_head_recorded_quarantined(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"
+            status_path.parent.mkdir()
+            status_path.write_text(json.dumps({"heads": {"resolved-sha": {"status": "quarantined"}}}))
+
+            argvs = self._create(tmp, mock_run, "resolved-sha", squad_status_path=status_path)
+
+            self.assertIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_none_squad_status_path_is_unguarded_backward_compat(self, mock_run):
+        # squad_status_path defaults to None -- exactly today's behavior,
+        # unaffected even though this same head sha would be blocked if
+        # tracking were active for this format (spec: un-piloted formats
+        # are completely unaffected).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            argvs = self._create(tmp, mock_run, "whatever-unresolved-sha")
+            self.assertIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+
+    @patch("parallel_model_fix_loop.subprocess.run")
+    def test_missing_squad_status_file_blocks_reset_fail_closed(self, mock_run):
+        # squad-status tracking IS active for this format (a path was
+        # given) but the merger hasn't written its first status file yet
+        # -- get-with-default reads this as "nothing resolved", not
+        # "nothing to protect", so the reset stays blocked rather than
+        # racing the merger's very first poll.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            status_path = tmp / "squad-status" / "nikon.json"  # never created
+            argvs = self._create(tmp, mock_run, "whatever-sha", squad_status_path=status_path)
+            self.assertNotIn(["git", "checkout", "-B", self.BRANCH, "main"], argvs)
+            self.assertIn(["git", "checkout", self.BRANCH], argvs)
+
+
 # /tmp/base is an inert fixture path -- no real filesystem I/O happens
 # here, this only exercises string/Path construction.
 class WorktreePathTests(unittest.TestCase):

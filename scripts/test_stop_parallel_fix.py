@@ -145,6 +145,105 @@ class MainTests(unittest.TestCase):
         self.assertIn(signal.SIGTERM, [sig for _pid, sig, _kind in signaled])
 
 
+class MergerReapingTests(unittest.TestCase):
+    """Spec M2: squad_merge_loop.py merger daemons are reaped the same
+    way as the dispatcher/wrapper -- found by pattern, signaled by PID
+    (not process group)."""
+
+    def _run(self, argv, find_pids_map, alive_pids=None):
+        alive_pids = set(alive_pids or ())
+        signaled = []
+
+        def find_pids_fn(pattern):
+            return list(find_pids_map.get(pattern, []))
+
+        def signal_pid_fn(pid, sig):
+            signaled.append((pid, sig, "pid"))
+            alive_pids.discard(pid)
+
+        def signal_group_fn(pid, sig):
+            signaled.append((pid, sig, "group"))
+            alive_pids.discard(pid)
+
+        out = io.StringIO()
+        exit_code = main(
+            argv, find_pids_fn=find_pids_fn, command_line_fn=lambda pid: f"fake-{pid}",
+            is_alive_fn=lambda pid: pid in alive_pids,
+            signal_pid_fn=signal_pid_fn, signal_group_fn=signal_group_fn,
+            sleep_fn=lambda s: None, now_fn=lambda: 0.0, stdout=out,
+        )
+        return exit_code, out.getvalue(), signaled
+
+    def test_merger_signaled_by_pid_not_group(self):
+        exit_code, output, signaled = self._run(
+            [], find_pids_map={"squad_merge_loop.py": [300]},
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(signaled, [(300, signal.SIGTERM, "pid")])
+        self.assertIn("1 squad merger process(es)", output)
+
+    def test_merger_and_worker_and_wrapper_all_reaped_together(self):
+        exit_code, output, signaled = self._run(
+            [],
+            find_pids_map={
+                "parallel_model_fix_loop.py": [100],
+                "squad_merge_loop.py": [300, 301],
+                "model_fix_loop.py": [200],
+            },
+        )
+        self.assertEqual(
+            set(signaled),
+            {(100, signal.SIGTERM, "pid"), (300, signal.SIGTERM, "pid"),
+             (301, signal.SIGTERM, "pid"), (200, signal.SIGTERM, "group")},
+        )
+
+    def test_no_merger_process_reports_none_found(self):
+        # Something else must be running, or main() short-circuits with
+        # "Nothing running" before ever reaching the merger section.
+        exit_code, output, signaled = self._run(
+            [], find_pids_map={"parallel_model_fix_loop.py": [100]},
+        )
+        self.assertIn("No squad merger process found", output)
+
+    def test_merger_dry_run_signals_nothing(self):
+        exit_code, output, signaled = self._run(
+            ["--dry-run"], find_pids_map={"squad_merge_loop.py": [300]},
+        )
+        self.assertEqual(signaled, [])
+        self.assertIn("Would signal", output)
+
+    def test_ignored_sigterm_escalates_merger_to_sigkill_by_pid(self):
+        alive_pids = {300}
+        signaled = []
+
+        def find_pids_fn(pattern):
+            return [300] if pattern == "squad_merge_loop.py" else []
+
+        def signal_pid_fn(pid, sig):
+            signaled.append((pid, sig))
+            if sig == signal.SIGKILL:
+                alive_pids.discard(pid)
+
+        t = [0.0]
+
+        def now_fn():
+            t[0] += 1.0
+            return t[0]
+
+        out = io.StringIO()
+        exit_code = main(
+            ["--grace-period", "2"],
+            find_pids_fn=find_pids_fn, command_line_fn=lambda pid: "fake",
+            is_alive_fn=lambda pid: pid in alive_pids,
+            signal_pid_fn=signal_pid_fn, signal_group_fn=lambda pid, sig: self.fail("must not group-signal a merger"),
+            sleep_fn=lambda s: None, now_fn=now_fn, stdout=out,
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn((300, signal.SIGTERM), signaled)
+        self.assertIn((300, signal.SIGKILL), signaled)
+        self.assertNotIn(300, alive_pids)
+
+
 class SigtermEscalationTests(unittest.TestCase):
     """A dedicated fixture for the escalation path: signal_pid_fn/
     signal_group_fn must NOT clear aliveness on SIGTERM (only SIGKILL
