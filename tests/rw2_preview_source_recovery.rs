@@ -376,7 +376,7 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 
 #[test]
 fn footerless_preview_exififd_keeps_reached_shading_correction() {
-    let mut data = source();
+    let data = source();
     let outer_ifd0 = read_u32(&data, 4) as usize;
     let jpg_from_raw = entry(&data, outer_ifd0, 0x002e);
     assert_eq!(read_u16(&data, jpg_from_raw + 2), 7);
@@ -407,17 +407,27 @@ fn footerless_preview_exififd_keeps_reached_shading_correction() {
     preview.extend_from_slice(&[0xff, 0xd9]);
     assert_eq!(preview.len(), 54);
 
-    let preview_offset = u32::try_from(data.len()).unwrap();
-    data[jpg_from_raw + 4..jpg_from_raw + 8]
-        .copy_from_slice(&u32::try_from(preview.len()).unwrap().to_le_bytes());
-    data[jpg_from_raw + 8..jpg_from_raw + 12].copy_from_slice(&preview_offset.to_le_bytes());
-    data.extend_from_slice(&preview);
+    for trailer in [false, true] {
+        let mut variant = data.clone();
+        let mut jpg = preview.clone();
+        if trailer {
+            // ExifTool still uses the APP1 boundary when JPEG carries an
+            // unrelated byte after EOI (pinned source-derived RW2 oracle).
+            jpg.push(b'X');
+        }
+        let preview_offset = u32::try_from(variant.len()).unwrap();
+        variant[jpg_from_raw + 4..jpg_from_raw + 8]
+            .copy_from_slice(&u32::try_from(jpg.len()).unwrap().to_le_bytes());
+        variant[jpg_from_raw + 8..jpg_from_raw + 12].copy_from_slice(&preview_offset.to_le_bytes());
+        variant.extend_from_slice(&jpg);
 
-    let metadata = parse(&data);
-    assert_eq!(
-        metadata.get_string("ExifIFD:ShadingCorrection"),
-        Some("Yes")
-    );
+        let metadata = parse(&variant);
+        assert_eq!(
+            metadata.get_string("ExifIFD:ShadingCorrection"),
+            Some("Yes"),
+            "trailer={trailer}"
+        );
+    }
 }
 
 #[test]

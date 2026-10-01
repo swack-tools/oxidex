@@ -239,30 +239,39 @@ pub fn parse_ifd(
     ifd_offset: u64,
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
-    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, true)
+    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, reader.size(), true)
 }
 
 /// Parse an embedded subdirectory whose complete entry array may end without
-/// the optional next-IFD pointer (Exif.pm:6394-6400). Ordinary TIFF IFDs still
-/// use `parse_ifd` and require the pointer field.
+/// the optional next-IFD pointer (Exif.pm:6394-6400). `directory_limit`
+/// names the enclosing APP1 payload boundary; out-of-line values can still
+/// be read through the wider `reader`. Ordinary TIFF IFDs still use
+/// `parse_ifd` and require the pointer field.
 pub(crate) fn parse_ifd_without_next_offset(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
+    directory_limit: u64,
 ) -> Result<IfdEntries> {
-    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, false)
+    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, directory_limit, false)
 }
 
 fn parse_ifd_with_footer_requirement(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
+    directory_limit: u64,
     require_next_offset: bool,
 ) -> Result<IfdEntries> {
     let file_size = reader.size();
+    if directory_limit > file_size {
+        return Err(ExifToolError::parse_error(
+            "IFD directory limit beyond file size",
+        ));
+    }
 
     // Validate IFD offset
-    if ifd_offset >= file_size {
+    if ifd_offset >= directory_limit {
         return Err(ExifToolError::parse_error_at(
             "IFD offset beyond file size",
             ifd_offset as usize,
@@ -283,10 +292,10 @@ fn parse_ifd_with_footer_requirement(
     // Validate IFD size doesn't exceed file. Exif.pm:6394-6400 accepts
     // exactly zero or two bytes after a complete entry array when the normal
     // four-byte pointer is absent; one or three bytes are malformed.
-    let bytes_after_entries = file_size
+    let bytes_after_entries = directory_limit
         .checked_sub(ifd_offset)
         .and_then(|available| available.checked_sub((2 + entry_count as usize * 12) as u64));
-    if ifd_offset + ifd_size as u64 > file_size
+    if ifd_offset + ifd_size as u64 > directory_limit
         || (!require_next_offset && matches!(bytes_after_entries, Some(1 | 3)))
     {
         return Err(ExifToolError::parse_error_at(

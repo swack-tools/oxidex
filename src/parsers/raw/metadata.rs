@@ -1853,6 +1853,7 @@ fn extract_rw2_embedded_exif_tags(
         &reader,
         exif_ifd_offset,
         byte_order,
+        tiff_data.len() as u64,
     ) else {
         return Ok(());
     };
