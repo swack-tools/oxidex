@@ -2203,11 +2203,13 @@ def run_daemon(
                 break
             # Host-lease and hub-failure exits above take priority over this call.
             # A failed announcement does not alter the completed reconcile step.
+            # Bind this step's observations before the bounded worker starts;
+            # a stalled worker must not read the next cycle's snapshot.
+            observed_capabilities = getattr(res, "heartbeat_capabilities", None)
             register_cycle(
                 reg_client, host, reg_session,
                 lambda: registration_payload(
-                    host, workers, repo_root, reg_scope_token,
-                    getattr(res, "heartbeat_capabilities", None),
+                    host, workers, repo_root, reg_scope_token, observed_capabilities,
                 ),
                 _reg_log, reg_backoff,
             )
