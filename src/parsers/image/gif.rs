@@ -541,7 +541,7 @@ impl FormatParser for GIFParser {
         // Add GIF: prefixed version for format-specific tagging
         metadata.insert(
             "GIF:BackgroundColor".to_string(),
-            TagValue::String(format!("#{:02x}", lsd.background_color_index)),
+            TagValue::Integer(lsd.background_color_index as i64),
         );
 
         // PixelAspectRatio - convert from raw value to actual ratio
