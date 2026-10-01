@@ -208,6 +208,10 @@ impl ISOParser {
             return Ok(());
         };
         let mut offset = DESCRIPTOR_START;
+        // Earlier descriptors belong to ExifTool's Copy1 group. This map
+        // cannot represent that family-4 identity, so retain only the final
+        // ISO-group winner instead of reporting an earlier copy as ISO.
+        let mut boot_system = None;
         while offset
             .checked_add(DESCRIPTOR_SIZE)
             .is_some_and(|end| end <= reader.size())
@@ -231,7 +235,7 @@ impl ISOParser {
                     );
                     for tag in emitted {
                         if tag.name == "BootSystem" {
-                            metadata.insert("ISO:BootSystem", tag.value);
+                            boot_system = Some(tag.value);
                         }
                     }
                 }
@@ -239,6 +243,9 @@ impl ISOParser {
                 _ => break,
             }
             offset += DESCRIPTOR_SIZE;
+        }
+        if let Some(value) = boot_system {
+            metadata.insert("ISO:BootSystem", value);
         }
         Ok(())
     }
@@ -346,10 +353,16 @@ impl FormatParser for ISOParser {
                 TagValue::String(descriptor_type.to_string()),
             );
 
-            // The primary descriptor may follow a boot or supplementary
-            // descriptor; table offsets are relative to its own sector.
+            // Process every primary descriptor: a later defined field replaces
+            // its predecessor, while an absent field leaves the earlier value.
+            // Publish only the ISO-group winners; earlier physical copies have
+            // a Copy1 family-4 identity this map cannot represent.
+            let mut primary_values = MetadataMap::new();
             for pvd_offset in Self::find_primary_descriptors(reader)? {
-                Self::extract_pvd_metadata(reader, &mut metadata, pvd_offset)?;
+                Self::extract_pvd_metadata(reader, &mut primary_values, pvd_offset)?;
+            }
+            for (key, occurrence) in primary_values.winners_in_file_order() {
+                metadata.insert(key.clone(), occurrence.raw.clone());
             }
 
             // The boot record lives in a later descriptor sector, if at all.
@@ -614,6 +627,14 @@ mod tests {
             metadata.get("ISO:VolumeName"),
             Some(&TagValue::String("SECOND".into()))
         );
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "VolumeName")
+                .count(),
+            1,
+            "earlier descriptor is a Copy1 group, not another ISO occurrence"
+        );
     }
 
     #[test]
@@ -628,6 +649,14 @@ mod tests {
         assert_eq!(
             metadata.get("ISO:BootSystem"),
             Some(&TagValue::String("SECOND".into()))
+        );
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "BootSystem")
+                .count(),
+            1,
+            "earlier descriptor is a Copy1 group, not another ISO occurrence"
         );
     }
 }
