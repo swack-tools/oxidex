@@ -43,6 +43,11 @@ runs:
             exit 1
           fi
         done
+        pinned_cargo=$(rustup which --toolchain "$PINNED_RUST" cargo)
+        if [ "$(cargo -vV)" != "$("$pinned_cargo" -vV)" ]; then
+          echo "Cargo build identity differs from the rustup-resolved repository pin" >&2
+          exit 1
+        fi
         for tool in cargo rustfmt; do
           pinned_tool=$(rustup which --toolchain "$PINNED_RUST" "$tool")
           if [ "$("$tool" --version)" != "$("$pinned_tool" --version)" ]; then

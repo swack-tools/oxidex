@@ -65,6 +65,8 @@ else:
     commit = 'wrong' if name == os.environ.get('WRONG_COMMIT') else 'pinned'
     if tool in ('rustc', 'override'):
         print(f'release: {version}\\ncommit-hash: {commit}\\nhost: test-host')
+    elif tool == 'cargo' and '-vV' in sys.argv:
+        print(f'cargo {version}\\ncommit-hash: {commit}')
     else:
         print(f'{tool} {version}')
 """)
@@ -76,7 +78,8 @@ else:
                    'PINNED_RUST': '1.97.1'}
             env.pop('RUSTC', None)
             cases = ({}, {'WRONG_VERSION': 'rustc'}, {'WRONG_COMMIT': 'rustc'},
-                     {'WRONG_VERSION': 'cargo'}, {'WRONG_VERSION': 'rustfmt'},
+                     {'WRONG_VERSION': 'cargo'}, {'WRONG_COMMIT': 'cargo'},
+                     {'WRONG_VERSION': 'rustfmt'},
                      {'RUSTC': str(root / 'override'), 'WRONG_COMMIT': 'override'})
             for changes in cases:
                 with self.subTest(changes=changes):
