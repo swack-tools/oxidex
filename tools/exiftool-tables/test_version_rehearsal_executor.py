@@ -1,6 +1,7 @@
 """Offline scheduler tests for the non-promoting version rehearsal executor."""
 from __future__ import annotations
 
+import ast
 from contextlib import redirect_stderr
 import io
 import json
@@ -8,12 +9,14 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -663,6 +666,11 @@ class ExecutorTests(unittest.TestCase):
             self.assertNotEqual(record["state"], "ok", record)
             self.assertEqual(record["state"], "escaped_descendants", record)
             self.assertIn(descendant_pid, record["escaped_descendants"])
+            details = next(row for row in record["descendant_diagnostics"]
+                           if row["pid"] == descendant_pid)
+            self.assertEqual(details["signal"], "sent")
+            self.assertIn("start_ticks", details)
+            self.assertEqual(record["descendant_observations_omitted"], 0)
             self.assertEqual(record["exit"], 0)
             self.assertFalse(executor._pid_live(descendant_pid),
                              "a detached descendant outlived the accepted command")
@@ -678,6 +686,112 @@ class ExecutorTests(unittest.TestCase):
                     os.kill(descendant_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_large_exit_report_drains_on_small_status_pipe(self):
+        """A full escaped-PID verdict and Unicode basenames cannot block communicate()."""
+        import fcntl
+        executable = shutil.which("sleep")
+        self.assertIsNotNone(executable)
+        copies = []
+        for index in range(16):
+            copy = self.root / ("é" * 62 + f"{index:02d}")
+            shutil.copyfile(executable, copy)
+            copy.chmod(0o700)
+            copies.append(str(copy))
+
+        probe_read, probe_write = os.pipe()
+        try:
+            capacity = fcntl.fcntl(probe_write, fcntl.F_SETPIPE_SZ, 4096)
+            if capacity != 4096:
+                self.skipTest(f"kernel minimum pipe capacity is {capacity}; requires 4096 bytes")
+        finally:
+            os.close(probe_read)
+            os.close(probe_write)
+        actual_handshake = executor._await_supervised_exec
+
+        def shrink_status_pipe(child):
+            actual_handshake(child)
+            capacity = fcntl.fcntl(child._oxidex_lineage_status_fd,
+                                   fcntl.F_SETPIPE_SZ, 4096)
+            self.assertEqual(capacity, 4096)
+
+        program = ("import subprocess,sys,time\n"
+                   "for path in sys.argv[1:]:\n"
+                   " subprocess.Popen([path, '60'], stdin=subprocess.DEVNULL, "
+                   "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+                   "start_new_session=True, close_fds=True)\n"
+                   "time.sleep(0.5)\n")
+        with patch.object(executor, "_await_supervised_exec", side_effect=shrink_status_pipe), \
+             patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 8):
+            record = executor._run_record([sys.executable, "-c", program, *copies],
+                                          cwd=self.root, env=dict(os.environ),
+                                          run=subprocess.run)
+        self.assertEqual(record["state"], "escaped_descendants", record)
+        self.assertEqual(len(record["escaped_descendants"]), 16)
+        self.assertEqual(len(record["descendant_diagnostics"]), 16)
+        self.assertEqual(record["descendant_observations_omitted"], 0)
+        self.assertGreater(len(json.dumps(record["descendant_diagnostics"]).encode()), 4096)
+        self.assertEqual({row["exe"] for row in record["descendant_diagnostics"]},
+                         {Path(path).name for path in copies})
+        self.assertTrue(all(not executor._pid_live(pid)
+                            for pid in record["escaped_descendants"]))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_status_reader_start_failure_sweeps_already_execed_command(self):
+        """A failed reader thread cannot strand the command after its exec handshake."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        command_pid = None
+
+        def fail_after_command_started(_child):
+            nonlocal command_pid
+            command_pid = int(_read_reported_line(read_fd))
+            raise OSError("injected reader start failure")
+
+        try:
+            with patch.object(executor, "_start_lineage_status_reader",
+                              side_effect=fail_after_command_started):
+                record = executor._run_record(
+                    [sys.executable, "-c",
+                     "import os,sys,time; os.write(int(sys.argv[1]), "
+                     "f'{os.getpid()}\\n'.encode()); time.sleep(60)", str(write_fd)],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run)
+            self.assertEqual(record["state"], "spawn_failed", record)
+            self.assertIsNotNone(command_pid)
+            self.assertFalse(executor._pid_live(command_pid))
+            self.assertEqual(executor.unproven_children(), [])
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+            if command_pid is not None:
+                try:
+                    os.kill(command_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_stage_record_includes_bounded_descendant_snapshot(self):
+        child = SimpleNamespace(pid=123, returncode=0, communicate=lambda **_: ("", ""))
+
+        def finish(owned):
+            owned._oxidex_lineage_diagnostics = [
+                {"pid": 42, "state": "R", "exe": "git", "signal": "sent",
+                 "start_ticks": 100, "ppid": 123, "disappeared_before_signal": False}]
+            owned._oxidex_lineage_diagnostics_omitted = 2
+            return [42]
+
+        with patch.object(executor, "_spawn_with_deferred_sigint", return_value=child), \
+             patch.object(executor, "_finish_lineage", side_effect=finish), \
+             patch.object(executor, "_require_ownership_release"), \
+             patch.object(executor, "_settle"):
+            record = executor._run_record(["fake-command"], cwd=self.root,
+                                          env=dict(os.environ), run=subprocess.run)
+        self.assertEqual(record["state"], "escaped_descendants")
+        self.assertEqual(record["escaped_descendants"], [42])
+        self.assertEqual(record["descendant_diagnostics"][0]["exe"], "git")
+        self.assertEqual(record["descendant_observations_omitted"], 2)
 
     def test_reaped_leader_group_is_never_signalled_by_numeric_pgid(self):
         """After the leader is reaped its PGID may be reused; signal only verified members."""
@@ -731,6 +845,136 @@ class ExecutorTests(unittest.TestCase):
                     os.close(high_read)
                 except OSError:
                     pass
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_supervisor_sweep_distinguishes_vanished_from_unreadable_live_child(self):
+        """Execute the embedded snapshot and sweep bodies with controlled procfs races."""
+        source = ast.parse(executor._LINUX_LINEAGE_SUPERVISOR)
+        bodies = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                  and node.name in {"children", "snapshot", "sweep"}]
+        self.assertEqual({node.name for node in bodies}, {"children", "snapshot", "sweep"})
+        program = compile(ast.Module(body=bodies, type_ignores=[]), "<actual Linux supervisor>", "exec")
+
+        cases = (("?", True, set(), FileNotFoundError),
+                 ("?", False, {42}, PermissionError),
+                 ("S", True, {42}, None), ("Z", False, set(), None))
+        for state, vanished, expected, stat_error in cases:
+            with self.subTest(state=state, vanished=vanished, stat_error=stat_error):
+                def proc_open(path, **_kwargs):
+                    if path.endswith("/children"):
+                        return io.StringIO("42")
+                    if stat_error is not None:
+                        raise stat_error("stat unreadable")
+                    return io.StringIO("42 (worker) " + state + " 7 " + "0 " * 17 + "1234 0")
+
+                def kill(_pid, _signal):
+                    if vanished:
+                        raise ProcessLookupError("gone before signal")
+
+                def waitpid(_pid, _flags):
+                    raise ChildProcessError("ECHILD")
+
+                fake_os = SimpleNamespace(
+                    path=os.path, readlink=lambda _path: "/secret/path/worker",
+                    kill=kill, waitpid=waitpid, WNOHANG=os.WNOHANG,
+                    getpid=lambda: 1, listdir=lambda _path: ["1"])
+                namespace = {"os": fake_os, "open": proc_open, "time": time,
+                             "signal": signal}
+                exec(program, namespace)
+                verified, escaped, status, rows, omitted = namespace["sweep"](1, 0)
+                self.assertTrue(verified)
+                self.assertEqual((escaped, status, omitted), (expected, 0, 0))
+                self.assertEqual(rows[0]["state"], state)
+                self.assertEqual(rows[0]["signal"], "vanished" if vanished else "sent")
+                self.assertEqual(rows[0]["disappeared_before_signal"], vanished)
+                self.assertEqual(rows[0]["exe"], "worker")
+                self.assertNotIn("/secret/path", json.dumps(rows[0]))
+                if state == "S":
+                    self.assertEqual((rows[0]["ppid"], rows[0]["start_ticks"]), (7, 1234))
+
+    def test_procfs_readers_preserve_identity_with_non_utf8_comm(self):
+        # Linux truncates comm by bytes, including inside a multibyte character.
+        raw = b"42 (name)\xc3) S 7 9 " + b"0 " * 16 + b"12345 0\n"
+        path = self.root / "proc-stat"
+        path.write_bytes(raw)
+        self.assertEqual(executor._procfs_process_row(path), ("S", 7, 9, 12345))
+        self.assertEqual(executor._procfs_stat(path), ("S", 9))
+
+    def test_supervisor_procfs_fallback_handles_non_utf8_comm(self):
+        raw = b"42 (name)\xc3) S 7 9 " + b"0 " * 16 + b"12345 0\n"
+        source = ast.parse(executor._LINUX_LINEAGE_SUPERVISOR)
+        bodies = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                  and node.name in {"children", "snapshot", "start_time"}]
+        def proc_open(path, **kwargs):
+            if path.endswith("/children"):
+                raise FileNotFoundError(path)
+            return io.TextIOWrapper(io.BytesIO(raw), encoding=kwargs.get("encoding", "utf-8"),
+                                    errors=kwargs.get("errors", "strict"))
+        fake_os = SimpleNamespace(path=os.path, getpid=lambda: 7,
+                                  listdir=lambda path: ["7"] if path.endswith("/task") else ["42"],
+                                  readlink=lambda path: "/safe/worker")
+        namespace = {"os": fake_os, "open": proc_open}
+        exec(compile(ast.Module(body=bodies, type_ignores=[]), "<actual supervisor>", "exec"), namespace)
+        self.assertEqual(namespace["children"](), {42})
+        self.assertEqual(namespace["start_time"](42), 12345)
+        self.assertEqual(namespace["snapshot"](42),
+                         {"pid": 42, "state": "S", "ppid": 7, "start_ticks": 12345, "exe": "worker"})
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the lineage supervisor is Linux-only")
+    def test_supervisor_diagnostics_are_bounded(self):
+        source = ast.parse(executor._LINUX_LINEAGE_SUPERVISOR)
+        sweep = next(node for node in source.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "sweep")
+        namespace = {"os": SimpleNamespace(kill=lambda *_: None,
+                                            waitpid=lambda *_: (_ for _ in ()).throw(ChildProcessError()),
+                                            WNOHANG=os.WNOHANG),
+                     "signal": signal, "time": time, "children": lambda: set(range(100, 120)),
+                     "snapshot": lambda pid: {"pid": pid, "state": "S"}}
+        exec(compile(ast.Module(body=[sweep], type_ignores=[]), "<actual Linux supervisor>", "exec"),
+             namespace)
+        verified, escaped, _, rows, omitted = namespace["sweep"](1, 0)
+        self.assertTrue(verified)
+        self.assertEqual(len(escaped), 20)
+        self.assertEqual((len(rows), omitted), (16, 4))
+
+    def test_lineage_diagnostics_survive_exit_report_and_old_reports(self):
+        child = SimpleNamespace(_oxidex_lineage_status_fd=3, returncode=None)
+        base = {"phase": "exit", "verified": True, "returncode": 0, "escaped": [42]}
+        with patch.object(executor, "_lineage_reports", return_value=[base]), \
+             patch.object(executor, "_close_lineage_status"):
+            self.assertEqual(executor._finish_lineage(child), [42])
+        self.assertEqual(executor._lineage_diagnostic_message(child), "")
+
+        row = {"pid": 42, "state": "?", "ppid": None, "start_ticks": None,
+               "exe": "worker", "signal": "sent", "disappeared_before_signal": False}
+        child = SimpleNamespace(_oxidex_lineage_status_fd=3, returncode=None)
+        report = dict(base, descendants=[row], descendant_observations_omitted=2)
+        with patch.object(executor, "_lineage_reports", return_value=[report]), \
+             patch.object(executor, "_close_lineage_status"):
+            self.assertEqual(executor._finish_lineage(child), [42])
+        message = executor._lineage_diagnostic_message(child)
+        self.assertIn('"exe": "worker"', message)
+        self.assertIn('"observations_omitted": 2', message)
+        self.assertLessEqual(len(message), 4200)
+
+    def test_tracked_run_refusal_includes_bounded_descendant_diagnostics(self):
+        child = SimpleNamespace(pid=123, returncode=0, communicate=lambda **_: ("", ""))
+
+        def finish(owned):
+            owned._oxidex_lineage_diagnostics = [{"pid": 42, "state": "?", "exe": "worker",
+                                                    "signal": "sent", "disappeared_before_signal": False}]
+            owned._oxidex_lineage_diagnostics_omitted = 0
+            return [42]
+
+        with patch.object(executor, "_spawn_with_deferred_sigint", return_value=child), \
+             patch.object(executor, "_finish_lineage", side_effect=finish), \
+             patch.object(executor, "_require_ownership_release"), \
+             patch.object(executor, "_settle"):
+            with self.assertRaisesRegex(OSError, '"exe": "worker"') as raised:
+                executor._tracked_run(["fake-command"])
+        self.assertIn("boundary killed them: 42", str(raised.exception))
 
     @unittest.skipUnless(sys.platform.startswith("linux"),
                          "the lineage supervisor is Linux-only")
