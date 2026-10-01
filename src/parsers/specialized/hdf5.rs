@@ -196,3 +196,22 @@ pub fn parse_hdf5_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
         parser.parse(reader).map_err(|e| e.to_string())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestReader;
+
+    #[test]
+    fn rejects_unsupported_superblock_version() {
+        let mut data = HDF5_SIGNATURE.to_vec();
+        data.push(7);
+        data.resize(64, 0);
+        let error = parse_hdf5_metadata(&TestReader::new(data))
+            .expect_err("unsupported superblock must not produce metadata");
+        assert!(
+            error.contains("Unsupported superblock version: 7"),
+            "{error}"
+        );
+    }
+}
