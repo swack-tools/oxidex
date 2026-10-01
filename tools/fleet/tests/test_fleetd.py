@@ -757,6 +757,64 @@ class TestVerdictStoreFailureIsDurableAndOwnerless(FleetdBase):
     def _reasons(self, entries):
         return [r[0] for r in entries]
 
+    def test_long_staging_slug_starts_and_releases_its_claim(self):
+        """A valid long branch name must still fit the gate launch log."""
+        slug = "x" * 200
+        env = scrub_env()
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        f"HEAD:refs/heads/staging/{slug}"], check=True, env=env)
+        subprocess.run(["git", "-C", str(self.seed), "push", "-q", str(self.bare),
+                        ":refs/heads/staging/one"], check=True, env=env)
+        self.set_desired(gates=1)
+
+        try:
+            started = self.reconcile()
+        except OSError as exc:
+            self.fail(f"gate did not start: {exc}; claims="
+                      f"{self.hub.list('refs/fleet/claims/gate/')}")
+        self.assertEqual(len(started.started), 1, started)
+        tag = started.started[0]
+        self.assertTrue(any(w.tag == tag and w.alive() for w in self.workers))
+        self.finish_worker(tag)
+        self.set_desired(gates=0)
+        reaped = self.reconcile()
+        self.assertIn(tag, reaped.finished)
+        self.assertEqual(self.hub.list("refs/fleet/claims/gate/"), {})
+
+    def test_worker_tag_bounds_unicode_components_by_bytes(self):
+        tag = fleetd._worker_tag("h" * 100 + "é", "é" * 200)
+        self.assertTrue(tag.isascii(), tag)
+        self.assertLessEqual(len(f"fleetd-gate-{tag}.launch.log".encode()), 255)
+        self.assertLessEqual(len(f"fleetd-agent-{tag}.log".encode()), 255)
+        self.assertLessEqual(len(f"gate-{tag}.verdict-store-failed".encode()), 255)
+
+    def test_replacement_gate_gets_new_identity_with_frozen_clock(self):
+        """A reaped gate's stop file and failure marker belong to that run.
+
+        Two starts within one wall-clock second used to share a tag, so the
+        replacement immediately consumed the first gate's stop file and its
+        marker was misreported as the replacement's failure.
+        """
+        self.set_desired(gates=1)
+        with mock.patch.object(fleetd.time, "time", return_value=1_000_000.25):
+            first = self.reconcile()
+        self.assertEqual(len(first.started), 1, first)
+        old_tag = first.started[0]
+        old_marker = self._marker(old_tag)
+        self.finish_worker(old_tag)
+
+        with mock.patch.object(fleetd.time, "time", return_value=1_000_000.25):
+            replacement = self.reconcile()
+        self.assertIn(old_tag, replacement.finished)
+        self.assertEqual(len(replacement.started), 1, replacement)
+        new_tag = replacement.started[0]
+        self.assertNotEqual(new_tag, old_tag)
+        self.assertTrue(old_marker.exists())
+        self.assertFalse((self.tmp / f"stop-{new_tag}").exists())
+        self.assertFalse(fleetd._verdict_store_failed_marker(self.tmp / "logs", new_tag).exists())
+        self.assertTrue(any(w.tag == new_tag and w.alive() for w in self.workers),
+                        self.worker_states())
+
     def test_a_marker_from_a_gate_fleetd_never_spawned_becomes_a_warning(self):
         """No worker, no claim, no reap -- the shape `train.real_gate` and
         a hand-run `gate.sh` leave behind, and the shape the reap-time
