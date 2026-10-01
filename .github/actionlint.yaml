@@ -23,3 +23,8 @@ self-hosted-runner:
     - warp-ubuntu-latest-arm64-2x
     # WarpBuild macOS
     - warp-macos-15-arm64-6x
+    # swack-tools IONOS ARC runner scale sets (.github/ionos-runners/):
+    # ionos-large = one job per 8-core / 16-thread / 16 GB node,
+    # ionos-small = three jobs per node.
+    - ionos-large
+    - ionos-small

@@ -1,0 +1,33 @@
+# ARC runner scale set "ionos-large" (gha-runner-scale-set chart).
+githubConfigUrl: https://github.com/swack-tools
+githubConfigSecret: arc-github
+runnerScaleSetName: ionos-large
+minRunners: 0
+listenerTemplate:
+  spec:
+    nodeSelector:
+      workload: ci-runners
+    containers:
+      - name: listener
+template:
+  metadata:
+    annotations:
+      cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+  spec:
+    nodeSelector:
+      workload: ci-runners
+    imagePullSecrets:
+      - name: ghcr-pull
+    containers:
+      - name: runner
+        image: ghcr.io/swack-tools/ci-runner:2.337.0-1
+        imagePullPolicy: IfNotPresent
+        command: ["/home/runner/run.sh"]
+        # CPU is a request only, never a limit, so a job can use idle cores.
+        # Memory limit = request, so one job can't starve its neighbours.
+        resources:
+          requests:
+            cpu: "12"
+            memory: 11776Mi
+          limits:
+            memory: 11776Mi
