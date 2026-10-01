@@ -1690,6 +1690,7 @@ def server_client(hub) -> Optional[ServerHub]:
         return hub.primary.with_timeouts(
             connect_timeout_s=REGISTER_CONNECT_TIMEOUT_S,
             read_timeout_s=REGISTER_READ_TIMEOUT_S,
+            total_timeout_s=REGISTER_READ_TIMEOUT_S,
         )
     return None
 

@@ -502,6 +502,44 @@ class TestRunDaemonRegistration(ServerFixture):
                                    interval=0, once=True, reconcile=failed_reconcile)
         self.assertEqual(rc, 6)
 
+    def test_daemon_keeps_backoff_state_across_reconcile_cycles(self):
+        held = []
+        original_claim = runner.Claim
+        class TrackedClaim(original_claim):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                held.append(self)
+        class DeadRegistrationClient:
+            def __init__(self):
+                self.attempts = 0
+            def register(self, _runner_id, _payload):
+                self.attempts += 1
+                raise TimeoutError("registration withheld")
+        client = DeadRegistrationClient()
+        cycles = [0]
+        now = [0.0]
+        real_cycle = runner.register_cycle
+        def clocked_cycle(*args, **kwargs):
+            result = real_cycle(*args, clock=lambda: now[0], **kwargs)
+            now[0] += runner.LOOP_SECONDS
+            return result
+        def reconcile(*_args, **_kwargs):
+            cycles[0] += 1
+            if cycles[0] == 10:
+                held[0]._mark_lost("stop after nine attempts")
+            return fleetd.ReconcileResult()
+        with mock.patch.object(runner, "Claim", TrackedClaim), \
+                mock.patch.object(runner, "server_client", return_value=client), \
+                mock.patch.object(runner, "register_cycle", side_effect=clocked_cycle):
+            rc = runner.run_daemon(self.hub, self.host, gate_command=[str(self.stub)],
+                                   log_dir=self.log_dir, repo_root=REPO_ROOT,
+                                   interval=0, reconcile=reconcile)
+        self.assertEqual(rc, 4)
+        self.assertEqual(cycles[0], 10)
+        self.assertGreaterEqual(client.attempts, 3)
+        self.assertLess(client.attempts, 9,
+                        "dropping the daemon's backoff dict would register on every cycle")
+
     def test_a_live_server_is_registered_from_inside_the_loop(self):
         self.attach_election()
         rc, steps = self._run_once()
@@ -589,6 +627,26 @@ class _BlackHoleListener:
             except OSError:
                 pass
         self._thread.join(timeout=5)
+
+
+class _SlowDripListener(_BlackHoleListener):
+    """Answer headers, then keep each body read alive without completing it."""
+
+    def _accept_forever(self):
+        while True:
+            try:
+                conn, _addr = self._sock.accept()
+            except OSError:
+                return
+            self._held.append(conn)
+            try:
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n"
+                             b"Connection: close\r\n\r\n")
+                for _ in range(20):
+                    conn.sendall(b"{")
+                    time.sleep(0.1)
+            except OSError:
+                pass
 
 
 class TestRegistrationLatencyBound(HermeticCase):
@@ -742,6 +800,24 @@ class TestRegistrationLatencyBound(HermeticCase):
         # unfixed code (20.43 s total), so the margin over the defect is
         # still a factor of five.
         self.assert_within_budget(elapsed, 1, "one run_daemon step", slack=3.0)
+
+    def test_slow_drip_response_has_a_total_deadline(self):
+        drip = _SlowDripListener()
+        self.addCleanup(drip.close)
+        hub = FallbackHub(ServerHub(drip.url, token="fixture-unused"), self.github)
+        client = runner.server_client(hub)
+        t0 = time.monotonic()
+        self.assertIsNone(runner.register_once(client, self.host, {"id": self.host},
+                                               lambda _m: None))
+        self.assertLess(time.monotonic() - t0, 1.2,
+                        "body bytes arriving before each idle timeout must not "
+                        "hold the reconcile thread past the total deadline")
+
+        t0 = time.monotonic()
+        with self.assertRaises(PrimaryFailure):
+            client.health()
+        self.assertLess(time.monotonic() - t0, 1.2,
+                        "steady-state health probes need the same total deadline")
 
     # -- the damping --------------------------------------------------- #
 

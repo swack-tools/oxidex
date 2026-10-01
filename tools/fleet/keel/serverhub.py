@@ -76,6 +76,8 @@ from __future__ import annotations
 import http.client
 import json
 import socket
+import threading
+import time
 import sys
 import urllib.parse
 from pathlib import Path
@@ -154,6 +156,7 @@ class ServerHub:
         *,
         connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
         read_timeout_s: float = DEFAULT_READ_TIMEOUT_S,
+        total_timeout_s: Optional[float] = None,
     ):
         parsed = urllib.parse.urlsplit(base_url if "//" in base_url else f"http://{base_url}")
         if parsed.scheme not in ("http", "https"):
@@ -167,12 +170,14 @@ class ServerHub:
         self._token = token
         self.connect_timeout_s = float(connect_timeout_s)
         self.read_timeout_s = float(read_timeout_s)
+        self.total_timeout_s = float(total_timeout_s) if total_timeout_s is not None else None
 
     def __repr__(self) -> str:  # no token, ever
         return f"ServerHub({self.base_url!r})"
 
     def with_timeouts(self, *, connect_timeout_s: Optional[float] = None,
-                      read_timeout_s: Optional[float] = None) -> "ServerHub":
+                      read_timeout_s: Optional[float] = None,
+                      total_timeout_s: Optional[float] = None) -> "ServerHub":
         """Clone the authenticated client with a separate announcement budget."""
         return ServerHub(
             self.base_url, token=self._token,
@@ -180,6 +185,7 @@ class ServerHub:
                                else connect_timeout_s),
             read_timeout_s=(self.read_timeout_s if read_timeout_s is None
                             else read_timeout_s),
+            total_timeout_s=total_timeout_s,
         )
 
     # ---------------------------------------------------------------- #
@@ -550,12 +556,34 @@ class ServerHub:
             # Phase 2: the request goes out and the answer comes back.
             # From the first byte sent, a failure no longer proves the
             # server did nothing: fail-closed, `request_sent=True`.
-            if conn.sock is not None:
-                conn.sock.settimeout(self.read_timeout_s)
+            sock = conn.sock
+            if sock is not None:
+                sock.settimeout(self.read_timeout_s)
+            expired = threading.Event()
+            deadline = None
+            timer = None
+            if self.total_timeout_s is not None:
+                # The socket timeout is an idle timeout: a peer dripping one
+                # byte per read can otherwise hold the reconcile thread forever.
+                # Only the cloned registration client has this total deadline;
+                # the CAS primary keeps its original timeout semantics.
+                deadline = time.monotonic() + self.total_timeout_s
+                def expire() -> None:
+                    expired.set()
+                    if sock is not None:
+                        try:
+                            sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                timer = threading.Timer(self.total_timeout_s, expire)
+                timer.daemon = True
+                timer.start()
             try:
                 conn.request(method, path, body=data, headers=self._headers(headers, data is not None))
                 resp = conn.getresponse()
                 raw = resp.read()
+                if expired.is_set() or (deadline is not None and time.monotonic() >= deadline):
+                    raise TimeoutError("total response deadline exceeded")
                 status = resp.status
             except Exception as exc:
                 raise PrimaryFailure(
@@ -563,6 +591,9 @@ class ServerHub:
                     f"have been sent ({type(exc).__name__}: {exc})",
                     request_sent=True,
                 ) from exc
+            finally:
+                if timer is not None:
+                    timer.cancel()
         finally:
             conn.close()
 
