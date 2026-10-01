@@ -553,9 +553,9 @@ pub(crate) fn extract_iptc_carrier_values_from_block(
             value_form,
         ));
     }
-    collapse_iptc_typed_entries(print_entries)
+    collapse_iptc_carrier_typed_entries(print_entries)
         .into_iter()
-        .zip(collapse_iptc_typed_entries(value_entries))
+        .zip(collapse_iptc_carrier_typed_entries(value_entries))
         .map(|((print_name, print), (value_name, value))| {
             debug_assert_eq!(print_name, value_name);
             (print_name, print, value)
@@ -603,16 +603,47 @@ fn carrier_value_before_printconv(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IptcListPlacement {
+    // Preserve the JPEG aggregator's established output order.
+    AfterScalars,
+    // A carrier's physical directory reports each tag at its first IIM
+    // record, even when a later record adds another value to its list.
+    FirstSeen,
+}
+
 fn collapse_iptc_typed_entries(
     entries: Vec<(u8, u8, String, TagValue)>,
 ) -> Vec<(String, TagValue)> {
+    collapse_iptc_typed_entries_with_placement(entries, IptcListPlacement::AfterScalars)
+}
+
+fn collapse_iptc_carrier_typed_entries(
+    entries: Vec<(u8, u8, String, TagValue)>,
+) -> Vec<(String, TagValue)> {
+    collapse_iptc_typed_entries_with_placement(entries, IptcListPlacement::FirstSeen)
+}
+
+fn collapse_iptc_typed_entries_with_placement(
+    entries: Vec<(u8, u8, String, TagValue)>,
+    placement: IptcListPlacement,
+) -> Vec<(String, TagValue)> {
     let mut out: Vec<(String, TagValue)> = Vec::new();
-    let mut lists: Vec<(String, Vec<TagValue>)> = Vec::new();
+    let mut lists: Vec<(String, Vec<TagValue>, Option<usize>)> = Vec::new();
     for (record_number, dataset_number, name, value) in entries {
         if is_repeatable_iptc_dataset(record_number, dataset_number) {
-            match lists.iter_mut().find(|(tag, _)| *tag == name) {
-                Some((_, values)) => values.push(value),
-                None => lists.push((name, vec![value])),
+            match lists.iter_mut().find(|(tag, _, _)| *tag == name) {
+                Some((_, values, _)) => values.push(value),
+                None => {
+                    let first_index = if placement == IptcListPlacement::FirstSeen {
+                        let index = out.len();
+                        out.push((name.clone(), TagValue::new_string(String::new())));
+                        Some(index)
+                    } else {
+                        None
+                    };
+                    lists.push((name, vec![value], first_index));
+                }
             }
             continue;
         }
@@ -621,15 +652,19 @@ fn collapse_iptc_typed_entries(
             None => out.push((name, value)),
         }
     }
-    for (name, mut values) in lists {
+    for (name, mut values, first_index) in lists {
         let stored = if values.len() == 1 {
             values.remove(0)
         } else {
             TagValue::Array(values)
         };
-        match out.iter_mut().find(|(tag, _)| *tag == name) {
-            Some(entry) => entry.1 = stored,
-            None => out.push((name, stored)),
+        if let Some(index) = first_index {
+            out[index].1 = stored;
+        } else {
+            match out.iter_mut().find(|(tag, _)| *tag == name) {
+                Some(entry) => entry.1 = stored,
+                None => out.push((name, stored)),
+            }
         }
     }
     out

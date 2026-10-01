@@ -350,30 +350,33 @@ impl EPSParser {
     /// `%%BeginPhotoshop: <len>` / `%%EndPhotoshop` block, one line of hex
     /// digits per line (each line commented out with a leading `%`). This
     /// mirrors ExifTool's `PostScript.pm` handling of the same block.
-    fn extract_photoshop_block(data: &[u8]) -> Option<Vec<u8>> {
+    fn extract_photoshop_blocks(data: &[u8]) -> Vec<Vec<u8>> {
         const BEGIN_MARKER: &[u8] = b"BeginPhotoshop";
         const END_MARKER: &[u8] = b"EndPhotoshop";
 
-        let begin_pos = find_subsequence(data, BEGIN_MARKER)?;
-        let after_begin = &data[begin_pos + BEGIN_MARKER.len()..];
-        let end_pos = find_subsequence(after_begin, END_MARKER)?;
-        let block = &after_begin[..end_pos];
-
-        let block_str = String::from_utf8_lossy(block);
-        let mut hex_chars = String::new();
-        for (i, line) in block_str.split(['\r', '\n']).enumerate() {
-            if i == 0 {
-                // First "line" is the ": <length>" declaration, not data.
-                continue;
-            }
-            for c in line.chars() {
-                if c.is_ascii_hexdigit() {
-                    hex_chars.push(c);
+        let mut blocks = Vec::new();
+        let mut pos = 0;
+        while let Some(begin_offset) = find_subsequence(&data[pos..], BEGIN_MARKER) {
+            let block_start = pos + begin_offset + BEGIN_MARKER.len();
+            let Some(end_offset) = find_subsequence(&data[block_start..], END_MARKER) else {
+                break;
+            };
+            let block_end = block_start + end_offset;
+            let block_str = String::from_utf8_lossy(&data[block_start..block_end]);
+            let mut hex_chars = String::new();
+            for (i, line) in block_str.split(['\r', '\n']).enumerate() {
+                if i == 0 {
+                    // First line declares the byte length; it is not data.
+                    continue;
                 }
+                hex_chars.extend(line.chars().filter(char::is_ascii_hexdigit));
             }
+            if let Ok(decoded) = hex::decode(hex_chars) {
+                blocks.push(decoded);
+            }
+            pos = block_end + END_MARKER.len();
         }
-
-        hex::decode(hex_chars).ok()
+        blocks
     }
 
     /// Extracts IPTC metadata from Photoshop 8BIM blocks in EPS data
@@ -539,15 +542,13 @@ impl FormatParser for EPSParser {
             // Extract XMP metadata
             Self::extract_xmp(data, &mut metadata);
 
-            // Extract IPTC metadata from raw binary 8BIM blocks, if present
+            // PostScript.pm reads each %%BeginPhotoshop DSC block as one
+            // physical Photoshop resource stream. Raw 8BIM bytes elsewhere
+            // in EPS are not a second representation to replay. Do not
+            // deduplicate by payload: two separate DSC blocks may contain
+            // equal IPTC bytes and still be distinct physical occurrences.
             let mut iptc_blocks = CarrierIptcBlocks::default();
-            Self::extract_iptc(data, &mut metadata, &mut iptc_blocks);
-
-            // ASCII EPS files typically embed the Photoshop 8BIM resource data
-            // (IPTC + IPTC digest) as a hex-encoded %%BeginPhotoshop block rather
-            // than raw binary, since PostScript is a text format. Decode that
-            // block, if present, and extract IPTC from it too.
-            if let Some(photoshop_data) = Self::extract_photoshop_block(data) {
+            for photoshop_data in Self::extract_photoshop_blocks(data) {
                 Self::extract_iptc(&photoshop_data, &mut metadata, &mut iptc_blocks);
             }
 

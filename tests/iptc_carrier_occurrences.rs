@@ -82,6 +82,62 @@ fn copy_family_is_projected_from_physical_directory_number() {
     assert_eq!(default.len(), 1);
 }
 
+fn eps_grouped_text_order(group: &str, fixture: &str) -> Vec<String> {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/iptc_carrier")
+        .join(fixture);
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args([group, "-a", "-s"])
+        .arg(file)
+        .output()
+        .expect("run oxidex");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (group, rest) = line.split_once(']')?;
+            let (tag, value) = rest.split_once(':')?;
+            let tag = tag.trim();
+            matches!(tag, "By-line" | "ObjectName")
+                .then(|| format!("{}:{tag}={}", group.trim_start_matches('['), value.trim()))
+        })
+        .collect()
+}
+
+#[test]
+fn eps_grouped_text_sort_uses_resolved_copy_identity() {
+    assert_eq!(
+        eps_grouped_text_order("-G4", "eps-one-hex-sort.eps"),
+        [":By-line=Alice", ":ObjectName=Second", "Copy1:By-line=Bob"]
+    );
+    assert_eq!(
+        eps_grouped_text_order("-G1:4", "eps-one-hex-sort.eps"),
+        [
+            "IPTC:By-line=Alice",
+            "IPTC2:Copy1:By-line=Bob",
+            "IPTC2:ObjectName=Second",
+        ]
+    );
+}
+
+#[test]
+fn eps_interleaved_list_keeps_first_source_position() {
+    for (group, expected_group) in [("-G1", "IPTC"), ("-G1:4", "IPTC"), ("-G4", "")] {
+        assert_eq!(
+            eps_grouped_text_order(group, "eps-interleaved-list.eps"),
+            [
+                format!("{expected_group}:By-line=Alice, Bob"),
+                format!("{expected_group}:ObjectName=Between"),
+            ],
+            "{group}"
+        );
+    }
+}
+
 #[path = "common/fixtures.rs"]
 mod fixtures;
 

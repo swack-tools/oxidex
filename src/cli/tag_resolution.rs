@@ -141,19 +141,25 @@ fn family_label(occurrence: &TagOccurrence, family: u8) -> String {
 /// The copy number belongs to the resolved key, not the source row.
 /// Project family 4 only after FoundTag duplicate numbering has run.
 fn joined_family_label_for_entry(entry: &ResolvedOccurrence<'_>, families: &[u8]) -> String {
+    joined_family_label_for_copy(entry.occurrence, entry.copy, families)
+}
+
+fn joined_family_label_for_copy(
+    occurrence: &TagOccurrence,
+    copy: Option<u32>,
+    families: &[u8],
+) -> String {
     if !families.contains(&4) {
-        return joined_family_label(entry.occurrence, families);
+        return joined_family_label(occurrence, families);
     }
     let mut labels = Vec::with_capacity(families.len());
     for &family in families {
         let label = if family == 4 {
-            entry
-                .copy
-                .filter(|copy| *copy > 0)
+            copy.filter(|copy| *copy > 0)
                 .map(|copy| format!("Copy{copy}"))
                 .unwrap_or_default()
         } else {
-            family_label(entry.occurrence, family)
+            family_label(occurrence, family)
         };
         if !label.is_empty() && labels.last() != Some(&label) {
             labels.push(label);
@@ -961,7 +967,11 @@ fn select_occurrences<'m>(
             let ranks: Vec<usize> = found
                 .iter()
                 .map(|&i| {
-                    let label = joined_family_label(keys[i].occurrence, families);
+                    let label = joined_family_label_for_copy(
+                        keys[i].occurrence,
+                        Some(keys[i].copy),
+                        families,
+                    );
                     let next = rank.len();
                     *rank.entry(label).or_insert(next)
                 })

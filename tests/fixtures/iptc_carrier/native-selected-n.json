@@ -62,5 +62,25 @@
     "IPTC:Urgency": "05",
     "IPTC:Category": "0042",
     "IPTC:By-line": "Alice"
+  },
+  "eps-raw-and-hex-same.eps": {
+    "IPTC:By-line": "Alice"
+  },
+  "eps-raw-only.eps": {},
+  "eps-two-hex-same.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Alice"
+  },
+  "eps-one-hex-sort.eps": {
+    "IPTC:By-line": "Alice",
+    "IPTC2:Copy1:By-line": "Bob",
+    "IPTC2:ObjectName": "Second"
+  },
+  "eps-interleaved-list.eps": {
+    "IPTC:By-line": [
+      "Alice",
+      "Bob"
+    ],
+    "IPTC:ObjectName": "Between"
   }
 }

@@ -7,3 +7,5 @@ These tiny files wrap source-derived IIM datasets in PSD image resources, TIFF I
 The converted controls in every carrier distinguish PrintConv-only enum labels from ValueConv dates/times under native `-n` and OxiDex `--no-print-conv` (OxiDex reserves `-n` for dry-run). The linked TIFF control proves one counter spans IFD0 and IFD1.
 
 Leading-zero controls use EditorialUpdate `01`, Urgency `05`, and Category `0042`: normal output keeps their source PrintConv labels, while raw output retains the exact strings `01`, `05`, and `0042` in all four carriers.
+
+EPS representation controls follow PostScript.pm: raw 8BIM bytes outside a `%%BeginPhotoshop` DSC block are ignored, a raw-plus-hex replay contributes one physical occurrence, and two separate Photoshop DSC blocks with equal IPTC payloads remain two occurrences. `eps-one-hex-sort.eps` checks copy-aware group ordering; `eps-interleaved-list.eps` checks that a By-line list spanning a scalar stays at its first IIM record position under G1, G1:4, and G4.
