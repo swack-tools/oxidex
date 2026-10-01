@@ -239,6 +239,26 @@ pub fn parse_ifd(
     ifd_offset: u64,
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
+    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, true)
+}
+
+/// Parse an embedded subdirectory whose complete entry array may end without
+/// the optional next-IFD pointer (Exif.pm:6394-6400). Ordinary TIFF IFDs still
+/// use `parse_ifd` and require the pointer field.
+pub(crate) fn parse_ifd_without_next_offset(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+) -> Result<IfdEntries> {
+    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, false)
+}
+
+fn parse_ifd_with_footer_requirement(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    require_next_offset: bool,
+) -> Result<IfdEntries> {
     let file_size = reader.size();
 
     // Validate IFD offset
@@ -256,11 +276,19 @@ pub fn parse_ifd(
         .u16_at(0)
         .ok_or_else(|| ExifToolError::parse_error("Failed to read IFD entry count"))?;
 
-    // Calculate IFD size: 2 bytes (count) + 12 bytes per entry + 4 bytes (next IFD offset)
-    let ifd_size = 2 + (entry_count as usize * 12) + 4;
+    // Embedded subdirectories can end after their entries; standalone IFDs
+    // still require the four-byte next-IFD field.
+    let ifd_size = 2 + (entry_count as usize * 12) + if require_next_offset { 4 } else { 0 };
 
-    // Validate IFD size doesn't exceed file
-    if ifd_offset + ifd_size as u64 > file_size {
+    // Validate IFD size doesn't exceed file. Exif.pm:6394-6400 accepts
+    // exactly zero or two bytes after a complete entry array when the normal
+    // four-byte pointer is absent; one or three bytes are malformed.
+    let bytes_after_entries = file_size
+        .checked_sub(ifd_offset)
+        .and_then(|available| available.checked_sub((2 + entry_count as usize * 12) as u64));
+    if ifd_offset + ifd_size as u64 > file_size
+        || (!require_next_offset && matches!(bytes_after_entries, Some(1 | 3)))
+    {
         return Err(ExifToolError::parse_error_at(
             format!("IFD size ({} bytes) exceeds file bounds", ifd_size),
             ifd_offset as usize,

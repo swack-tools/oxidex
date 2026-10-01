@@ -375,6 +375,52 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 }
 
 #[test]
+fn footerless_preview_exififd_keeps_reached_shading_correction() {
+    let mut data = source();
+    let outer_ifd0 = read_u32(&data, 4) as usize;
+    let jpg_from_raw = entry(&data, outer_ifd0, 0x002e);
+    assert_eq!(read_u16(&data, jpg_from_raw + 2), 7);
+
+    // The APP1 TIFF ends exactly after A411's one complete entry. JPEG EOI
+    // supplies only two bytes beyond it, so there is no four-byte next-IFD
+    // footer for parse_ifd to read. Pinned ExifTool 13.59 still reports Yes.
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&0x8769u16.to_le_bytes());
+    tiff.extend_from_slice(&4u16.to_le_bytes());
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    tiff.extend_from_slice(&26u32.to_le_bytes());
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(tiff.len(), 26);
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&0xa411u16.to_le_bytes());
+    tiff.extend_from_slice(&3u16.to_le_bytes());
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    assert_eq!(tiff.len(), 40);
+
+    let mut preview = vec![0xff, 0xd8, 0xff, 0xe1];
+    preview.extend_from_slice(&u16::try_from(8 + tiff.len()).unwrap().to_be_bytes());
+    preview.extend_from_slice(b"Exif\0\0");
+    preview.extend_from_slice(&tiff);
+    preview.extend_from_slice(&[0xff, 0xd9]);
+    assert_eq!(preview.len(), 54);
+
+    let preview_offset = u32::try_from(data.len()).unwrap();
+    data[jpg_from_raw + 4..jpg_from_raw + 8]
+        .copy_from_slice(&u32::try_from(preview.len()).unwrap().to_le_bytes());
+    data[jpg_from_raw + 8..jpg_from_raw + 12].copy_from_slice(&preview_offset.to_le_bytes());
+    data.extend_from_slice(&preview);
+
+    let metadata = parse(&data);
+    assert_eq!(
+        metadata.get_string("ExifIFD:ShadingCorrection"),
+        Some("Yes")
+    );
+}
+
+#[test]
 fn preview_a411_uses_source_read_formats_beyond_integral_wires() {
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);

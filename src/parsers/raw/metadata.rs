@@ -1847,8 +1847,13 @@ fn extract_rw2_embedded_exif_tags(
         return Ok(());
     };
 
-    // A malformed optional ExifIFD must not discard IFD0 or IFD1 values.
-    let Ok(exif_tags) = parse_ifd(&reader, exif_ifd_offset, byte_order) else {
+    // A complete embedded ExifIFD can end without a next-IFD footer. A
+    // malformed optional ExifIFD must not discard IFD0 or IFD1 values.
+    let Ok(exif_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
+        &reader,
+        exif_ifd_offset,
+        byte_order,
+    ) else {
         return Ok(());
     };
 
