@@ -59,21 +59,52 @@ DEFAULT_MANIFEST = OXIDEX_HOME / "logs/model-fix-requests/manifest.log"
 DEFAULT_SCOREBOARD = OXIDEX_HOME / "logs/model-scoreboard.jsonl"
 DEFAULT_REPO = OXIDEX_HOME / "worktrees/fleet-ops"
 
-# Candidate pool, best-known first. Ordering matters only as a tie-break
-# before any performance data exists; once manifest.log has samples the
-# scoreboard drives selection.
-CANDIDATES = [
-    "deepseek-v4-pro",
-    "kimi-k2.7-code",
-    "kimi-k2.6",
-    "glm-5.2",
-    "gpt-5.6",
-    "minimax-m2.5",
-    "deepseek-v4-flash",
-    "glm-5.1",
-    "qwen3.5-397b-a17b",
-    "gpt-5.5",
-]
+# Candidates are PER PROVIDER: model ids are not portable between them
+# (clawbay serves "deepseek-v4-pro", wafer serves "DeepSeek-V4-Pro", and
+# wafer has no gpt-* at all). Probing one provider's ids against the
+# other's endpoint finds nothing healthy, which would either wedge the
+# daemon into "never rotate" or -- worse -- let it overwrite a working
+# pool with names that provider cannot serve.
+#
+# Keyed by a substring of the endpoint so the right list is chosen from
+# whatever base_url the live config currently points at. Best-known
+# model first; ordering is only a tie-break before the scoreboard has
+# samples.
+CANDIDATES_BY_PROVIDER = {
+    "theclawbay.com": [
+        "deepseek-v4-pro",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "glm-5.2",
+        "gpt-5.6",
+        "minimax-m2.5",
+        "deepseek-v4-flash",
+        "glm-5.1",
+        "qwen3.5-397b-a17b",
+        "gpt-5.5",
+    ],
+    "wafer.ai": [
+        "Kimi-K2.6",
+        "GLM-5.2",
+        "DeepSeek-V4-Pro",
+    ],
+}
+DEFAULT_CANDIDATES = CANDIDATES_BY_PROVIDER["theclawbay.com"]
+
+
+def candidates_for(base_url, config=None):
+    """Model ids valid for this endpoint.
+
+    A `[rotator] candidates = [...]` list in config.toml always wins, so
+    a new provider can be adopted without editing this file.
+    """
+    override = ((config or {}).get("rotator") or {}).get("candidates")
+    if override:
+        return list(override)
+    for host, models in CANDIDATES_BY_PROVIDER.items():
+        if host in (base_url or ""):
+            return list(models)
+    return list(DEFAULT_CANDIDATES)
 
 # Sections whose [[<name>.models]] pools this daemon manages, and how many
 # entries each should carry. worker has two phases (explore/patch) and the
@@ -200,7 +231,7 @@ def score_models(manifest_path, since_iso=None, repo=None, git_run=None):
     return out
 
 
-def rank_candidates(healthy, scores):
+def rank_candidates(healthy, scores, candidate_order=None):
     """Healthy models, best first.
 
     Sorts by success rate (the failure this daemon exists to avoid),
@@ -213,6 +244,7 @@ def rank_candidates(healthy, scores):
     # ("DeepSeek-V4-Pro"), while candidates use the API's canonical
     # lowercase ids ("deepseek-v4-pro"). Without folding case, every
     # model looks unscored and months of history is silently ignored.
+    candidate_order = candidate_order or DEFAULT_CANDIDATES
     folded = {k.lower(): v for k, v in (scores or {}).items()}
 
     def key(m):
@@ -221,7 +253,7 @@ def rank_candidates(healthy, scores):
         sr = 0.9 if sr is None else sr
         lat = s.get("p50_latency")
         lat = 120.0 if lat is None else lat
-        return (-round(sr, 2), -s.get("fixes", 0), lat, CANDIDATES.index(m) if m in CANDIDATES else 99)
+        return (-round(sr, 2), -s.get("fixes", 0), lat, candidate_order.index(m) if m in candidate_order else 99)
     return sorted(healthy, key=key)
 
 
@@ -351,6 +383,7 @@ def main(argv=None):
     cfg = tomllib.loads(Path(args.config).read_text())
     base_url = cfg["worker"]["base_url"]
     api_key = cfg["worker"]["api_key"]
+    candidates = candidates_for(base_url, cfg)
 
     from subprocess import run as _run  # local: only needed for fix attribution
 
@@ -358,6 +391,7 @@ def main(argv=None):
         return _run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True).stdout  # nosec B603
 
     log = lambda m: print(f"[{ts()}] {m}", flush=True)  # noqa: E731
+    log(f"provider={base_url} candidates={candidates}")
     log(f"model-rotator up (health={args.health_seconds}s rotate={args.rotate_seconds}s "
         f"report={args.report_seconds}s dry_run={args.dry_run})")
 
@@ -371,7 +405,7 @@ def main(argv=None):
 
         # Always probe what is IN USE; on a rotate tick probe every candidate.
         rotating = (now - last_rotate) >= args.rotate_seconds
-        to_probe = CANDIDATES if rotating else in_use
+        to_probe = candidates if rotating else in_use
         log(f"health check ({'rotate' if rotating else 'pool-only'}): {len(to_probe)} model(s)")
         health = probe_all(base_url, api_key, to_probe, timeout=args.probe_timeout, log=log)
 
@@ -380,7 +414,7 @@ def main(argv=None):
         down_in_use = [m for m in in_use if m in health and not health[m]["up"]]
 
         if rotating:
-            ranked = rank_candidates(healthy, scores)
+            ranked = rank_candidates(healthy, scores, candidates)
             if ranked:
                 log(f"rotating; healthy={ranked}")
                 apply_pools(args.config, ranked, log=log, dry_run=args.dry_run)
@@ -390,11 +424,11 @@ def main(argv=None):
         elif down_in_use:
             log(f"pool member(s) DOWN: {down_in_use} -- swapping out")
             extra = probe_all(base_url, api_key,
-                              [m for m in CANDIDATES if m not in health],
+                              [m for m in candidates if m not in health],
                               timeout=args.probe_timeout, log=log)
             health.update(extra)
             healthy = [m for m, h in health.items() if h["up"]]
-            ranked = rank_candidates(healthy, scores)
+            ranked = rank_candidates(healthy, scores, candidates)
             if ranked:
                 apply_pools(args.config, ranked, log=log, dry_run=args.dry_run)
             else:

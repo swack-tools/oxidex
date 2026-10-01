@@ -454,7 +454,11 @@ class EnsureStagingWorktreeTests(GitRepoTestCase):
 # process_commit: the full per-commit pipeline
 # ---------------------------------------------------------------------------
 
-class ProcessCommitTests(GitRepoTestCase):
+class SquadProcessFixture(GitRepoTestCase):
+    """Shared process_commit scaffolding. Split out from the tests so a
+    second test class can reuse it WITHOUT subclassing ProcessCommitTests,
+    which would silently re-run every one of its cases."""
+
     def _setup_squad(self):
         repo = self.make_repo()
         git(repo, "branch", "squad/nikon")
@@ -485,6 +489,8 @@ class ProcessCommitTests(GitRepoTestCase):
         kwargs.update(overrides)
         return sml.process_commit(**kwargs)
 
+
+class ProcessCommitTests(SquadProcessFixture):
     def test_not_novel_marks_consumed_without_work_and_skips_validate(self):
         repo, staging, home, sha = self._setup_squad()
         called = []
@@ -1137,6 +1143,119 @@ class RealFormatMatchTests(unittest.TestCase):
         _, kwargs = mock_run_format_comparison.call_args
         self.assertEqual(kwargs["semaphore_max_holders"], 2)
         self.assertEqual(kwargs["semaphore_path"], sml.DEFAULT_BUILD_SEMAPHORE_PATH)
+
+
+class PolicyVersionRetryTests(GitRepoTestCase):
+    """A rejection is permanent only with respect to the rules that
+    produced it. When the validator's acceptance policy changes, heads it
+    rejected under the OLD policy get exactly one fresh attempt -- without
+    this, the 2026-07-25 extractor fixes (which made 20 of 44 quarantined
+    heads admissible) could never have taken effect retroactively."""
+
+    def test_stale_policy_only_fires_for_quarantines(self):
+        cur = sml.validate_fix_commit.POLICY_VERSION
+        self.assertFalse(sml.stale_policy({"status": "consumed", "policy_version": cur - 1}))
+        self.assertFalse(sml.stale_policy({"status": "quarantined", "policy_version": cur}))
+        self.assertTrue(sml.stale_policy({"status": "quarantined", "policy_version": cur - 1}))
+
+    def test_unstamped_legacy_quarantine_counts_as_stale(self):
+        # Entries written before stamping existed predate every fix that
+        # made them stale, so they must be retried, not grandfathered in.
+        self.assertTrue(sml.stale_policy({"status": "quarantined"}))
+
+    def test_candidate_commits_reopens_a_stale_quarantine(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-nef")
+        c1 = self.commit_file(repo, "a.rs", "1\n", "fix a")
+        c2 = self.commit_file(repo, "b.rs", "1\n", "fix b")
+        cur = sml.validate_fix_commit.POLICY_VERSION
+
+        status = {"heads": {
+            c1: {"status": "quarantined", "policy_version": cur - 1},  # stale
+            c2: {"status": "quarantined", "policy_version": cur},      # current
+        }}
+        self.assertEqual(
+            sml.candidate_commits(repo, "model-fix-parallel-nef", "squad/nikon", status), [c1],
+        )
+
+    def test_candidate_commits_never_reopens_a_consumed_head(self):
+        repo = self.make_repo()
+        git(repo, "branch", "squad/nikon")
+        git(repo, "checkout", "-q", "-b", "model-fix-parallel-nef")
+        c1 = self.commit_file(repo, "a.rs", "1\n", "fix a")
+        cur = sml.validate_fix_commit.POLICY_VERSION
+
+        # Already published: re-cherry-picking it would duplicate the work.
+        status = {"heads": {c1: {"status": "consumed", "policy_version": cur - 99}}}
+        self.assertEqual(
+            sml.candidate_commits(repo, "model-fix-parallel-nef", "squad/nikon", status), [],
+        )
+
+    def test_quarantine_entries_are_stamped_with_the_current_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qpath = Path(tmp) / "quarantine.jsonl"
+            entry = sml.append_quarantine(
+                qpath, patch_id="p1", sha="abc", format_name="NEF", squad="nikon",
+                reason="r", flags=["f"], now_fn=lambda: 1,
+            )
+        self.assertEqual(entry["policy_version"], sml.validate_fix_commit.POLICY_VERSION)
+
+    def test_recorded_quarantine_head_is_stamped_but_consumed_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nikon.json"
+            sml.record_head(path, "sha1", status="quarantined", patch_id="p1",
+                            format_name="NEF", reason="r", now_fn=lambda: 1)
+            sml.record_head(path, "sha2", status="consumed", patch_id="p2",
+                            format_name="NEF", now_fn=lambda: 1)
+            data = sml.load_squad_status(path)
+        self.assertEqual(data["heads"]["sha1"]["policy_version"],
+                         sml.validate_fix_commit.POLICY_VERSION)
+        self.assertNotIn("policy_version", data["heads"]["sha2"])
+
+
+class PolicyVersionProcessCommitTests(SquadProcessFixture):
+    """The patch-id ledger is the SECOND gate; it has to honour the policy
+    stamp too, or candidate_commits re-offers a head that process_commit
+    then drops on the floor."""
+
+    def test_patch_id_quarantined_under_old_policy_is_revalidated(self):
+        repo, staging, home, sha = self._setup_squad()
+        patch_id = sml.compute_patch_id_for_sha(repo, sha)
+        qpath = sml.quarantine_ledger_path(home)
+        sml.append_quarantine(
+            qpath, patch_id=patch_id, sha=sha, format_name="NEF", squad="nikon",
+            reason="rejected by the old rules", flags=["printconv-unverifiable"],
+            now_fn=lambda: 1, policy_version=sml.validate_fix_commit.POLICY_VERSION - 1,
+        )
+        entries = sml.load_quarantine(qpath)
+        validated = []
+
+        result = self._process(
+            repo, staging, home, sha, quarantine_entries=entries,
+            validate_fn=lambda s, r, **kw: (validated.append(s) or
+                                            {"ok": True, "flags": [], "patch_id": patch_id}),
+        )
+
+        self.assertEqual(validated, [sha], "the new policy must actually be consulted")
+        self.assertNotEqual(result["outcome"], "skipped_quarantined")
+
+    def test_patch_id_quarantined_under_current_policy_still_skipped(self):
+        repo, staging, home, sha = self._setup_squad()
+        patch_id = sml.compute_patch_id_for_sha(repo, sha)
+        qpath = sml.quarantine_ledger_path(home)
+        sml.append_quarantine(
+            qpath, patch_id=patch_id, sha=sha, format_name="NEF", squad="nikon",
+            reason="rejected by the current rules", flags=["printconv-mismatch:Bogus"],
+            now_fn=lambda: 1,
+        )
+        entries = sml.load_quarantine(qpath)
+
+        result = self._process(
+            repo, staging, home, sha, quarantine_entries=entries,
+            validate_fn=lambda *a, **k: self.fail("must not revalidate"),
+        )
+        self.assertEqual(result["outcome"], "skipped_quarantined")
 
 
 if __name__ == "__main__":

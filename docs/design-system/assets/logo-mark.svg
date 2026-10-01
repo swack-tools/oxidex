@@ -1,0 +1,30 @@
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  
+  <circle cx="60" cy="60" r="58" fill="#16191f" stroke="#2a2f3a" stroke-width="2"></circle>
+
+  
+  <rect x="30" y="25" width="60" height="70" rx="4" fill="none" stroke="#e8824a" stroke-width="2"></rect>
+
+  
+  <circle cx="48" cy="45" r="5" fill="#e8824a"></circle>
+  <path d="M 35 70 L 45 55 L 55 65 L 70 50 L 85 70 Z" fill="#e8824a" opacity="0.7"></path>
+
+  
+  <line x1="35" y1="80" x2="65" y2="80" stroke="#e8824a" stroke-width="2" opacity="0.8"></line>
+  <line x1="35" y1="87" x2="75" y2="87" stroke="#e8824a" stroke-width="2" opacity="0.6"></line>
+
+  
+  <circle cx="75" cy="85" r="12" fill="#b5551e"></circle>
+  <g transform="translate(75, 85)">
+    <circle cx="0" cy="0" r="8" fill="#0d0f12"></circle>
+    <circle cx="0" cy="-10" r="2" fill="#e8824a"></circle>
+    <circle cx="7" cy="-7" r="2" fill="#e8824a"></circle>
+    <circle cx="10" cy="0" r="2" fill="#e8824a"></circle>
+    <circle cx="7" cy="7" r="2" fill="#e8824a"></circle>
+    <circle cx="0" cy="10" r="2" fill="#e8824a"></circle>
+    <circle cx="-7" cy="7" r="2" fill="#e8824a"></circle>
+    <circle cx="-10" cy="0" r="2" fill="#e8824a"></circle>
+    <circle cx="-7" cy="-7" r="2" fill="#e8824a"></circle>
+    <circle cx="0" cy="0" r="3" fill="#e8824a"></circle>
+  </g>
+</svg>

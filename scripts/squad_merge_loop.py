@@ -397,13 +397,43 @@ def commit_format_trailer(repo_root, sha):
     return values[0] if values else None
 
 
-def candidate_commits(repo_root, worker_branch, squad_branch, status):
+def stale_policy(entry, policy_version=None):
+    """True when `entry` is a quarantine recorded under a DIFFERENT
+    validator policy than the one running now, so the rejection was
+    reached by rules we no longer apply and deserves one fresh attempt.
+
+    Entries written before policy stamping existed have no
+    "policy_version" key at all; those are treated as stale too, which is
+    exactly right -- they predate every fix that made them stale.
+
+    A "consumed" entry is never stale: it is already published.
+    """
+    if not isinstance(entry, dict) or entry.get("status") != "quarantined":
+        return False
+    current = (
+        validate_fix_commit.POLICY_VERSION if policy_version is None
+        else policy_version
+    )
+    return entry.get("policy_version") != current
+
+
+def candidate_commits(repo_root, worker_branch, squad_branch, status,
+                       policy_version=None):
     """Oldest-first commits on `worker_branch` not yet reachable from
     `squad_branch` and not already recorded consumed/quarantined in
-    `status` (spec M2 step (b))."""
+    `status` (spec M2 step (b)).
+
+    A head quarantined under a superseded validator policy IS a candidate
+    again -- see stale_policy. Otherwise a validator bugfix can never
+    take effect retroactively, which is how 20 valid fixes stayed
+    rejected across the whole of 2026-07-25 even after the rules that
+    rejected them were repaired."""
     shas = new_commits_since(repo_root, squad_branch, worker_branch)
-    seen = set((status or {}).get("heads") or {})
-    return [s for s in shas if s not in seen]
+    heads = (status or {}).get("heads") or {}
+    return [
+        s for s in shas
+        if s not in heads or stale_policy(heads[s], policy_version)
+    ]
 
 
 def union_novel_shas(repo_root, worker_branch, origin_ref, squad_branch):
@@ -466,12 +496,19 @@ def load_quarantine(path):
 
 
 def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
-                       quarantine_entries=None, now_fn=time.time):
+                       quarantine_entries=None, now_fn=time.time,
+                       policy_version=None):
     """Append one rejection entry (K1-style: O_APPEND|O_CREAT|O_WRONLY,
     exactly one os.write of one line). A quarantined patch-id is skipped
     without retry by every later poll (spec M2) -- the attempt/backoff
     fields exist for operator visibility, not because this daemon ever
-    automatically retries a quarantined patch-id."""
+    automatically retries a quarantined patch-id.
+
+    The ONE exception is a change to the acceptance rules themselves:
+    `policy_version` stamps which validator policy did the rejecting, so
+    a later poll running a DIFFERENT policy can give the head one fresh
+    attempt (see quarantine_blocks and candidate_commits). A rejection is
+    only permanent with respect to the rules that produced it."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior_attempt = 0
@@ -489,6 +526,10 @@ def append_quarantine(path, *, patch_id, sha, format_name, squad, reason, flags,
         "flags": list(flags or []),
         "attempt": attempt,
         "backoff_seconds": backoff_seconds,
+        "policy_version": (
+            validate_fix_commit.POLICY_VERSION if policy_version is None
+            else policy_version
+        ),
     }
     line = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
     fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
@@ -533,7 +574,8 @@ def _write_squad_status(path, data):
 
 
 def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
-                 squad_sha=None, reason=None, now_fn=time.time):
+                 squad_sha=None, reason=None, now_fn=time.time,
+                 policy_version=None):
     """Record one worker-branch head's outcome (spec M2 step 5 / M5
     consume handshake): status is "consumed" or "quarantined". Written
     via tempfile + os.replace so a concurrent reader (create_worktree's
@@ -552,6 +594,14 @@ def record_head(path, sha, *, status, patch_id, format_name, work_done=True,
         entry["squad_sha"] = squad_sha
     if reason is not None:
         entry["reason"] = reason
+    if status == "quarantined":
+        # Only rejections carry a policy stamp -- a "consumed" head is
+        # already published and must never be reconsidered, no matter how
+        # the acceptance rules move.
+        entry["policy_version"] = (
+            validate_fix_commit.POLICY_VERSION if policy_version is None
+            else policy_version
+        )
     data["heads"][sha] = entry
     _write_squad_status(path, data)
     return data
@@ -630,9 +680,15 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
                "marked consumed, no work done")
         return {"sha": sha, "outcome": "consumed_no_work", "patch_id": patch_id}
 
-    if patch_id in quarantine_entries:
+    if patch_id in quarantine_entries and not stale_policy(
+        {**quarantine_entries[patch_id], "status": "quarantined"}
+    ):
         log_fn(f"[{squad}] {sha[:12]} ({fmt}): patch-id already quarantined -- skipped without retry")
         return {"sha": sha, "outcome": "skipped_quarantined", "patch_id": patch_id}
+    if patch_id in quarantine_entries:
+        log_fn(f"[{squad}] {sha[:12]} ({fmt}): quarantined under validator policy "
+               f"{quarantine_entries[patch_id].get('policy_version')!r}, now on "
+               f"{validate_fix_commit.POLICY_VERSION} -- retrying once under the new rules")
 
     def quarantine(reason, flags):
         entry = append_quarantine(

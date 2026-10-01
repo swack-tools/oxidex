@@ -229,3 +229,30 @@ class ManagedSectionsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CandidatesForProviderTests(unittest.TestCase):
+    def test_wafer_endpoint_gets_wafer_model_ids(self):
+        # Probing clawbay's lowercase ids against wafer finds nothing
+        # healthy, which would wedge the daemon into never rotating.
+        from model_rotator import candidates_for
+        c = candidates_for("https://pass.wafer.ai/v1")
+        self.assertIn("Kimi-K2.6", c)
+        self.assertNotIn("gpt-5.6", c)
+
+    def test_clawbay_endpoint_gets_clawbay_model_ids(self):
+        from model_rotator import candidates_for
+        c = candidates_for("https://api.theclawbay.com/v1")
+        self.assertIn("deepseek-v4-pro", c)
+        self.assertIn("gpt-5.6", c)
+
+    def test_config_override_wins_over_endpoint_defaults(self):
+        from model_rotator import candidates_for
+        self.assertEqual(
+            candidates_for("https://pass.wafer.ai/v1",
+                           {"rotator": {"candidates": ["only-this"]}}),
+            ["only-this"])
+
+    def test_unknown_endpoint_falls_back_rather_than_raising(self):
+        from model_rotator import candidates_for
+        self.assertTrue(candidates_for("https://brand-new-provider/v1"))

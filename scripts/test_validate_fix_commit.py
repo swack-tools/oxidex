@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import validate_fix_commit
 from validate_fix_commit import (
     check_ownership,
     extract_added_map_values,
@@ -699,6 +700,202 @@ class PatchIdAndCliTests(unittest.TestCase):
             parsed = json.loads(out)
         self.assertEqual(rc, 0)
         self.assertEqual(parsed["checks"]["multi_sample"], "pass")
+
+
+class FalseQuarantineRegressionTests(unittest.TestCase):
+    """The four extractor defects that produced 33 of the 77 quarantined
+    heads measured 2026-07-25, plus the guards that keep fixing them from
+    re-opening the fabricated-value hole they exist to close."""
+
+    def setUp(self):
+        # The perl-lib corpus is cached per path for sweep throughput;
+        # tempdir fixtures reuse paths across tests in the same process.
+        validate_fix_commit._perl_lib_corpus.cache_clear()
+
+    # -- match arms are not map entries ---------------------------------
+
+    def test_stringless_match_arm_is_not_unverifiable(self):
+        # `=>` is match-arm syntax in Rust, and a match arm dispatching a
+        # tag id to a decoder is the commonest shape of a tag-wiring fix.
+        # A right-hand side with no string cannot hide a fabricated
+        # display value.
+        diff = (
+            "diff --git a/src/raw/metadata.rs b/src/raw/metadata.rs\n"
+            "@@ -10,3 +10,7 @@ fn read_header(bytes: &[u8]) -> Result<()> {\n"
+            "+        ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),\n"
+            "+        ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),\n"
+            "+        0x0100 => thumb_width = read_tiff_u32(bytes, byte_order),\n"
+            "+        Err(_) => return,\n"
+            "+        _ => continue,\n"
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    def test_real_printconv_arm_is_still_extracted(self):
+        diff = (
+            "diff --git a/src/canon/q.rs b/src/canon/q.rs\n"
+            "@@ -1,2 +1,3 @@ fn quality(v: u8) -> &'static str {\n"
+            '+        0x1 => "Economy",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Economy"])
+
+    # -- &[&str] key registries are identifiers, not values -------------
+
+    def test_str_slice_registry_elements_are_not_printconv_values(self):
+        # const KNOWN_TAGS: &[&str] = &[...] is a registry of raw APP12
+        # KEY NAMES the parser recognises. Demanding "REV"/"S0"/"STB1"
+        # appear in an ExifTool PrintConv table rejects correct code.
+        diff = (
+            "diff --git a/src/jpeg/app12_olympus.rs b/src/jpeg/app12_olympus.rs\n"
+            "@@ -102,6 +102,10 @@ const KNOWN_TAGS: &[&str] = &[\n"
+            '     "Protect",\n'
+            '+    "REV",\n'
+            '+    "S0",\n'
+            '+    "STB1",\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(unverifiable, [])
+
+    def test_fixed_size_str_array_is_still_checked(self):
+        # `[&str; 400]` is the INDEXED PrintConv lookup idiom -- same
+        # element type as the registry above, but its elements really are
+        # display values. The `;` is the discriminator.
+        diff = (
+            "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+            "@@ -100,6 +100,7 @@ const LENS_NAMES: [&str; 400] = [\n"
+            '     "Canon EF 50mm f/1.8",\n'
+            '+    "Fabricated Lens Name",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Lens Name"])
+
+    def test_unparseable_hunk_context_still_checks_bare_strings(self):
+        # git's default funcname driver only reports column-0
+        # declarations, so a const declared indented inside an fn/impl
+        # shows NO useful context. The registry rule is a negative gate
+        # precisely so this case keeps its fabrication check.
+        diff = (
+            "diff --git a/src/canon/lens.rs b/src/canon/lens.rs\n"
+            "@@ -100,6 +100,7 @@ impl LensResolver {\n"
+            '     "Canon EF 50mm f/1.8",\n'
+            '+    "Fabricated Lens Name",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, ["Fabricated Lens Name"])
+
+    # -- format! templates are not literals -----------------------------
+
+    def test_format_macro_arm_is_unverifiable_not_fabricated(self):
+        diff = (
+            "diff --git a/src/x.rs b/src/x.rs\n"
+            "@@ -1,2 +1,3 @@ fn describe(other: u32) -> String {\n"
+            '+        other => format!("Unknown({})", other),\n'
+        )
+        values, unverifiable = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+        self.assertEqual(len(unverifiable), 1)
+
+    def test_standalone_format_template_line_is_not_a_value(self):
+        # A multi-line format!( ... ) call whose template sits alone on
+        # its own line looks exactly like a bare table element.
+        diff = (
+            "diff --git a/src/jpeg/flir_parser.rs b/src/jpeg/flir_parser.rs\n"
+            "@@ -40,3 +40,5 @@ fn parse_flir_datetime(raw: &[u8]) -> String {\n"
+            '+        "{:04}:{:02}:{:02} {:02}:{:02}:{:02}.{:03}",\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    # -- test code is not production evidence ---------------------------
+
+    def test_assert_messages_in_test_modules_are_ignored(self):
+        diff = (
+            "diff --git a/src/thermal.rs b/src/thermal.rs\n"
+            "@@ -200,3 +200,5 @@ mod tests {\n"
+            '+        assert_eq!(v, "Off", "Flash=0 should be PrintConv\'d to Off");\n'
+        )
+        values, _ = extract_added_map_values(diff)
+        self.assertEqual(values, [])
+
+    # -- wrong module cited != invented value ---------------------------
+
+    def test_value_in_another_module_is_warn_only_not_mismatch(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Co-sited",\n'
+            '        _ => "Unknown",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            # The cited module (Canon.pm) lacks the value; Exif.pm has it.
+            write_perl_module(perl_lib, "%ycc = (2 => 'Co-sited');\n", name="Exif.pm")
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("printconv-wrong-perl-ref:Co-sited", result["flags"])
+        self.assertNotIn("printconv-mismatch:Co-sited", result["flags"])
+
+    def test_value_in_no_module_at_all_is_still_a_hard_mismatch(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Totally Invented Value",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(repo, {"src/canon/q.rs": rust}, full_trailers())
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("printconv-mismatch:Totally Invented Value", result["flags"])
+        self.assertFalse(result["ok"])
+
+    # -- Perl-Ref is required only when it is consumed ------------------
+
+    def test_perl_ref_not_required_when_diff_has_no_printconv_value(self):
+        # Pure wiring: a tag with no Perl table block behind it. The
+        # emitter omits Perl-Ref by design, so requiring it quarantined
+        # the fix forever.
+        rust = (
+            "pub fn wire(bytes: &[u8]) {\n"
+            "    match tag {\n"
+            "        0x0100 => width = read_u32(bytes),\n"
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(
+                repo, {"src/raw/wire.rs": rust}, full_trailers(**{"Perl-Ref": None})
+            )
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertNotIn("missing-trailer:Perl-Ref", result["flags"])
+
+    def test_perl_ref_still_required_when_there_is_a_value_to_attest(self):
+        rust = (
+            "pub fn quality(v: u8) -> &'static str {\n"
+            "    match v {\n"
+            '        0x1 => "Economy",\n'
+            "    }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_repo(tmp)
+            perl_lib = write_perl_module(Path(tmp) / "perl", PERL_QUALITY)
+            sha = commit_fix(
+                repo, {"src/canon/q.rs": rust}, full_trailers(**{"Perl-Ref": None})
+            )
+            result = validate_commit(sha, repo, perl_lib=perl_lib)
+        self.assertIn("missing-trailer:Perl-Ref", result["flags"])
+        self.assertFalse(result["ok"])
 
 
 if __name__ == "__main__":

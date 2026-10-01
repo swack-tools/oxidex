@@ -1,0 +1,20 @@
+/* OxiDex — Oxide Terminal color tokens. Dark only. */
+:root {
+  --ox-bg: #0d0f12;          /* page background */
+  --ox-surface: #16191f;     /* panels, cards */
+  --ox-surface-2: #1d2129;   /* raised/hover, table headers */
+  --ox-border: #2a2f3a;      /* hairline 1px borders */
+  --ox-accent: #e8824a;      /* rust-orange brand anchor */
+  --ox-accent-deep: #b5551e; /* pressed states, gradient endpoint */
+  --ox-text: #e6e9ef;        /* primary text */
+  --ox-text-dim: #8b93a3;    /* labels, offsets — never below 13px */
+  --ox-green: #7fd88f;       /* values, pass */
+  --ox-red: #e06c75;         /* errors, fail */
+  --ox-blue: #6cb6ff;        /* links, info */
+  --ox-glow: 0 0 24px rgba(232, 130, 74, 0.15); /* hero only, one per page */
+}
+/* Semantic pairing rule: keys dim, values green, offsets dim mono, actions orange. */
+.ox-key { color: var(--ox-text-dim); }
+.ox-val { color: var(--ox-green); }
+.ox-offset { color: var(--ox-text-dim); font-family: "IBM Plex Mono", monospace; }
+.ox-action { color: var(--ox-accent); }
