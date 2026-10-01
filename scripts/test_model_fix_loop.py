@@ -8825,5 +8825,618 @@ class NormalizeTableJobConfigTests(unittest.TestCase):
         self.assertEqual(cfg["max_repair_rounds"], 3)
 
 
+# --- Rejection taxonomy / gap-set comparison / pre-dispatch reachability ----
+
+class AnnotateRejectionTests(unittest.TestCase):
+    def test_marker_is_appended_so_leading_text_is_preserved(self):
+        out = model_fix_loop.annotate_rejection(
+            "gap count did not decrease", model_fix_loop.REJECT_GAP_SET_UNCHANGED,
+        )
+        self.assertTrue(out.startswith("gap count did not decrease"))
+        self.assertIn("[reject:gap-set-unchanged]", out)
+
+    def test_existing_log_scrapers_still_match_an_annotated_reason(self):
+        # watch_parallel_fix.REGRESSED_RE greps this substring; the
+        # annotation must never break the live dashboard.
+        out = model_fix_loop.annotate_rejection(
+            "gap count did not decrease", model_fix_loop.REJECT_GAP_SET_CHURNED, "detail",
+        )
+        self.assertIn("gap count did not decrease", out)
+
+    def test_detail_rides_along(self):
+        out = model_fix_loop.annotate_rejection("base", "build-failed", "look here")
+        self.assertEqual(out, "base [reject:build-failed] look here")
+
+    def test_is_idempotent_first_classification_wins(self):
+        once = model_fix_loop.annotate_rejection("base", "wrong-value")
+        twice = model_fix_loop.annotate_rejection(once, "build-failed", "no")
+        self.assertEqual(once, twice)
+
+    def test_empty_code_is_a_noop(self):
+        self.assertEqual(model_fix_loop.annotate_rejection("base", None), "base")
+
+    def test_rejection_code_round_trips_and_is_none_when_absent(self):
+        out = model_fix_loop.annotate_rejection("base", "tag-still-absent")
+        self.assertEqual(model_fix_loop.rejection_code(out), "tag-still-absent")
+        self.assertIsNone(model_fix_loop.rejection_code("plain reason"))
+        self.assertIsNone(model_fix_loop.rejection_code(None))
+
+
+class GapSetDeltaTests(unittest.TestCase):
+    @staticmethod
+    def _report(missing=(), diffs=()):
+        return {
+            "missing_tags": [{"family": k.split(":")[0], "name": k.split(":")[1]} for k in missing],
+            "value_differences": [{"tag_key": k} for k in diffs],
+        }
+
+    def test_gap_keys_spans_both_lists(self):
+        keys = model_fix_loop.gap_keys(self._report(["EXIF:Make"], ["EXIF:ISO"]))
+        self.assertEqual(keys, {"EXIF:Make", "EXIF:ISO"})
+
+    def test_gap_keys_accepts_the_raw_report_field_name_too(self):
+        raw = {"missing_in_oxidex": [{"family": "EXIF", "name": "Make"}]}
+        self.assertEqual(model_fix_loop.gap_keys(raw), {"EXIF:Make"})
+
+    def test_missing_reports_are_empty_sets(self):
+        self.assertEqual(model_fix_loop.gap_keys(None), set())
+
+    def test_equal_counts_can_still_be_a_changed_set(self):
+        # THE case count-comparison hides: one closed, one opened, count
+        # identical, and the old gate called it "gap count did not decrease".
+        pre = self._report(["EXIF:Make", "EXIF:Model"])
+        post = self._report(["EXIF:Model", "EXIF:Software"])
+        delta = model_fix_loop.gap_set_delta(pre, post)
+        self.assertEqual(delta["closed"], ["EXIF:Make"])
+        self.assertEqual(delta["opened"], ["EXIF:Software"])
+        self.assertEqual(delta["still_open"], ["EXIF:Model"])
+
+    def test_identical_sets_report_nothing_moved(self):
+        pre = post = self._report(["EXIF:Make"], ["EXIF:ISO"])
+        delta = model_fix_loop.gap_set_delta(pre, post)
+        self.assertEqual(delta["closed"], [])
+        self.assertEqual(delta["opened"], [])
+        self.assertEqual(sorted(delta["still_open"]), ["EXIF:ISO", "EXIF:Make"])
+
+    def test_a_tag_that_moves_from_missing_to_value_differs_is_not_closed(self):
+        pre = self._report(["EXIF:Make"])
+        post = self._report([], ["EXIF:Make"])
+        delta = model_fix_loop.gap_set_delta(pre, post)
+        self.assertEqual(delta["closed"], [])
+        self.assertEqual(delta["still_open"], ["EXIF:Make"])
+
+    def test_format_gap_set_delta_names_both_buckets(self):
+        rendered = model_fix_loop.format_gap_set_delta(
+            {"closed": ["A:B"], "opened": ["C:D", "E:F"], "still_open": []},
+        )
+        self.assertIn("closed 1 (A:B)", rendered)
+        self.assertIn("opened 2 (C:D, E:F)", rendered)
+
+    def test_format_gap_set_delta_clamps_long_lists(self):
+        keys = [f"EXIF:T{i}" for i in range(20)]
+        rendered = model_fix_loop.format_gap_set_delta(
+            {"closed": [], "opened": keys, "still_open": []},
+        )
+        self.assertIn(f"+{20 - model_fix_loop.GAP_SET_DELTA_MAX_NAMED} more", rendered)
+
+    def test_format_gap_set_delta_of_none_is_empty(self):
+        self.assertEqual(model_fix_loop.format_gap_set_delta(None), "")
+
+    def test_format_gap_set_delta_says_so_when_nothing_moved(self):
+        rendered = model_fix_loop.format_gap_set_delta(
+            {"closed": [], "opened": [], "still_open": ["A:B"]},
+        )
+        self.assertIn("unchanged", rendered)
+
+
+class ClassifyRecheckRejectionTests(unittest.TestCase):
+    @staticmethod
+    def _report(missing=()):
+        return {
+            "missing_tags": [{"family": k.split(":")[0], "name": k.split(":")[1]} for k in missing],
+            "value_differences": [],
+        }
+
+    def test_value_differs_verdict_wins_outright(self):
+        reason, code, delta = model_fix_loop.classify_recheck_rejection(
+            "base", self._report(["A:B"]), self._report(["A:B"]),
+            tag_verdicts=[("value_differs", "100", "0")],
+        )
+        self.assertEqual(code, model_fix_loop.REJECT_WRONG_VALUE)
+        self.assertIn("[reject:wrong-value]", reason)
+        self.assertIsNone(delta)
+
+    def test_identical_sets_are_the_structural_signal(self):
+        same = self._report(["A:B", "C:D"])
+        reason, code, delta = model_fix_loop.classify_recheck_rejection(
+            "gap count did not decrease", same, same, tag_verdicts=[("missing",)],
+        )
+        self.assertEqual(code, model_fix_loop.REJECT_GAP_SET_UNCHANGED)
+        self.assertIn("no observable effect", reason)
+        self.assertEqual(delta["closed"], [])
+
+    def test_churned_set_tells_the_worker_its_patch_worked(self):
+        # Target closed, something else opened, count flat.
+        reason, code, delta = model_fix_loop.classify_recheck_rejection(
+            "gap count did not decrease",
+            self._report(["A:B"]), self._report(["C:D"]), tag_verdicts=[None],
+        )
+        self.assertEqual(code, model_fix_loop.REJECT_GAP_SET_CHURNED)
+        self.assertIn("Do not discard this approach", reason)
+        self.assertEqual((delta["closed"], delta["opened"]), (["A:B"], ["C:D"]))
+
+    def test_set_moved_but_target_still_open_is_tag_still_absent(self):
+        reason, code, delta = model_fix_loop.classify_recheck_rejection(
+            "gap count did not decrease",
+            self._report(["A:B", "C:D"]), self._report(["A:B", "E:F"]),
+            tag_verdicts=[("missing",)],
+        )
+        self.assertEqual(code, model_fix_loop.REJECT_TAG_STILL_ABSENT)
+        self.assertIn("still open", reason)
+        self.assertIn("closed 1 (C:D)", reason)
+
+    def test_no_comparison_dicts_leaves_the_historical_reason_untouched(self):
+        # The legacy int/2-tuple recheck_fn contract has no evidence, so
+        # it must not gain a marker that asserts any.
+        reason, code, delta = model_fix_loop.classify_recheck_rejection(
+            "gap count did not decrease", None, None, tag_verdicts=None,
+        )
+        self.assertEqual(reason, "gap count did not decrease")
+        self.assertEqual(code, model_fix_loop.REJECT_TAG_STILL_ABSENT)
+        self.assertIsNone(delta)
+
+
+class ClassifyBuildRejectionTests(unittest.TestCase):
+    def test_infrastructure_failure_is_not_a_rejection(self):
+        self.assertIsNone(model_fix_loop.classify_build_rejection(
+            f"{model_fix_loop.INFRA_FAILURE_PREFIX} urlopen error",
+        ))
+
+    def test_apply_marker_is_preserved(self):
+        marked = model_fix_loop.annotate_rejection(
+            "no working fix after repair attempt", model_fix_loop.REJECT_PATCH_NOT_APPLIED,
+        )
+        self.assertEqual(
+            model_fix_loop.classify_build_rejection(marked),
+            model_fix_loop.REJECT_PATCH_NOT_APPLIED,
+        )
+
+    def test_everything_else_is_a_build_failure(self):
+        for reason in ("no working fix after repair attempt", "no diff in model response",
+                       "compile error: mismatched types"):
+            self.assertEqual(
+                model_fix_loop.classify_build_rejection(reason),
+                model_fix_loop.REJECT_BUILD_FAILED,
+            )
+
+
+class AttemptBuildRejectionCodeTests(unittest.TestCase):
+    def test_apply_exhaustion_is_distinguishable_from_build_exhaustion(self):
+        built, reason, diff, _ = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=lambda d, root: (False, "error: patch does not apply"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: self.fail("must not build an unapplied patch"),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertTrue(reason.startswith("no working fix after repair attempt"))
+        self.assertEqual(
+            model_fix_loop.rejection_code(reason), model_fix_loop.REJECT_PATCH_NOT_APPLIED,
+        )
+        self.assertIn("patch does not apply", reason)
+
+    def test_build_exhaustion_keeps_its_historical_string(self):
+        built, reason, diff, _ = attempt_build(
+            [{"role": "user", "content": "fix format X"}],
+            call_model_fn=lambda messages, *a: "```diff\n--- a/x\n+++ b/x\n```\n",
+            git_apply_fn=lambda d, root: (True, "ok"),
+            git_checkout_clean_fn=lambda root: None,
+            cargo_build_fn=lambda root: (False, "still broken"),
+            config=CONFIG,
+            repo_root=Path("/fake/repo"),
+        )
+        self.assertFalse(built)
+        self.assertEqual(reason, "no working fix after repair attempt")
+        self.assertEqual(
+            model_fix_loop.classify_build_rejection(reason), model_fix_loop.REJECT_BUILD_FAILED,
+        )
+
+
+class FixGapGapSetRejectionTests(HermeticFixGapTestCase):
+    @staticmethod
+    def _report(missing=()):
+        return {
+            "missing_tags": [
+                {"family": k.split(":")[0], "name": k.split(":")[1]} for k in missing
+            ],
+            "value_differences": [],
+            "extra_in_oxidex": [],
+            "duplicate_emissions": [],
+        }
+
+    def _run(self, pre, post, **kw):
+        return fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n+++ b/x\n", messages),
+            recheck_fn=lambda fmt: (2, None, post),
+            recheck_baseline=pre,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            **kw,
+        )
+
+    def test_a_changed_set_at_a_flat_count_is_not_reported_as_no_progress(self):
+        result = self._run(
+            self._report(["EXIF:LensModel", "EXIF:Make"]),
+            self._report(["EXIF:Make", "EXIF:Software"]),
+            max_repair_rounds=1,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            model_fix_loop.rejection_code(result["reason"]),
+            model_fix_loop.REJECT_GAP_SET_CHURNED,
+        )
+        self.assertIn("closed 1 (EXIF:LensModel)", result["reason"])
+        self.assertIn("opened 1 (EXIF:Software)", result["reason"])
+
+    def test_an_unchanged_set_says_the_target_is_out_of_reach(self):
+        same = self._report(["EXIF:LensModel"])
+        result = self._run(same, same, max_repair_rounds=1)
+        self.assertEqual(
+            model_fix_loop.rejection_code(result["reason"]),
+            model_fix_loop.REJECT_GAP_SET_UNCHANGED,
+        )
+        self.assertIn("prove the code you are editing actually runs", result["reason"])
+
+    def test_two_unchanged_rounds_abandon_the_target_instead_of_spending_more_calls(self):
+        same = self._report(["EXIF:LensModel"])
+        calls = []
+
+        def counting_build(messages, **kwargs):
+            calls.append(1)
+            return True, None, "--- a/x\n+++ b/x\n", messages
+
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=counting_build,
+            recheck_fn=lambda fmt: (2, None, same),
+            recheck_baseline=same,
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["rejection_code"], model_fix_loop.REJECT_GAP_SET_UNCHANGED)
+        # Stopped at MAX_GAP_SET_UNCHANGED_ROUNDS, not at max_repair_rounds:
+        # the 3 rounds not taken are 3 fixer calls plus 3 critique calls.
+        self.assertEqual(len(calls), model_fix_loop.MAX_GAP_SET_UNCHANGED_ROUNDS)
+
+    def test_a_round_that_moves_the_set_resets_the_abandon_counter(self):
+        reports = [
+            self._report(["EXIF:LensModel"]),          # round 1: unchanged
+            self._report(["EXIF:Other"]),              # round 2: churned -- resets
+            self._report(["EXIF:LensModel"]),          # round 3: unchanged again
+        ]
+        seen = []
+
+        def stepping_recheck(_fmt):
+            post = reports[min(len(seen), len(reports) - 1)]
+            seen.append(post)
+            return (2, None, post)
+
+        result = fix_gap(
+            make_gap(gap_count=2), CONFIG,
+            attempt_build_fn=lambda messages, **kwargs: (True, None, "--- a/x\n", messages),
+            recheck_fn=stepping_recheck,
+            recheck_baseline=self._report(["EXIF:LensModel"]),
+            cargo_test_workspace_fn=lambda root: (True, ""),
+            git_checkout_clean_fn=lambda root: None,
+            critique_fn=lambda *a, **k: "critique",
+            log_fn=lambda s: None,
+            max_repair_rounds=3,
+        )
+        self.assertEqual(result["status"], "failed")
+        # Ran all 3 rounds -- the churned round in the middle broke the
+        # consecutive run, so nothing was abandoned early.
+        self.assertEqual(len(seen), 3)
+
+    def test_wrong_value_is_reported_over_the_set_delta(self):
+        post = self._report([])
+        post["value_differences"] = [
+            {"tag_key": "EXIF:LensModel", "exiftool_value": "50mm", "oxidex_value": "??"},
+        ]
+        result = self._run(self._report(["EXIF:LensModel"]), post, max_repair_rounds=1)
+        self.assertEqual(
+            model_fix_loop.rejection_code(result["reason"]), model_fix_loop.REJECT_WRONG_VALUE,
+        )
+
+
+class FormatSpecificTagKeysTests(unittest.TestCase):
+    def test_filesystem_groups_are_excluded(self):
+        tags = {
+            "SourceFile": "a.iso", "File:FileName": "a.iso", "File:FileSize": "1",
+            "File:FileType": "Unknown", "System:FileModifyDate": "x",
+        }
+        self.assertEqual(model_fix_loop.format_specific_tag_keys(tags), [])
+
+    def test_ungrouped_keys_do_not_count_as_parsed(self):
+        # oxidex emits bare duplicates ("FileSize", "FileType") beside the
+        # grouped copies; counting them would make every file look parsed.
+        self.assertEqual(
+            model_fix_loop.format_specific_tag_keys({"FileSize": "1", "FileType": "TXT"}), [],
+        )
+
+    def test_real_parser_output_counts(self):
+        self.assertEqual(
+            model_fix_loop.format_specific_tag_keys(
+                {"File:FileName": "a.nef", "EXIF:Make": "NIKON", "MakerNotes:ISO": "100"},
+            ),
+            ["EXIF:Make", "MakerNotes:ISO"],
+        )
+
+    def test_empty_input_is_empty(self):
+        self.assertEqual(model_fix_loop.format_specific_tag_keys(None), [])
+
+
+class DefaultFormatReachableTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.repo = Path(self._tmpdir.name)
+        binary = self.repo / "target" / "debug" / "oxidex"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+
+    def _check(self, fmt="ISO", sample="a.iso", run_fn=None):
+        return model_fix_loop.default_format_reachable(fmt, sample, self.repo, run_fn=run_fn)
+
+    def test_no_sample_is_undetermined_not_unreachable(self):
+        reachable, detail = self._check(sample=None)
+        self.assertIsNone(reachable)
+        self.assertIn("no sample", detail)
+
+    def test_no_binary_is_undetermined(self):
+        reachable, _ = model_fix_loop.default_format_reachable(
+            "ISO", "a.iso", Path(self._tmpdir.name) / "nope",
+        )
+        self.assertIsNone(reachable)
+
+    def test_hard_error_with_no_output_is_unreachable(self):
+        # The live ISO 9660 signature: "Unsupported format: Format Unknown
+        # not yet supported", exit 1, empty stdout.
+        reachable, detail = self._check(run_fn=lambda argv, timeout: (1, ""))
+        self.assertIs(reachable, False)
+        self.assertIn("nothing downstream of format detection runs", detail)
+
+    def test_only_filesystem_tags_is_unreachable(self):
+        payload = json.dumps([{"File:FileName": "a.iso", "File:FileType": "Unknown"}])
+        reachable, detail = self._check(run_fn=lambda argv, timeout: (0, payload))
+        self.assertIs(reachable, False)
+        self.assertIn("no format-specific tags", detail)
+
+    def test_file_type_unknown_alone_never_triggers_a_skip(self):
+        # Measured 2026-07-30: PSD, TTF, PE and XMP all report
+        # File:FileType=Unknown while parsing perfectly. Skipping on that
+        # signal alone would starve four healthy formats.
+        payload = json.dumps([{
+            "File:FileType": "Unknown", "File:FileName": "a.psd",
+            "ICC_Profile:BlueMatrixColumn": "x", "ExifIFD:ColorSpace": "sRGB",
+        }])
+        reachable, detail = self._check(fmt="PSD", run_fn=lambda argv, timeout: (0, payload))
+        self.assertIs(reachable, True)
+        self.assertIn("2 format-specific tag(s)", detail)
+
+    def test_parsed_output_is_reachable(self):
+        payload = json.dumps([{"File:FileType": "NEF", "EXIF:Make": "NIKON"}])
+        reachable, _ = self._check(fmt="NEF", run_fn=lambda argv, timeout: (0, payload))
+        self.assertIs(reachable, True)
+
+    def test_unparseable_output_is_undetermined(self):
+        reachable, detail = self._check(run_fn=lambda argv, timeout: (0, "not json"))
+        self.assertIsNone(reachable)
+        self.assertIn("JSON", detail)
+
+    def test_subprocess_explosion_is_undetermined(self):
+        def boom(argv, timeout):
+            raise OSError("no exec")
+
+        self.assertIsNone(self._check(run_fn=boom)[0])
+
+    def test_nonzero_exit_with_output_is_still_judged_on_its_tags(self):
+        payload = json.dumps([{"File:FileType": "NEF", "EXIF:Make": "NIKON"}])
+        reachable, _ = self._check(fmt="NEF", run_fn=lambda argv, timeout: (2, payload))
+        self.assertIs(reachable, True)
+
+
+class MakeReachabilityFnTests(unittest.TestCase):
+    def test_result_is_memoized_per_format(self):
+        calls = []
+
+        def fake_check(fmt, sample, repo_root):
+            calls.append(fmt)
+            return True, "ok"
+
+        fn = model_fix_loop.make_reachability_fn(Path("/repo"), check_fn=fake_check)
+        for _ in range(5):
+            fn({"format": "NEF", "entry": {"source_file": "a.nef"}})
+        fn({"format": "ISO", "entry": {"source_file": "a.iso"}})
+        self.assertEqual(calls, ["NEF", "ISO"])
+
+    def test_sample_comes_from_the_tag_entry(self):
+        seen = {}
+
+        def fake_check(fmt, sample, repo_root):
+            seen["sample"] = sample
+            return None, "unknown"
+
+        model_fix_loop.make_reachability_fn(None, check_fn=fake_check)(
+            {"format": "ISO", "entry": {"source_file": "/samples/ISO.iso"}},
+        )
+        self.assertEqual(seen["sample"], "/samples/ISO.iso")
+
+    def test_missing_entry_is_tolerated(self):
+        fn = model_fix_loop.make_reachability_fn(
+            None, check_fn=lambda fmt, sample, repo: (None, "no sample"),
+        )
+        self.assertEqual(fn({"format": "ISO"}), (None, "no sample"))
+
+
+class FormatUnreachableReasonTests(unittest.TestCase):
+    def test_carries_the_required_phrase_and_a_code(self):
+        reason = model_fix_loop.format_unreachable_reason("ISO", "exit 1, no output")
+        self.assertIn("format ISO produces no output; parser unreachable", reason)
+        self.assertEqual(
+            model_fix_loop.rejection_code(reason), model_fix_loop.REJECT_FORMAT_UNREACHABLE,
+        )
+        self.assertIn("exit 1, no output", reason)
+
+
+class RunTagLoopReachabilityTests(unittest.TestCase):
+    """Pre-dispatch gate: an unreachable format must cost zero model calls."""
+
+    setUp = RunTagLoopTests.setUp
+    _state_io = RunTagLoopTests._state_io
+
+    def test_unreachable_format_is_skipped_without_calling_fix_gap(self):
+        gaps = [make_gap()]
+        store, load, save = self._state_io()
+        result = run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda *a, **k: self.fail("no model call may be spent"),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None,
+            reachability_fn=lambda tg: (False, "exit 1, no output"),
+        )
+        self.assertEqual(result["fixed"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["status"], "unreachable")
+        self.assertEqual(
+            model_fix_loop.rejection_code(result["skipped"][0]["reason"]),
+            model_fix_loop.REJECT_FORMAT_UNREACHABLE,
+        )
+
+    def test_skip_blacklists_the_tag_with_a_reason_and_charges_no_fails(self):
+        gaps = [make_gap()]
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda *a, **k: self.fail("no model call may be spent"),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None, worker_id="w1",
+            reachability_fn=lambda tg: (False, "exit 1, no output"),
+        )
+        entry = store["NEF:EXIF:LensModel"]
+        self.assertTrue(entry["blacklisted"])
+        self.assertTrue(entry["unreachable"])
+        self.assertEqual(entry["fails"], 0)
+        self.assertIn("parser unreachable", entry["blacklist_reason"])
+        self.assertNotIn("claimed_by", entry)
+
+    def test_undetermined_verdict_dispatches_exactly_as_before(self):
+        gaps = [make_gap()]
+        attempted = []
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, cfg, prev=None: (
+                attempted.append(tg["tag_key"]) or {"status": "failed", "reason": "nope"}
+            ),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None,
+            reachability_fn=lambda tg: (None, "no binary built yet"),
+        )
+        self.assertEqual(attempted, ["NEF:EXIF:LensModel"])
+
+    def test_reachable_verdict_dispatches(self):
+        gaps = [make_gap()]
+        attempted = []
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, cfg, prev=None: (
+                attempted.append(tg["tag_key"]) or {"status": "failed", "reason": "nope"}
+            ),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None,
+            reachability_fn=lambda tg: (True, "12 tags"),
+        )
+        self.assertEqual(attempted, ["NEF:EXIF:LensModel"])
+
+    def test_omitting_the_gate_keeps_the_previous_behaviour(self):
+        gaps = [make_gap()]
+        attempted = []
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda tg, cfg, prev=None: (
+                attempted.append(tg["tag_key"]) or {"status": "failed", "reason": "nope"}
+            ),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None,
+        )
+        self.assertEqual(attempted, ["NEF:EXIF:LensModel"])
+
+    def test_cluster_members_are_released_too(self):
+        gaps = [make_gap()]
+        store, load, save = self._state_io()
+        run_tag_loop(
+            {"models": ["x"]}, find_gaps_fn=lambda: gaps,
+            fix_gap_fn=lambda *a, **k: self.fail("no model call may be spent"),
+            state_path=self.state_path, load_state_fn=load, save_state_fn=save,
+            max_rounds=1, log_fn=lambda s: None, worker_id="w1", max_cluster_tags=4,
+            reachability_fn=lambda tg: (False, "exit 1, no output"),
+        )
+        for key in ("NEF:EXIF:LensModel", "NEF:EXIF:ISO"):
+            self.assertNotIn("claimed_by", store.get(key, {}), key)
+
+
+class SummarizeRejectionCodesTests(unittest.TestCase):
+    def test_rolls_up_codes_most_frequent_first(self):
+        attempts = [
+            {"reason": model_fix_loop.annotate_rejection("a", "gap-set-unchanged")},
+            {"reason": model_fix_loop.annotate_rejection("b", "build-failed")},
+            {"reason": model_fix_loop.annotate_rejection("c", "gap-set-unchanged")},
+        ]
+        out = model_fix_loop.summarize_rejection_codes(attempts)
+        self.assertIn("gap-set-unchanged x2", out)
+        self.assertIn("build-failed x1", out)
+        self.assertLess(out.index("gap-set-unchanged"), out.index("build-failed"))
+
+    def test_unannotated_history_produces_nothing(self):
+        self.assertEqual(
+            model_fix_loop.summarize_rejection_codes([{"reason": "gap count did not decrease"}]), "",
+        )
+        self.assertEqual(model_fix_loop.summarize_rejection_codes(None), "")
+
+    def test_every_code_has_guidance(self):
+        for code in (model_fix_loop.REJECT_PATCH_NOT_APPLIED, model_fix_loop.REJECT_BUILD_FAILED,
+                     model_fix_loop.REJECT_TAG_STILL_ABSENT, model_fix_loop.REJECT_WRONG_VALUE,
+                     model_fix_loop.REJECT_GAP_SET_UNCHANGED, model_fix_loop.REJECT_GAP_SET_CHURNED,
+                     model_fix_loop.REJECT_FORMAT_UNREACHABLE):
+            self.assertIn(code, model_fix_loop.REJECTION_CODE_GUIDANCE)
+
+    def test_the_rollup_reaches_the_next_prompt_for_this_tag(self):
+        rendered = model_fix_loop.format_previous_attempts([
+            {"diff": "--- a/x\n", "reason": model_fix_loop.annotate_rejection(
+                "gap count did not decrease", "gap-set-unchanged",
+            )},
+        ])
+        self.assertIn("How the previous attempts on this tag failed:", rendered)
+        self.assertIn("gap-set-unchanged x1", rendered)
+
+    def test_an_unannotated_history_renders_exactly_as_it_used_to(self):
+        rendered = model_fix_loop.format_previous_attempts([
+            {"diff": "--- a/x\n", "reason": "nope"},
+        ])
+        self.assertNotIn("How the previous attempts", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

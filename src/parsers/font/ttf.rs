@@ -10,6 +10,7 @@
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS};
 
 /// TTF signature: 0x00 0x01 0x00 0x00 or "true"
 const TTF_SIGNATURE_1: &[u8] = &[0x00, 0x01, 0x00, 0x00];
@@ -61,10 +62,24 @@ const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
 const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
-/// (Font.pm). Only the two this parser can decode losslessly are named;
-/// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
+/// (Font.pm). These numeric IDs are copied from that table: Japanese=1,
+/// ChineseTW=2, Korean=3, Hebrew=5, and ChineseCN=25.
 const MAC_ENCODING_ROMAN: u16 = 0;
+const MAC_ENCODING_JAPANESE: u16 = 1;
+const MAC_ENCODING_CHINESE_TW: u16 = 2;
+const MAC_ENCODING_KOREAN: u16 = 3;
 const MAC_ENCODING_HEBREW: u16 = 5;
+const MAC_ENCODING_CHINESE_CN: u16 = 25;
+
+/// General-purpose decoders corresponding to the Macintosh CJK scripts.
+/// Keeping this mapping separate allows generated ExifTool-specific mapping
+/// tables to replace the codecs later without changing name-table traversal.
+const MAC_CJK_ENCODINGS: [(u16, &'static Encoding); 4] = [
+    (MAC_ENCODING_JAPANESE, SHIFT_JIS),
+    (MAC_ENCODING_CHINESE_TW, BIG5),
+    (MAC_ENCODING_KOREAN, EUC_KR),
+    (MAC_ENCODING_CHINESE_CN, GBK),
+];
 
 /// Name IDs for name table records. Names match ExifTool's
 /// `%Image::ExifTool::Font::Name` table (Font.pm), which is what determines
@@ -296,6 +311,29 @@ impl TTFParser {
         out
     }
 
+    /// Decodes an arbitrary Macintosh CJK byte string.
+    ///
+    /// This feeds the complete record to the corresponding stateful decoder,
+    /// so ASCII, single-byte characters, and all valid multibyte sequences
+    /// known to the codec are handled. Invalid or incomplete input is rejected
+    /// instead of emitting replacement characters under a localized tag.
+    ///
+    /// The Macintosh dictionaries have a small number of mappings that differ
+    /// from the related standard codecs. Full parity requires generated tables
+    /// rather than thousands of hand-maintained match arms.
+    /// TODO: codegen the ExifTool Charset/Mac*.pm CJK dictionaries.
+    fn decode_mac_cjk(data: &[u8], encoding_id: u16) -> Option<String> {
+        let encoding = MAC_CJK_ENCODINGS
+            .iter()
+            .find_map(|(id, encoding)| (*id == encoding_id).then_some(*encoding))?;
+        let (decoded, had_errors) = encoding.decode_without_bom_handling(data);
+        if had_errors {
+            None
+        } else {
+            Some(decoded.into_owned())
+        }
+    }
+
     /// Extracts a string from the name table
     fn extract_name_string(
         reader: &dyn FileReader,
@@ -332,22 +370,14 @@ impl TTFParser {
             PLATFORM_MACINTOSH if record.encoding_id == MAC_ENCODING_HEBREW => {
                 Some(Self::decode_mac_hebrew(str_data))
             }
+            PLATFORM_MACINTOSH
+                if MAC_CJK_ENCODINGS
+                    .iter()
+                    .any(|(id, _)| *id == record.encoding_id) =>
+            {
+                Self::decode_mac_cjk(str_data, record.encoding_id)
+            }
             PLATFORM_MACINTOSH => {
-                // Preserve the previous behavior for unsupported Macintosh encodings.
-                // The remaining Macintosh scripts (MacJapanese, MacKorean,
-                // MacChineseTW, MacChineseCN, ...) are NOT the standard
-                // Shift_JIS/EUC-KR/Big5/GBK codecs, so decoding them with
-                // encoding_rs would emit text that differs from ExifTool.
-                // Measured 2026-07-27 against ExifTool 13.55's own
-                // Charset/Mac*.pm tables: MacJapanese 6878/7192 two-byte
-                // sequences agree with Shift_JIS (1 differ, 313 have no
-                // Shift_JIS mapping at all) plus 68 single-byte overrides
-                // (0x5c is U+00A5 YEN, not backslash); MacKorean 8212/9361
-                // vs EUC-KR (13 differ, 1136 unmapped); MacChineseTW
-                // 13435/13461 vs Big5 (26 differ); MacChineseCN 7462/7480
-                // vs GBK (6 differ, 12 unmapped). A wrong value is worse
-                // than an open gap, so these records are left undecoded
-                // until their tables can be carried verbatim.
                 String::from_utf8(str_data.to_vec()).ok()
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
@@ -378,10 +408,6 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
             (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
             (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
-            // Mapped for completeness, but currently unreachable in practice:
-            // records in these languages carry Macintosh scripts this parser
-            // cannot decode losslessly (see extract_name_string), so they are
-            // dropped before a suffix is ever applied.
             (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
             (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
@@ -916,6 +942,77 @@ mod tests {
         // ASCII is pass-through: this is why FontSubfamily-he ("Regular")
         // already matched before MacHebrew was wired.
         assert_eq!(TTFParser::decode_mac_hebrew(b"Regular"), "Regular");
+    }
+
+    #[test]
+    fn mac_cjk_decoder_handles_complete_records_and_rejects_invalid_input() {
+        assert_eq!(
+            TTFParser::decode_mac_cjk(
+                &[0x83, 0x8c, 0x83, 0x4d, 0x83, 0x85, 0x83, 0x89, 0x81, 0x5b],
+                MAC_ENCODING_JAPANESE,
+            ),
+            Some("レギュラー".to_string())
+        );
+        assert_eq!(
+            TTFParser::decode_mac_cjk(b"Regular", MAC_ENCODING_JAPANESE),
+            Some("Regular".to_string())
+        );
+        assert_eq!(
+            TTFParser::decode_mac_cjk(&[0x82], MAC_ENCODING_JAPANESE),
+            None
+        );
+        assert_eq!(TTFParser::decode_mac_cjk(b"x", 999), None);
+    }
+
+    /// Exercises the production parser against ExifTool's real Font.ttf
+    /// corpus sample rather than reconstructing its name table in the test.
+    #[test]
+    fn combined_font_sample_emits_mac_cjk_subfamilies() {
+        let configured_path = std::env::var_os("OXIDEX_FONT_SAMPLE").map(std::path::PathBuf::from);
+        let sample_path = configured_path.unwrap_or_else(|| {
+            std::path::PathBuf::from(
+                "/tmp/oxidex-exiftool-cache/combined-samples/Font.ttf",
+            )
+        });
+
+        let data = match std::fs::read(&sample_path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "skipping external-corpus assertion; set OXIDEX_FONT_SAMPLE \
+                     to ExifTool's Font.ttf (looked for {})",
+                    sample_path.display()
+                );
+                return;
+            }
+            Err(error) => panic!(
+                "failed to read real Font.ttf corpus sample {}: {error}",
+                sample_path.display()
+            ),
+        };
+
+        let metadata = TTFParser
+            .parse(&TestReader::new(data))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to parse real Font.ttf corpus sample {}: {error}",
+                    sample_path.display()
+                )
+            });
+
+        for (key, expected) in [
+            ("Font:FontSubfamily-ja", "レギュラー"),
+            ("Font:FontSubfamily-ko", "일반"),
+            ("Font:FontSubfamily-zh-CN", "常规"),
+            ("Font:FontSubfamily-zh-TW", "標準體"),
+        ] {
+            assert_eq!(
+                metadata.get(key),
+                Some(&TagValue::String(expected.to_string())),
+                "unexpected {key} from real corpus sample {}",
+                sample_path.display()
+            );
+        }
     }
 
     #[test]
