@@ -20,8 +20,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 91)
-        self.assertEqual(len(all_items), 92 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 92)
+        self.assertEqual(len(all_items), 93 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="png_shift_contract")},
                          {"png-shift-contract"})
         self.assertEqual({item.key for item in artifacts.select(producer="scene_type_inverse_codegen")},
@@ -39,8 +39,9 @@ class ManifestTests(unittest.TestCase):
                          {"xmp-lens-maps"})
         self.assertEqual({item.key for item in artifacts.select(producer="font_language_specs")},
                          {"font-language-capture", "font-language-rust"})
+        self.assertEqual({item.key for item in artifacts.select(producer="gen_plus_media_matrix")}, {"plus-media-matrix"})
         self.assertEqual(len(artifacts.select(1)), 61 + members)
-        self.assertEqual(len(artifacts.select(2)), 31)
+        self.assertEqual(len(artifacts.select(2)), 32)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual({item.key for item in artifacts.select(producer='gen_tag_registry')},
                          {f'registry-{domain}' for domain in
