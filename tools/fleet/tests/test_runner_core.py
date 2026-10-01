@@ -346,6 +346,41 @@ class TestJournalWiring(RunnerFixture):
             runner.reconcile_journal_runs(journal, self.hub, self.host, [])
         self.assertTrue(journal.read_job(worker.job_key).closed)
 
+    def test_ambiguous_create_preserves_exact_attempted_token(self):
+        claim = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host=self.host)
+        real_create = self.hub.create
+
+        def accepted_without_reply(ref, payload):
+            self.assertTrue(real_create(ref, payload))
+            raise HubUnreachableError("response lost")
+
+        with mock.patch.object(self.hub, "create", side_effect=accepted_without_reply):
+            with self.assertRaises(HubUnreachableError):
+                claim.acquire()
+        payload = self.hub.read(claim.ref)
+        self.assertEqual(payload["started_at"], claim_mod._iso(claim._started_at))
+        self.hub.delete(claim.ref, expect_sha=self.hub.sha(claim.ref))
+
+    def test_ambiguous_host_recovery_rejects_pid_time_lookalike(self):
+        actual = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host=self.host)
+        actual.acquire()
+        self.addCleanup(actual.release)
+        lookalike = claim_mod.Claim(
+            self.hub, kind="host", key=self.host, work_kind="fleetd",
+            work_key=self.host, holder_host=self.host)
+        lookalike._started_at = claim_mod._utcnow()
+        recorded = claim_mod._parse_iso(self.hub.read(actual.ref)["started_at"]).timestamp()
+        with mock.patch.object(self.hub, "update", wraps=self.hub.update) as update:
+            matched, adopted = runner._recover_ambiguous_host_claim(
+                self.hub, self.host, lookalike, (recorded - 1, recorded + 1))
+        self.assertFalse(matched)
+        self.assertIsNone(adopted)
+        update.assert_not_called()
+
     def test_ambiguous_host_claim_rejects_replaced_token_before_renewal(self):
         host_claim = claim_mod.Claim(
             self.hub, kind="host", key=self.host, work_kind="fleetd",

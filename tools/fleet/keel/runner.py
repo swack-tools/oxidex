@@ -2015,7 +2015,11 @@ def _recover_ambiguous_host_claim(hub, host: str, singleton: Claim,
         started = claim_mod._parse_iso(payload["started_at"]).timestamp()
     except (KeyError, TypeError, ValueError):
         return False, None
-    if not (payload.get("holder_host") == host and
+    attempted_token = (claim_mod._iso(singleton._started_at)
+                       if singleton._started_at is not None else None)
+    if not (attempted_token is not None and
+            payload.get("started_at") == attempted_token and
+            payload.get("holder_host") == host and
             payload.get("work_kind") == "fleetd" and
             payload.get("work_key") == host and
             payload.get("pid") == os.getpid() and

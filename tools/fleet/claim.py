@@ -447,14 +447,18 @@ class Claim:
         with self._lock:
             # Re-acquiring a released/lost Claim object must not carry the
             # previous acquisition's identity into the new payload.
-            self._started_at = None
+            # Keep the attempted token even if create succeeds remotely
+            # and its response is lost. Recovery must match this exact
+            # acquisition, never a host/PID/time-window lookalike.
+            self._started_at = now
             self._released = False
             payload = self._payload(now)
             won = self.hub.create(self.ref, payload)
             if won:
-                self._started_at = now
                 self._last_renew_ok = now
                 self._sha = self.hub.sha(self.ref)
+            else:
+                self._started_at = None
         if not won:
             raise ClaimHeldError(f"{self.ref} is already held")
         self._clear_lost()
