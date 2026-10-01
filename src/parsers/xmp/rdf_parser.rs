@@ -4579,59 +4579,85 @@ fn decode_xmp_contrast_or_saturation(value: &str) -> String {
     .to_string()
 }
 
-/// Decodes the PLUS Media Matrix IDs used by the pinned `PLUS.xmp` fixture.
+/// Decodes PLUS Media Matrix IDs with the complete selected PLUS.pm lookup.
 ///
 /// This follows `PLUS.pm`'s `%mediaMatrix` `OTHER` PrintConv: normalize the
 /// wire value, describe the version/usage headers, then render each 4-byte
 /// Media Matrix ID with its table description when one is known.
 fn format_plus_media_summary_code(value: &str) -> String {
-    let compact: String = value
-        .chars()
-        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || *ch == '|')
-        .collect();
-    let mut fields = compact.split('|');
-    if fields.next() != Some("") || fields.next() != Some("PLUS") {
-        return value.to_string();
+    // PrintConv resolves an exact literal before invoking its OTHER callback.
+    // Matching is case-sensitive; lowercase IDs reach OTHER and uppercase only.
+    if let Some(description) = super::generated_plus_media_matrix::lookup(value) {
+        return description.to_string();
     }
-    let (Some(version), Some(usage_count)) = (fields.next(), fields.next()) else {
-        return value.to_string();
+    // PLUS.pm uppercases before checking the header. An unrecognized header
+    // still returns that uppercased value, including its original punctuation.
+    let upper = value.to_uppercase();
+    let Some(header) = upper.strip_prefix("|PLUS|") else {
+        return upper;
     };
-    let Some(version_digits) = version.strip_prefix('V') else {
-        return value.to_string();
+    let Some((version, after_version)) = header.split_once('|') else {
+        return upper;
     };
-    if version_digits.len() < 3 || !usage_count.starts_with('U') {
-        return value.to_string();
+    let Some((usage_count, codes)) = after_version.split_once('|') else {
+        return upper;
+    };
+    let mut formatted = format!("PLUS {version}");
+    if let Some((major, minor)) = plus_version_parts(version) {
+        formatted.push_str(&format!(" (LDF Version {major}.{minor})"));
+    }
+    formatted.push_str(&format!(" {usage_count}"));
+    if let Some(count) = plus_usage_total(usage_count) {
+        formatted.push_str(&format!(" ({count} Media Usages:)"));
     }
 
-    let (major, minor) = version_digits.split_at(version_digits.len() - 2);
-    let major = major.trim_start_matches('0');
-    let major = if major.is_empty() { "0" } else { major };
-    let usage_total = usage_count
-        .strip_prefix('U')
-        .and_then(|count| count.parse::<u32>().ok());
-
-    let mut formatted = format!("PLUS {version} (LDF Version {major}.{minor}) {usage_count}");
-    if let Some(total) = usage_total {
-        formatted.push_str(&format!(" ({total} Media Usages:)"));
-    }
-
-    let codes: String = fields
-        .flat_map(str::chars)
-        .filter(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+    // Perl keeps '|' during tr/0-9A-Z|//dc, then searches for each
+    // nonoverlapping digit + three uppercase letters. Noise and separators
+    // therefore cannot shift a valid ID into a wrong four-byte chunk.
+    let filtered: Vec<u8> = codes
+        .bytes()
+        .filter(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'|')
         .collect();
-    for bytes in codes.as_bytes().chunks_exact(4) {
+    let mut index = 0;
+    while index + 4 <= filtered.len() {
+        let bytes = &filtered[index..index + 4];
+        if !bytes[0].is_ascii_digit() || !bytes[1..].iter().all(u8::is_ascii_uppercase) {
+            index += 1;
+            continue;
+        }
         let code = std::str::from_utf8(bytes).expect("ASCII Media Matrix ID");
-        if let Some(count) = plus_usage_item_count(code) {
+        if let Some(description) = super::generated_plus_media_matrix::lookup(code) {
+            formatted.push_str(&format!(" {code} ({description})"));
+        } else if let Some(count) = plus_usage_item_count(code) {
             formatted.push_str(&format!("; {code} ({count} Usage Items:)"));
         } else if let Some(letter) = code.strip_prefix("1UN") {
-            formatted.push_str(&format!(" {code} (Usage Number {letter})"));
-        } else if let Some(description) = plus_media_matrix_description(code) {
-            formatted.push_str(&format!(" {code} ({description})"));
+            // The pinned OTHER callback omits the ID for an unknown usage
+            // number; its literal table entries above do include the ID.
+            formatted.push_str(&format!(" (Usage Number {letter})"));
         } else {
             formatted.push_str(&format!(" {code}"));
         }
+        index += 4;
     }
     formatted
+}
+
+fn plus_version_parts(version: &str) -> Option<(&str, &str)> {
+    use std::sync::OnceLock;
+    static VERSION: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = VERSION.get_or_init(|| regex::Regex::new(r"V0*(\d+)(\d{2})$").unwrap());
+    let captures = pattern.captures(version)?;
+    Some((captures.get(1)?.as_str(), captures.get(2)?.as_str()))
+}
+
+fn plus_usage_total(header: &str) -> Option<&str> {
+    use std::sync::OnceLock;
+    static USAGE: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = USAGE.get_or_init(|| regex::Regex::new(r"U0*(\d+)").unwrap());
+    pattern
+        .captures(header)?
+        .get(1)
+        .map(|capture| capture.as_str())
 }
 
 fn plus_usage_item_count(code: &str) -> Option<u32> {
@@ -4645,51 +4671,6 @@ fn plus_usage_item_count(code: &str) -> Option<u32> {
     } else {
         None
     }
-}
-
-/// Pinned `PLUS.pm` `%mediaMatrix` entries used by `PLUS.xmp`.
-fn plus_media_matrix_description(code: &str) -> Option<&'static str> {
-    Some(match code {
-        "2BFT" => "Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats",
-        "2BOS" => "Advertising|Art|Art Display, All Art Types|Electronic Display",
-        "2EMA" => "Advertising|Email|All Email Types|Internet Email",
-        "2FET" => "Advertising|Marketing Materials|Promotional E-card|Internet Email",
-        "3PRV" => "Multiple Placements on Both Sides",
-        "3PSD" => "Multiple Placements on Screen",
-        "3PTZ" => "Multiple Placements on Any Pages",
-        "4SBG" => "Any Size Image|Up To Full Screen Ad",
-        "4SDL" => "Up To Full Screen Image|Any Size Screen",
-        "4SKG" => "Any Size Image|Any Size Screen",
-        "4SLA" => "Any Size Image|Any Size Pages",
-        "5VUP" => "Single Version",
-        "6QCH" => "One|Copy",
-        "6QCX" => "One|Display",
-        "6QUL" => "Any Quantity",
-        "7DWM" => "In Perpetuity",
-        "8IAD" => "Advertising and Marketing",
-        "8IAE" => "Arts and Entertainment",
-        "8IAG" => "Agriculture, Farming and Horticulture",
-        "8IAR" => "Architecture and Engineering",
-        "8IBR" => "Broadcast Media",
-        "8IEC" => "Ecology, Environmental and Conservation",
-        "8IEN" => "Energy, Utilities and Fuel",
-        "8IEV" => "Events and Conventions",
-        "8IFO" => "Forestry and Wood Products",
-        "8IGL" => "Gardening and Landscaping",
-        "8IGR" => "Graphic Design",
-        "8IHH" => "Hotels and Hospitality",
-        "8IIM" => "Industry and Manufacturing",
-        "8INP" => "Not For Profit, Social, Charitable",
-        "8IPO" => "Personal Use Only",
-        "8IPM" => "Publishing Media",
-        "8IPR" => "Public Relations",
-        "8ISM" => "Retail Sales and Marketing",
-        "8ITR" => "Travel and Tourism",
-        "8LEN" => "English",
-        "8RAU" => "Oceania|Australia",
-        "9EXC" => "All Exclusive",
-        _ => return None,
-    })
 }
 
 /// XMP.pm:2011-2024 `%Image::ExifTool::XMP::exif` PrintConv.
@@ -5768,11 +5749,108 @@ mod tests {
                 "XMP-plus:MediaSummaryCode",
                 "|PLUS|V0121|U001|1IAA1UNA2EMA3PTZ4SBG5VUP6QUL7DWM8RAU8IAD8LEN9EXC|",
             ),
-            "PLUS V0121 (LDF Version 1.21) U001 (1 Media Usages:); 1IAA (1 Usage Items:) 1UNA (Usage Number A) 2EMA (Advertising|Email|All Email Types|Internet Email) 3PTZ (Multiple Placements on Any Pages) 4SBG (Any Size Image|Up To Full Screen Ad) 5VUP (Single Version) 6QUL (Any Quantity) 7DWM (In Perpetuity) 8RAU (Oceania|Australia) 8IAD (Advertising and Marketing) 8LEN (English) 9EXC (All Exclusive)"
+            "PLUS V0121 (LDF Version 1.21) U001 (1 Media Usages:) 1IAA (1 Usage Item:) 1UNA (Usage Number A) 2EMA (Advertising|Email|All Email Types|Internet Email) 3PTZ (Multiple Placements on Any Pages) 4SBG (Any Size Image|Up To Full Screen Ad) 5VUP (Single Version) 6QUL (Any Quantity) 7DWM (In Perpetuity) 8RAU (Oceania|Australia) 8IAD (Advertising and Marketing) 8LEN (English) 9EXC (All Exclusive)"
         );
         assert_eq!(
             format_xmp_value("XMP-plus:MediaSummaryCode", "|PLUS|V0100|U001|1IAAZZZZ|"),
-            "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:); 1IAA (1 Usage Items:) ZZZZ"
+            "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:) 1IAA (1 Usage Item:)"
+        );
+    }
+
+    #[test]
+    fn plus_media_summary_code_matches_pinned_other_edge_cases() {
+        let tag = "XMP-plus:MediaSummaryCode";
+        let cases = [
+            (
+                "2AAA",
+                "Advertising|All Media Types|All Formats|All Distribution Formats",
+            ),
+            ("2aaa", "2AAA"),
+            (
+                "|plus|v0100|u001|1iaa2bft|",
+                "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:) 1IAA (1 Usage Item:) 2BFT (Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats)",
+            ),
+            (
+                "|PLUS|V0100|U001|ZZ2BFT|",
+                "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:) 2BFT (Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats)",
+            ),
+            (
+                "|PLUS|V0100|U001|1IAA|2BFT|",
+                "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:) 1IAA (1 Usage Item:) 2BFT (Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats)",
+            ),
+            (
+                "|PLUS|V0100|U001|1IAF1UNF|",
+                "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:); 1IAF (6 Usage Items:) (Usage Number F)",
+            ),
+            (
+                "|PLUS|fooV0001|abcU0009xyz|2AAA|",
+                "PLUS FOOV0001 (LDF Version 0.01) ABCU0009XYZ (9 Media Usages:) 2AAA (Advertising|All Media Types|All Formats|All Distribution Formats)",
+            ),
+            (
+                "|PLUS|BAD|BAD|2AAA|",
+                "PLUS BAD BAD 2AAA (Advertising|All Media Types|All Formats|All Distribution Formats)",
+            ),
+            ("oops|plus|v0100|u001|2AAA|", "OOPS|PLUS|V0100|U001|2AAA|"),
+            (
+                "|PLUS|V0100|U999999999999999999999999999|2AAA|",
+                "PLUS V0100 (LDF Version 1.00) U999999999999999999999999999 (999999999999999999999999999 Media Usages:) 2AAA (Advertising|All Media Types|All Formats|All Distribution Formats)",
+            ),
+            (
+                "|PLUS|V0100|U001|Z|2AAA|x3PTZ|",
+                "PLUS V0100 (LDF Version 1.00) U001 (1 Media Usages:) 2AAA (Advertising|All Media Types|All Formats|All Distribution Formats) 3PTZ (Multiple Placements on Any Pages)",
+            ),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(format_xmp_value(tag, raw), expected, "{raw}");
+        }
+        assert_eq!(
+            format_xmp_value("XMP:MediaSummaryCode", cases[0].0),
+            cases[0].0
+        );
+    }
+
+    #[test]
+    fn plus_media_matrix_generated_rows_are_sorted_and_cover_direct_keys() {
+        use super::super::generated_plus_media_matrix::{ROWS, lookup};
+        assert_eq!(ROWS.len(), 2143);
+        assert!(ROWS.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        for (key, expected) in [
+            ("1IAA", "1 Usage Item:"),
+            ("1UNA", "Usage Number A"),
+            (
+                "2AAA",
+                "Advertising|All Media Types|All Formats|All Distribution Formats",
+            ),
+            (
+                "2BFT",
+                "Personal Use|Website|Web Page, All Types|All Electronic Distribution Formats",
+            ),
+            ("9EXC", "All Exclusive"),
+        ] {
+            assert_eq!(lookup(key), Some(expected));
+        }
+        assert_eq!(lookup("2ZZZ"), None);
+    }
+
+    #[test]
+    fn foreign_media_summary_code_does_not_use_plus_conversion() {
+        let raw = "|PLUS|V0100|U001|2AAA|";
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:plus="https://example.test/foreign/">
+                <plus:MediaSummaryCode>|PLUS|V0100|U001|2AAA|</plus:MediaSummaryCode>
+              </rdf:Description>
+            </rdf:RDF>
+        "#;
+        let tags = parse_xmp(xml).unwrap();
+        assert!(
+            tags.contains(&("XMP-tmp0:MediaSummaryCode".to_string(), raw.to_string())),
+            "{tags:?}"
+        );
+        assert!(
+            !tags
+                .iter()
+                .any(|(name, _)| name == "XMP-plus:MediaSummaryCode")
         );
     }
 
