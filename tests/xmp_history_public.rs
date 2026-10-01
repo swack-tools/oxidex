@@ -86,3 +86,25 @@ fn native_history_sequence_is_a_list_of_flattened_fields() {
         assert_eq!(history_json(&path), expected, "{extension}");
     }
 }
+
+#[test]
+fn native_history_all_six_event_fields_keep_list_boundaries() {
+    // XMP.pm %sResourceEvent declares exactly these six fields. The two
+    // parameter values contain comma-space, so a joined/split surrogate
+    // would produce four wrong elements instead of two native ones.
+    let expected = json!({
+        "XMP-xmpMM:HistoryAction": ["created", "saved"],
+        "XMP-xmpMM:HistoryChanged": ["/metadata", "/content"],
+        "XMP-xmpMM:HistoryInstanceID": ["uuid:one", "uuid:two"],
+        "XMP-xmpMM:HistoryParameters": ["first, parameter", "second, parameter"],
+        "XMP-xmpMM:HistorySoftwareAgent": ["Tool A", "Tool B"],
+        "XMP-xmpMM:HistoryWhen": ["2024:01:02 03:04:05Z", "2024:02:03 04:05:06Z"]
+    });
+    for extension in ["jpg", "pdf", "eps"] {
+        assert_eq!(
+            history_json(&fixture("all-fields", extension)),
+            expected,
+            "{extension}"
+        );
+    }
+}

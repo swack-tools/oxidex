@@ -262,13 +262,18 @@ impl EPSParser {
                         parse_xmp_entries_with_source_forms(xmp_data)
                     {
                         for (entry, source) in entries.iter().zip(&gps_sources) {
-                            // xmpMM History is a Seq of structures. Its
-                            // repeated native fields remain arrays in JSON;
-                            // joining then splitting would corrupt a value
-                            // containing a literal comma and space.
+                            // XMP.pm's xmpMM History is a Seq of ResourceEvent
+                            // structs with these six declared fields. Keep
+                            // repeated values as arrays; joining and splitting
+                            // corrupts values containing a comma and space.
                             let typed_history = matches!(
                                 entry.tag.as_str(),
-                                "XMP-xmpMM:HistoryAction" | "XMP-xmpMM:HistoryWhen"
+                                "XMP-xmpMM:HistoryAction"
+                                    | "XMP-xmpMM:HistoryChanged"
+                                    | "XMP-xmpMM:HistoryInstanceID"
+                                    | "XMP-xmpMM:HistoryParameters"
+                                    | "XMP-xmpMM:HistorySoftwareAgent"
+                                    | "XMP-xmpMM:HistoryWhen"
                             );
                             let mut value = entry.tag_value(typed_history);
                             if matches!(
