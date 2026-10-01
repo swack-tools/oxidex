@@ -1038,6 +1038,7 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
         if not ref:
             done.append((job_key, "no claim ref to release"))
             continue
+        close_journal = journal
         if journal is not None:
             try:
                 current = journal.read_job(job_key)
@@ -1045,18 +1046,23 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
                 still_owed.append(owed)
                 done.append((ref, f"journal unreadable: {exc}; left alone"))
                 continue
-            if (current is None or current.closed or
+            if (current is None or
                     current.prior_runs != owed.run_index or
                     current.claim_ref != ref or current.started_at != started_at):
                 done.append((ref, "journal describes a newer run or different "
                                   "ownership; left alone"))
                 continue
+            # Local completion does not prove the remote claim was released.
+            # Keep the ownership/CAS checks and retry debt, but do not append
+            # another exit to this already completed run.
+            if current.closed:
+                close_journal = None
         try:
             sha = hub.sha(ref)
             if sha is None:
                 done.append((ref, "already gone"))
-                if journal is not None:
-                    _close(journal, job_key, reason)
+                if close_journal is not None:
+                    _close(close_journal, job_key, reason)
                 continue
             payload = hub.read(ref)
         except HubError as exc:
@@ -1065,13 +1071,13 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             continue
         if not payload or payload.get("holder_host") != host:
             done.append((ref, f"held by {(payload or {}).get('holder_host')!r}; left alone"))
-            if journal is not None:
-                _close(journal, job_key, "claim is another host's now")
+            if close_journal is not None:
+                _close(close_journal, job_key, "claim is another host's now")
             continue
         if not started_at:
             done.append((ref, "no ownership token was journaled; left alone"))
-            if journal is not None:
-                _close(journal, job_key, "no ownership token to prove the claim is ours")
+            if close_journal is not None:
+                _close(close_journal, job_key, "no ownership token to prove the claim is ours")
             continue
         if payload.get("started_at") != started_at:
             # OUR host, but not OUR acquisition -- this host took the
@@ -1081,8 +1087,8 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             # `claim._owns`' token; half of it is not enough.
             done.append((ref, f"re-acquired at {payload.get('started_at')!r} "
                               f"(ours was {started_at!r}); left alone"))
-            if journal is not None:
-                _close(journal, job_key, "claim was re-acquired by this host")
+            if close_journal is not None:
+                _close(close_journal, job_key, "claim was re-acquired by this host")
             continue
         try:
             ok = hub.delete(ref, expect_sha=sha)
@@ -1092,8 +1098,8 @@ def release_pending(hub, host: str, adoption: JournalAdoption,
             continue
         done.append((ref, "released" if ok else "CAS lost; left alone"))
         if ok:
-            if journal is not None:
-                _close(journal, job_key, reason)
+            if close_journal is not None:
+                _close(close_journal, job_key, reason)
         else:
             still_owed.append(owed)
     adoption.to_release = still_owed

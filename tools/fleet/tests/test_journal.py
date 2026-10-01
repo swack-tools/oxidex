@@ -981,6 +981,38 @@ class TestReleasePending(JournalCase):
         self.assertTrue(job.open)
         self.assertEqual(job.started_at, current)
 
+    def test_closed_run_still_releases_its_remote_claim_without_another_exit(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="locally finished")
+        before = self.j.path_for("staging-one").read_bytes()
+        out = jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertEqual(out, [(ref, "released")])
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(self.j.path_for("staging-one").read_bytes(), before)
+
+    def test_closed_run_retains_release_debt_during_store_outage(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="locally finished")
+        before = self.j.path_for("staging-one").read_bytes()
+        with mock.patch.object(self.hub, "sha", side_effect=HubError("offline")):
+            jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertEqual([o.claim_ref for o in res.to_release], [ref])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertEqual(self.j.path_for("staging-one").read_bytes(), before)
+        jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertIsNone(self.hub.sha(ref))
+
+    def test_closed_run_retains_release_debt_after_lost_cas(self):
+        ref, res = self.owed()
+        self.j.exit(job_key="staging-one", outcome="locally finished")
+        before = self.j.path_for("staging-one").read_bytes()
+        with mock.patch.object(self.hub, "delete", return_value=False):
+            jr.release_pending(self.hub, HOST, res, journal=self.j)
+        self.assertEqual([o.claim_ref for o in res.to_release], [ref])
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertEqual(self.j.path_for("staging-one").read_bytes(), before)
+
     def test_cas_failure_keeps_release_owed_and_run_open(self):
         ref, res = self.owed()
         with mock.patch.object(self.hub, "delete", return_value=False):
