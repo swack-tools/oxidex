@@ -363,6 +363,39 @@ impl TTFParser {
         Ok(decoded)
     }
 
+    /// Decode a Font.pm UCS2/UTF16 string after its BOM and NUL rules.
+    /// Format-1 language tags need the source's loss-tolerant replacement;
+    /// name values use the strict path so guessed text is never published.
+    fn decode_font_utf16(data: &[u8], lossy: bool) -> Option<String> {
+        let (body, little_endian) = match data.get(..2) {
+            Some([0xfe, 0xff]) => (&data[2..], false),
+            Some([0xff, 0xfe]) => (&data[2..], true),
+            _ => (data, false),
+        };
+        if !body.len().is_multiple_of(2) {
+            return None;
+        }
+        let words: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|pair| {
+                if little_endian {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect();
+        let mut decoded = if lossy {
+            String::from_utf16_lossy(&words)
+        } else {
+            String::from_utf16(&words).ok()?
+        };
+        if let Some(nul) = decoded.find('\0') {
+            decoded.truncate(nul);
+        }
+        Some(decoded)
+    }
+
     /// Decode a `Font:` value with Font.pm's charset boundary. The older
     /// bare-name extractor above intentionally keeps its existing behavior.
     fn extract_font_name_string(
@@ -374,30 +407,7 @@ impl TTFParser {
         let start = table.offset as u64 + u64::from(string_offset) + u64::from(record.offset);
         let data = reader.read(start, record.length as usize)?;
         let mut decoded = match record.platform_id {
-            PLATFORM_WINDOWS | PLATFORM_UNICODE => {
-                // Charset::Decompose consumes the initial UCS2/UTF16 byte-order
-                // mark and changes the word order when it is little-endian.
-                // Font.pm's no-BOM TTF order is big-endian.
-                let (body, little_endian) = match data.get(..2) {
-                    Some([0xfe, 0xff]) => (&data[2..], false),
-                    Some([0xff, 0xfe]) => (&data[2..], true),
-                    _ => (data, false),
-                };
-                if !body.len().is_multiple_of(2) {
-                    return Ok(None);
-                }
-                let words: Vec<u16> = body
-                    .chunks_exact(2)
-                    .map(|pair| {
-                        if little_endian {
-                            u16::from_le_bytes([pair[0], pair[1]])
-                        } else {
-                            u16::from_be_bytes([pair[0], pair[1]])
-                        }
-                    })
-                    .collect();
-                String::from_utf16(&words).ok()
-            }
+            PLATFORM_WINDOWS | PLATFORM_UNICODE => Self::decode_font_utf16(data, false),
             PLATFORM_MACINTOSH => match record.encoding_id {
                 MAC_ENCODING_ROMAN => Some(Self::decode_mac_roman(data)),
                 MAC_ENCODING_HEBREW => Some(Self::decode_mac_hebrew(data)),
@@ -554,14 +564,12 @@ impl TTFParser {
                 break;
             }
             let data = reader.read(table_start + str_start + offset, len as usize)?;
-            let utf16: Vec<u16> = data
-                .chunks_exact(2)
-                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-                .collect();
-            // Font.pm's UCS2 decoder replaces an invalid surrogate and keeps
-            // processing later language records. The ASCII name filter below
-            // removes that replacement character.
-            let decoded = String::from_utf16_lossy(&utf16);
+            // Font.pm's UCS2 decoder consumes a BOM, truncates at NUL, and
+            // replaces invalid surrogates without stopping later records.
+            // The ASCII filter removes replacement characters.
+            let Some(decoded) = Self::decode_font_utf16(data, true) else {
+                break;
+            };
             let filtered: String = decoded
                 .chars()
                 .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
@@ -1186,6 +1194,85 @@ mod tests {
             Some(&TagValue::String("Recovery Format One".to_string()))
         );
         assert!(!tags.contains_key("Font:FontFamily"));
+    }
+
+    fn format_one_font_family_with_language(language: &[u8]) -> MetadataMap {
+        let family = [0, b'F'];
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&24u16.to_be_bytes());
+        for field in [
+            PLATFORM_UNICODE,
+            3,
+            0x8000,
+            NAME_FONT_FAMILY,
+            family.len() as u16,
+            language.len() as u16,
+        ] {
+            data.extend_from_slice(&field.to_be_bytes());
+        }
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&(language.len() as u16).to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(language);
+        data.extend_from_slice(&family);
+        let table = TableEntry {
+            tag: *b"name",
+            offset: 0,
+            length: data.len() as u32,
+        };
+        TTFParser::extract_exiftool_name_tags(&TestReader::new(data), &table).unwrap()
+    }
+
+    #[test]
+    fn format_one_language_bom_matches_pinned_source() {
+        // Pinned native matrix: format1-decode-native-matrix.json.
+        for language in [
+            &[0, b'n', 0, b'b'][..],
+            &[0xfe, 0xff, 0, b'n', 0, b'b'][..],
+            &[0xff, 0xfe, b'n', 0, b'b', 0][..],
+        ] {
+            let tags = format_one_font_family_with_language(language);
+            assert_eq!(
+                tags.get("Font:FontFamily-nb"),
+                Some(&TagValue::String("F".to_string())),
+                "language bytes {language:02x?}"
+            );
+            assert!(!tags.contains_key("Font:FontFamily"));
+        }
+    }
+
+    #[test]
+    fn format_one_language_nul_filter_and_loss_match_pinned_source() {
+        for (language, expected_key) in [
+            (
+                &[0, b'e', 0, b'n', 0, 0, 0, b'-', 0, b'U', 0, b'S'][..],
+                "Font:FontFamily",
+            ),
+            (
+                &[0, b'n', 0, b'b', 0, 0, 0, b'-', 0, b'N', 0, b'O'][..],
+                "Font:FontFamily-nb",
+            ),
+            (&[0, 0, 0, b'n', 0, b'b'][..], "Font:FontFamily"),
+            (&[0, b'A', 0xd8, 0, 0, b'B'][..], "Font:FontFamily-AB"),
+            (&[0, b'n', 0, b'!', 0, b'b'][..], "Font:FontFamily-nb"),
+            (&[0xff, 0xfe][..], "Font:FontFamily"),
+        ] {
+            let tags = format_one_font_family_with_language(language);
+            assert_eq!(
+                tags.get(expected_key),
+                Some(&TagValue::String("F".to_string())),
+                "language bytes {language:02x?}"
+            );
+            assert_eq!(
+                tags.keys()
+                    .filter(|key| key.starts_with("Font:FontFamily"))
+                    .count(),
+                1,
+                "language bytes {language:02x?}"
+            );
+        }
     }
 
     #[test]
