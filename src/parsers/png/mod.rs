@@ -298,9 +298,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             1 => "Meters",
                             _ => "Unknown",
                         };
-                        metadata.insert(
-                            "PNG-pHYs:PixelUnits".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG-pHYs:PixelUnits",
                             TagValue::new_string(unit_str),
+                            TagValue::new_integer(unit as i64),
+                            "",
                         );
                     }
                 }

@@ -235,6 +235,7 @@ fn printed_scalar_requests_extract_valueconv_not_the_label() {
         ("-PNG:Compression", "0"),
         ("-PNG:Filter", "0"),
         ("-PNG:Interlace", "0"),
+        ("-PNG-pHYs:PixelUnits", "0"),
     ] {
         let output = run(&["-b", name], png);
         assert!(output.status.success(), "{name}: {output:?}");
@@ -243,9 +244,22 @@ fn printed_scalar_requests_extract_valueconv_not_the_label() {
     let Some(mp3) = fixtures::pinned_t_images_fixture_path("MP3.mp3") else {
         return;
     };
-    let output = run(&["-b", "-MPEG:AudioBitrate"], &mp3);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"128000");
+    for (name, expected) in [
+        ("-MPEG:MPEGAudioVersion", "3"),
+        ("-MPEG:AudioLayer", "1"),
+        ("-MPEG:AudioBitrate", "128000"),
+        ("-MPEG:SampleRate", "0"),
+        ("-MPEG:ChannelMode", "1"),
+        ("-MPEG:MSStereo", "1"),
+        ("-MPEG:IntensityStereo", "0"),
+        ("-MPEG:CopyrightFlag", "1"),
+        ("-MPEG:OriginalMedia", "1"),
+        ("-MPEG:Emphasis", "0"),
+    ] {
+        let output = run(&["-b", name], &mp3);
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert_eq!(output.stdout, expected.as_bytes(), "{name}");
+    }
 }
 
 #[test]
@@ -284,4 +298,26 @@ fn invalid_cr3_preview_keeps_default_summary_but_refuses_binary_request() {
     assert!(!output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("binary payload is unavailable"));
+}
+
+#[test]
+fn pdf_icc_curve_retains_the_embedded_source_bytes() {
+    // A minimal ICCBased PDF embedding red_trc_apple.icc. Pinned ExifTool
+    // 13.59 reports ICC_Profile:RedTRC and extracts the exact 32 bytes below.
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf/icc_redtrc.pdf"
+    ));
+    let ordinary = run(&["-s", "-ICC_Profile:RedTRC"], path);
+    assert!(ordinary.status.success(), "{ordinary:?}");
+    assert!(
+        String::from_utf8_lossy(&ordinary.stdout).contains("Binary data 32 bytes"),
+        "{ordinary:?}"
+    );
+    let extracted = run(&["-b", "-ICC_Profile:RedTRC"], path);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(
+        extracted.stdout,
+        include_bytes!("fixtures/icc/red_trc_apple.bin")
+    );
 }
