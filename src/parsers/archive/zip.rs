@@ -6,6 +6,7 @@ use std::io::Cursor;
 use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
 
 /// Parser for ZIP archive files
 ///
@@ -78,6 +79,19 @@ impl FormatParser for ZipParser {
         }
 
         let mut metadata = MetadataMap::new();
+
+        // The general-purpose bit flag is stored at offset 6 in the first
+        // local file header as a little-endian 16-bit value.
+        if reader.size() >= 8 {
+            let local_header = reader.read(0, 8)?;
+            if local_header.starts_with(ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+                let bit_flag = u16::from_le_bytes([local_header[6], local_header[7]]);
+                metadata.insert(
+                    "ZIP:ZipBitFlag".to_string(),
+                    TagValue::new_integer(bit_flag as i64),
+                );
+            }
+        }
 
         // Read entire file into memory for zip crate
         let size = reader.size() as usize;
@@ -471,6 +485,34 @@ mod tests {
         assert!(ZipParser::datetime_compare(&dt1, &dt2) < 0);
         assert!(ZipParser::datetime_compare(&dt2, &dt1) > 0);
         assert_eq!(ZipParser::datetime_compare(&dt1, &dt3), 0);
+    }
+
+    #[test]
+    fn test_zip_bit_flag() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut buffer);
+            let options = SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("test.txt", options).unwrap();
+            zip.write_all(b"test").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let data = buffer.into_inner();
+        assert_eq!(
+            u16::from_le_bytes([data[6], data[7]]),
+            0,
+            "test archive should have a zero general-purpose bit flag"
+        );
+
+        let reader = BufferedReader::from_bytes(&data);
+        let metadata = ZipParser.parse(&reader).unwrap();
+
+        assert_eq!(
+            metadata.get("ZIP:ZipBitFlag"),
+            Some(&TagValue::new_integer(0))
+        );
     }
 
     #[test]
