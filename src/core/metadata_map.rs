@@ -580,6 +580,16 @@ impl MetadataMap {
         key: K,
         bytes: Vec<u8>,
     ) -> Option<TagValue> {
+        self.insert_available_binary_with_display_and_group1(key, bytes, "")
+    }
+
+    /// Available binary source bytes with the producing table's family-1 group.
+    pub(crate) fn insert_available_binary_with_display_and_group1<K: Into<String>>(
+        &mut self,
+        key: K,
+        bytes: Vec<u8>,
+        group1: &str,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -588,6 +598,7 @@ impl MetadataMap {
             bytes.len()
         ));
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display.clone(), order);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.value = Some(display.clone());
         occurrence.print = Some(display);
         occurrence.stored = Some(TagValue::Binary(bytes));

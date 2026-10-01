@@ -85,3 +85,65 @@ fn xmp_literal_binary_summary_is_extractable_text() {
     assert!(binary.status.success(), "{:?}", binary);
     assert_eq!(binary.stdout, LITERAL.as_bytes());
 }
+
+#[test]
+fn binary_orientation_uses_value_conversion() {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/jpeg/edge_cases/orientation_1.jpg"
+    ));
+    let output = run(&["-b", "-Orientation"], path);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3");
+}
+
+#[test]
+fn empty_directory_binary_scan_keeps_stdout_empty() {
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-b", "-Make"])
+        .arg(first.path())
+        .arg(second.path())
+        .output()
+        .unwrap();
+    assert!(output.stdout.is_empty(), "{:?}", output);
+}
+
+#[test]
+fn icc_red_trc_extracts_retained_curve_bytes() {
+    // The 536-byte ICC profile was extracted from pinned ExifTool 13.59's
+    // Apple_iPadAir_3rd_generation.jpg corpus sample. The 32-byte expected
+    // payload is that same native oracle's `-b -RedTRC` output.
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/icc/red_trc_apple.icc"
+    ));
+    let ordinary = run(&["-s", "-RedTRC"], path);
+    assert!(ordinary.status.success(), "{ordinary:?}");
+    assert!(
+        String::from_utf8_lossy(&ordinary.stdout)
+            .contains("(Binary data 32 bytes, use -b option to extract)")
+    );
+
+    let binary = run(&["-b", "-RedTRC"], path);
+    assert!(binary.status.success(), "{binary:?}");
+    assert_eq!(
+        binary.stdout,
+        include_bytes!("fixtures/icc/red_trc_apple.bin")
+    );
+
+    // The same profile through JPEG APP2 exercises the shared ICC insertion
+    // and container merge path that the original review finding reached.
+    let dir = TempDir::new().unwrap();
+    let jpeg_path = dir.path().join("embedded-redtrc.jpg");
+    let mut app2 = b"ICC_PROFILE\0\x01\x01".to_vec();
+    app2.extend_from_slice(include_bytes!("fixtures/icc/red_trc_apple.icc"));
+    fs::write(&jpeg_path, with_segment(0xe2, &app2)).unwrap();
+    let embedded = run(&["-b", "-RedTRC"], &jpeg_path);
+    assert!(embedded.status.success(), "{embedded:?}");
+    assert_eq!(
+        embedded.stdout,
+        include_bytes!("fixtures/icc/red_trc_apple.bin")
+    );
+}

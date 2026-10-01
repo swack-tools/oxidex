@@ -186,7 +186,7 @@ fn handle_multi_file_processing(
             unidentified,
             directories_scanned,
         };
-        if modifications.is_empty() && (args.json || args.csv) {
+        if modifications.is_empty() && (args.json || args.csv || args.binary_output) {
             if let Err(e) = batch_processor::print_structured_output_for_no_files(args) {
                 eprintln!("Error: Batch processing failed: {e}");
                 process::exit(1);

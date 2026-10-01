@@ -429,17 +429,16 @@ pub fn render_binary_requested_tags(
                 entry.lookup_key
             ));
         }
-        let value = resolved_display_value(entry.occurrence, !args.exiftool_compat());
-        match value {
+        // ExifTool's -b disables PrintConv independently of -n. The
+        // occurrence's ValueConv channel is the only honest source for text
+        // and numeric extraction after binary payload cases above.
+        let value = entry.occurrence.project(ValueChannel::ValueConv);
+        match value.as_ref() {
             TagValue::String(text) => out.extend_from_slice(text.as_bytes()),
-            TagValue::TextBytes(bytes) | TagValue::Binary(bytes) => out.extend_from_slice(&bytes),
+            TagValue::TextBytes(bytes) | TagValue::Binary(bytes) => out.extend_from_slice(bytes),
             other => out.extend_from_slice(
-                super::output_formatter::format_tag_value_with_mode(
-                    &entry.lookup_key,
-                    &other,
-                    !args.exiftool_compat(),
-                )
-                .as_bytes(),
+                super::output_formatter::format_tag_value_with_mode(&entry.lookup_key, other, true)
+                    .as_bytes(),
             ),
         }
     }
