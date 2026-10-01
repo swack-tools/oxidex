@@ -484,6 +484,60 @@ mod tests {
     use crate::ffi::write_tags::exiftool_set_tag_string;
 
     #[test]
+    fn invalid_utf8_inputs_preserve_existing_metadata() {
+        use crate::ffi::{
+            EXIFTOOL_ERR_INVALID_TAG_VALUE, exiftool_read_file, exiftool_remove_tag,
+            exiftool_set_tag_float, exiftool_set_tag_integer, exiftool_write_file,
+        };
+
+        struct Handle(*mut ExifToolHandle);
+        impl Drop for Handle {
+            fn drop(&mut self) {
+                exiftool_destroy(self.0);
+            }
+        }
+        let handle = Handle(exiftool_create());
+        assert!(!handle.0.is_null());
+        let name = CString::new("EXIF:Make").unwrap();
+        let value = CString::new("preserved").unwrap();
+        let bad = CString::new(vec![0xff, 0xfe]).unwrap();
+        assert_eq!(
+            exiftool_set_tag_string(handle.0, name.as_ptr(), value.as_ptr()),
+            EXIFTOOL_OK
+        );
+        let codes = [
+            exiftool_read_file(handle.0, bad.as_ptr()),
+            exiftool_write_file(handle.0, bad.as_ptr()),
+            exiftool_set_tag_string(handle.0, bad.as_ptr(), value.as_ptr()),
+            exiftool_set_tag_string(handle.0, name.as_ptr(), bad.as_ptr()),
+            exiftool_set_tag_integer(handle.0, bad.as_ptr(), 5),
+            exiftool_set_tag_float(handle.0, bad.as_ptr(), 2.0),
+            exiftool_remove_tag(handle.0, bad.as_ptr()),
+        ];
+        for code in codes {
+            assert_eq!(code, EXIFTOOL_ERR_INVALID_TAG_VALUE);
+        }
+        assert_eq!(super::exiftool_has_tag(handle.0, bad.as_ptr()), 0);
+        assert!(exiftool_get_tag_string(handle.0, bad.as_ptr()).is_null());
+        let mut integer = 123;
+        assert_eq!(
+            super::exiftool_get_tag_integer(handle.0, bad.as_ptr(), &mut integer),
+            EXIFTOOL_ERR_INVALID_TAG_VALUE
+        );
+        assert_eq!(integer, 123);
+        let mut float = 1.25;
+        assert_eq!(
+            super::exiftool_get_tag_float(handle.0, bad.as_ptr(), &mut float),
+            EXIFTOOL_ERR_INVALID_TAG_VALUE
+        );
+        assert_eq!(float, 1.25);
+        let observed = exiftool_get_tag_string(handle.0, name.as_ptr());
+        assert!(!observed.is_null());
+        assert_eq!(unsafe { CStr::from_ptr(observed) }, value.as_c_str());
+        assert_eq!(super::exiftool_get_tag_count(handle.0), 1);
+    }
+
+    #[test]
     fn const_string_getters_are_safe_for_concurrent_calls() {
         let handle = exiftool_create();
         assert!(!handle.is_null());

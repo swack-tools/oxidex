@@ -12755,6 +12755,36 @@ mod rational_array_tests {
         assert_eq!(print_x3f_mark_bits(0b1001), "[0], [3]");
     }
 
+    #[test]
+    fn x3f_invalid_directory_preserves_valid_header_fields() {
+        for directory_offset in [u32::MAX, 232] {
+            let mut data = vec![0_u8; 232];
+            data[..4].copy_from_slice(b"FOVb");
+            data[4..8].copy_from_slice(&0x0002_0001_u32.to_le_bytes());
+            data[28..32].copy_from_slice(&100_u32.to_le_bytes());
+            data[32..36].copy_from_slice(&80_u32.to_le_bytes());
+            data[40..48].copy_from_slice(b"Daylight");
+            // One case points beyond EOF; the other reaches a complete but
+            // invalid directory header. Both must retain the valid header.
+            data.extend_from_slice(b"NOPE\0\0\0\0\0\0\0\0");
+            data.extend_from_slice(&directory_offset.to_le_bytes());
+            let metadata = parse_raw_metadata(&data, RawFormat::SigmaX3F).unwrap();
+            for (name, expected) in [
+                ("FileVersion", "2.1"),
+                ("WhiteBalance", "Daylight"),
+                ("ImageWidth", "100"),
+                ("ImageHeight", "80"),
+                ("Rotation", "0"),
+            ] {
+                assert_eq!(
+                    metadata.get(&format!("SigmaRaw:{name}")),
+                    Some(&TagValue::new_string(expected.to_string())),
+                    "directory offset {directory_offset}: {name}"
+                );
+            }
+        }
+    }
+
     /// The extended header maps slot -> tag id, not slot -> tag. Both samples
     /// store X3FillLight (id 10) in slot 6, ahead of RedAdjust (id 7), so an
     /// implementation that assumed positional order would mislabel four tags.
