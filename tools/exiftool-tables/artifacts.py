@@ -197,6 +197,7 @@ STATIC_ARTIFACTS = (
     Artifact("xmp-priority-capture", 2, "capture_xmp_priorities", "tools/exiftool-tables/fixtures/xmp_priorities.json"),
     Artifact("xmp-priority-rust", 2, "xmp_priority_specs", "src/parsers/xmp/generated_priorities.rs"),
     Artifact("xmp-lens-maps", 2, "gen_xmp_lens_maps", "src/composite/xmp_lens_maps.rs"),
+    Artifact("plus-media-matrix", 2, "gen_plus_media_matrix", "src/parsers/xmp/generated_plus_media_matrix.rs"),
     Artifact("tag-exists", 2, "tag_exists_codegen", "src/writers/generated_tag_exists.rs"),
     Artifact("copy-targets", 2, "copy_targets_codegen", "src/writers/generated_copy_targets.rs"),
     Artifact("makernote-groups", 2, "makernote_groups_codegen", "src/writers/generated_makernote_groups.rs"),
