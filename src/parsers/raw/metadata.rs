@@ -1175,6 +1175,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             tag_value,
                         );
                     } else if format == RawFormat::NikonNEF {
+                        // `ifd_name` retains the legacy lookup fallback for
+                        // IFD2+, but the occurrence records the actual chain.
+                        let physical_ifd_name = format!("IFD{ifd_index}");
                         record_nef_ifd_row(
                             &mut metadata,
                             tag_name,
@@ -1184,7 +1187,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             *value_count,
                             bytes,
                             byte_order,
-                            ifd_name,
+                            &physical_ifd_name,
                             chain_is_priority_dir,
                         );
                     } else {
