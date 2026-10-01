@@ -1941,7 +1941,7 @@ fn extract_rw2_embedded_exif_tags(
         exif_ifd_offset,
         byte_order,
         &[0xA411, 0xA412],
-        &preview_model,
+        preview_model.as_ref(),
         directory_limit,
     ) {
         let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")

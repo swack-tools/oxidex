@@ -31,6 +31,7 @@ use crate::parsers::tiff::makernotes::makernote_context::{
 };
 use crate::tag_db::lookup_tag_name;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Maps the surviving rows returned by [`parse_ifd`] back to their physical
 /// slots in the on-disk entry array.
@@ -3251,7 +3252,7 @@ pub(crate) struct ReachedIntegralEntry {
     pub values: Vec<i64>,
     pub raw_value: Option<(u64, usize)>,
     /// Model established before this physical entry was processed.
-    pub known_model: String,
+    pub known_model: Arc<str>,
 }
 
 /// Exif.pm:6763-6773 refuses values with more than 100,000 elements unless
@@ -3338,7 +3339,7 @@ fn scan_reached_integral_ifd_entries(
     }
 
     let mut reached = Vec::new();
-    let mut current_model = known_model.to_string();
+    let mut current_model: Arc<str> = Arc::from(known_model);
     let mut warnings = 0u32;
     let mut completed = true;
     for index in 0..u64::from(count) {
@@ -3417,12 +3418,8 @@ fn scan_reached_integral_ifd_entries(
         if tag_id == 0x0110 && field_type == 2 {
             // Exif::Main's Model RawConv sets the member variable as this
             // entry is visited. Subdirectories entered earlier cannot see it.
-            current_model = String::from_utf8_lossy(&bytes[..size as usize])
-                .split('\0')
-                .next()
-                .unwrap_or("")
-                .trim_end()
-                .to_string();
+            let model = String::from_utf8_lossy(&bytes[..size as usize]);
+            current_model = Arc::from(model.split('\0').next().unwrap_or("").trim_end());
         }
         if !requested_tags.contains(&tag_id) {
             continue;
@@ -3518,7 +3515,7 @@ fn followed_subdirectories(
     pointer_tags: &[u16],
     known_model: &str,
     directory_limit: u64,
-) -> Vec<(u16, u64, String)> {
+) -> Vec<(u16, u64, Arc<str>)> {
     if !enterable_ifd(reader, ifd_offset, byte_order, directory_limit) {
         return Vec::new();
     }
@@ -3557,7 +3554,7 @@ pub(crate) fn first_unvisited_exif_ifd(
     ifd0_offset: u64,
     byte_order: ByteOrder,
     directory_limit: u64,
-) -> Option<(u64, String)> {
+) -> Option<(u64, Arc<str>)> {
     let mut visited = vec![ifd0_offset];
     for (tag_id, target, known_model) in followed_subdirectories(
         reader,
