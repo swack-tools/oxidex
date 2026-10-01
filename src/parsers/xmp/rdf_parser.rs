@@ -772,6 +772,7 @@ fn parse_xmp_packet_in_directory(
     let mut depth = 0;
     let mut property_depth = 0;
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
+    let mut collection_is_alt = false;
     let mut collection_values: Vec<String> = Vec::new(); // Collect rdf:li values
     // `xml:lang` of each collected `rdf:li`, parallel to `collection_values`.
     // A lang-alt is not one comma-joined value: ExifTool reports the
@@ -844,6 +845,8 @@ fn parse_xmp_packet_in_directory(
                     // Check if this is a Bag/Seq/Alt container
                     if is_collection_container(&tag_name, &resolver) {
                         inside_collection = true;
+                        collection_is_alt =
+                            NamespaceResolver::extract_local_name(&tag_name) == "Alt";
                         collection_values.clear();
                         collection_langs.clear();
                         current_value.clear();
@@ -892,18 +895,18 @@ fn parse_xmp_packet_in_directory(
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
-                        if if current_path.first().is_none_or(|(namespace, id)| {
+                        let known_tag = current_path.first().and_then(|(namespace, id)| {
                             super::generated_priorities::xmp_table(namespace)
                                 .and_then(|table| table.tag(id))
-                                .is_none()
-                        }) {
-                            // FoundXMP fixes an unknown tag's list type from
-                            // its first item; later language attributes cannot
-                            // turn a plain list into lang-alt.
-                            collection_langs.first().is_some_and(Option::is_some)
-                        } else {
-                            collection_langs.iter().any(Option::is_some)
-                        } {
+                        });
+                        let language_alternatives = known_tag.map_or_else(
+                            || {
+                                collection_is_alt
+                                    && collection_langs.first().is_some_and(Option::is_some)
+                            },
+                            |tag| tag.lang_alt,
+                        );
+                        if language_alternatives {
                             // Only x-default owns the bare name. A missing
                             // default never removes another language's suffix.
                             for (index, value) in collection_values.iter().enumerate() {
@@ -8583,6 +8586,29 @@ mod entry_tests {
 #[cfg(test)]
 mod language_flatname_recovery_tests {
     use super::*;
+
+    #[test]
+    fn known_language_alternatives_follow_source_schema() {
+        for container in ["Bag", "Alt", "Seq"] {
+            for (property, expected) in
+                [("subject", "XMP-dc:Subject"), ("title", "XMP-dc:Title-fr")]
+            {
+                let xml = format!(
+                    r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:{property}><rdf:{container}><rdf:li xml:lang="fr">A</rdf:li></rdf:{container}></dc:{property}></rdf:Description></rdf:RDF>"#
+                );
+                let tags = parse_xmp(xml.as_bytes()).unwrap();
+                let dc: Vec<_> = tags
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("XMP-dc:"))
+                    .collect();
+                assert_eq!(
+                    dc,
+                    vec![&(expected.to_string(), "A".to_string())],
+                    "{property}/{container}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn first_unlabelled_item_keeps_unknown_alt_as_list() {
