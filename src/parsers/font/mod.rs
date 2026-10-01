@@ -1,5 +1,6 @@
 //! Font format parsers
 
+mod mac_charset;
 pub mod otf;
 pub mod ttf;
 pub mod woff;

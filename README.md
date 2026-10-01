@@ -60,7 +60,19 @@ oxidex --detector=magika unknown_file
 - [User Guide](https://oxidex.net/) - Installation, usage, and format support
 - [Benchmarks](https://oxidex.net/performance/#benchmark-results) - Performance comparison with Perl ExifTool
 - [API Reference](https://docs.rs/oxidex) - Rust library documentation
+- [AI Harness](docs/AI_HARNESS.md) - The autonomous fleet that closes ExifTool tag-coverage gaps, and its measured results
 - [GitHub Issues](https://github.com/swack-tools/oxidex/issues) - Bug reports and feature requests
+
+## Closing the parity gap
+
+Tag coverage is extended by an autonomous **AI harness** ("the fleet") that compares OxiDex
+against real ExifTool, asks a language model to patch the gaps it finds, and puts every candidate
+patch through a gate stack — apply, build, re-compare, targeted tests, duplicate check, reviewer,
+full test suite — before anything is committed.
+
+[**docs/AI_HARNESS.md**](docs/AI_HARNESS.md) documents how it works end to end and what it has
+actually produced: 67 tag gaps closed with measured evidence, per-model patch-apply rates, a full
+failure taxonomy, and an explicit list of the figures that could *not* be measured.
 
 ## Development
 

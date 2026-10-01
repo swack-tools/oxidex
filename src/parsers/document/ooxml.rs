@@ -17,6 +17,19 @@ fn extract_zip_bit_flag(data: &[u8]) -> Option<u16> {
     Some(u16::from_le_bytes([flag_bytes[0], flag_bytes[1]]))
 }
 
+/// Render the bit flag the way ExifTool's ZIP.pm does.
+///
+/// `PrintConv => '$val ? sprintf("0x%.4x",$val) : $val'`: a set flag word is
+/// 4-digit hex, a zero one is a plain `0`. Most OOXML writers set bit 11
+/// (UTF-8 names), so this is the usual case rather than an edge one.
+fn zip_bit_flag_value(bit_flag: u16) -> TagValue {
+    if bit_flag == 0 {
+        TagValue::new_integer(0)
+    } else {
+        TagValue::new_string(format!("0x{:04x}", bit_flag))
+    }
+}
+
 /// Extract the CRC-32 from the first ZIP local file header.
 ///
 /// ExifTool exposes this header field as `ZIP:ZipCRC`.
@@ -150,10 +163,7 @@ impl FormatParser for DocxParser {
         }
 
         if let Some(bit_flag) = zip_bit_flag {
-            metadata.insert(
-                "ZIP:ZipBitFlag".to_string(),
-                TagValue::new_integer(i64::from(bit_flag)),
-            );
+            metadata.insert("ZIP:ZipBitFlag".to_string(), zip_bit_flag_value(bit_flag));
         }
 
         if let Some(compressed_size) = zip_compressed_size {

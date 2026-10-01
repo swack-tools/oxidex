@@ -8,9 +8,11 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::tag_conversion::{parse_string_to_tag_value, raw_bytes_to_tag_value};
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
 use crate::io::EndianReader;
+use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
 use crate::parsers::jpeg::app_segments::{
-    parse_app6, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_agfa, parse_app12_olympus,
-    parse_app14_adobe,
+    parse_app6_ijpeg, parse_app10_hdr, parse_app11_jpeg_hdr, parse_app12_olympus,
+    parse_app12_picture_info, parse_app14_adobe, parse_infiray_isothermal, parse_meta_app3,
+    parse_photoshop_irb,
 };
 use crate::parsers::jpeg::icc_chunk_assembler::IccChunkAssembler;
 use crate::parsers::jpeg::quality_estimate::estimate_quality_from_dqt_tables;
@@ -286,6 +288,83 @@ pub fn process_iptc_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     }
 }
 
+/// Processes Photoshop APP13 segments and extracts Image Resource Block tags.
+///
+/// ExifTool routes an APP13 payload beginning with "Photoshop 3.0\0" to
+/// `%Photoshop::Main` (ExifTool.pm:8348) and concatenates CONSECUTIVE APP13
+/// Photoshop segments before parsing, because a resource may straddle the
+/// 64 kB segment limit. The IPTC resource (0x0404) is handled separately by
+/// `process_iptc_segments`.
+///
+/// # Arguments
+///
+/// * `segments` - Parsed JPEG segments
+/// * `metadata` - MetadataMap to populate with Photoshop tags
+pub fn process_photoshop_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP13_MARKER: u16 = 0xFFED;
+    const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
+
+    // Join runs of consecutive Photoshop APP13 segments, dropping the
+    // repeated header on every continuation segment.
+    let mut combined: Vec<u8> = Vec::new();
+    let flush = |combined: &mut Vec<u8>, metadata: &mut MetadataMap| {
+        if combined.is_empty() {
+            return;
+        }
+        match parse_photoshop_irb(combined) {
+            Ok(photoshop_metadata) => {
+                for (key, value) in photoshop_metadata.iter() {
+                    metadata.insert(key.clone(), value.clone());
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to parse APP13 Photoshop segment: {}", e);
+            }
+        }
+        combined.clear();
+    };
+
+    for segment in segments.iter() {
+        let is_photoshop =
+            segment.marker == APP13_MARKER && segment.data.starts_with(PHOTOSHOP_HEADER);
+        if !is_photoshop {
+            flush(&mut combined, metadata);
+            continue;
+        }
+        if combined.is_empty() {
+            combined.extend_from_slice(segment.data);
+        } else {
+            combined.extend_from_slice(&segment.data[PHOTOSHOP_HEADER.len()..]);
+        }
+    }
+    flush(&mut combined, metadata);
+}
+
+/// Processes APP3 "Meta" segments and extracts Kodak Meta IFD metadata.
+///
+/// ExifTool routes an APP3 payload matching `/^(Meta|META|Exif)\0\0/` to
+/// `%Kodak::Meta` (ExifTool.pm:7990), a TIFF directory with its own tag ids.
+/// Tags land in the `Meta:` family, ExifTool's family-0 group for that table.
+///
+/// # Arguments
+///
+/// * `segments` - Parsed JPEG segments
+/// * `metadata` - MetadataMap to populate with Meta tags
+pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP3_MARKER: u16 = 0xFFE3;
+
+    for segment in segments.iter().filter(|s| s.marker == APP3_MARKER) {
+        // APP3 also carries Stim and other payloads; a non-Meta identifier
+        // is not an error, just not this parser's directory.
+        let Ok(meta) = parse_meta_app3(segment.data) else {
+            continue;
+        };
+        for (key, value) in meta.iter() {
+            metadata.insert(key.clone(), value.clone());
+        }
+    }
+}
+
 /// Processes MPF (Multi-Picture Format) APP2 segments.
 ///
 /// MPF is used in dual-camera phones and 3D cameras to store multiple images
@@ -418,9 +497,10 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 ///
 /// APP6 segments (marker 0xFFE6) are dispatched on the same identifier
 /// conditions ExifTool uses: GoPro GPMF ("GoPro\0"), HP/Toshiba TDHD
-/// ("TDHD\x01\0\0\0"), and NITF ("NITF\0"). GoPro tags are emitted under the
-/// GoPro: family with ExifTool tag names (e.g. GoPro:Model,
-/// GoPro:CameraSerialNumber). Unrecognized APP6 payloads extract nothing.
+/// ("TDHD\x01\0\0\0"), and NITF ("NITF\0"). Tags are emitted under the APP6:
+/// family with ExifTool tag names (e.g. APP6:Model, APP6:CameraSerialNumber) --
+/// APP6 is ExifTool's family-0 group for all three; GoPro/NITF are only its
+/// family-1 names. Unrecognized APP6 payloads extract nothing.
 ///
 /// # Arguments
 ///
@@ -428,8 +508,9 @@ pub fn process_sof_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// * `metadata` - MetadataMap to populate with APP6 tags
 pub fn process_app6_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const APP6_MARKER: u16 = 0xFFE6;
+    let is_ijpeg = has_ijpeg_header(segments);
     for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
-        match parse_app6(segment.data) {
+        match parse_app6_ijpeg(segment.data, is_ijpeg) {
             Ok(app6_metadata) => {
                 for (key, value) in app6_metadata.iter() {
                     metadata.insert(key.clone(), value.clone());
@@ -528,8 +609,8 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 ///
 /// APP12 segments (marker 0xFFEC) contain various proprietary metadata formats:
 /// - Olympus Picture Info (cameras store camera settings and serial numbers)
-/// - Agfa Picture Info (Agfa camera metadata)
 /// - Ducky (Adobe Photoshop "Save for Web" quality settings)
+/// - "Picture Info" text (Agfa, Polaroid and others)
 ///
 /// # Arguments
 ///
@@ -538,14 +619,14 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 ///
 /// # Identifier Dispatch
 ///
-/// The function examines the beginning of each APP12 segment to determine
-/// which parser to use:
-/// - "OLYM" or "OLYMP" prefix -> Olympus parser
-/// - "[picture info]" prefix -> Olympus parser (older format)
-/// - "AGFA" prefix -> Agfa parser
-/// - "Type=" or "ID=" at start -> Agfa key=value parser (no identifier)
-/// - Contains "=" in first 50 bytes with key=value structure -> Agfa parser
-/// - "Ducky" prefix -> Already handled by existing parse_ducky_segment
+/// ExifTool (ExifTool.pm:8338) splits APP12 exactly two ways: a payload
+/// starting with "Ducky" goes to `%APP12::Ducky`, and EVERYTHING else goes to
+/// `%APP12::PictureInfo`, whose scan simply finds nothing in a segment that
+/// holds no `tag=value` text. OxiDex keeps one extra branch ahead of that for
+/// the binary Olympus APP12 layout, which has its own dedicated parser:
+/// - "OLYM"/"OLYMP"/"OLYMPUS" prefix -> Olympus parser
+/// - "Ducky" prefix -> `parse_ducky_segment`
+/// - anything else -> Picture Info scan
 ///
 /// # Error Handling
 ///
@@ -565,24 +646,14 @@ pub fn process_app12_segments(segments: &[Segment], metadata: &mut MetadataMap) 
             continue;
         }
 
-        // Check for Olympus identifier ("OLYM" or "OLYMP" prefix)
-        // Olympus uses various identifiers including "OLYMPUS", "[picture info]", etc.
-        let is_olympus = (segment.data.len() >= 4 && &segment.data[..4] == b"OLYM")
-            || (segment.data.len() >= 5 && &segment.data[..5] == b"OLYMP")
-            || (segment.data.len() >= 7 && &segment.data[..7] == b"OLYMPUS")
-            || (segment.data.len() >= 14 && &segment.data[..14] == b"[picture info]");
-
-        // Check for Agfa identifier (explicit "AGFA" prefix)
-        let is_agfa_explicit = segment.data.len() >= 4 && &segment.data[..4] == b"AGFA";
-
-        // Check for Agfa-style key=value format without identifier.
-        // Older Agfa cameras wrote APP12 segments that start directly with key=value pairs
-        // like "Type=SR84" or "ID=AGFA DIGITAL CAMERA" without an "AGFA" prefix.
-        let is_agfa_keyvalue =
-            !is_olympus && !is_agfa_explicit && is_agfa_style_keyvalue_format(segment.data);
+        // Check for Olympus identifier ("OLYM" or "OLYMP" prefix).
+        // "[picture info]" is deliberately NOT routed here: that is the
+        // ordinary textual Picture Info layout ExifTool scans with
+        // ProcessAPP12, and the Olympus parser expects binary data.
+        let is_olympus = segment.data.starts_with(b"OLYM");
 
         // Check for Ducky identifier (handled by existing parser in app_parsers.rs)
-        let is_ducky = segment.data.len() >= 5 && &segment.data[..5] == b"Ducky";
+        let is_ducky = segment.data.starts_with(b"Ducky");
 
         if is_olympus {
             // Parse Olympus Picture Info segment
@@ -599,101 +670,25 @@ pub fn process_app12_segments(segments: &[Segment], metadata: &mut MetadataMap) 
                     eprintln!("Warning: Failed to parse APP12 Olympus segment: {}", e);
                 }
             }
-        } else if is_agfa_explicit || is_agfa_keyvalue {
-            // Parse Agfa Picture Info segment (with or without explicit identifier)
-            match parse_app12_agfa(segment.data) {
-                Ok(agfa_metadata) => {
-                    // Merge Agfa metadata into the main metadata map
-                    for (key, value) in agfa_metadata.iter() {
-                        metadata.insert(key.clone(), value.clone());
-                    }
-                }
-                Err(e) => {
-                    // Log warning but continue processing
-                    eprintln!("Warning: Failed to parse APP12 Agfa segment: {}", e);
-                }
-            }
         } else if is_ducky {
             // Ducky segments are already handled by the existing parse_ducky_segment
             // function in app_parsers.rs. We call it here for consistency.
             let _ = crate::parsers::jpeg::app_parsers::parse_ducky_segment(segment.data, metadata);
-        }
-        // Unknown APP12 formats are silently ignored - they may be proprietary
-        // formats from other manufacturers that we don't support yet.
-    }
-}
-
-/// Checks if the segment data looks like Agfa-style key=value format without an identifier.
-///
-/// This detects APP12 segments from older Agfa cameras that wrote metadata directly
-/// as key=value pairs without the "AGFA" identifier prefix. These segments typically
-/// start with tags like "Type=", "ID=", "CameraType=", or "Version=".
-///
-/// # Arguments
-///
-/// * `data` - Raw APP12 segment data
-///
-/// # Returns
-///
-/// `true` if the data appears to be Agfa-style key=value format, `false` otherwise
-///
-/// # Detection Criteria
-///
-/// 1. First, check for common Agfa tag prefixes at the start ("Type=", "ID=", "CameraType=", "Version=")
-/// 2. If not found, check if an equals sign appears within the first 50 bytes
-/// 3. Verify the content before the equals sign looks like a valid key name (alphanumeric)
-/// 4. Ensure the segment is not binary data (check for excessive control characters)
-fn is_agfa_style_keyvalue_format(data: &[u8]) -> bool {
-    // Check for common Agfa tag prefixes at the very start of the segment
-    // These are the most common tags that Agfa cameras write first
-    const AGFA_START_PREFIXES: &[&[u8]] = &[b"Type=", b"ID=", b"CameraType=", b"Version="];
-
-    for prefix in AGFA_START_PREFIXES {
-        if data.len() >= prefix.len() && &data[..prefix.len()] == *prefix {
-            return true;
+        } else {
+            // Every remaining APP12 payload is scanned as "Picture Info";
+            // one with no tag=value text yields nothing, matching ExifTool.
+            match parse_app12_picture_info(segment.data) {
+                Ok(picture_info) => {
+                    for (key, value) in picture_info.iter() {
+                        metadata.insert(key.clone(), value.clone());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse APP12 Picture Info segment: {}", e);
+                }
+            }
         }
     }
-
-    // If no known prefix, look for key=value pattern in first 50 bytes
-    // This handles variations in Agfa format where the first key might differ
-    let search_len = data.len().min(50);
-    let search_data = &data[..search_len];
-
-    // Find the first equals sign
-    let eq_pos = match search_data.iter().position(|&b| b == b'=') {
-        Some(pos) => pos,
-        None => return false, // No equals sign found, not key=value format
-    };
-
-    // The key must be non-empty and before the equals sign
-    if eq_pos == 0 {
-        return false;
-    }
-
-    // Verify the key looks like a valid identifier (alphanumeric, no binary garbage)
-    // Keys in Agfa format are typically ASCII letters/digits only
-    let potential_key = &data[..eq_pos];
-    let key_is_valid = potential_key
-        .iter()
-        .all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-
-    if !key_is_valid {
-        return false;
-    }
-
-    // Additional check: ensure the segment is mostly text (not binary data)
-    // Count control characters (excluding CR, LF, null which are valid delimiters)
-    let control_char_count = search_data
-        .iter()
-        .filter(|&&b| b < 0x20 && b != b'\r' && b != b'\n' && b != 0x00)
-        .count();
-
-    // If more than 10% control characters, probably not text format
-    if control_char_count * 10 > search_len {
-        return false;
-    }
-
-    true
 }
 
 /// Processes APP14 segments and extracts Adobe DCT encoding metadata.
@@ -803,6 +798,7 @@ pub fn process_dqt_segments(segments: &[Segment], metadata: &mut MetadataMap) {
 /// left alone.
 pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const APP8_MARKER: u16 = 0xFFE8;
+    let is_ijpeg = has_ijpeg_header(segments);
     for segment in segments.iter().filter(|s| s.marker == APP8_MARKER) {
         // The 32-byte/"SPIFF\0" gate is intentionally duplicated in
         // parse_spiff_segment as defense-in-depth; its own length/identifier
@@ -810,6 +806,28 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         // design, not dead code.
         if segment.data.len() == 32 && segment.data.starts_with(b"SPIFF\0") {
             let _ = crate::parsers::jpeg::app_parsers::parse_spiff_segment(segment.data, metadata);
+            continue;
+        }
+        // ExifTool falls through to InfiRay's isothermal record for any APP8
+        // of at least 32 bytes in an IJPEG file (ExifTool.pm:8215).
+        if is_ijpeg && segment.data.len() >= INFIRAY_ISOTHERMAL_MIN_LENGTH {
+            for (key, value) in parse_infiray_isothermal(segment.data).iter() {
+                metadata.insert(key.clone(), value.clone());
+            }
         }
     }
+}
+
+/// Whether this file is an InfiRay IJPEG, i.e. carries an APP2 segment
+/// matching ExifTool's `/^....IJPEG\0/s` version header.
+///
+/// ExifTool records this as `$$self{HasIJPEG}` while walking the segments
+/// (ExifTool.pm:7968) and later uses it as the ONLY gate for the InfiRay
+/// APP6/APP7/APP8/APP9 records, which carry no identifier of their own.
+fn has_ijpeg_header(segments: &[Segment]) -> bool {
+    const APP2_MARKER: u16 = 0xFFE2;
+    segments
+        .iter()
+        .filter(|s| s.marker == APP2_MARKER)
+        .any(|s| s.data.len() >= 10 && &s.data[4..10] == b"IJPEG\0")
 }

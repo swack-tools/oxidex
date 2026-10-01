@@ -354,6 +354,207 @@ def collect_green_stamps(home, squads, cursor, repo_root=None, run_git=None, log
 
 
 # ---------------------------------------------------------------------------
+# Step 2b: branch-content discovery -- the stamp ledger is NOT the only
+# authority on "is there news?"
+# ---------------------------------------------------------------------------
+#
+# WHY this exists. collect_green_stamps is stamp-driven: a squad is only
+# ever "news" if its merger wrote a fresh consumed/work_done head into
+# squad-status. That made the whole publish path dead-end on real,
+# committed, validated work, measured 2026-07-30:
+#
+#   $ git for-each-ref refs/heads/squad/*   -> 22 commits ahead of main
+#                                              across 13 squads
+#   $ git ls-remote --heads origin 'squad/*' -> nothing. Never pushed.
+#   fleet-up.log, every round for 4+ hours:
+#     skipping stale stamp for squad/xmp @ a3a1f9d8991b: no longer
+#       contained in squad/xmp (recut since it was stamped)
+#     ... (same for sigma-c2pa, ps-docs, standards-appn)
+#     no news since last sweep -- nothing to do
+#     auto-publish: sweep finished with status 'no_news'
+#
+# Two independent ways work goes invisible forever, both of them
+# reachable in normal operation:
+#   1. the merger green-stamps a squad_sha, should_recut later recuts the
+#      branch, the stamp no longer resolves -- collect_green_stamps skips
+#      it AND advances the cursor past it, so it never resurfaces. The
+#      "the merger will re-stamp the work" the skip path assumes never
+#      happens: the merger only stamps when it CONSUMES a new worker
+#      commit, it never re-stamps work it already consumed.
+#   2. a commit reaches squad/<squad> without a work_done stamp at all.
+#
+# In both, the commit is sitting on the branch, fully validated, and no
+# code path in the sweep ever looks at a branch. So: look at the branch.
+#
+# The authority here is the TREE the branch would produce once integrated
+# onto origin/main -- never the sha, and never a raw `git diff
+# origin/main..squad/X`. Both of those are actively wrong on this repo:
+#   * sha: a squash-merge gives identical content a fresh sha, so a fully
+#     landed branch still reads N commits "ahead" and pushing it restarts
+#     CI forever (the same rule the zero_delta gate in run_sweep enforces).
+#   * raw diff: squad branches sit on STALE BASES (measured: 13 of 14 were
+#     3 commits behind main). `git diff origin/main..squad/X` reports
+#     every file main gained since the branch was cut as a DELETION the
+#     squad never made. Acting on that diff reverts newer work -- ~37,000
+#     lines of it, nearly, on 2026-07-30.
+# `git merge-tree --write-tree` resolves against the MERGE BASE, which is
+# exactly the rebase-before-you-evaluate rule expressed as a pure
+# function: it cannot manufacture a deletion for a file the squad never
+# touched, and it needs no checkout, no index and no branch mutation --
+# which matters because the merger daemon owns squad/<squad> and is
+# running concurrently.
+
+# How many consecutive failed sweeps of the IDENTICAL branch content park
+# a squad. The park is keyed on that content tree, so it is revisitable by
+# construction: one new commit changes the tree and un-parks the squad
+# with a clean slate. Nothing here can become terminal, which is the
+# property the old quarantine lacked -- a squad that failed once could
+# never publish again.
+DEFAULT_BRANCH_PARK_ATTEMPTS = 3
+
+
+def merged_content_tree(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN):
+    """The tree `ref` would produce once integrated onto `origin_ref`,
+    computed without checking anything out or touching any branch.
+
+    Returns (tree_sha, note). tree_sha is None when the content could not
+    be evaluated, and `note` says why. `git merge-tree --write-tree` exits
+    0 on a clean merge, 1 when the merge conflicts (it still prints a tree
+    on stdout, but that tree contains conflict markers and is not
+    publishable), and >1 on a usage/ref error.
+    """
+    rc, out, err = run_git(["merge-tree", "--write-tree", origin_ref, ref], repo_root)
+    first = (out.splitlines() or [""])[0].strip()
+    if rc == 0 and first:
+        return first, None
+    if rc == 1:
+        return None, f"conflicts with {origin_ref}"
+    return None, (err.strip().splitlines() or [f"git merge-tree failed for {ref}"])[0]
+
+
+def branch_formats(repo_root, ref, run_git, origin_ref=ORIGIN_MAIN,
+                   squads_toml_path=None, squad=None):
+    """Formats the commits on `ref` claim to touch, read from the
+    ``Format:`` trailer every fleet commit carries, e.g.
+
+        fix(jpeg): wire 2 missing tags (via deepseek/deepseek-v4-pro)
+
+        Format: JPEG
+        Tag: APP12:STB5
+
+    These drive run_post_merge_recheck, so an empty list would make the
+    semantic recheck vacuous -- hence the fall back to the squad's
+    advisory squads.toml list when no commit declared one.
+    """
+    formats = set()
+    rc, out, _err = run_git(["log", f"{origin_ref}..{ref}", "--format=%B"], repo_root)
+    if rc == 0:
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("Format:"):
+                value = line.split(":", 1)[1].strip()
+                if value:
+                    formats.add(value)
+    if not formats and squads_toml_path and squad:
+        try:
+            formats.update(squad_merge_loop.squad_formats(squads_toml_path, squad))
+        except (OSError, ValueError):
+            pass
+    return sorted(formats)
+
+
+def collect_branch_news(repo_root, squads, run_git, *, origin_ref=ORIGIN_MAIN,
+                        parks=None, squads_toml_path=None, log_fn=print,
+                        max_attempts=DEFAULT_BRANCH_PARK_ATTEMPTS):
+    """Every squad branch carrying content origin_ref does not already
+    have, keyed by the tree it would produce once integrated.
+
+    Returns {squad: {"squad_sha", "formats", "tree"}} in the same shape
+    collect_green_stamps returns, so run_sweep can merge the two.
+
+    Self-limiting without any cursor: once a squad's work lands on main,
+    its merged tree IS origin_ref's tree, so it stops being news on its
+    own. That is why there is no "consume" step here to get out of sync --
+    the question "is this already published?" is answered by content every
+    round, from scratch.
+    """
+    parks = parks or {}
+    news = {}
+    base_tree, note = merged_content_tree(repo_root, origin_ref, run_git, origin_ref=origin_ref)
+    if base_tree is None:
+        rc, out, _err = run_git(["rev-parse", f"{origin_ref}^{{tree}}"], repo_root)
+        if rc != 0:
+            log_fn(f"branch scan: cannot resolve {origin_ref} ({note}) -- skipping branch discovery")
+            return news
+        base_tree = out.strip()
+
+    for squad in sorted(squads):
+        branch = squad_merge_loop.staging_branch(squad)
+        rc, out, _err = run_git(["rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}"], repo_root)
+        if rc != 0:
+            continue
+        tip = out.strip()
+        tree, note = merged_content_tree(repo_root, branch, run_git, origin_ref=origin_ref)
+        if tree is None:
+            # Not publishable this round and nothing is recorded, so the
+            # next round re-evaluates from scratch -- a conflict the
+            # merger's own recut resolves clears itself with no state to
+            # unwind.
+            log_fn(f"branch scan: skipping {branch} -- cannot evaluate content ({note})")
+            continue
+        if tree == base_tree:
+            continue
+        park = parks.get(squad) or {}
+        if park.get("tree") == tree and int(park.get("attempts") or 0) >= max_attempts:
+            log_fn(f"branch scan: {branch} parked after {park['attempts']} failed sweeps of this "
+                   f"exact content ({tree[:12]}) -- a new commit on the branch un-parks it")
+            continue
+        news[squad] = {
+            "squad_sha": tip,
+            "tree": tree,
+            "formats": branch_formats(repo_root, branch, run_git, origin_ref=origin_ref,
+                                      squads_toml_path=squads_toml_path, squad=squad),
+        }
+    return news
+
+
+def dedupe_by_tree(candidates, log_fn=print):
+    """Collapse squads whose branches would produce the IDENTICAL merged
+    tree down to one contributor each.
+
+    This is the publish-side backstop for duplicate assignment. Measured
+    2026-07-30, ten squads carried the same 28-line change to
+    src/parsers/jpeg/app_segments/app12_olympus.rs and produced the
+    byte-identical merged tree 8205143145654711 -- because 13 of the 14
+    squads in squads.toml list the format "JPEG", so every one of their
+    workers independently derived the same fix. Merging all ten is not
+    wrong (nine are no-ops) but it inflates the PR body, multiplies the
+    per-squad semantic recheck, and makes bisection attribute a failure to
+    an arbitrary one of ten identical candidates.
+
+    Deterministic: the alphabetically-first squad wins, so the same input
+    always yields the same contributor and re-running a sweep does not
+    reshuffle attribution.
+    """
+    kept = {}
+    by_tree = {}
+    for squad in sorted(candidates):
+        info = candidates[squad]
+        tree = info.get("tree")
+        if tree is None:
+            kept[squad] = info
+            continue
+        owner = by_tree.get(tree)
+        if owner is None:
+            by_tree[tree] = squad
+            kept[squad] = info
+            continue
+        log_fn(f"dedupe: squad/{squad} carries content identical to squad/{owner} "
+               f"(tree {tree[:12]}) -- attributing it to squad/{owner} only")
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Step 3: fresh sweep branch, never reused
 # ---------------------------------------------------------------------------
 
@@ -1219,9 +1420,48 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     cursor = load_sweep_state(sweep_state_path)
     stamps, new_cursor = collect_green_stamps(
         home, squads, cursor, repo_root=repo_root, run_git=run_git, log_fn=log_fn)
-    if not stamps:
+
+    # Step 2b: the stamp ledger is not the only authority on "is there
+    # news?". Anything committed to a squad branch whose stamp went stale
+    # (or never existed) is invisible to collect_green_stamps forever --
+    # see collect_branch_news for the measured evidence. Branch content is
+    # only consulted for squads the ledger did NOT already speak for this
+    # round, so a stamped squad keeps its exact stamped sha and the
+    # existing cursor semantics are untouched.
+    parks = dict(cursor.get("branch_parks") or {})
+    branch_news = collect_branch_news(
+        repo_root, [s for s in squads if s not in stamps], run_git,
+        origin_ref=origin_ref, parks=parks, squads_toml_path=squads_toml_path, log_fn=log_fn)
+    if branch_news:
+        log_fn(f"branch scan: {len(branch_news)} squad(s) carry unpublished content "
+               f"the stamp ledger did not report: {sorted(branch_news)}")
+
+    # Collapse squads whose branches are content-identical (the duplicate
+    # -assignment backstop) before anything expensive touches them.
+    candidates = dedupe_by_tree({**stamps, **branch_news}, log_fn=log_fn)
+    branch_sourced = {s: info for s, info in candidates.items() if s in branch_news}
+
+    if not candidates:
         log_fn("no news since last sweep -- nothing to do")
         return {"status": "no_news", "preflight": health}
+
+    # Count the attempt BEFORE the risky work, and persist it now, so a
+    # round that crashes, wedges or is killed still burns an attempt
+    # rather than letting one poisoned branch re-run the full sweep every
+    # round forever. Keyed on the content tree: one new commit on the
+    # branch changes the tree, which resets attempts to zero. Nothing here
+    # can become terminal.
+    if branch_sourced:
+        for squad, info in branch_sourced.items():
+            prior = parks.get(squad) or {}
+            attempts = int(prior.get("attempts") or 0) + 1 if prior.get("tree") == info["tree"] else 1
+            parks[squad] = {"tree": info["tree"], "attempts": attempts,
+                            "last_ts": datetime.fromtimestamp(now_fn(), tz=timezone.utc).isoformat()}
+        state = load_sweep_state(sweep_state_path)
+        state["branch_parks"] = parks
+        save_sweep_state(sweep_state_path, state)
+
+    stamps = candidates
 
     def persist_cursor(durable_squads):
         """Advance the cursor ONLY for squads whose stamp reached a
@@ -1239,11 +1479,32 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         to every future sweep with no durable record to show for it."""
         if not durable_squads:
             return
-        merged = {"squads": dict(cursor.get("squads") or {})}
+        # Re-read rather than rebuild from `cursor`: this round already
+        # wrote branch_parks (step 2b), and rebuilding a fresh {"squads":
+        # ...} dict here would silently drop it -- turning the park
+        # counter into a no-op and letting a poisoned branch re-run the
+        # full sweep every round forever.
+        merged = load_sweep_state(sweep_state_path)
+        merged["squads"] = dict(cursor.get("squads") or {})
         for squad in durable_squads:
             if squad in new_cursor["squads"]:
                 merged["squads"][squad] = new_cursor["squads"][squad]
         save_sweep_state(sweep_state_path, merged)
+
+    def clear_parks(squads_to_clear):
+        """Drop the park record for squads whose content demonstrably
+        reached main this round, so the next genuinely-new commit starts
+        from a clean slate instead of inheriting a stale attempt count."""
+        if not squads_to_clear:
+            return
+        state = load_sweep_state(sweep_state_path)
+        existing = dict(state.get("branch_parks") or {})
+        if not any(squad in existing for squad in squads_to_clear):
+            return
+        for squad in squads_to_clear:
+            existing.pop(squad, None)
+        state["branch_parks"] = existing
+        save_sweep_state(sweep_state_path, state)
 
     branch = next_sweep_branch_name(repo_root, run_git, now_fn=now_fn)
     ok, message = cut_fresh_sweep_branch(repo_root, branch, run_git, origin_ref=origin_ref)
@@ -1384,6 +1645,9 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
         # this same round forever.
         durable_squads.update(merge_infos.keys())
         persist_cursor(durable_squads)
+        # The content is already on main, so a park counter for it is
+        # measuring a problem that no longer exists.
+        clear_parks(merge_infos.keys())
         return {
             "status": "zero_delta", "branch": branch, "merged_squads": sorted(merge_infos),
             "failed_squads": failed_squads, "bisection": bisection_result, "preflight": health,
@@ -1527,6 +1791,9 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn
     # `gh pr create` leaves the branch on origin either way.
     durable_squads.update(merge_infos.keys())
     persist_cursor(durable_squads)
+    # The push landed, so this exact content is no longer a candidate for
+    # re-sweeping and its park counter has nothing left to bound.
+    clear_parks(merge_infos.keys())
 
     pr_result = create_pr_fn(title, body, branch, "main")
     # `gh pr create` fails routinely and quietly: an expired token, a

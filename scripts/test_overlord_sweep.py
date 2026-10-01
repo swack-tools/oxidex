@@ -2028,3 +2028,117 @@ class StaleStampsMustNotBeMergedTests(unittest.TestCase):
             home = self._home_with_stamp(tmp, "xmp", "deadbeef1234")
             stamps, _cursor = overlord_sweep.collect_green_stamps(home, ["xmp"], {})
             self.assertEqual(stamps["xmp"]["squad_sha"], "deadbeef1234")
+
+
+# ---------------------------------------------------------------------------
+# Step 2b: branch-content discovery (the publish path must not dead-end on
+# work that reached a squad branch without a live stamp)
+# ---------------------------------------------------------------------------
+
+class BranchContentDiscoveryTests(GitRepoTestCase):
+    """The regression these lock down was measured 2026-07-30: 22 commits
+    sat on 13 squad branches, none pushed, while every sweep round for
+    4+ hours logged "no news since last sweep -- nothing to do"."""
+
+    def _squad_branch(self, repo, squad, rel_path, content, message, trailers=None):
+        git(repo, "checkout", "-q", "-b", squad_merge_loop.staging_branch(squad), "main")
+        sha = self.commit_file(repo, rel_path, content, message, trailers=trailers)
+        git(repo, "checkout", "-q", "main")
+        return sha
+
+    def test_branch_with_unstamped_work_is_found(self):
+        repo = self.make_repo()
+        tip = self._squad_branch(repo, "olympus", "src/a.rs", "fn a() {}\n",
+                                 "fix(jpeg): wire tags", trailers=[("Format", "JPEG")])
+        news = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], overlord_sweep.default_run_git, origin_ref="main", log_fn=lambda *_: None)
+        self.assertEqual(news["olympus"]["squad_sha"], tip)
+        self.assertEqual(news["olympus"]["formats"], ["JPEG"])
+
+    def test_branch_whose_content_already_landed_is_not_news(self):
+        """Self-limiting without a cursor: once the content is on main the
+        merged tree IS main's tree, so it stops being news on its own."""
+        repo = self.make_repo()
+        self._squad_branch(repo, "olympus", "src/a.rs", "fn a() {}\n", "fix(jpeg): wire tags")
+        git(repo, "merge", "-q", "--no-ff", "-m", "landed", squad_merge_loop.staging_branch("olympus"))
+        news = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], overlord_sweep.default_run_git, origin_ref="main", log_fn=lambda *_: None)
+        self.assertEqual(news, {})
+
+    def test_stale_base_does_not_manufacture_deletions(self):
+        """The nearly-reverted-37k-lines case. The squad branch is cut, main
+        then gains a file the squad never saw; the squad's contribution must
+        still be exactly its own commit -- `git diff main..squad/x` would
+        report main's newer file as a deletion."""
+        repo = self.make_repo()
+        self._squad_branch(repo, "olympus", "src/a.rs", "fn a() {}\n", "fix(jpeg): wire tags")
+        self.commit_file(repo, "src/newer.rs", "fn newer() {}\n", "main moves on")
+        news = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], overlord_sweep.default_run_git, origin_ref="main", log_fn=lambda *_: None)
+        self.assertIn("olympus", news)
+        listing = git_out(repo, "ls-tree", "-r", "--name-only", news["olympus"]["tree"])
+        self.assertIn("src/newer.rs", listing, "rebase-equivalent merge must keep main's newer file")
+        self.assertIn("src/a.rs", listing)
+
+    def test_park_is_revisitable_a_new_commit_clears_it(self):
+        repo = self.make_repo()
+        self._squad_branch(repo, "olympus", "src/a.rs", "fn a() {}\n", "fix(jpeg): wire tags")
+        run_git = overlord_sweep.default_run_git
+        news = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], run_git, origin_ref="main", log_fn=lambda *_: None)
+        tree = news["olympus"]["tree"]
+
+        parked = {"olympus": {"tree": tree, "attempts": overlord_sweep.DEFAULT_BRANCH_PARK_ATTEMPTS}}
+        self.assertEqual(
+            overlord_sweep.collect_branch_news(repo, ["olympus"], run_git, origin_ref="main",
+                                               parks=parked, log_fn=lambda *_: None),
+            {}, "a squad at the attempt ceiling for this exact content is parked")
+
+        # One new commit changes the tree -- and therefore un-parks it.
+        git(repo, "checkout", "-q", squad_merge_loop.staging_branch("olympus"))
+        self.commit_file(repo, "src/b.rs", "fn b() {}\n", "fix(jpeg): more")
+        git(repo, "checkout", "-q", "main")
+        revisited = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], run_git, origin_ref="main", parks=parked, log_fn=lambda *_: None)
+        self.assertIn("olympus", revisited, "a park must never be terminal")
+        self.assertNotEqual(revisited["olympus"]["tree"], tree)
+
+    def test_unevaluable_branch_is_skipped_without_recording_state(self):
+        """A branch that conflicts with main is not publishable this round,
+        but nothing is written down, so the next round re-evaluates it from
+        scratch once the merger's recut resolves it."""
+        repo = self.make_repo()
+        self._squad_branch(repo, "olympus", "src/a.rs", "squad side\n", "fix: squad")
+        self.commit_file(repo, "src/a.rs", "main side\n", "main writes the same file")
+        news = overlord_sweep.collect_branch_news(
+            repo, ["olympus"], overlord_sweep.default_run_git, origin_ref="main", log_fn=lambda *_: None)
+        self.assertEqual(news, {})
+
+    def test_missing_branch_is_ignored(self):
+        repo = self.make_repo()
+        news = overlord_sweep.collect_branch_news(
+            repo, ["nosuchsquad"], overlord_sweep.default_run_git, origin_ref="main",
+            log_fn=lambda *_: None)
+        self.assertEqual(news, {})
+
+
+class DedupeByTreeTests(unittest.TestCase):
+    """Ten squads carried one 28-line app12_olympus.rs change on
+    2026-07-30 and produced the byte-identical merged tree 8205143145654711."""
+
+    def test_identical_trees_collapse_to_one_deterministic_owner(self):
+        candidates = {
+            "thermal": {"tree": "aaa", "squad_sha": "1", "formats": ["JPEG"]},
+            "olympus": {"tree": "aaa", "squad_sha": "2", "formats": ["JPEG"]},
+            "nikon": {"tree": "aaa", "squad_sha": "3", "formats": ["JPEG"]},
+            "xmp": {"tree": "bbb", "squad_sha": "4", "formats": ["XMP"]},
+        }
+        kept = overlord_sweep.dedupe_by_tree(candidates, log_fn=lambda *_: None)
+        self.assertEqual(sorted(kept), ["nikon", "xmp"], "alphabetically-first squad wins its tree")
+        self.assertEqual(overlord_sweep.dedupe_by_tree(candidates, log_fn=lambda *_: None), kept,
+                         "dedupe must be deterministic across runs")
+
+    def test_stamped_candidates_without_a_tree_are_never_dropped(self):
+        candidates = {"a": {"squad_sha": "1", "formats": []}, "b": {"squad_sha": "2", "formats": []}}
+        self.assertEqual(sorted(overlord_sweep.dedupe_by_tree(candidates, log_fn=lambda *_: None)),
+                         ["a", "b"])

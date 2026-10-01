@@ -1753,17 +1753,19 @@ fn jpeg_app6_gopro_segment_yields_gopro_tags() {
         jpeg_segment(0xC0, &sof0_payload()),
     ]);
     let metadata = read_temp_file(&jpeg, ".jpg");
-    // Parity target captured from ExifTool 13.55 (-G1: group GoPro)
-    assert_eq!(metadata.get_string("GoPro:Model"), Some("HERO8 Black"));
+    // Parity target captured from ExifTool 13.59. The family ExifTool reports
+    // these under is APP6 (`-G0`/`-G`, which is what the comparison harness
+    // asks for); "GoPro" is only the family-1 name.
+    assert_eq!(metadata.get_string("APP6:Model"), Some("HERO8 Black"));
     assert_eq!(
-        metadata.get_string("GoPro:CameraSerialNumber"),
+        metadata.get_string("APP6:CameraSerialNumber"),
         Some("C3221324545448")
     );
     assert_eq!(
-        metadata.get_string("GoPro:FirmwareVersion"),
+        metadata.get_string("APP6:FirmwareVersion"),
         Some("HD8.01.01.60.00")
     );
-    assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+    assert_eq!(metadata.get_string("APP6:Rate"), Some("4_1SEC"));
 }
 
 #[test]

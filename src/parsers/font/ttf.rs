@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+use super::mac_charset;
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
@@ -61,8 +62,9 @@ const LANGUAGE_CHINESE_TW_WINDOWS: u16 = 0x0404;
 const LANGUAGE_CHINESE_CN_WINDOWS: u16 = 0x0804;
 
 /// Macintosh encoding (script) IDs from ExifTool's `%ttCharset{Macintosh}`
-/// (Font.pm). Only the two this parser can decode losslessly are named;
-/// see `decode_mac_hebrew` for why the CJK scripts are deliberately absent.
+/// (Font.pm). Only the two decoded inline are named here; the four CJK
+/// scripts are dispatched by ID in `mac_charset::for_mac_encoding`, which
+/// carries ExifTool's own tables.
 const MAC_ENCODING_ROMAN: u16 = 0;
 const MAC_ENCODING_HEBREW: u16 = 5;
 
@@ -333,22 +335,25 @@ impl TTFParser {
                 Some(Self::decode_mac_hebrew(str_data))
             }
             PLATFORM_MACINTOSH => {
-                // Preserve the previous behavior for unsupported Macintosh encodings.
-                // The remaining Macintosh scripts (MacJapanese, MacKorean,
-                // MacChineseTW, MacChineseCN, ...) are NOT the standard
-                // Shift_JIS/EUC-KR/Big5/GBK codecs, so decoding them with
-                // encoding_rs would emit text that differs from ExifTool.
-                // Measured 2026-07-27 against ExifTool 13.55's own
-                // Charset/Mac*.pm tables: MacJapanese 6878/7192 two-byte
-                // sequences agree with Shift_JIS (1 differ, 313 have no
-                // Shift_JIS mapping at all) plus 68 single-byte overrides
-                // (0x5c is U+00A5 YEN, not backslash); MacKorean 8212/9361
-                // vs EUC-KR (13 differ, 1136 unmapped); MacChineseTW
-                // 13435/13461 vs Big5 (26 differ); MacChineseCN 7462/7480
-                // vs GBK (6 differ, 12 unmapped). A wrong value is worse
-                // than an open gap, so these records are left undecoded
-                // until their tables can be carried verbatim.
-                String::from_utf8(str_data.to_vec()).ok()
+                // The Macintosh CJK scripts are NOT the standard
+                // Shift_JIS/EUC-KR/Big5/GBK codecs -- decoding them with
+                // encoding_rs would emit text that differs from ExifTool on
+                // hundreds of sequences per script (see `mac_charset` for the
+                // measured divergence). `mac_charset` therefore carries
+                // ExifTool's own Charset/Mac*.pm tables verbatim, and covers
+                // MacJapanese, MacChineseTW, MacKorean and MacChineseCN.
+                //
+                // The remaining Macintosh scripts (MacArabic, MacThai,
+                // MacDevanagari, ...) are still an open gap: ExifTool ships
+                // tables for some of them, but none appear in the corpus, so
+                // they stay on the previous best-effort path rather than
+                // being carried untested. A wrong value is worse than an open
+                // gap, so they are only emitted when the bytes happen to be
+                // valid UTF-8.
+                match mac_charset::for_mac_encoding(record.encoding_id) {
+                    Some(charset) => Some(mac_charset::decode(str_data, charset)),
+                    None => String::from_utf8(str_data.to_vec()).ok(),
+                }
             }
             _ => String::from_utf8(str_data.to_vec()).ok(),
         };
@@ -378,10 +383,8 @@ impl TTFParser {
             (PLATFORM_MACINTOSH, LANGUAGE_SWEDISH_MACINTOSH) => Some("sv"),
             (PLATFORM_MACINTOSH, LANGUAGE_PORTUGUESE_MACINTOSH) => Some("pt"),
             (PLATFORM_MACINTOSH, LANGUAGE_NORWEGIAN_MACINTOSH) => Some("no"),
-            // Mapped for completeness, but currently unreachable in practice:
-            // records in these languages carry Macintosh scripts this parser
-            // cannot decode losslessly (see extract_name_string), so they are
-            // dropped before a suffix is ever applied.
+            // Records in these languages carry the Macintosh CJK scripts,
+            // which `mac_charset` decodes with ExifTool's own tables.
             (PLATFORM_MACINTOSH, LANGUAGE_JAPANESE_MACINTOSH) => Some("ja"),
             (PLATFORM_MACINTOSH, LANGUAGE_CHINESE_TW_MACINTOSH) => Some("zh-TW"),
             (PLATFORM_MACINTOSH, LANGUAGE_KOREAN_MACINTOSH) => Some("ko"),
@@ -1060,6 +1063,78 @@ mod tests {
 
         assert_eq!(metadata.get("Copyright"), Some(&expected));
         assert_eq!(metadata.get("Font:Copyright"), Some(&expected));
+    }
+
+    /// End-to-end check that a Macintosh CJK record reaches the right tag
+    /// with the right text: the encoding ID has to pick the charset, the
+    /// language ID has to pick the suffix, and the two are different numbers.
+    ///
+    /// The bytes and the expected strings are the four `FontSubfamily`
+    /// records in the corpus's `Font.ttf`, verified against
+    /// `exiftool -s -FontSubfamily-ja Font.ttf` (and -ko, -zh-CN, -zh-TW) on
+    /// ExifTool 13.55. `mac_charset`'s own tests cover the decoder; this
+    /// covers the wiring around it.
+    #[test]
+    fn macintosh_cjk_subfamilies_match_exiftool() {
+        // (encoding ID, language ID, raw bytes, tag suffix, expected text)
+        let records: [(u16, u16, &[u8], &str, &str); 4] = [
+            (
+                1,
+                11,
+                &[0x83, 0x8c, 0x83, 0x4d, 0x83, 0x85, 0x83, 0x89, 0x81, 0x5b],
+                "ja",
+                "レギュラー",
+            ),
+            (
+                2,
+                19,
+                &[0xbc, 0xd0, 0xb7, 0xc7, 0xc5, 0xe9],
+                "zh-TW",
+                "標準體",
+            ),
+            (3, 23, &[0xc0, 0xcf, 0xb9, 0xdd], "ko", "일반"),
+            (25, 33, &[0xb3, 0xa3, 0xb9, 0xe6], "zh-CN", "常规"),
+        ];
+
+        const RECORD_LEN: u16 = 12;
+        let count = records.len() as u16;
+        let storage_offset = 6 + RECORD_LEN * count;
+
+        let mut header = vec![
+            b't', b'r', b'u', b'e', // sfnt version
+            0x00, 0x01, // numTables = 1
+            0x00, 0x00, // searchRange
+            0x00, 0x00, // entrySelector
+            0x00, 0x00, // rangeShift
+            b'n', b'a', b'm', b'e', // table tag
+            0x00, 0x00, 0x00, 0x00, // checksum
+            0x00, 0x00, 0x00, 0x1c, // table offset = 28
+            0x00, 0x00, 0x00, 0x00, // table length (unused by the parser)
+        ];
+        header.extend_from_slice(&0u16.to_be_bytes()); // name table format
+        header.extend_from_slice(&count.to_be_bytes());
+        header.extend_from_slice(&storage_offset.to_be_bytes());
+
+        let mut strings = Vec::new();
+        for &(encoding_id, language_id, bytes, _, _) in &records {
+            header.extend_from_slice(&PLATFORM_MACINTOSH.to_be_bytes());
+            header.extend_from_slice(&encoding_id.to_be_bytes());
+            header.extend_from_slice(&language_id.to_be_bytes());
+            header.extend_from_slice(&NAME_FONT_SUBFAMILY.to_be_bytes());
+            header.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+            header.extend_from_slice(&(strings.len() as u16).to_be_bytes());
+            strings.extend_from_slice(bytes);
+        }
+        header.extend_from_slice(&strings);
+
+        let metadata = TTFParser.parse(&TestReader::new(header)).unwrap();
+        for (_, _, _, suffix, expected) in records {
+            assert_eq!(
+                metadata.get(&format!("Font:FontSubfamily-{suffix}")),
+                Some(&TagValue::String(expected.to_string())),
+                "FontSubfamily-{suffix}"
+            );
+        }
     }
 
     #[test]

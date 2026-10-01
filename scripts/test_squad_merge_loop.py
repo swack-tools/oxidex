@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -1541,6 +1542,86 @@ class PolicyVersionProcessCommitTests(SquadProcessFixture):
             validate_fn=lambda *a, **k: self.fail("must not revalidate"),
         )
         self.assertEqual(result["outcome"], "skipped_quarantined")
+
+
+# ---------------------------------------------------------------------------
+# One worker branch, one consuming squad
+# ---------------------------------------------------------------------------
+
+class FormatOwnerMapTests(GitRepoTestCase):
+    """squads.toml's `formats` is many-to-one by design (13 of 14 squads
+    list JPEG). Read as a work partition it handed the single
+    model-fix-parallel-jpeg branch to all 13 mergers, which each
+    cherry-picked the same commits: 22 commits carrying 7 distinct
+    patch-ids, one of them (5703eaa44c114f4c) copied 13 times."""
+
+    def _toml(self, text):
+        path = self.tmp / "squads.toml"
+        path.write_text(text)
+        return path
+
+    def test_module_name_match_wins(self):
+        path = self._toml(
+            '[squads."standards-appn"]\nmodules = ["JPEG", "APP12"]\nformats = ["JPEG", "NEF"]\n'
+            '[squads.olympus]\nmodules = ["Olympus"]\nformats = ["JPEG"]\n'
+        )
+        # olympus lists fewer formats, but standards-appn owns JPEG.pm itself.
+        self.assertEqual(sml.format_owner_map(path)["jpeg"], "standards-appn")
+
+    def test_most_specialised_squad_wins_when_no_module_matches(self):
+        path = self._toml(
+            '[squads."exif-core"]\nmodules = ["Exif"]\nformats = ["RW2", "NEF", "CR2"]\n'
+            '[squads."panasonic-leica"]\nmodules = ["Panasonic"]\nformats = ["RW2"]\n'
+        )
+        self.assertEqual(sml.format_owner_map(path)["rw2"], "panasonic-leica")
+
+    def test_the_real_manifest_yields_an_exclusive_partition(self):
+        owners = sml.format_owner_map(sml.DEFAULT_SQUADS_TOML)
+        with open(sml.DEFAULT_SQUADS_TOML, "rb") as fh:
+            squads = tomllib.load(fh)["squads"]
+        consumers = {}
+        for squad in sorted(squads):
+            for fmt in squads[squad].get("formats") or []:
+                if owners.get(fmt.lower(), squad) == squad:
+                    consumers.setdefault(fmt.lower(), []).append(squad)
+        duplicated = {f: s for f, s in consumers.items() if len(s) > 1}
+        self.assertEqual(duplicated, {}, "every worker branch must have exactly one consumer")
+        # The format that actually caused the incident, and the squad that
+        # owns JPEG.pm/APP12 -- the module the duplicated commit touched.
+        self.assertEqual(owners["jpeg"], "standards-appn")
+
+    def test_owner_map_is_pure_and_stable(self):
+        self.assertEqual(sml.format_owner_map(sml.DEFAULT_SQUADS_TOML),
+                         sml.format_owner_map(sml.DEFAULT_SQUADS_TOML))
+
+
+class CandidateBranchExclusivityTests(GitRepoTestCase):
+    def _toml(self):
+        path = self.tmp / "squads.toml"
+        path.write_text(
+            '[squads."standards-appn"]\nmodules = ["JPEG"]\nformats = ["JPEG"]\n'
+            '[squads.olympus]\nmodules = ["Olympus"]\nformats = ["JPEG"]\n'
+            '[squads.thermal]\nmodules = ["FLIR"]\nformats = ["JPEG"]\n'
+        )
+        return path
+
+    def test_only_the_owning_squad_consumes_a_shared_worker_branch(self):
+        repo = self.make_repo()
+        git(repo, "branch", "model-fix-parallel-jpeg")
+        path = self._toml()
+        self.assertEqual(sml.candidate_worker_branches(repo, path, "standards-appn"),
+                         [("JPEG", "model-fix-parallel-jpeg")])
+        for bystander in ("olympus", "thermal"):
+            self.assertEqual(sml.candidate_worker_branches(repo, path, bystander), [],
+                             f"{bystander} must not cherry-pick a branch it does not own")
+
+    def test_a_sole_claimant_still_gets_its_branch(self):
+        repo = self.make_repo()
+        git(repo, "branch", "model-fix-parallel-x3f")
+        path = self.tmp / "solo.toml"
+        path.write_text('[squads."sigma-c2pa"]\nmodules = ["Sigma"]\nformats = ["X3F"]\n')
+        self.assertEqual(sml.candidate_worker_branches(repo, path, "sigma-c2pa"),
+                         [("X3F", "model-fix-parallel-x3f")])
 
 
 if __name__ == "__main__":

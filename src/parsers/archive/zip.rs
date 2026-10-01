@@ -218,10 +218,15 @@ impl FormatParser for ZipParser {
         Self::read_first_local_file_tags(reader, &mut metadata)?;
 
         if let Some(bit_flag) = Self::read_first_local_file_bit_flag(reader)? {
-            metadata.insert(
-                "ZIP:ZipBitFlag".to_string(),
-                TagValue::new_integer(bit_flag as i64),
-            );
+            // ExifTool ZIP.pm: PrintConv => '$val ? sprintf("0x%.4x",$val) : $val'
+            // -- a set flag word prints as 4-digit hex, but a zero one stays a
+            // plain "0" rather than "0x0000".
+            let value = if bit_flag == 0 {
+                TagValue::new_integer(0)
+            } else {
+                TagValue::new_string(format!("0x{:04x}", bit_flag))
+            };
+            metadata.insert("ZIP:ZipBitFlag".to_string(), value);
         }
 
         if let Some(compression) = Self::read_first_local_file_compression(reader)? {

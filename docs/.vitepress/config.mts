@@ -40,7 +40,8 @@ export default defineConfig({
         text: 'v1.2.1',
         items: [
           { text: 'Changelog', link: '/changelog' },
-          { text: 'Contributing', link: '/contributing/' }
+          { text: 'Contributing', link: '/contributing/' },
+          { text: 'AI Harness', link: '/AI_HARNESS' }
         ]
       }
     ],

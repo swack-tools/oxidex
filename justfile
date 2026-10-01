@@ -401,6 +401,12 @@ fleet-down:
 fleet-check:
     @./scripts/fleet_up.sh --dry-run
 
+# Model-call failure rate from the manifests (the only logs carrying BOTH
+# outcomes). Exits 2 rather than guessing when the rate cannot be measured.
+# Default window is the last 30 minutes; pass e.g. "--last 2h" or an ISO cutoff.
+fleet-failrate *ARGS='--last 30m':
+    @python3 ./scripts/fleet_failrate.py {{ARGS}}
+
 # Git commands
 # -------------
 

@@ -36,22 +36,28 @@
 //! let data: &[u8] = &[/* APP6 segment data */];
 //! let metadata = parse_app6(data)?;
 //!
-//! if let Some(model) = metadata.get_string("GoPro:Model") {
+//! if let Some(model) = metadata.get_string("APP6:Model") {
 //!     println!("Camera model: {}", model);
 //! }
 //! ```
 
+use super::perl_number;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
+
+/// Minimum APP6 payload length before ExifTool will read it as an InfiRay
+/// MixMode record (ExifTool.pm:8162: `$$self{HasIJPEG} and $length >= 129`).
+const INFIRAY_MIXMODE_MIN_LENGTH: usize = 129;
 
 /// Parses APP6 segment data and extracts metadata.
 ///
 /// This function dispatches to format-specific parsers based on the segment
 /// identifier, using the same conditions as ExifTool's JPEG.pm APP6 table:
-/// - GoPro GPMF data - starts with "GoPro\0"
-/// - TDHD data (HP/Toshiba) - starts with "TDHD\x01\0\0\0"
 /// - NITF data - starts with "NITF\0"
+/// - TDHD data (HP/Toshiba) - starts with "TDHD\x01\0\0\0"
+/// - GoPro GPMF data - starts with "GoPro\0"
+/// - InfiRay MixMode - only in an IJPEG file, so see `parse_app6_ijpeg`
 /// - Other formats extract nothing (matching ExifTool without -u)
 ///
 /// # Arguments
@@ -77,9 +83,33 @@ use crate::io::EndianReader;
 /// // Parse a GoPro GPMF segment
 /// let gpmf_data = &[/* GPMF data */];
 /// let metadata = parse_app6(gpmf_data)?;
-/// assert!(metadata.contains_key("GoPro:Model"));
+/// assert!(metadata.contains_key("APP6:Model"));
 /// ```
 pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
+    parse_app6_ijpeg(data, false)
+}
+
+/// Parses APP6 segment data, optionally allowing the InfiRay MixMode layout.
+///
+/// InfiRay's APP6 record carries no identifier of its own: ExifTool only
+/// reads it once an APP2 segment matching `/^....IJPEG\0/` has set
+/// `$$self{HasIJPEG}` (ExifTool.pm:7968). `is_ijpeg` is that flag, which only
+/// the caller walking the whole segment list can know.
+///
+/// # Arguments
+///
+/// * `data` - Raw APP6 segment data (excluding the APP6 marker and length bytes)
+/// * `is_ijpeg` - Whether the file carries an InfiRay IJPEG APP2 version header
+///
+/// # Returns
+///
+/// * `Ok(MetadataMap)` - A metadata map containing extracted APP6 tags
+/// * `Err(ExifToolError)` - If the data is malformed or unsupported
+///
+/// # Errors
+///
+/// Returns an error if the segment is too short to hold any identifier.
+pub fn parse_app6_ijpeg(data: &[u8], is_ijpeg: bool) -> Result<MetadataMap> {
     // Minimum APP6 segment should have at least a few bytes
     if data.len() < 4 {
         return Err(ExifToolError::parse_error(
@@ -89,11 +119,11 @@ pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
 
     // Dispatch on the same identifier conditions ExifTool's actual READ path
     // uses (ExifTool.pm's ProcessJPEG APP6 handling, not JPEG.pm's table
-    // Condition which is never consulted for reads):
-    // GoPro: /^GoPro\0/, HP TDHD: /^TDHD\x01\0\0\0/ with length > 12, NITF: /^NITF\0/.
+    // Condition which is never consulted for reads), and in the same order:
+    // NITF, HP TDHD, GoPro, then the identifier-less InfiRay MixMode.
 
-    if data.starts_with(b"GoPro\0") {
-        return parse_gpmf(&data[6..]);
+    if data.starts_with(b"NITF\0") {
+        return Ok(parse_nitf(&data[5..]));
     }
 
     // ExifTool also requires segment length > 12 for TDHD (ExifTool.pm:8146);
@@ -102,8 +132,12 @@ pub fn parse_app6(data: &[u8]) -> Result<MetadataMap> {
         return parse_tdhd(data);
     }
 
-    if data.starts_with(b"NITF\0") {
-        return parse_nitf(data);
+    if data.starts_with(b"GoPro\0") {
+        return parse_gpmf(&data[6..]);
+    }
+
+    if is_ijpeg && data.len() >= INFIRAY_MIXMODE_MIN_LENGTH {
+        return Ok(parse_infiray_mix_mode(data));
     }
 
     // Unknown APP6 formats (EPPIM, DJI DTAT, Motorola MMIMETA, ...) extract
@@ -162,7 +196,10 @@ fn gopro_tag_name(fourcc: &str) -> Option<&'static str> {
         "MINF" => "Model",
         "MMOD" => "MediaMode",
         "MTRX" => "AccelerometerMatrix",
-        "MUID" => "MediaUID",
+        // GoPro.pm's %GPMF hash lists MUID twice: the earlier entry names it
+        // MediaUID, the later one (forum12825) MediaUniqueID. Perl keeps the
+        // LAST duplicate key, so ExifTool reports MediaUniqueID.
+        "MUID" => "MediaUniqueID",
         "MWET" => "MicrophoneWet",
         "MXCF" => "MappingXMode",
         "MYCF" => "MappingYMode",
@@ -213,6 +250,32 @@ fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
     const NO_YES_TAGS: &[&str] = &[
         "AUBT", "AUPT", "CLDP", "DZOM", "EISE", "HDRV", "ORDP", "SCAP", "SMTR",
     ];
+
+    // MUID (MediaUniqueID) is a list of int32u rendered as concatenated
+    // zero-padded hex:
+    //   PrintConv => 'my @a = split " ", $val;
+    //                 $_ = sprintf("%.8x",$_) foreach @a; join("", @a)'
+    // The list arrives here already space-joined (or as a lone Integer when
+    // the record holds a single element).
+    if fourcc == "MUID" {
+        return match &value {
+            TagValue::String(s) => TagValue::String(
+                s.split_whitespace()
+                    .map(|w| match w.parse::<u32>() {
+                        Ok(n) => format!("{:08x}", n),
+                        // Anything that isn't an int32u is passed through
+                        // rather than silently rounded to a neighbouring value.
+                        Err(_) => w.to_string(),
+                    })
+                    .collect::<String>(),
+            ),
+            TagValue::Integer(n) => match u32::try_from(*n) {
+                Ok(n) => TagValue::String(format!("{:08x}", n)),
+                Err(_) => value,
+            },
+            _ => value,
+        };
+    }
 
     let TagValue::String(s) = &value else {
         return value;
@@ -330,7 +393,7 @@ fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
         };
         if let Some(value) = decode_gpmf_value(format, size, count, value_data) {
             metadata.insert(
-                format!("GoPro:{}", tag_name),
+                format!("APP6:{}", tag_name),
                 gopro_print_conv(fourcc, value),
             );
         }
@@ -429,31 +492,152 @@ fn parse_tdhd(data: &[u8]) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
-/// Parses NITF (National Imagery Transmission Format) metadata.
+/// Parses NITF (National Imagery Transmission Format) metadata
+/// (`%Image::ExifTool::JPEG::NITF`).
 ///
-/// NITF is used for geospatial imagery metadata in defense/intelligence applications.
-/// The format includes image classification, geolocation, and sensor information.
+/// NITF is used for geospatial imagery metadata in defense/intelligence
+/// applications. The table declares no `FORMAT`, so it defaults to `int8u`
+/// and the numeric keys are plain byte offsets into the record; ExifTool
+/// reads it big-endian (`SetByteOrder('MM')`, ExifTool.pm:8142).
 ///
 /// # Arguments
 ///
-/// * `data` - Raw NITF data (starts with "NITF" identifier)
+/// * `data` - NITF record, i.e. the APP6 payload AFTER the "NITF\0" identifier
 ///
 /// # Returns
 ///
-/// * `Ok(MetadataMap)` - Extracted NITF metadata
-/// * `Err(ExifToolError)` - If parsing fails
-fn parse_nitf(data: &[u8]) -> Result<MetadataMap> {
+/// A metadata map of the NITF tags present; a short record simply yields
+/// fewer tags, as ExifTool's binary-data reader does.
+fn parse_nitf(data: &[u8]) -> MetadataMap {
     let mut metadata = MetadataMap::new();
+    let mut put = |name: &str, value: TagValue| {
+        metadata.insert(format!("APP6:{}", name), value);
+    };
+    // PrintConv hash misses report the raw code, never a neighbouring label.
+    let lookup = |code: i64, table: &[(i64, &str)]| -> TagValue {
+        match table.iter().find(|(k, _)| *k == code) {
+            Some((_, label)) => TagValue::String((*label).to_string()),
+            None => TagValue::String(format!("Unknown ({})", code)),
+        }
+    };
+    let be_u16 = |off: usize| -> Option<u16> {
+        data.get(off..off + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
 
-    // Caller has verified the "NITF\0" identifier (5 bytes).
-    // Detailed field parsing (ExifTool JPEG.pm %JPEG::NITF) is not yet
-    // ported; expose the raw payload for now.
-    metadata.insert(
-        "APP6:NITFData".to_string(),
-        TagValue::Binary(data[5..].to_vec()),
-    );
+    // 0: NITFVersion, int8u[2], ValueConv sprintf("%d.%.2d", ...)
+    if let Some(pair) = data.get(0..2) {
+        put(
+            "NITFVersion",
+            TagValue::String(format!("{}.{:02}", pair[0], pair[1])),
+        );
+    }
+    // 2: ImageFormat, ValueConv chr($val & 0xff), PrintConv { B => 'IMode B' }
+    if let Some(&code) = data.get(2) {
+        let letter = code as char;
+        put(
+            "ImageFormat",
+            if letter == 'B' {
+                TagValue::String("IMode B".to_string())
+            } else {
+                TagValue::String(format!("Unknown ({})", letter))
+            },
+        );
+    }
+    if let Some(v) = be_u16(3) {
+        put("BlocksPerRow", TagValue::Integer(v as i64));
+    }
+    if let Some(v) = be_u16(5) {
+        put("BlocksPerColumn", TagValue::Integer(v as i64));
+    }
+    if let Some(&code) = data.get(7) {
+        put("ImageColor", lookup(code as i64, &[(0, "Monochrome")]));
+    }
+    if let Some(&v) = data.get(8) {
+        put("BitDepth", TagValue::Integer(v as i64));
+    }
+    if let Some(&code) = data.get(9) {
+        put(
+            "ImageClass",
+            lookup(
+                code as i64,
+                &[(0, "General Purpose"), (4, "Tactical Imagery")],
+            ),
+        );
+    }
+    if let Some(&code) = data.get(10) {
+        put(
+            "JPEGProcess",
+            lookup(
+                code as i64,
+                &[
+                    (1, "Baseline sequential DCT, Huffman coding, 8-bit samples"),
+                    (4, "Extended sequential DCT, Huffman coding, 12-bit samples"),
+                ],
+            ),
+        );
+    }
+    if let Some(&v) = data.get(11) {
+        put("Quality", TagValue::Integer(v as i64));
+    }
+    if let Some(&code) = data.get(12) {
+        put("StreamColor", lookup(code as i64, &[(0, "Monochrome")]));
+    }
+    if let Some(&v) = data.get(13) {
+        put("StreamBitDepth", TagValue::Integer(v as i64));
+    }
+    // 14: Flags, int32u, PrintConv sprintf("0x%x", $val)
+    if let Some(bytes) = data.get(14..18) {
+        let flags = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        put("Flags", TagValue::String(format!("0x{:x}", flags)));
+    }
 
-    Ok(metadata)
+    metadata
+}
+
+/// Parses an InfiRay IJPEG visual/infrared mixing-mode record
+/// (`%Image::ExifTool::InfiRay::MixMode`), read little-endian
+/// (`SetByteOrder('II')`, ExifTool.pm:8164).
+///
+/// The record carries no identifier; the caller decides whether the file is
+/// an IJPEG. Offsets are byte offsets: MixMode int8u at 0x00,
+/// FusionIntensity float at 0x01, OffsetAdjustment float at 0x05, and
+/// CorrectionAsix float[30] at 0x09.
+fn parse_infiray_mix_mode(data: &[u8]) -> MetadataMap {
+    let mut metadata = MetadataMap::new();
+    let le_f32 = |off: usize| -> Option<f32> {
+        data.get(off..off + 4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+
+    if let Some(&mode) = data.first() {
+        metadata.insert("APP6:MixMode".to_string(), TagValue::Integer(mode as i64));
+    }
+    // PrintConv => 'sprintf("%.1f %%", $val * 100)'
+    if let Some(intensity) = le_f32(0x01) {
+        metadata.insert(
+            "APP6:FusionIntensity".to_string(),
+            TagValue::String(format!("{:.1} %", intensity as f64 * 100.0)),
+        );
+    }
+    if let Some(offset) = le_f32(0x05) {
+        metadata.insert(
+            "APP6:OffsetAdjustment".to_string(),
+            TagValue::String(perl_number(offset as f64)),
+        );
+    }
+    // float[30]: ExifTool joins list elements with a single space.
+    let axis: Option<Vec<String>> = (0..30)
+        .map(|i| le_f32(0x09 + i * 4).map(|v| perl_number(v as f64)))
+        .collect();
+    if let Some(axis) = axis {
+        metadata.insert(
+            "APP6:CorrectionAsix".to_string(),
+            TagValue::String(axis.join(" ")),
+        );
+    }
+
+    metadata
 }
 
 #[cfg(test)]
@@ -493,16 +677,16 @@ mod tests {
         ]);
         let metadata = parse_app6(&payload).unwrap();
         // ExifTool 13.55: -G1 group GoPro, tag names from GoPro.pm GPMF table
-        assert_eq!(metadata.get_string("GoPro:Model"), Some("HERO8 Black"));
+        assert_eq!(metadata.get_string("APP6:Model"), Some("HERO8 Black"));
         assert_eq!(
-            metadata.get_string("GoPro:CameraSerialNumber"),
+            metadata.get_string("APP6:CameraSerialNumber"),
             Some("C3221324545448")
         );
         assert_eq!(
-            metadata.get_string("GoPro:FirmwareVersion"),
+            metadata.get_string("APP6:FirmwareVersion"),
             Some("HD8.01.01.60.00")
         );
-        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+        assert_eq!(metadata.get_string("APP6:Rate"), Some("4_1SEC"));
     }
 
     #[test]
@@ -513,9 +697,31 @@ mod tests {
             gpmf_record(b"VERS", b'B', 1, 3, &[7, 6, 5]),
         ]);
         let metadata = parse_app6(&payload).unwrap();
-        assert_eq!(metadata.get_string("GoPro:AutoRotation"), Some("Up"));
-        assert_eq!(metadata.get_string("GoPro:Protune"), Some("Off"));
-        assert_eq!(metadata.get_string("GoPro:MetadataVersion"), Some("7.6.5"));
+        assert_eq!(metadata.get_string("APP6:AutoRotation"), Some("Up"));
+        assert_eq!(metadata.get_string("APP6:Protune"), Some("Off"));
+        assert_eq!(metadata.get_string("APP6:MetadataVersion"), Some("7.6.5"));
+    }
+
+    #[test]
+    fn test_parse_app6_gopro_media_unique_id_is_concatenated_hex() {
+        // ExifTool 13.55 on combined-samples/GoPro.jpg:
+        //   MediaUniqueID : 491b313ca89d1416...
+        let payload = gopro_payload(&[gpmf_record(
+            b"MUID",
+            b'L',
+            4,
+            3,
+            &[
+                0x49, 0x1b, 0x31, 0x3c, 0xa8, 0x9d, 0x14, 0x16, 0x00, 0x00, 0x00, 0x00,
+            ],
+        )]);
+        let metadata = parse_app6(&payload).unwrap();
+        assert_eq!(
+            metadata.get_string("APP6:MediaUniqueID"),
+            Some("491b313ca89d141600000000")
+        );
+        // The pre-forum12825 name must not be emitted
+        assert!(metadata.get("APP6:MediaUID").is_none());
     }
 
     #[test]
@@ -525,8 +731,8 @@ mod tests {
             gpmf_record(b"PIMN", b'L', 4, 1, &100u32.to_be_bytes()),
         ]);
         let metadata = parse_app6(&payload).unwrap();
-        assert_eq!(metadata.get_integer("GoPro:AutoISOMax"), Some(1600));
-        assert_eq!(metadata.get_integer("GoPro:AutoISOMin"), Some(100));
+        assert_eq!(metadata.get_integer("APP6:AutoISOMax"), Some(1600));
+        assert_eq!(metadata.get_integer("APP6:AutoISOMin"), Some(100));
     }
 
     #[test]
@@ -538,8 +744,8 @@ mod tests {
             gpmf_record(b"RATE", b'c', 1, 6, b"4_1SEC"),
         ]);
         let metadata = parse_app6(&payload).unwrap();
-        assert!(metadata.get("GoPro:XXXX").is_none());
-        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+        assert!(metadata.get("APP6:XXXX").is_none());
+        assert_eq!(metadata.get_string("APP6:Rate"), Some("4_1SEC"));
     }
 
     #[test]
@@ -548,7 +754,7 @@ mod tests {
         let inner = gpmf_record(b"DVNM", b'c', 1, 11, b"HERO8 Black");
         let payload = gopro_payload(&[gpmf_record(b"DEVC", 0, 1, inner.len() as u16, &inner)]);
         let metadata = parse_app6(&payload).unwrap();
-        assert_eq!(metadata.get_string("GoPro:DeviceName"), Some("HERO8 Black"));
+        assert_eq!(metadata.get_string("APP6:DeviceName"), Some("HERO8 Black"));
     }
 
     #[test]
@@ -558,9 +764,9 @@ mod tests {
         records.push(gpmf_record(b"CASN", b'c', 1, 4, b"1234"));
         let payload = gopro_payload(&records);
         let metadata = parse_app6(&payload).unwrap();
-        assert_eq!(metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+        assert_eq!(metadata.get_string("APP6:Rate"), Some("4_1SEC"));
         // Records after the null terminator are not parsed (ExifTool behavior)
-        assert!(metadata.get("GoPro:CameraSerialNumber").is_none());
+        assert!(metadata.get("APP6:CameraSerialNumber").is_none());
     }
 
     /// Wraps `inner` in `levels` nested DEVC container records (format 0).
@@ -582,14 +788,103 @@ mod tests {
         let deep = nest_gpmf(40, rate.clone());
         let deep_payload = gopro_payload(&[deep]);
         let deep_metadata = parse_app6(&deep_payload).unwrap();
-        assert_eq!(deep_metadata.get_string("GoPro:Rate"), None);
+        assert_eq!(deep_metadata.get_string("APP6:Rate"), None);
 
         // Shallow control: RATE nested only 2 levels deep, well within the
         // cap — must still be extracted normally.
         let shallow = nest_gpmf(2, rate);
         let shallow_payload = gopro_payload(&[shallow]);
         let shallow_metadata = parse_app6(&shallow_payload).unwrap();
-        assert_eq!(shallow_metadata.get_string("GoPro:Rate"), Some("4_1SEC"));
+        assert_eq!(shallow_metadata.get_string("APP6:Rate"), Some("4_1SEC"));
+    }
+
+    /// The APP6 NITF record of combined-samples/ExifTool.jpg, byte for byte.
+    /// Expected values from `exiftool -G0 -s combined-samples/ExifTool.jpg`
+    /// (ExifTool 13.55).
+    #[test]
+    fn test_parse_app6_nitf_matches_exiftool() {
+        let mut payload = b"NITF\0".to_vec();
+        payload.extend_from_slice(&[
+            0x02, 0x00, // NITFVersion 2.00
+            0x42, // ImageFormat 'B'
+            0x00, 0x01, // BlocksPerRow 1
+            0x00, 0x01, // BlocksPerColumn 1
+            0x00, // ImageColor Monochrome
+            0x08, // BitDepth 8
+            0x00, // ImageClass General Purpose
+            0x01, // JPEGProcess baseline
+            0x01, // Quality 1
+            0x00, // StreamColor Monochrome
+            0x08, // StreamBitDepth 8
+            0x01, 0x01, 0x00, 0x00, // Flags 0x1010000
+        ]);
+        let m = parse_app6(&payload).unwrap();
+
+        assert_eq!(m.get_string("APP6:NITFVersion"), Some("2.00"));
+        assert_eq!(m.get_string("APP6:ImageFormat"), Some("IMode B"));
+        assert_eq!(m.get_integer("APP6:BlocksPerRow"), Some(1));
+        assert_eq!(m.get_integer("APP6:BlocksPerColumn"), Some(1));
+        assert_eq!(m.get_string("APP6:ImageColor"), Some("Monochrome"));
+        assert_eq!(m.get_integer("APP6:BitDepth"), Some(8));
+        assert_eq!(m.get_string("APP6:ImageClass"), Some("General Purpose"));
+        assert_eq!(
+            m.get_string("APP6:JPEGProcess"),
+            Some("Baseline sequential DCT, Huffman coding, 8-bit samples")
+        );
+        assert_eq!(m.get_integer("APP6:Quality"), Some(1));
+        assert_eq!(m.get_string("APP6:StreamColor"), Some("Monochrome"));
+        assert_eq!(m.get_integer("APP6:StreamBitDepth"), Some(8));
+        assert_eq!(m.get_string("APP6:Flags"), Some("0x1010000"));
+        assert_eq!(m.len(), 12);
+        // The raw-blob placeholder this table replaced must be gone
+        assert!(m.get("APP6:NITFData").is_none());
+    }
+
+    #[test]
+    fn test_parse_app6_nitf_unknown_codes_report_themselves() {
+        let mut payload = b"NITF\0".to_vec();
+        payload.extend_from_slice(&[
+            0x02, 0x00, 0x43, // ImageFormat 'C' -- no PrintConv entry
+            0x00, 0x01, 0x00, 0x01, 0x09, // ImageColor 9
+            0x08, 0x09, // ImageClass 9
+            0x09, // JPEGProcess 9
+            0x01, 0x09, // StreamColor 9
+            0x08, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        let m = parse_app6(&payload).unwrap();
+        assert_eq!(m.get_string("APP6:ImageFormat"), Some("Unknown (C)"));
+        assert_eq!(m.get_string("APP6:ImageColor"), Some("Unknown (9)"));
+        assert_eq!(m.get_string("APP6:ImageClass"), Some("Unknown (9)"));
+        assert_eq!(m.get_string("APP6:JPEGProcess"), Some("Unknown (9)"));
+        assert_eq!(m.get_string("APP6:StreamColor"), Some("Unknown (9)"));
+    }
+
+    /// The APP6 payload of combined-samples/InfiRay.jpg. Expected values from
+    /// `exiftool -G0 -s combined-samples/InfiRay.jpg` (ExifTool 13.55).
+    #[test]
+    fn test_parse_app6_infiray_mix_mode_matches_exiftool() {
+        let mut payload = vec![0x00]; // MixMode 0
+        payload.extend_from_slice(&1.0f32.to_le_bytes()); // FusionIntensity
+        payload.extend_from_slice(&2.0f32.to_le_bytes()); // OffsetAdjustment
+        payload.resize(192, 0); // CorrectionAsix float[30], all zero
+
+        let m = parse_app6_ijpeg(&payload, true).unwrap();
+        assert_eq!(m.get_integer("APP6:MixMode"), Some(0));
+        assert_eq!(m.get_string("APP6:FusionIntensity"), Some("100.0 %"));
+        assert_eq!(m.get_string("APP6:OffsetAdjustment"), Some("2"));
+        assert_eq!(
+            m.get_string("APP6:CorrectionAsix"),
+            Some(["0"; 30].join(" ").as_str())
+        );
+        assert_eq!(m.len(), 4);
+
+        // Without the APP2 IJPEG version header ExifTool reads nothing here,
+        // because this record has no identifier of its own.
+        assert!(parse_app6_ijpeg(&payload, false).unwrap().is_empty());
+
+        // ExifTool's gate is `$length >= 129`
+        let short = vec![0u8; 128];
+        assert!(parse_app6_ijpeg(&short, true).unwrap().is_empty());
     }
 
     #[test]
@@ -602,7 +897,7 @@ mod tests {
         let mut nitf = b"NITF\0".to_vec();
         nitf.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
         let metadata = parse_app6(&nitf).unwrap();
-        assert!(metadata.contains_key("APP6:NITFData"));
+        assert!(metadata.contains_key("APP6:NITFVersion"));
 
         // "NTIF\0" must NOT match the real dispatch condition
         let mut ntif = b"NTIF\0".to_vec();
