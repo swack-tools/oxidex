@@ -1,7 +1,7 @@
 name: Pinned ExifTool source
 description: >-
   Resolve .exiftool-version, fetch that ExifTool release into
-  $RUNNER_TEMP/oxidex-table-oracle, export EXIFTOOL_SOURCE, and install the
+  a fresh directory under $RUNNER_TEMP, export EXIFTOOL_SOURCE, and install the
   Archive::Zip support the oracle capability probe needs. Requires a checkout.
 outputs:
   version:
@@ -38,12 +38,15 @@ runs:
         ET_VERSION: ${{ steps.stamp.outputs.version }}
       run: |
         set -euo pipefail
-        EXIFTOOL_SOURCE="$RUNNER_TEMP/oxidex-table-oracle"
-        echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
-        curl --fail --silent --show-error --location -o "$RUNNER_TEMP/exiftool-tables.tar.gz" \
+        work=$(mktemp -d "${RUNNER_TEMP:?}/oxidex-table-oracle.XXXXXXXX")
+        EXIFTOOL_SOURCE="$work/source"
+        archive="$work/archive.tar.gz"
+        trap 'rm -f -- "$archive"' EXIT
+        mkdir "$EXIFTOOL_SOURCE"
+        curl --fail --silent --show-error --location -o "$archive" \
           "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
-        mkdir -p "$EXIFTOOL_SOURCE"
-        tar xzf "$RUNNER_TEMP/exiftool-tables.tar.gz" -C "$EXIFTOOL_SOURCE" --strip-components=1
+        tar xzf "$archive" -C "$EXIFTOOL_SOURCE" --strip-components=1
+        echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
     # verify_subdirs.py probes DOCX parsing as well as the version.
     # A Perl without Archive::Zip reports ZIP and is not a valid oracle.
     - name: Install oracle container support
