@@ -80,10 +80,12 @@ and doing nothing. See that constant for the argument in both directions.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -187,6 +189,26 @@ TIP_SIGNAL_REF = "refs/fleet/signals/tip"
 # --------------------------------------------------------------------- #
 # The reconcile step
 # --------------------------------------------------------------------- #
+
+
+def _worker_tag(host: str, slug: str) -> str:
+    """Give each physical run its own log, marker, and stop-file identity.
+
+    Wall-clock seconds repeat across rapid replacements and daemon restarts;
+    a fresh UUID also prevents an old run's artifacts being reused after
+    the process that created them is gone.
+    """
+    # The tag is embedded in several single filename components. Keep the
+    # readable parts ASCII and bounded by bytes, even for a valid long or
+    # Unicode branch; the digest distinguishes names with the same prefix.
+    def readable(value: str, limit: int) -> str:
+        return "".join(c if c.isascii() and (c.isalnum() or c in "_-") else "_"
+                       for c in value)[:limit] or "x"
+
+    source = f"{host}\0{slug}".encode("utf-8")
+    fingerprint = hashlib.sha256(source).hexdigest()[:12]
+    return (f"{readable(host, 24)}-{readable(slug, 40)}-"
+            f"{fingerprint}-{uuid.uuid4().hex}")
 
 
 @dataclass
@@ -685,7 +707,7 @@ def dispatch_agents(
             res.refused.append((f"agent-{code}", f"{branch}: {detail}"))
             continue
 
-        tag = f"{host}-a-{branch.split('/')[-1].removeprefix(dispatch_mod.INTENT_PREFIX)}-{int(time.time()) % 100000}"
+        tag = _worker_tag(host, f"a-{branch.split('/')[-1].removeprefix(dispatch_mod.INTENT_PREFIX)}")
         # Count the purchase BEFORE making it. A crash between here and the
         # spawn costs this key one retry; the other order costs unbounded
         # money (see dispatch.py's "counting direction").
@@ -1072,7 +1094,7 @@ def reconcile_once(
 
                     for slug in candidates[:deficit]:
                         branch = _branch(q[slug])
-                        tag = f"{host}-{slug}-{int(time.time()) % 100000}"
+                        tag = _worker_tag(host, slug)
                         try:
                             w = start_gate(hub, branch, tag, gate_command, host, log_dir,
                                            journal=jn)

@@ -20,8 +20,8 @@ This report records exact source and generated-declaration identities. Generated
 | `blocked_generated_reader_refusal` | 156 |
 | `generated_reader_declaration_option_gated` | 1123 |
 | `generated_reader_declaration_unobserved` | 778 |
-| `ifd_schema_declaration_eligible_unobserved` | 2890 |
-| `ifd_schema_declaration_omitted_unobserved` | 416 |
+| `ifd_schema_declaration_eligible_unobserved` | 2898 |
+| `ifd_schema_declaration_omitted_unobserved` | 408 |
 | `ifd_schema_declaration_refused_unobserved` | 9562 |
 | `source_row_not_yet_consumed` | 18562 |
 
@@ -289,7 +289,7 @@ Declarations below are authenticated schema facts, not runtime reachability or o
 | Image::ExifTool::EXE::PEF | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::EXE::PEString | 17 | 17 | 0 | 0 | 0 | 0 | 0 | raw_key_unrepresentable: 17 |
 | Image::ExifTool::EXE::PEVersion | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Exif::Main | 727 | 602 | 469 | 314 | 19 | 0 | 0 | ifd_isoffset_unsupported: 14; print_conv: 25; raw_conv: 18; value_conv: 43; variant_makernotes_dispatch: 4; variant_unreported_skipped: 35 |
+| Image::ExifTool::Exif::Main | 727 | 602 | 472 | 314 | 19 | 0 | 0 | ifd_isoffset_unsupported: 14; print_conv: 25; raw_conv: 18; value_conv: 40; variant_makernotes_dispatch: 4; variant_unreported_skipped: 35 |
 | Image::ExifTool::Extra | 91 | 91 | 0 | 29 | 0 | 0 | 0 | — |
 | Image::ExifTool::FITS::Main | 14 | 14 | 0 | 0 | 0 | 0 | 0 | raw_key_unrepresentable: 14 |
 | Image::ExifTool::FLAC::Main | 8 | 4 | 3 | 0 | 0 | 0 | 0 | tag_variant_cond_unsupported: 1 |
@@ -1104,9 +1104,9 @@ Declarations below are authenticated schema facts, not runtime reachability or o
 | Image::ExifTool::Panasonic::Leica3 | 2 | 1 | 1 | 1 | 0 | 0 | 0 | — |
 | Image::ExifTool::Panasonic::Leica4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::Panasonic::Leica5 | 11 | 8 | 7 | 8 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Panasonic::Leica6 | 8 | 8 | 5 | 7 | 0 | 0 | 0 | ifd_isoffset_unsupported: 1; print_conv: 1; value_conv: 1 |
+| Image::ExifTool::Panasonic::Leica6 | 8 | 8 | 6 | 7 | 0 | 0 | 0 | ifd_isoffset_unsupported: 1; print_conv: 1 |
 | Image::ExifTool::Panasonic::Leica9 | 10 | 10 | 9 | 10 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Panasonic::Main | 140 | 136 | 113 | 135 | 0 | 0 | 0 | condition: 1; print_conv: 10; raw_conv: 4; tag_variant_cond_unsupported: 4; value_conv: 7 |
+| Image::ExifTool::Panasonic::Main | 140 | 136 | 117 | 135 | 0 | 0 | 0 | condition: 1; print_conv: 10; raw_conv: 4; tag_variant_cond_unsupported: 4; value_conv: 3 |
 | Image::ExifTool::Panasonic::PANA | 23 | 17 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::Panasonic::SerialInfo | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::Panasonic::ShotInfo | 1 | 1 | 0 | 1 | 0 | 0 | 0 | — |

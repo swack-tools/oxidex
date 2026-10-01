@@ -1842,6 +1842,10 @@ def _compile_first_element(rest):
 # conversions), so the oracle could never probe it, and an unprobed shape
 # is not a translation.
 _TRIM_TRAILING_WS_RE = re.compile(r"^\$val\s*=~\s*s/\\s\+\$//\s*;\s*\$val$")
+# ISO.pm BootSystem uses literal spaces rather than Perl's \s class. Keep
+# this exact expression separate: tabs remain, and `$` can match before a
+# final newline while leaving that newline in place.
+_TRIM_TRAILING_SPACES_RE = re.compile(r"^\$val\s*=~\s*s/ \+\$//\s*;\s*\$val$")
 
 # normalize() folds every whitespace run to one space, which is right for
 # Perl code and wrong INSIDE an `s///`, `tr///` or `y///` pattern or
@@ -1862,6 +1866,12 @@ def is_trim_trailing_ws_form(expr):
     r"""True for `$val =~ s/\s+$//; $val` in any spacing -- verify_exprs.py
     picks its string probes from this."""
     return isinstance(expr, str) and _TRIM_TRAILING_WS_RE.match(normalize(expr)) is not None
+
+
+def is_trim_trailing_spaces_form(expr):
+    """True only for Perl's scalar `$val =~ s/ +$//; $val`."""
+    return (isinstance(expr, str) and not _PATTERN_WS_RUN_RE.search(expr)
+            and _TRIM_TRAILING_SPACES_RE.match(normalize(expr)) is not None)
 
 
 def _tr_unescape_class(cls):
@@ -1986,6 +1996,9 @@ def _compile_uncached(s):
 
     if _TRIM_TRAILING_WS_RE.match(s):
         return ("str", "String", "crate::exiftool_tables::exprs::trim_trailing_ws({v})")
+
+    if _TRIM_TRAILING_SPACES_RE.match(s):
+        return ("str", "String", "crate::exiftool_tables::exprs::trim_trailing_spaces({v})")
 
     if _LIST_HINT_RE.search(s):
         try:
