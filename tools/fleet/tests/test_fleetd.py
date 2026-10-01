@@ -296,7 +296,8 @@ class TestProcessListingFailure(FleetdBase):
         adopted = self.make_adopted_gate()
         adopted.claim._mark_lost("lease no longer ours")
         try:
-            with mock.patch.object(fleetd, "kill_worker", return_value="killed") as killer:
+            with mock.patch.object(fleetd, "kill_worker", return_value="killed") as killer, \
+                    mock.patch.object(runner_mod, "_pgid_alive", return_value=False):
                 result = fleetd.reconcile_once(
                     self.hub, self.host, self.workers, [str(self.stub)],
                     self.tmp / "logs", Path(__file__).resolve().parents[3],
@@ -469,10 +470,13 @@ class TestProcessListingFailure(FleetdBase):
                 pgid_probe=lambda: (_ for _ in ()).throw(
                     runner_mod.ProcessListingUnavailable("ps failed")),
                 warnings=self.host_warnings)
-        self.assertEqual(len(result.killed), 1,
-                         "the independently proved lost lease requires stop-work")
+        # Signal is mandatory in this pass; an unreaped adopted group can
+        # remain kernel-visible, so durable exit waits for a later pass.
+        self.assertEqual(result.killed, [])
         self.adopted_child.popen.wait(timeout=WAIT_BUDGET_S)
         self.assertFalse(adopted.alive(), "the fixture gate's group was stopped")
+        runner_mod.stop_lost_workers(self.workers, journal_mod.Journal(), self.host)
+        self.assertNotIn(adopted, self.workers)
         self.assertIsNone(self.hub.sha(adopted.claim.ref))
 
     def test_direct_child_poll_still_reaps_when_listing_fails(self):

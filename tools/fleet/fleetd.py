@@ -857,6 +857,9 @@ def reconcile_once(
               "retaining adopted workers and starting no new work this pass",
               file=sys.stderr, flush=True)
     for w in list(workers):
+        if w.claim.lost:
+            # A failed local termination remains open for the next retry.
+            continue
         if (pgids is not None and w.popen is None and w.pgid not in pgids
                 and not w.claim.lost):
             # A missing row in one ps snapshot cannot close an adopted

@@ -793,7 +793,7 @@ class Claim:
         That is what lets `acquire()` own renewal unconditionally without
         the context manager double-starting a thread.
         """
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             return
         if self.ttl <= 0:
             # A zero/negative TTL claim is deliberately already expired
@@ -811,7 +811,8 @@ class Claim:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
 
     def renewer_running(self) -> bool:
         """Is the background renewer thread alive? For tests and doctors."""

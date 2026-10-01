@@ -771,6 +771,21 @@ class TestAdoptFromJournal(JournalCase):
         self.assertIsNone(bystander.poll(),
                           "and it must certainly not be killed")
 
+    def test_first_listing_present_second_missing_keeps_live_claim(self):
+        p = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=p.pid, started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=p.pid,
+                               started_at=started)
+        with mock.patch("keel.runner._journal_group_identity", return_value="missing"):
+            res = self.adopt(pgid_probe=lambda: {p.pid},
+                             identity_probe=lambda *_args: None)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.adopted, [])
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIsNone(p.poll())
+
     def test_a_journal_entry_from_another_hubs_scope_is_refused(self):
         """The scope token is derived from the HUB URL, so a
         disagreement means this entry was written by a runner pointed at
@@ -1213,6 +1228,27 @@ class TestAdoptAtStartup(JournalCase):
         self.assertTrue(self.workers[0].claim.renewer_running())
         self.assertTrue(any("adopting from the local job journal" in line
                             for line in self.logged), self.logged)
+
+    def test_partial_store_adoption_is_not_duplicated_by_journal_fallback(self):
+        p = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = claim_mod.claim_ref("gate", "staging-one")
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=p.pid,
+                               started_at=started)
+        self.journal_job("staging-one", pgid=p.pid, started_at=started)
+        real_list = claim_mod.list_claims
+
+        def fail_agent_list(hub, *, kind):
+            if kind == "agent":
+                raise HubError("agent listing unavailable after gate adoption")
+            return real_list(hub, kind=kind)
+
+        with mock.patch.object(claim_mod, "list_claims", side_effect=fail_agent_list):
+            res = self.startup()
+        self.assertEqual(res.mode, "journal")
+        self.assertEqual([w.pgid for w in self.workers], [p.pid])
+        self.assertTrue(self.workers[0].claim.renewer_running())
+        self.assertEqual(res.journal_result.adopted, [])
 
     def test_an_offline_runner_is_not_allowed_to_spawn(self):
         """SPEC §5.3: "sweeps nothing, spawns nothing, and retries the

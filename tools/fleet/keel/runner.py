@@ -455,7 +455,8 @@ def _scoped_worker_in_group(pgid: int, markers: Optional[Sequence[str]],
     return None
 
 
-def _journal_group_identity(pgid: int, scope_token: str) -> str:
+def _journal_group_identity(pgid: int, scope_token: str,
+                            markers: Optional[Sequence[str]] = None) -> str:
     """Return scoped, other, or missing from one same-uid process listing.
 
     A kernel-live group omitted by ps is `missing`, not proof of a
@@ -468,7 +469,7 @@ def _journal_group_identity(pgid: int, scope_token: str) -> str:
     except AttributeError:
         uid = None
     present = False
-    markers = worker_markers()
+    markers = worker_markers() if markers is None else markers
     for line in lines:
         spgid, spid, suid, command = _ps_fields(line, 4)
         if int(spgid) != pgid or int(spid) == 0:
@@ -702,10 +703,7 @@ def reap_dead_same_host_singleton(
 
 
 def _pgid_alive(pgid: int) -> bool:
-    """Does any process remain in group `pgid`? `killpg(pgid, 0)` is the
-    cheap probe; `live_pgids()` (the `ps` listing) is the instrument used
-    to VERIFY a kill, because a signal probe cannot distinguish a group
-    that is gone from one we merely lost the right to signal."""
+    """Is group `pgid` still kernel-visible or termination inconclusive?"""
     try:
         os.killpg(pgid, 0)
         return True
@@ -714,7 +712,7 @@ def _pgid_alive(pgid: int) -> bool:
     except PermissionError:
         return True  # exists, not ours -- treat as alive, never as gone
     except OSError:
-        return False
+        return True  # an inconclusive kernel probe cannot prove termination
 
 
 def kill_process_group(
@@ -773,7 +771,7 @@ def kill_process_group(
 
 
 def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
-    """Tear a worker down by process group and drop its claim.
+    """Tear a worker down by process group; release only after kernel absence.
 
     THE KILL IS NOT HOSTAGE TO THE HUB. The signal work above is purely
     local -- `killpg` and a `ps` listing -- and the claim delete below is
@@ -785,12 +783,14 @@ def kill_worker(w: "Worker", grace: Optional[float] = None) -> str:
     An undeleted claim is self-correcting -- it expires on its TTL and any
     host reaps it (`claim.reap_expired`); a stranded worker entry is not.
     """
-    outcome = kill_process_group(w.pgid, grace=grace, alive_probe=lambda _p: w.alive())
+    outcome = kill_process_group(w.pgid, grace=grace, alive_probe=_pgid_alive)
     if w.popen is not None:
         try:
             w.popen.wait(timeout=5)  # reap, so it cannot linger as a zombie
         except subprocess.TimeoutExpired:
             outcome += " (child not reaped within 5s)"
+    if _pgid_alive(w.pgid):
+        return outcome + " (group still exists; claim and journal retained)"
     # Safe either way: `release` is a CAS delete, so if the lease really
     # is somebody else's now, this cannot touch their claim.
     try:
@@ -814,6 +814,11 @@ def stop_lost_workers(workers: list, journal, host: str,
             continue
         reason = worker.claim.lost_reason or "renewal failed (no reason recorded)"
         outcome = killer(worker)
+        if _pgid_alive(worker.pgid):
+            print(f"fleetd[{host}] LOST LEASE {worker.claim.ref} pgid={worker.pgid}: "
+                  f"termination unconfirmed ({outcome}); retaining run for retry",
+                  file=sys.stderr, flush=True)
+            continue
         workers.remove(worker)
         killed.append((worker.tag, reason))
         if worker.job_key:
@@ -999,7 +1004,8 @@ def reconcile_journal_runs(jn, hub, host: str, workers: list, *,
                 payload = hub.read(job.claim_ref) if job.claim_ref else None
                 if (payload is not None and
                         payload.get("holder_host") == host and
-                        payload.get("started_at") == job.started_at):
+                        payload.get("started_at") == job.started_at and
+                        not claim_mod.is_expired(payload)):
                     continue
                 # With the old claim absent or superseded, a different
                 # process may have recycled the numeric group. Only a
@@ -1997,23 +2003,18 @@ def build_hub(
 # (verbatim from fleetd.main's body; fleetd.main now delegates here)
 
 
-def _recover_ambiguous_host_claim(hub, host: str, singleton: Claim,
-                                  attempt_window: tuple) -> tuple:
+def _recover_ambiguous_host_claim(hub, host: str, singleton: Claim) -> tuple:
     """Recognize only the claim this process may have created before losing its reply.
 
     The local lock excludes another current runner, but a stale claim from
     an earlier process must never be adopted by host name alone. PID, PGID
-    and the acquisition timestamp inside this call's window identify this
-    attempted create; Claim.adopt then verifies and renews its store token.
+    identify this attempted create; Claim.adopt then verifies and renews
+    its exact store token.
     Returns (matched, adopted claim). A matched claim whose renewal fails
     stays pending; it must not be reaped as a predecessor's claim.
     """
     payload = hub.read(singleton.ref)
     if payload is None:
-        return False, None
-    try:
-        started = claim_mod._parse_iso(payload["started_at"]).timestamp()
-    except (KeyError, TypeError, ValueError):
         return False, None
     attempted_token = (claim_mod._iso(singleton._started_at)
                        if singleton._started_at is not None else None)
@@ -2023,8 +2024,7 @@ def _recover_ambiguous_host_claim(hub, host: str, singleton: Claim,
             payload.get("work_kind") == "fleetd" and
             payload.get("work_key") == host and
             payload.get("pid") == os.getpid() and
-            payload.get("pgid") == os.getpgrp() and
-            attempt_window[0] <= started <= attempt_window[1]):
+            payload.get("pgid") == os.getpgrp()):
         return False, None
     singleton.stop_renewer(timeout=2)
     adopted = Claim.adopt(
@@ -2435,14 +2435,13 @@ def _run_daemon_locked(
                       holder_host=host,  # fleet identity, not hostname -- see start_gate
                       ttl=singleton_ttl_s())  # short TTL for the scheduler lease itself
     singleton_owned = False
-    singleton_ambiguous_window = None
+    singleton_ambiguous = False
     try:
         # acquire_or_reap: a hard-killed predecessor (launchctl kickstart -k,
         # OOM, crash) never runs its graceful release, and a plain acquire
         # then locks the host out until the claim is manually reaped -- m5
         # spent 20 minutes in a KeepAlive spawn/refuse/exit loop this way.
         # A LIVE predecessor still refuses (the singleton guard stands).
-        acquire_started = time.time()
         singleton.acquire_or_reap()
         singleton_owned = True
     except claim_mod.ClaimHeldError:
@@ -2471,16 +2470,16 @@ def _run_daemon_locked(
     except HubUnreachableError as exc:
         # A create can succeed while its response is lost. Only the exact
         # attempt's claim may be recovered; host name alone proves nothing.
-        singleton_ambiguous_window = (acquire_started - 1, time.time() + 1)
+        singleton_ambiguous = True
         try:
             matched, recovered = _recover_ambiguous_host_claim(
-                hub, host, singleton, singleton_ambiguous_window)
+                hub, host, singleton)
         except HubError:
             matched, recovered = False, None
         if matched and recovered is not None:
             singleton = recovered
             singleton_owned = True
-            singleton_ambiguous_window = None
+            singleton_ambiguous = False
         else:
             print(f"{label}[{host}] host singleton unavailable ({exc}); "
                   "local lock held, starts disabled until store ownership is acquired",
@@ -2595,9 +2594,9 @@ def _run_daemon_locked(
                 try:
                     matched = False
                     recovered = None
-                    if singleton_ambiguous_window is not None:
+                    if singleton_ambiguous:
                         matched, recovered = _recover_ambiguous_host_claim(
-                            hub, host, singleton, singleton_ambiguous_window)
+                            hub, host, singleton)
                     if matched:
                         if recovered is None:
                             raise HubUnreachableError(
@@ -2606,7 +2605,7 @@ def _run_daemon_locked(
                     else:
                         singleton.acquire_or_reap()
                     singleton_owned = True
-                    singleton_ambiguous_window = None
+                    singleton_ambiguous = False
                     for worker in workers:
                         worker.claim.start_renewer()
                 except claim_mod.ClaimHeldError:
@@ -2619,6 +2618,9 @@ def _run_daemon_locked(
                     rc = 3
                     break
                 except HubError as exc:
+                    # A later retry can also create the claim and lose its
+                    # reply. The exact attempted token survives in Claim.
+                    singleton_ambiguous = True
                     print(f"{label}[{host}] host singleton still unavailable: "
                           f"{exc}; starts remain disabled",
                           file=sys.stderr, flush=True)
@@ -2660,28 +2662,44 @@ def _run_daemon_locked(
                     # Store adoption can release claims and sweep orphans; it
                     # is therefore only legal after host ownership is proved.
                     refreshed: list = []
-                    try:
-                        current = journal_mod.adopt_at_startup(
-                            hub, host, refreshed, journal=jn)
-                    except (HubError, journal_mod.JournalError,
-                            ProcessListingUnavailable) as exc:
-                        for extra in refreshed:
-                            extra.claim.stop_renewer(timeout=2)
-                        print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
-                              "starts remain disabled", file=sys.stderr, flush=True)
+                    # A second Claim for the same token must not race the
+                    # current renewer between its read and adoption CAS.
+                    for old in workers:
+                        old.claim.stop_renewer(timeout=2)
+                    if any(old.claim.renewer_running() for old in workers):
+                        for old in workers:
+                            if not old.claim.renewer_running():
+                                old.claim.start_renewer()
+                        print(f"{label}[{host}] STORE RECHECK DEFERRED: worker "
+                              "renewer has not stopped", file=sys.stderr, flush=True)
                     else:
-                        if current.mode == "store":
-                            for old in workers:
-                                old.claim.stop_renewer(timeout=2)
-                            workers[:] = refreshed
+                        try:
+                            current = journal_mod.adopt_at_startup(
+                                hub, host, refreshed, journal=jn)
+                        except (HubError, journal_mod.JournalError,
+                                ProcessListingUnavailable) as exc:
+                            print(f"{label}[{host}] STORE RECHECK FAILED: {exc}; "
+                                  "starts remain disabled", file=sys.stderr, flush=True)
+                            current = None
+                        # A partial store pass remains authoritative for the
+                        # jobs it adopted; the journal path skips those keys.
+                        for old in workers:
+                            if not any(
+                                new.job_key == old.job_key or
+                                (new.claim.ref == old.claim.ref and
+                                 new.pgid == old.pgid and
+                                 new.claim._started_at == old.claim._started_at)
+                                for new in refreshed
+                            ):
+                                old.claim.start_renewer()
+                                refreshed.append(old)
+                        workers[:] = refreshed
+                        if current is not None and current.mode == "store":
                             reconcile_journal_runs(jn, hub, host, workers, label=label)
                             spawn_allowed = True
                             print(f"{label}[{host}] STORE BACK: authoritative "
                                   "adoption completed; starts can be CAS "
                                   "arbitrated again", file=sys.stderr, flush=True)
-                        else:
-                            for extra in refreshed:
-                                extra.claim.stop_renewer(timeout=2)
                 line = (
                     f"{label}[{host}] gates={len(workers)} started={res.started} "
                     f"finished={res.finished} killed={res.killed} refused={res.refused} "

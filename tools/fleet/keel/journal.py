@@ -950,6 +950,13 @@ def adopt_from_journal(
         own_pgid = None
 
     for job in sorted(scan.open_jobs, key=lambda j: j.job_key):
+        if any(w.job_key == job.job_key or
+               (w.claim.ref == job.claim_ref and w.pgid == job.pgid and
+                claim_mod._iso(w.claim._started_at) == job.started_at)
+               for w in workers):
+            # A store pass may have adopted this job before a later hub
+            # listing failed. Keep its live claim/renewer as the one owner.
+            continue
         if job.holder_host is not None and job.holder_host != host:
             res.refused.append(
                 (job.job_key,
@@ -1016,12 +1023,19 @@ def adopt_from_journal(
                 f"process identity listing unavailable ({exc}); releasing nothing")
             return res
         if member is None:
-            if missing_from_listing:
-                # Both listings may have omitted a live group. With the
-                # kernel reporting it alive, absence from ps is uncertainty,
-                # not authority to delete its lease later.
+            from keel.runner import _journal_group_identity
+            try:
+                group_identity = _journal_group_identity(pgid, scope_token, markers)
+            except ProcessListingUnavailable as exc:
+                res.to_release.clear()
+                res.refused_wholesale = (
+                    f"process identity listing unavailable ({exc}); releasing nothing")
+                return res
+            if group_identity != "other":
+                # A missing ps row is inconclusive whichever listing omitted
+                # it. Only a positively different group can retire this run.
                 res.refused.append((job.job_key,
-                                    f"pgid {pgid} exists but identity listing omitted it"))
+                                    f"pgid {pgid} exists but different identity is unproved"))
                 continue
             res.to_release.append(
                 OwedRelease(job.job_key, job.claim_ref, job.started_at,
