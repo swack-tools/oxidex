@@ -1657,6 +1657,322 @@ def build_hub(
 # --------------------------------------------------------------------- #
 
 
+
+# Server-only registration; the coordination hub keeps its CAS contract.
+REGISTER_CONNECT_TIMEOUT_S = 2.0
+REGISTER_READ_TIMEOUT_S = 3.0
+REGISTER_BACKOFF_BASE_S = 15.0
+REGISTER_BACKOFF_MAX_S = 60.0
+
+def server_client(hub) -> Optional[ServerHub]:
+    """The `ServerHub` inside `hub`, or `None` when no server is
+    configured.
+
+    THE ONE place that knows the hub chain's shape. `run_daemon`'s `hub`
+    parameter is duck-typed on purpose -- everything downstream of it
+    works against the eight-method coordination contract and must keep
+    working against a plain `fleetlib.Hub` -- so the knowledge that a
+    server-configured runner is holding a `FallbackHub` whose `.primary`
+    is a `ServerHub` lives here and nowhere else. `None` is the normal
+    answer on a hubless Stage-1 runner, not an error.
+    """
+    if isinstance(hub, FallbackHub) and isinstance(hub.primary, ServerHub):
+        # A CLONE with registration's own budget, not `hub.primary`
+        # itself. Handing back the primary hands back the CAS write
+        # path's 20 s read timeout, and this client is used from the
+        # reconcile loop's own thread -- see `REGISTER_READ_TIMEOUT_S`
+        # for the stall that buys. It is also emphatically NOT the
+        # object `FallbackHub` damps: `_primary_worth_trying`'s 30 s
+        # sticky window (`fallbackhub.STICKY_S`) applies to calls made
+        # THROUGH the FallbackHub, and `register` is deliberately not one
+        # of them (SPEC §4.3 r2), so registration has to carry its own
+        # damping. That is `register_cycle`'s `backoff`.
+        return hub.primary.with_timeouts(
+            connect_timeout_s=REGISTER_CONNECT_TIMEOUT_S,
+            read_timeout_s=REGISTER_READ_TIMEOUT_S,
+            total_timeout_s=REGISTER_READ_TIMEOUT_S,
+        )
+    return None
+
+
+def live_workers_payload(workers: Sequence["Worker"]) -> list:
+    """`live_workers[]` (SPEC SS5.3, SS9's liveness join) built from the
+    IN-MEMORY `workers` list -- the join of claims x live pgids that
+    `adopt_workers` already computed and that `reconcile_once` keeps
+    current, and which costs nothing to read.
+
+    Deliberately NOT built from a hub claim listing. `CachedHub.list()`
+    and `fetch_namespace()` over `refs/fleet/claims/` are index-served
+    with no freshness test at all (cachedhub.py `list`/`fetch_namespace`);
+    the fresh-claims invariant covers `sha`/`read`/`read_with_sha` only.
+    That is safe for a consumer that then CASes against a live-read sha --
+    the CAS catches the staleness -- and it is NOT safe here, where the
+    listing would be the input to a liveness verdict with no CAS behind it
+    to catch the error.
+
+    `claim_sha`/`started_at` come off the `Claim` object's own recorded
+    state, the same two privates `election.status_fields` reads for the
+    same reason: they are the lease as this process holds it, and half of
+    them (`started_at`) is half the ownership token, compared downstream
+    as literal text.
+    """
+    out = []
+    for w in workers:
+        c = getattr(w, "claim", None)
+        started = getattr(c, "_started_at", None) if c is not None else None
+        out.append({
+            "claim_ref": getattr(c, "ref", None),
+            "claim_sha": getattr(c, "_sha", None),
+            "pgid": w.pgid,
+            "tag": w.tag,
+            "kind": w.kind,
+            "started_at": claim_mod._iso(started) if started is not None else None,
+        })
+    return out
+
+
+def registration_payload(host: str, workers: Sequence["Worker"], repo_root: Path,
+                         scope_token: str, observed_capabilities: Optional[dict] = None) -> dict:
+    """The body of `POST /v1/runners/{id}/register`: what this host is
+    (`capabilities`) and what it is running (`live_workers[]`, top level,
+    per SPEC SS5.3's shape).
+
+    Optional capabilities come from this reconcile step's heartbeat
+    snapshot, not fresh probes. Missing measurements stay null so a slow
+    oracle, disk, memory, or toolchain probe cannot withhold the server's
+    liveness witness. `scope_token` remains known from daemon setup.
+
+    NAME COLLISION, on purpose and worth knowing: `doctor.py` already has
+    a `registration_payload`, whose docstring says it exists so "a runner's
+    `register` call has both the summary numbers and the reasoning behind
+    each one". This is NOT that function and does not call it. `doctor`'s
+    takes a list of already-run `Check`s, one of which is an NTP round
+    trip, and this one is called from inside the reconcile loop, where a
+    network probe is a latency source the loop's whole reason for
+    existing (reap + lost-lease kill on a 15 s cadence) cannot afford. If
+    the two ever need to be the same numbers, the fix is for `doctor` to
+    call this, not the reverse.
+
+    WHAT IS DELIBERATELY ABSENT: the GATE's `platform_id`/`rustc_id` as
+    `gate_toolchain_ids` computes them. `check_toolchain_agreement` has
+    already compared them against this process's own ids at startup and
+    refused to start on a mismatch (`TOOLCHAIN_MISMATCH_RC`) unless
+    `FLEET_ALLOW_TOOLCHAIN_MISMATCH=1`, in which case the disagreement is
+    already durable in `HostWarnings` and therefore already in every
+    heartbeat. So on any runner that reaches this call the gate's ids are
+    either equal to the ones below or already reported elsewhere, and
+    re-deriving them here would spend a `bash` + `rustc -vV` (30 s
+    timeout) per registration inside that same loop to learn nothing new.
+    Omitted and said so rather than approximated.
+    """
+    # Registration is the server's liveness witness, not a new capability
+    # measurement. A slow local probe must never consume its whole deadline.
+    # The completed reconcile step supplies its observed heartbeat values;
+    # without one, unknown values remain null rather than being fabricated.
+    observed = observed_capabilities or {}
+    free_mem = observed.get("free_mem_gb")
+    if isinstance(free_mem, (int, float)) and free_mem < 0:
+        free_mem = None
+    return {
+        "id": host,
+        "capabilities": {
+            "owning_user": observed.get("owning_user"),
+            "platform_id": observed.get("platform_id"),
+            "rustc_id": observed.get("rustc_id"),
+            "cores": observed.get("cores"),
+            "free_disk_gb": observed.get("free_disk_gb"),
+            "free_mem_gb": free_mem,
+            "oracle_ok": observed.get("oracle_ok"),
+            "gate_version": observed.get("gate_version"),
+            "scope_token": scope_token,
+        },
+        "live_workers": live_workers_payload(workers),
+    }
+
+
+def register_once(client, runner_id: str, payload: dict,
+                  log: Callable[[str], None]) -> Optional[dict]:
+    """ONE registration attempt. Returns the server's reply dict, or
+    `None` on any failure -- and NEVER raises into the caller.
+
+    Non-fatal is the entire contract. The retry policy is the reconcile
+    loop's own 15 s cadence and nothing else: no second retry ladder, no
+    second thread. The runner already has one bounded-failure counter with
+    a supervisor-visible exit (`RECONCILE_HUB_FAILURE_LIMIT`), and a
+    second, independent ladder around a call that is not load-bearing is a
+    second thing that can wedge.
+
+    The `except` is broader than this file's usual policy (the loop below
+    catches `HubError` only, so a bug in this tree takes the process down
+    loudly rather than being retried forever). That asymmetry is
+    deliberate and bounded to here: a defect in an ANNOUNCEMENT must not
+    stop a healthy host from gating. It is loud in the log, with the
+    exception type named, so it cannot pass for a quiet server outage.
+    """
+    try:
+        reply = client.register(runner_id, payload)
+    except Exception as exc:  # noqa: BLE001 -- see docstring
+        log(f"REGISTER failed ({type(exc).__name__}: {exc}) -- "
+            f"continuing unregistered; gating is unaffected")
+        return None
+    if not isinstance(reply, dict) or not isinstance(reply.get("boot_id"), str) or not reply["boot_id"]:
+        log("REGISTER answered without a valid boot_id -- ignoring")
+        return None
+    return reply
+
+
+def _boot_id_changed(health: object, session: dict) -> bool:
+    """True when the server's advertised `boot_id` differs from the one
+    our last registration was answered with -- i.e. the process we are
+    talking to is not the process that holds our registration, so the
+    registration is gone and must be re-sent.
+
+    Its own named function for one reason: `tests/test_runner_register.py`
+    disables exactly this comparison as a negative control and requires
+    the reconnect test to go RED. A reconnect test that cannot fail proves
+    nothing.
+
+    A non-dict `health` answers False -- `ServerHub.health` already raises
+    on a 200 that is not an object, so reaching here with one would mean a
+    different client entirely, and guessing "the server rebooted" from an
+    unreadable answer would produce a re-register storm rather than a
+    reconnection.
+    """
+    if not isinstance(health, dict):
+        return False
+    return health.get("boot_id") != session.get("boot_id")
+
+
+def _register_backoff_wait_s(fails: int) -> float:
+    """Seconds to wait before the next attempt after `fails` consecutive
+    failed registration attempts. `fails <= 1` waits nothing: a single
+    blip is retried on the very next cycle, unchanged.
+
+    Its own named function so the ladder can be asserted directly, and so
+    the DEMOTION_S headroom argument above is checked against one
+    expression rather than re-derived from an inline shift.
+    """
+    if fails <= 1:
+        return 0.0
+    return min(REGISTER_BACKOFF_BASE_S * (2 ** (fails - 2)), REGISTER_BACKOFF_MAX_S)
+
+
+def _register_backoff_skip(backoff: Optional[dict], now: float) -> bool:
+    """True when this cycle is inside the backoff window and must not
+    make the call. `None` disables backoff entirely -- which is what a
+    direct caller (and every pre-existing test) gets."""
+    if backoff is None:
+        return False
+    return now < backoff.get("not_before", 0.0)
+
+
+def _register_backoff_note(backoff: Optional[dict], now: float, ok: bool,
+                           log: Callable[[str], None]) -> None:
+    """Record one attempt's outcome. Success clears the ladder; failure
+    advances it and logs the wait, because a silent gap between
+    registrations is indistinguishable from a runner that stopped trying.
+    """
+    if backoff is None:
+        return
+    if ok:
+        backoff["fails"] = 0
+        backoff["not_before"] = 0.0
+        return
+    fails = int(backoff.get("fails", 0)) + 1
+    wait = _register_backoff_wait_s(fails)
+    backoff["fails"] = fails
+    backoff["not_before"] = now + wait
+    if wait:
+        log(f"REGISTER backing off {wait:.0f}s after {fails} consecutive "
+            f"failed attempts -- gating is unaffected")
+
+
+def register_cycle(client, runner_id: str, session: dict,
+                   build_payload: Callable[[], dict],
+                   log: Callable[[str], None],
+                   backoff: Optional[dict] = None,
+                   clock: Callable[[], float] = time.monotonic) -> Optional[str]:
+    """One loop iteration's worth of registration. Mutates `session` in
+    place on success and returns why it registered (`"first"` or
+    `"reconnect"`), or `None` when it did not register or could not.
+
+    NEVER RAISES, and never touches the reconcile result. It runs AFTER
+    the reconcile step so that a slow server delays the NEXT cycle rather
+    than sitting between adoption and the first reap, where `run_daemon`
+    already argues (see `check_toolchain_agreement`'s call site) that a
+    second of avoidable latency is a live gate reported as an orphan and
+    killed.
+
+    BUT "delays the next cycle" is only tolerable because the delay is
+    BOUNDED, and it was not. This call ran on the loop's own thread with
+    the CAS write path's 5 s + 20 s budget and no damping of any kind, so
+    a server that accepted TCP and answered nothing cost 20 s on EVERY
+    cycle, in either steady state (`health()` when registered,
+    `register_once` when not) and forever. Two things bound it now, and
+    both are needed:
+
+      * `server_client` hands this function a client with
+        `REGISTER_CONNECT_TIMEOUT_S` / `REGISTER_READ_TIMEOUT_S`, so ONE
+        cycle's worst case is ~5 s rather than ~25 s; and
+      * `backoff` -- a caller-owned dict, mutated in place -- makes the
+        SECOND and later consecutive failures skip cycles entirely, so a
+        server that is down costs one attempt per `REGISTER_BACKOFF_MAX_S`
+        instead of one per cycle.
+
+    `backoff=None` disables the ladder. `build_payload` is a callable,
+    so nothing is measured on cycles without registration; on a server
+    clone it runs inside the one bounded announcement worker. A stalled
+    local probe therefore cannot hold the reconcile thread, and failures
+    use the same bounded backoff as network failures.
+    """
+    if client is None:
+        return None
+    now = clock()
+    if _register_backoff_skip(backoff, now):
+        return None
+    reason = "first"
+    if session:
+        try:
+            health = client.health()
+        except Exception as exc:  # noqa: BLE001 -- best-effort, see docstring
+            log(f"REGISTER health probe failed ({type(exc).__name__}: {exc}) -- "
+                f"keeping the existing registration")
+            _register_backoff_note(backoff, now, False, log)
+            return None
+        if not _boot_id_changed(health, session):
+            # The steady state, and the ONLY place a successful health
+            # probe clears the ladder. Clearing it on the probe alone
+            # would defeat the backoff in the one case that still costs
+            # wall-clock: a server that answers `/v1/health` quickly but
+            # black-holes `register` would reset `fails` to 0 on every
+            # cycle and pay a full read timeout on every cycle forever.
+            _register_backoff_note(backoff, now, True, log)
+            return None
+        reason = "reconnect"
+    payload_box: dict = {}
+    def bounded_payload() -> dict:
+        payload = build_payload()
+        payload_box["payload"] = payload
+        return payload
+
+    # The server clone builds this inside its single bounded worker, before
+    # DNS/connect/send. A stalled local capability probe cannot delay the
+    # next reconcile or send an abandoned registration later.
+    reply = register_once(client, runner_id, bounded_payload, log)
+    if reply is None:
+        _register_backoff_note(backoff, now, False, log)
+        return None
+    _register_backoff_note(backoff, now, True, log)
+    session.clear()
+    session.update(reply)
+    payload = payload_box.get("payload", {})
+    log(f"REGISTERED ({reason}) boot_id={reply.get('boot_id')} "
+        f"settle_until={reply.get('settle_until')} "
+        f"lease_expires_at={reply.get('lease_expires_at')} "
+        f"live_workers={len(payload.get('live_workers') or [])}")
+    return reason
+
+
 def run_daemon(
     hub,
     host: str,
@@ -1792,6 +2108,14 @@ def run_daemon(
         singleton.release()
         return TOOLCHAIN_MISMATCH_RC
 
+    reg_client = server_client(hub)
+    reg_session: dict = {}
+    reg_backoff: dict = {}
+    reg_scope_token = fleet_scope_token(hub.url)
+
+    def _reg_log(msg: str) -> None:
+        print(f"{label}[{host}] {msg}", file=sys.stderr, flush=True)
+
     stop = {"flag": False}
 
     def _sigterm(_sig, _frm):
@@ -1810,6 +2134,7 @@ def run_daemon(
             # or a MemoryError must still take the process down loudly
             # rather than be retried fifteen seconds later forever.
             degraded: Optional[HubError] = None
+            res = None
             try:
                 res = reconcile(hub, host, workers, gate_command, log_dir,
                                 repo_root, warnings=host_warnings)
@@ -1876,6 +2201,18 @@ def run_daemon(
                 )
                 rc = 6
                 break
+            # Host-lease and hub-failure exits above take priority over this call.
+            # A failed announcement does not alter the completed reconcile step.
+            # Bind this step's observations before the bounded worker starts;
+            # a stalled worker must not read the next cycle's snapshot.
+            observed_capabilities = getattr(res, "heartbeat_capabilities", None)
+            register_cycle(
+                reg_client, host, reg_session,
+                lambda: registration_payload(
+                    host, workers, repo_root, reg_scope_token, observed_capabilities,
+                ),
+                _reg_log, reg_backoff,
+            )
             if once or stop["flag"]:
                 # `--once` is a single step, so a degraded step IS a failed
                 # run: report it rather than exiting 0 on a reconcile that
