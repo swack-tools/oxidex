@@ -1,2 +1,4 @@
 # No LFS tracking - test fixtures are small enough for regular git
 # All test fixtures migrated to regular git storage (total size: ~1.2MB)
+# PDF xref records require a trailing byte after the in-use marker.
+tests/fixtures/xmp_priority/history_native/*.pdf binary
