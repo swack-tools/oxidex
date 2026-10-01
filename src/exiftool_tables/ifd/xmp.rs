@@ -24,7 +24,7 @@ pub static IFD_XMP_ALBUM: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 2)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
     },
     tags: &[],
     variants: &[],
@@ -78,7 +78,7 @@ pub static IFD_XMP_LIGHTROOM: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 4)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 3)],
     },
     tags: &[],
     variants: &[],
@@ -114,7 +114,7 @@ pub static IFD_XMP_CRS: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 272)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 271)],
     },
     tags: &[],
     variants: &[],
@@ -132,7 +132,7 @@ pub static IFD_XMP_DC: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 16)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 15)],
     },
     tags: &[],
     variants: &[],
@@ -186,7 +186,7 @@ pub static IFD_XMP_IPTCCORE: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 17)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 16)],
     },
     tags: &[],
     variants: &[],
@@ -220,7 +220,7 @@ pub static IFD_XMP_PDF: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 13)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 12)],
     },
     tags: &[],
     variants: &[],
@@ -256,7 +256,7 @@ pub static IFD_XMP_PHOTOSHOP: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 27)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 26)],
     },
     tags: &[],
     variants: &[],
@@ -364,7 +364,7 @@ pub static IFD_XMP_TIFF: IfdTable = IfdTable {
     set_group1: None,
     priority: Some(0),
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 27)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 26)],
     },
     tags: &[],
     variants: &[],
@@ -418,7 +418,7 @@ pub static IFD_XMP_XMPBJ: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 2)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
     },
     tags: &[],
     variants: &[],
@@ -436,7 +436,7 @@ pub static IFD_XMP_XMPMM: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 23)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 22)],
     },
     tags: &[],
     variants: &[],
@@ -490,7 +490,7 @@ pub static IFD_XMP_XMPTPG: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 14)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 13)],
     },
     tags: &[],
     variants: &[],

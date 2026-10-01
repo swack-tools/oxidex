@@ -114,6 +114,16 @@ fn registry_id_matches(table: &str, here: i64, wanted: &HashSet<i64>) -> bool {
                 .any(|id| id & !0xffff == 0x30000 && id & 0xffff == here))
 }
 
+// Pinned 13.59 source declares these as SubDirectory pointers. `-listx`
+// omits the pointer rows, while a PrintConv in the same table happens to use
+// the same display word. Keep this exception exact and require every member
+// to remain exercised below.
+const SOURCE_ONLY_CONTAINERS: &[(&str, &str)] = &[
+    ("Matroska::Main", "Video"),
+    ("Matroska::Main", "Audio"),
+    ("LNK::Main", "LinkInfo"),
+];
+
 #[test]
 fn packed_lnk_ids_do_not_hide_real_printconv_collisions() {
     assert!(registry_id_matches(
@@ -191,9 +201,14 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
     // PrintConv (for example, `Compression` is both a real EXIF tag and a value
     // elsewhere).
     let mut violations = Vec::new();
+    let mut exempted = HashSet::new();
     for domain in DOMAINS {
         for e in entries(domain) {
             if real.contains(&(e.table.clone(), e.name.clone())) {
+                continue;
+            }
+            if SOURCE_ONLY_CONTAINERS.contains(&(e.table.as_str(), e.name.as_str())) {
+                exempted.insert((e.table.clone(), e.name.clone()));
                 continue;
             }
             let is_display_value = values
@@ -214,6 +229,12 @@ fn registry_lists_no_print_conv_display_value_as_a_tag() {
         violations.len(),
         violations.join("\n")
     );
+    for &(table, name) in SOURCE_ONLY_CONTAINERS {
+        assert!(
+            exempted.contains(&(table.to_string(), name.to_string())),
+            "source-only container exemption is stale: {table}::{name}"
+        );
+    }
 }
 
 /// The subtlest shape of the same bug, and the one that actually misnames tags.
@@ -285,4 +306,30 @@ fn registry_tag_ids_are_not_print_conv_keys_in_disguise() {
         violations.len(),
         violations.join("\n")
     );
+}
+
+#[test]
+fn inferred_quicktime_key_name_is_kept_under_its_source_id() {
+    assert!(entries("media").iter().any(|entry| {
+        entry.table == "QuickTime::Keys" && entry.id == "artist" && entry.name == "Artist"
+    }));
+}
+
+#[test]
+fn embedded_numeric_array_count_does_not_force_scalar_cli_parse() {
+    use oxidex::cli::value_parser::parse_cli_tag_value;
+    use oxidex::core::tag_value::TagValue;
+
+    assert_eq!(
+        parse_cli_tag_value("Canon:WB_RGGBBlackLevels", "1 2 3 4").unwrap(),
+        TagValue::String("1 2 3 4".to_string())
+    );
+}
+
+#[test]
+fn decimal_source_ids_keep_numeric_exif_lookup() {
+    use oxidex::tag_db::lookup_tag_name;
+
+    assert_eq!(lookup_tag_name(0x0211, "IFD0"), "IFD0:YCbCrCoefficients");
+    assert_eq!(lookup_tag_name(0x9010, "ExifIFD"), "ExifIFD:OffsetTime");
 }

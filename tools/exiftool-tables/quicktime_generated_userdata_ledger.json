@@ -3295,7 +3295,7 @@
   "scope": "movie-level moov/udta explicit direct Format; language, implicit and custom controls omitted",
   "source": {
     "exiftool_version": "13.59",
-    "table_sha256": "123b7ca6ce34b1979cf2dc707fef3e3938d326e1b3ecadc69796816d15efbd4e"
+    "table_sha256": "facad094fb7293ff37a69ae5c2db168c31619f69cb73f0237a7da502cba7af94"
   },
   "specs": [
     {

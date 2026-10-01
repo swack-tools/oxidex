@@ -68,19 +68,19 @@ mod tests {
         assert!(gps.is_some(), "Should find GPS::Main table");
     }
 
-    /// ExifTool 13.59 Exif.pm tag 0x0211 declares
-    /// `Writable => 'rational64u'` with `Count => 3`.
+    /// Exif.pm declares a writable three-element rational array at 0x0211.
+    /// The registry keeps it writable but leaves scalar CLI type unknown.
     #[test]
-    fn ycbcr_coefficients_is_writable() {
+    fn ycbcr_coefficients_preserves_safe_array_projection() {
         let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
         let tag = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x0211" && tag.name == "YCbCrCoefficients")
+            .find(|tag| tag.id == "529" && tag.name == "YCbCrCoefficients")
             .expect("YCbCrCoefficients (0x0211) should exist");
 
         assert!(tag.writable);
-        assert_eq!(tag.type_name.as_deref(), Some("rational64u"));
+        assert_eq!(tag.type_name.as_deref(), Some("?"));
     }
 
     #[test]
@@ -92,21 +92,21 @@ mod tests {
         let offset_time = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9010")
+            .find(|tag| tag.id == "36880")
             .expect("OffsetTime (0x9010) should exist");
         assert_eq!(offset_time.name, "OffsetTime");
 
         let offset_time_original = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9011")
+            .find(|tag| tag.id == "36881")
             .expect("OffsetTimeOriginal (0x9011) should exist");
         assert_eq!(offset_time_original.name, "OffsetTimeOriginal");
 
         let offset_time_digitized = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9012")
+            .find(|tag| tag.id == "36882")
             .expect("OffsetTimeDigitized (0x9012) should exist");
         assert_eq!(offset_time_digitized.name, "OffsetTimeDigitized");
 
@@ -114,21 +114,21 @@ mod tests {
         let subsec_time = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9290")
+            .find(|tag| tag.id == "37520")
             .expect("SubSecTime (0x9290) should exist");
         assert_eq!(subsec_time.name, "SubSecTime");
 
         let subsec_time_original = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9291")
+            .find(|tag| tag.id == "37521")
             .expect("SubSecTimeOriginal (0x9291) should exist");
         assert_eq!(subsec_time_original.name, "SubSecTimeOriginal");
 
         let subsec_time_digitized = exif_table
             .tags
             .iter()
-            .find(|tag| tag.id == "0x9292")
+            .find(|tag| tag.id == "37522")
             .expect("SubSecTimeDigitized (0x9292) should exist");
         assert_eq!(subsec_time_digitized.name, "SubSecTimeDigitized");
     }
@@ -142,7 +142,7 @@ mod tests {
         let tile_length = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x0143")
+            .find(|tag| tag.id == "323")
             .expect("TileLength (0x0143) should exist");
 
         assert_eq!(tile_length.name, "TileLength");
@@ -150,75 +150,67 @@ mod tests {
         assert_eq!(tile_length.type_name.as_deref(), Some("int32u"));
     }
 
-    /// ExifTool 13.59 Exif.pm 0x013e declares WhitePoint as a writable
-    /// `rational64u` pair in IFD0. The generated tag model does not represent
-    /// the fixed count of two, but it must preserve the writable/type contract.
+    /// Exif.pm 0x013e declares a writable rational pair. Without a count
+    /// field, the registry leaves the scalar CLI type unknown.
     #[test]
     fn white_point_matches_pinned_exiftool_contract() {
         let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
         let white_point = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x013E")
+            .find(|tag| tag.id == "318")
             .expect("WhitePoint (0x013E) should exist");
 
         assert_eq!(white_point.name, "WhitePoint");
         assert!(white_point.writable);
-        assert_eq!(white_point.type_name.as_deref(), Some("rational64u"));
+        assert_eq!(white_point.type_name.as_deref(), Some("?"));
     }
 
-    /// ExifTool 13.59 Exif.pm 0x013f declares PrimaryChromaticities as a
-    /// writable `rational64u` with six values in IFD0.
+    /// Exif.pm 0x013f declares six writable rational values. The registry
+    /// leaves the scalar CLI type unknown until it can model the count.
     #[test]
     fn primary_chromaticities_matches_pinned_exiftool_contract() {
         let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
         let primary_chromaticities = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x013F")
+            .find(|tag| tag.id == "319")
             .expect("PrimaryChromaticities (0x013F) should exist");
 
         assert_eq!(primary_chromaticities.name, "PrimaryChromaticities");
         assert!(primary_chromaticities.writable);
-        assert_eq!(
-            primary_chromaticities.type_name.as_deref(),
-            Some("rational64u")
-        );
+        assert_eq!(primary_chromaticities.type_name.as_deref(), Some("?"));
     }
 
-    /// ExifTool 13.59 Exif.pm 0x0214 declares ReferenceBlackWhite as a
-    /// writable `rational64u` with six components in IFD0.
+    /// Exif.pm 0x0214 declares six writable rational components. The
+    /// registry leaves the scalar CLI type unknown until it can model them.
     #[test]
     fn reference_black_white_matches_pinned_exiftool_contract() {
         let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
         let reference_black_white = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x0214")
+            .find(|tag| tag.id == "532")
             .expect("ReferenceBlackWhite (0x0214) should exist");
 
         assert_eq!(reference_black_white.name, "ReferenceBlackWhite");
         assert!(reference_black_white.writable);
-        assert_eq!(
-            reference_black_white.type_name.as_deref(),
-            Some("rational64u")
-        );
+        assert_eq!(reference_black_white.type_name.as_deref(), Some("?"));
     }
 
-    /// ExifTool 13.59 Exif.pm 0x012d declares TransferFunction as a protected,
-    /// writable `int16u`. The generated tag model does not represent the
-    /// protected flag, but it must preserve the writable/type contract.
+    /// Exif.pm 0x012d declares 768 writable int16u values. The registry
+    /// keeps write capability while leaving the scalar CLI type unknown.
     #[test]
     fn transfer_function_matches_pinned_exiftool_contract() {
         let exif = get_tag_table("Exif::Main").expect("Exif::Main table should exist");
         let transfer_function = exif
             .tags
             .iter()
-            .find(|tag| tag.id == "0x012D")
+            .find(|tag| tag.id == "301")
             .expect("TransferFunction (0x012D) should exist");
 
         assert_eq!(transfer_function.name, "TransferFunction");
         assert!(transfer_function.writable);
-        assert_eq!(transfer_function.type_name.as_deref(), Some("int16u"));
+        assert_eq!(transfer_function.type_name.as_deref(), Some("?"));
     }
 }

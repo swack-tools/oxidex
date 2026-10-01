@@ -95,6 +95,8 @@ echo ">> extracting tag tables from Perl symbol table"
 # unnecessary. Both captures are fresh, using this exact interpreter/library,
 # and each consumer records the digest of its own source document.
 "$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
+echo ">> generating six source-backed tag registries"
+(cd "$ROOT" && cargo run --quiet --bin gen_tag_registry -- "$JSON" "$LIB")
 echo ">> extracting effective hydrated reader tables"
 "$PERL" "$HERE/dump_tables.pl" --reader-only --hydrated-layouts "$LIB" > "$HYDRATED_JSON"
 

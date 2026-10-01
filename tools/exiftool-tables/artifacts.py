@@ -111,6 +111,12 @@ def _module_artifacts(kind, stems):
     )
 
 STATIC_ARTIFACTS = (
+    Artifact("registry-core", 1, "gen_tag_registry", "oxidex-tags-core/src/core_tags.yaml"),
+    Artifact("registry-camera", 1, "gen_tag_registry", "oxidex-tags-camera/src/camera_tags.yaml"),
+    Artifact("registry-media", 1, "gen_tag_registry", "oxidex-tags-media/src/media_tags.yaml"),
+    Artifact("registry-image", 1, "gen_tag_registry", "oxidex-tags-image/src/image_tags.yaml"),
+    Artifact("registry-document", 1, "gen_tag_registry", "oxidex-tags-document/src/document_tags.yaml"),
+    Artifact("registry-specialty", 1, "gen_tag_registry", "oxidex-tags-specialty/src/specialty_tags.yaml"),
     Artifact("binary", 1, "codegen", "src/exiftool_tables/binary/mod.rs"),
     Artifact("ifd", 1, "codegen", "src/exiftool_tables/ifd/mod.rs"),
     Artifact("ifd-identity-ledger", 1, "codegen", "tools/exiftool-tables/ifd_identity_ledger.json"),

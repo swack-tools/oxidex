@@ -3,8 +3,8 @@
     "emitted": 6117,
     "reader_eligible": 4315,
     "reader_omitted": 1802,
-    "refused": 11734,
-    "rows": 17851
+    "refused": 11715,
+    "rows": 17832
   },
   "exiftool_version": "13.59",
   "instrument": "tools/exiftool-tables/codegen.py --ifd-out --ifd-identity-ledger-out",
@@ -187089,22 +187089,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::DJI::XMP",
-      "module": "DJI",
-      "name": "XMP DJI",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "843a1ae00e61c6d071c53e0c9f1f585e4b3444c2adc6f76bd09a23a2e1e96c58",
-      "state": "refused",
-      "table": "XMP",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::DV::Main",
       "module": "DV",
       "name": null,
@@ -292542,22 +292526,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::Microsoft::MP",
-      "module": "Microsoft",
-      "name": "XMP Microsoft Photo",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "3b71b4dc3fa90994fda5bcc41df8dc567b3cde273c4c9d92988ccedc643d8080",
-      "state": "refused",
-      "table": "MP",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::Microsoft::MP1",
       "module": "Microsoft",
       "name": null,
@@ -292744,22 +292712,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
-      "state": "refused",
-      "table": "MP1",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::Microsoft::MP1",
-      "module": "Microsoft",
-      "name": "XMP Microsoft Photo",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "3b71b4dc3fa90994fda5bcc41df8dc567b3cde273c4c9d92988ccedc643d8080",
       "state": "refused",
       "table": "MP1",
       "variant_path": []
@@ -293000,22 +292952,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "e1758cc67641cf28a9cd28cf675b368ee36b53bfb87a802b28bceb6be3142853",
-      "state": "refused",
-      "table": "XMP",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::Microsoft::XMP",
-      "module": "Microsoft",
-      "name": "XMP Microsoft",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "781abf70b6153829921adce56119960efa950fe1a6125a122fdbb9c1f12f9ac8",
       "state": "refused",
       "table": "XMP",
       "variant_path": []
@@ -316431,22 +316367,6 @@
       "artifact_state": "refused",
       "full_name": "Image::ExifTool::PDF::AIPrivate",
       "module": "PDF",
-      "name": "0",
-      "omissions": [],
-      "raw_key": "EXTRACT_UNKNOWN",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "6f67750345857fd6b6e0a8135dbd923f0a16b8b16a9f11ff1d58a6e6e8e7dcb8",
-      "state": "refused",
-      "table": "AIPrivate",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::PDF::AIPrivate",
-      "module": "PDF",
       "name": null,
       "omissions": [],
       "raw_key": "RoundTripVersion",
@@ -316759,22 +316679,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
-      "state": "refused",
-      "table": "Info",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::PDF::Info",
-      "module": "PDF",
-      "name": "1",
-      "omissions": [],
-      "raw_key": "EXTRACT_UNKNOWN",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "5b8dd045ff0e1772a71966175e8b31664e36c9f28e2ece99766ba653918662de",
       "state": "refused",
       "table": "Info",
       "variant_path": []
@@ -317193,22 +317097,6 @@
       "source_sha256": "88e229dcefe271b43754a5f8754f3b5cf30f7dcd67598c4de777b2c85069c31a",
       "state": "refused",
       "table": "Private",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::PDF::Properties",
-      "module": "PDF",
-      "name": "0",
-      "omissions": [],
-      "raw_key": "EXTRACT_UNKNOWN",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "6f67750345857fd6b6e0a8135dbd923f0a16b8b16a9f11ff1d58a6e6e8e7dcb8",
-      "state": "refused",
-      "table": "Properties",
       "variant_path": []
     },
     {
@@ -317737,22 +317625,6 @@
       "source_sha256": "d22aba73aef4499df66947d02f850f6da96571b39e666819883e137d04b77a58",
       "state": "refused",
       "table": "TransformParams",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::PDF::XObject",
-      "module": "PDF",
-      "name": "0",
-      "omissions": [],
-      "raw_key": "EXTRACT_UNKNOWN",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "6f67750345857fd6b6e0a8135dbd923f0a16b8b16a9f11ff1d58a6e6e8e7dcb8",
-      "state": "refused",
-      "table": "XObject",
       "variant_path": []
     },
     {
@@ -356312,7 +356184,7 @@
       "reasons": [
         "raw_key_unrepresentable"
       ],
-      "source_sha256": "e5561860baaf9c571c3c4cf80209423ca74e8452ef80a0bd6188a57170e6c5b0",
+      "source_sha256": "cd340248d8bde3a08b2d9a3d9b24ad53169a19e83f4333947bc54111993412ab",
       "state": "refused",
       "table": "allTables",
       "variant_path": []
@@ -359487,22 +359359,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::Album",
-      "module": "XMP",
-      "name": "XMP Adobe Album",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "21d95b085274c48bfd649ff7cdf95411a898e9a7474afd847bc7b06070783f2d",
-      "state": "refused",
-      "table": "Album",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::XMP::Composite",
       "module": "XMP",
       "name": "Flash",
@@ -359643,22 +359499,6 @@
       "source_sha256": "ed3be63663e19b472ad7db0da400f9d842d70334280a064b1e39733eed633005",
       "state": "refused",
       "table": "ExifTool",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::Lightroom",
-      "module": "XMP",
-      "name": "XMP Adobe Lightroom",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "f6c03b0ae1466c3e4d31aa16b09f5d4df57d407fbd7c32220247912c10c112c8",
-      "state": "refused",
-      "table": "Lightroom",
       "variant_path": []
     },
     {
@@ -363729,22 +363569,6 @@
       "artifact_state": "refused",
       "full_name": "Image::ExifTool::XMP::crs",
       "module": "XMP",
-      "name": "Photoshop Camera Raw namespace",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "6dffc14c861e68539ca7374a09864d5d5321f03c2043d8450d465b90b41542fe",
-      "state": "refused",
-      "table": "crs",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::crs",
-      "module": "XMP",
       "name": null,
       "omissions": [],
       "raw_key": "TIFFHandling",
@@ -364475,22 +364299,6 @@
       "source_sha256": "43dc6c6e5fa073c93b85d1a2a58a92be247c5a0b7bbbba36db095fe2f19b5b9c",
       "state": "refused",
       "table": "crs",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::dc",
-      "module": "XMP",
-      "name": "XMP Dublin Core",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "f1faf751da46f871d73304cc73e3cd6cdf716fd2379c3448ed83a51ec7a97532",
-      "state": "refused",
-      "table": "dc",
       "variant_path": []
     },
     {
@@ -366799,22 +366607,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::iptcCore",
-      "module": "XMP",
-      "name": "XMP IPTC Core",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "4defa30b49ec7f7d6d5f377e293a51fd22e19f32190307c7f759575f1c28cd7c",
-      "state": "refused",
-      "table": "iptcCore",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::XMP::pdf",
       "module": "XMP",
       "name": null,
@@ -366969,22 +366761,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "d263894d2d9a1dbc69d89696ac3dd8790513c5824bf688ef749cceb0228d92ee",
-      "state": "refused",
-      "table": "pdf",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::pdf",
-      "module": "XMP",
-      "name": "XMP PDF",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "b7835719b72ecdddd524e3304add25dba097c347163d8d13ff2565fe63563f41",
       "state": "refused",
       "table": "pdf",
       "variant_path": []
@@ -367401,22 +367177,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "103cba26175fccb0e34c29907b5e918e7bf1f52ae02ae6382b95f56bf0d8482a",
-      "state": "refused",
-      "table": "photoshop",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::photoshop",
-      "module": "XMP",
-      "name": "XMP Photoshop",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "d3ffe39649bf0c59b5cbac061f93c75ef19ee3c53169732e251a6576d5ec86ab",
       "state": "refused",
       "table": "photoshop",
       "variant_path": []
@@ -368273,22 +368033,6 @@
       "artifact_state": "refused",
       "full_name": "Image::ExifTool::XMP::tiff",
       "module": "XMP",
-      "name": "XMP TIFF",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "6d296625ca4188595325fd7c35df69cbe1a573fd23bb4d7309fa17efc781cd48",
-      "state": "refused",
-      "table": "tiff",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::tiff",
-      "module": "XMP",
       "name": null,
       "omissions": [],
       "raw_key": "TransferFunction",
@@ -368735,22 +368479,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::xmpBJ",
-      "module": "XMP",
-      "name": "XMP Basic Job Ticket",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "ce2f042de9130135b1107ab43e8caa88dfabd189100abb51c35cee90ac276dc6",
-      "state": "refused",
-      "table": "xmpBJ",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::XMP::xmpMM",
       "module": "XMP",
       "name": null,
@@ -369049,22 +368777,6 @@
         "raw_key_unrepresentable"
       ],
       "source_sha256": "43dc6c6e5fa073c93b85d1a2a58a92be247c5a0b7bbbba36db095fe2f19b5b9c",
-      "state": "refused",
-      "table": "xmpMM",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::xmpMM",
-      "module": "XMP",
-      "name": "XMP Media Management",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "85f0e02a9285374b3c0a607482de9093c4f1d47dd20267730bf48f477ecc4aa1",
       "state": "refused",
       "table": "xmpMM",
       "variant_path": []
@@ -369423,22 +369135,6 @@
     },
     {
       "artifact_state": "refused",
-      "full_name": "Image::ExifTool::XMP::xmpTPg",
-      "module": "XMP",
-      "name": "XMP Paged-Text",
-      "omissions": [],
-      "raw_key": "TABLE_DESC",
-      "reader_state": "refused",
-      "reasons": [
-        "raw_key_unrepresentable"
-      ],
-      "source_sha256": "e14ddd023bbc9e11c45f04c955a97da9325ff9f2f331ce1cc592434cba04c257",
-      "state": "refused",
-      "table": "xmpTPg",
-      "variant_path": []
-    },
-    {
-      "artifact_state": "refused",
       "full_name": "Image::ExifTool::ZIP::RAR5",
       "module": "ZIP",
       "name": null,
@@ -369536,9 +369232,9 @@
   ],
   "schema": "oxidex_ifd_identity_ledger_v1",
   "source": {
-    "expr_ledger_sha256": "4fa899fb2309a4903d7b182f93627c0207cd4a9323bf47d2695b6fa28384b37e",
+    "expr_ledger_sha256": "29ee6493209dde9a11fbfbe20fc9c729e471c4193e1093e865fa02e00e1339c1",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
-    "ifd_rust_sha256": "8e1dca66f25d96d61ea6f147ae22b768deb3d302c4c555cbb8e5672690b9404d",
-    "tables_json_sha256": "002b1f70711db04f411287256a69d57744841eeacfacf6c4d6fffda060f0d8ea"
+    "ifd_rust_sha256": "236097977cf606e2bddc6a49b3bfa240a1f1cec35f714903d84f2672a39ff8b0",
+    "tables_json_sha256": "3f03a1669fe1dccf3aad64c99b8934858a537dba4c013599c4e931e23a3c9f3d"
   }
 }

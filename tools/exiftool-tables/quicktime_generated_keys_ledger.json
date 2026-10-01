@@ -1011,7 +1011,7 @@
   "scope": "direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted",
   "source": {
     "exiftool_version": "13.59",
-    "table_sha256": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb"
+    "table_sha256": "68d4d87d30a24e9ba2ebbba360497e17087673ca9aebee0bfe7600111f7b2fe5"
   },
   "specs": [
     {

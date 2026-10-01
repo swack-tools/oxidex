@@ -95,9 +95,16 @@ def protocol_reason(doc, table):
         or not isinstance(proc.get('source_sha256'), str) or len(proc['source_sha256']) != 64):
         return 'unsupported_userdata_processor'
     meta = table['meta']
+    # SetupTagTable adds these two identity keys to the hydrated table. The
+    # widened dump now classifies them as table metadata. Accept only the
+    # source-proved identity for this exact table; a changed value still
+    # refuses the bounded reader contract.
+    identity_meta = {'TABLE_NAME': 'Image::ExifTool::QuickTime::UserData',
+                     'SHORT_NAME': 'QuickTime::UserData'}
     if (meta.get('FORMAT') != 'string' or meta.get('GROUPS', {}).get('1') != 'UserData'
         or meta.get('GROUPS', {}).get('0', 'QuickTime') != 'QuickTime'
-        or set(meta) - {'CHECK_PROC','FORMAT','GROUPS','LANG_INFO','NOTES','PREFERRED','PROCESS_PROC','TAG_PREFIX','WRITABLE','WRITE_GROUP','WRITE_PROC'}):
+        or any(meta.get(key) != value for key, value in identity_meta.items() if key in meta)
+        or set(meta) - {'CHECK_PROC','FORMAT','GROUPS','LANG_INFO','NOTES','PREFERRED','PROCESS_PROC','TAG_PREFIX','WRITABLE','WRITE_GROUP','WRITE_PROC', *identity_meta}):
         return 'unsupported_userdata_table_controls'
     p = doc.get('quicktime_userdata_reader_protocol', {})
     if p.get('kind') != 'quicktime_userdata_reader_protocol_v1':

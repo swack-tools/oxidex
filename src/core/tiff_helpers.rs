@@ -6286,10 +6286,11 @@ mod exif_subifd_tests {
 
     /// Leica M8/M8.2/M9/M Monochrom write FocalPlaneX/YResolution and
     /// FocalPlaneResolutionUnit under their TIFF/EP ids 0x920e-0x9210,
-    /// which the hand name table never named (`ExifIFD:0x920E`, hidden).
+    /// which the old hand name table did not name. The generated registry now
+    /// supplies the source name to both readers.
     /// ORA LeicaM9.jpg: 3700 / 3689 / `inches`.
     #[test]
-    fn legacy_focal_plane_ids_are_named_by_the_engine() {
+    fn legacy_focal_plane_ids_keep_source_names_in_both_walks() {
         let at = tail_at(3);
         let data = exif_block(
             &[
@@ -6314,8 +6315,16 @@ mod exif_subifd_tests {
         );
         assert!(metadata.get("ExifIFD:0x920E").is_none());
         let hand = walk_exif(&data, None, None, &[]);
-        assert!(hand.get("ExifIFD:FocalPlaneXResolution").is_none());
-        assert!(hand.get("ExifIFD:0x920E").is_some());
+        // The source-generated registry now names the legacy ID in the
+        // hand path too. Its write address remains the modern 0xa20e ID.
+        assert_eq!(
+            hand.get("ExifIFD:FocalPlaneXResolution"),
+            Some(&TagValue::Rational {
+                numerator: 3700,
+                denominator: 1,
+            })
+        );
+        assert!(hand.get("ExifIFD:0x920E").is_none());
     }
 
     /// Spec 7.1 test 7, the same-name pairs, which land under one key.
