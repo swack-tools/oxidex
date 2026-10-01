@@ -1341,6 +1341,39 @@ mod tests {
     }
 
     #[test]
+    fn exif_resource_without_subifd_footer_does_not_relabel_interop_as_ifd1() {
+        // Pinned 13.59 reads the ExifIFD with no next-IFD footer and warns
+        // that IFD1 points at the previously visited InteropIFD. The same
+        // bytes in a standalone TIFF take a different native path.
+        let mut tiff = vec![0u8; 94];
+        tiff[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        tiff[8..10].copy_from_slice(&1u16.to_le_bytes());
+        tiff[10..12].copy_from_slice(&0x8769u16.to_le_bytes());
+        tiff[12..14].copy_from_slice(&4u16.to_le_bytes());
+        tiff[14..18].copy_from_slice(&1u32.to_le_bytes());
+        tiff[18..22].copy_from_slice(&80u32.to_le_bytes());
+        tiff[22..26].copy_from_slice(&42u32.to_le_bytes());
+        tiff[42..44].copy_from_slice(&2u16.to_le_bytes());
+        tiff[44..46].copy_from_slice(&0x0201u16.to_le_bytes());
+        tiff[46..48].copy_from_slice(&4u16.to_le_bytes());
+        tiff[48..52].copy_from_slice(&1u32.to_le_bytes());
+        tiff[52..56].copy_from_slice(&72u32.to_le_bytes());
+        tiff[56..58].copy_from_slice(&0x0202u16.to_le_bytes());
+        tiff[58..60].copy_from_slice(&4u16.to_le_bytes());
+        tiff[60..64].copy_from_slice(&1u32.to_le_bytes());
+        tiff[64..68].copy_from_slice(&4u32.to_le_bytes());
+        tiff[80..82].copy_from_slice(&1u16.to_le_bytes());
+        tiff[82..84].copy_from_slice(&0xa005u16.to_le_bytes());
+        tiff[84..86].copy_from_slice(&4u16.to_le_bytes());
+        tiff[86..90].copy_from_slice(&1u32.to_le_bytes());
+        tiff[90..94].copy_from_slice(&42u32.to_le_bytes());
+        let mut metadata = MetadataMap::new();
+        PSDParser::parse_exif_data(&tiff, &mut metadata);
+        assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+        assert!(metadata.get("IFD1:ThumbnailLength").is_none());
+    }
+
+    #[test]
     fn parses_compression_from_embedded_exif_ifd1() {
         let mut metadata = MetadataMap::new();
         PSDParser::parse_exif_data(&photoshop_psd_ifd1(), &mut metadata);
