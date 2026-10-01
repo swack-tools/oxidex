@@ -253,6 +253,15 @@ else:
         else:
             assert flag('--out')==path
             output(path,name)
+    elif name=='gen_plus_media_matrix.py':
+        assert flag('--exiftool-dir')==lib.parent
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        path=artifact('gen_plus_media_matrix')
+        if '--check' in args:
+            assert path.read_text()=='generated explicit-A '+name+'\n'
+        else:
+            assert flag('--out')==path
+            output(path,name)
     elif name=='tag_exists_codegen.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -396,7 +405,8 @@ class RegenerationShellTests(unittest.TestCase):
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
                 'dump_lens_alternatives.pl', 'capture_xmp_priorities.pl',
                 'xmp_priority_specs.py', 'gen_xmp_lens_maps.py',
-                'gen_xmp_lens_maps.py:check', 'verify_geotiff.py',
+                'gen_xmp_lens_maps.py:check', 'gen_plus_media_matrix.py',
+                'gen_plus_media_matrix.py:check', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
                 'gen_nikon_encrypted_tables.py',
