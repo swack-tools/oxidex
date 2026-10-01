@@ -361,6 +361,27 @@ workspace:
     @echo "Workspace members:"
     @cargo metadata --format-version 1 --no-deps | jq -r '.workspace_members[]'
 
+# Autonomous fix fleet
+# --------------------
+
+# Bring the whole fix pipeline up, supervised (mergers + dispatcher + judgment queue)
+# Runs in the FOREGROUND and supervises until ^C; see `just fleet-status` / `just fleet-down`.
+# Extra args are forwarded, e.g. `just fleet-up "--workers 16"`.
+fleet-up *ARGS:
+    @./scripts/fleet_up.sh {{ARGS}}
+
+# What the fleet is actually doing right now (pidfile-exact, not a pgrep guess)
+fleet-status:
+    @./scripts/fleet_up.sh --status
+
+# Stop every tier this launcher started
+fleet-down:
+    @./scripts/fleet_up.sh --down
+
+# Preflight + resolved plan without starting or touching anything
+fleet-check:
+    @./scripts/fleet_up.sh --dry-run
+
 # Git commands
 # -------------
 
