@@ -36,18 +36,38 @@ Checks (each independent; all always run, none short-circuits another):
                 supplied.
 
   printconv     PrintConv-vs-Perl byte check: every quoted string VALUE
-                the diff ADDS inside map-like structures (`=>` lines and
-                const/static array literals, added lines only) must appear
+                the diff ADDS inside map-like structures must appear
                 byte-identical somewhere in the `Perl-Ref` module file
                 under --perl-lib. Any miss -> flag
-                "printconv-mismatch:<value-excerpt>". Values we cannot
-                extract or verify -- computed right-hand sides
-                (format!/sprintf-style, function calls, match-arm
-                blocks), a missing --perl-lib, an unresolvable Perl-Ref
+                "printconv-mismatch:<value-excerpt>".
+                extract_added_map_values defines "map-like" exactly and
+                is the authority; it covers `=>` arms AND the bodies of
+                block-bodied arms (`260 => { "...".to_string() }`),
+                const/static array literals, `const_decoder!` tables,
+                inline `for ... in [...]` tables, bare mid-table
+                elements (`"Value",` / `(12, "Value"),`, trailing
+                comments stripped) and `.insert(<key>, "<value>")`.
+                Values we cannot verify -- a runtime-built string
+                (format!/write!/... : the literal is a TEMPLATE, not a
+                value), a missing --perl-lib, an unresolvable Perl-Ref
                 module -> flag "printconv-unverifiable". Per spec open
                 question 6 this deliberately over-flags: computed
                 PrintConvs always force the human queue, never pass
                 silently.
+
+                NOT unverifiable, deliberately: the quoted argument of
+                an ordinary function call. `Some("Centered".to_string())`,
+                `String::from("sRGB")` and `.insert(k, "Fine")` are all
+                function calls carrying genuine display values, so they
+                are extracted and byte-checked like any other. (This
+                paragraph exists because the docstring used to promise
+                "function calls" were reported unverifiable, which the
+                code never did -- only the macro half was implemented.
+                Measured 2026-07-26 over the 50 commits then ahead of
+                origin/main on the 74 worker branches: 13 are
+                printconv-flagged and 0 of the 13 would clear if
+                call-argument strings were skipped, so the promise was
+                costing nothing and protecting nothing.)
 
   ownership     If --squads-toml maps squads to file globs, every file the
                 diff touches outside the committing squad's globs (squad =
@@ -138,6 +158,16 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 #      restricted to real tag tables, the mod-tests hunk gate is gone,
 #      the &[&str] registry gate is keyed on the declaration NAME, and
 #      non-source paths are rejected outright
+#   6  extractor evasion holes closed (2026-07-26): block-bodied match
+#      arms (the shape rustfmt itself produces at 71+ chars of display
+#      value), `const_decoder!`/inline-`for ... in [...]` tables, bare
+#      `(key, "value")` mid-table elements, `.insert(k, "value")`, and
+#      trailing `//` / `/* */` comments on bare table elements. Each was
+#      a shape for which extract_added_map_values returned ([], []), so
+#      validate_commit said ok=True AND
+#      overlord_sweep.classify_for_judgment_queue -- which shares this
+#      extractor -- returned no reason, i.e. the commit shipped as
+#      machine_accepted with no human ever seeing the value
 #
 # NOTE ON DIRECTION: the paragraph above frames a bump as "a rejection
 # can become an acceptance", because that is the case the merger's retry
@@ -148,7 +178,7 @@ CONDITIONAL_TRAILERS = tuple(k for k in REQUIRED_TRAILERS if k != "Perl-Ref")
 # human reading quarantine.jsonl months from now knows which ruleset
 # produced a verdict, and a stricter rule still changes what a re-offered
 # head is measured against.
-POLICY_VERSION = 5
+POLICY_VERSION = 6
 
 # Flags that are recorded for the human record but do NOT block
 # admission. `ownership:` says the fix landed outside the worker's squad
@@ -221,6 +251,106 @@ _QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 # checked separately on the right-hand side of the first `=`).
 _CONST_STATIC_RE = re.compile(r"\b(?:const|static)\b")
 
+# oxidex's OWN table macro. `const_decoder!(pub ASPECT_RATIO, i32, [(0,
+# "3:2"), (12, "3:2 (APS-H crop)")])` is the repo's canonical PrintConv
+# representation -- 338 uses across 46 files in src/, counted 2026-07-26
+# -- and _CONST_STATIC_RE cannot see it: `\bconst\b` needs a word
+# boundary after "const" and `const_decoder` has an underscore there. So
+# the extractor was blind to the single most common table shape in the
+# codebase while its docstring claimed to cover "const_decoder-style
+# tables". Measured on real fleet output: 17 distinct worker diffs under
+# ~/.oxidex/logs/model-fix-diffs add 21 distinct multi-word display
+# strings in this shape and the extractor returned nothing for all of
+# them (e.g. `(1, "Adjust by lens")` in 2026-07-25T16:10:18-canon-4).
+#
+# Matched by SHAPE (`<word>decoder<word>!(`) rather than by the exact
+# macro name so a sibling macro (const_decoder_signed!, decoder_map!)
+# does not silently re-open the hole.
+_TABLE_MACRO_RE = re.compile(r"\b\w*decoder\w*!\s*\(")
+
+# `for (bit, name) in [(29, "Main 10"), ...]` -- an inline table iterated
+# in place instead of declared. A real QuickTime HEVC profile fix used
+# this shape and its whole diff extracted nothing at all.
+#
+# The TUPLE pattern is required, and that is the whole point: a
+# single-binding loop over a flat list is an identifier walk, not a
+# key->display-value table. Measured 2026-07-26 on quarantined head
+# 226828957917 (a real APP12 fix): `for wb_tag in ["WB2", "WB3", "WB4",
+# "WB5", "WB6"]` is a list of raw APP12 tag NAMES, and treating it as a
+# table flagged all five as PrintConv values -- the same false-quarantine
+# class _STR_SLICE_REGISTRY_RE exists to prevent, arriving through a new
+# door. `for (k, v) in [...]` cannot be that: the second element of each
+# pair is a value by construction.
+_INLINE_TABLE_RE = re.compile(r"\bfor\s*\(\s*[^)]+,[^)]+\)\s*in\s+&?\s*\[")
+
+# A `.insert(<key>, "<display value>")` call. No `=>`, not a bare string
+# element, so no map-shape rule fired: the value was invisible. The key
+# side is deliberately NOT read -- `md.insert("EXIF:Make", value)` is the
+# overwhelmingly common shape in src/ (1,029 `.insert(` sites carrying a
+# quoted first argument, counted 2026-07-26) and its quoted argument is a
+# metadata KEY, not a PrintConv value.
+_INSERT_CALL_RE = re.compile(r"\.insert\s*\(")
+
+# Why extract_added_map_values tracks BRACE depth for match-arm bodies
+# (`arm_depth`) and not just bracket depth for array literals:
+#
+# A match arm whose right-hand side is a BLOCK -- `260 => {` -- puts its
+# value on a later line, where it is neither on a `=>` line nor a bare
+# string element (any wrapper, `.to_string()` / `.into()` /
+# `String::from(...)`, breaks _BARE_STRING_ELEMENT_RE's anchors). So the
+# value was extracted by nothing, byte-checked by nothing, and (because
+# overlord_sweep.classify_for_judgment_queue calls this same extractor)
+# routed to no human either.
+#
+# That is not a hypothetical adversarial shape -- rustfmt MANUFACTURES
+# it. Measured 2026-07-26 with rustfmt 1.9.0 --edition 2021 by binary
+# search: at indent 8 with a 3-digit key, a same-line arm whose display
+# value reaches 71 characters is rewritten into exactly
+#     260 => {
+#         "....".to_string()
+#     }
+# and the threshold drops ~4 chars per extra indent level. 2.44% of the
+# 19,796 distinct display strings in Image/ExifTool/*.pm (Lang excluded)
+# are that long. So the byte check switched itself off as a pure function
+# of line width -- short fabrications caught, long ones admitted, no
+# intent required -- and `cargo fmt` runs over every sweep branch before
+# it is pushed. The shape occurs naturally in oxidex today (7 sites, e.g.
+# src/parsers/raw/metadata.rs `"R03" => {` / `"R03 - DCF option file
+# (Adobe RGB)"`), so it is ordinary house output, not a tell.
+#
+# WHAT is extracted inside such a body is deliberately NARROWER than
+# inside an array literal: only a line that is one string literal wrapped
+# in nothing but conversions/constructors -- `"X".to_string()`,
+# `"X".into()`, `String::from("X")`, `Some("X".to_string())`,
+# `TagValue::String("X".to_owned())`, or the bare `"X"`. That is the arm's
+# RETURN VALUE, which is the thing the byte check is about.
+#
+# Taking every quoted string in the body instead (the obvious first cut,
+# and what the array-literal branch does) was measured over all 2,348
+# real worker diffs in ~/.oxidex/logs/model-fix-diffs on 2026-07-26: it
+# newly extracted values from 334 of them, and the additions were
+# dominated by things that are not display values at all -- separators
+# (", ", "."), byte magic ("Exif\0\0", "IJPEG\0"), key prefixes
+# ("ExifIFD:", "EXIF:") and tag names ("BlackLevel", "ActiveArea",
+# "JpgFromRaw") pulled out of ordinary body code. Those are precisely the
+# false-quarantine class that POLICY_VERSION 3 and 4 were spent fixing;
+# re-importing it to close this hole would be a bad trade. The narrow
+# rule closes the reported hole (a fabricated display value has to BE the
+# arm's value to be emitted) at a fraction of the noise.
+#
+# Known and accepted residue, listed so the next person does not think it
+# was missed: a value laundered through a local (`let s = "Fab"; Some(s)`)
+# or pushed (`out.push("Fab")`) inside a block arm is not extracted. Both
+# occur zero times in the 2,348-diff corpus, and neither is what rustfmt
+# produces from an ordinary arm.
+_WRAPPED_STRING_VALUE_RE = re.compile(
+    r"^\s*(?:return\s+)?"                         # an early return is a value too
+    r"(?:[A-Za-z_][\w:]*\s*\(\s*)*"               # Some( / String::from( / ...
+    r'"(?:[^"\\]|\\.)*"'                          # exactly one string literal
+    r"(?:\s*\.\s*[a-z_]+\(\))*"                   # .to_string() / .into() / ...
+    r"\s*\)*\s*[,;]?\s*$"                         # closing parens, optional , or ;
+)
+
 # A PrintConv value is a human-readable DISPLAY string ("Fine", "AE/AF
 # Lock", "Intel 386 or later, and compatibles"). The strings below are
 # IDENTIFIERS, and are never expected to appear in an ExifTool module's
@@ -237,15 +367,44 @@ _CONST_STATIC_RE = re.compile(r"\b(?:const|static)\b")
 # display value that merely contains a colon ("Fine: Best") or a space
 # is unaffected, so the fabricated-value check this gate exists for is
 # preserved intact.
-_TAG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_]*$")
+#
+# The identifier half admits `-` and `.` because real oxidex tag names
+# carry them. Measured 2026-07-26 while adding the block-arm/.insert/
+# tuple rules below: those rules read a string as a display value
+# without asking whether it IS one, and with a `\w`-only pattern
+# `"EXIF:TIFF-EPStandardID"` hard-blocked -- a value copied verbatim
+# from 2026-07-25T07:58:08-nikon-2-APPLIED.diff, i.e. a commit the fleet
+# had already ACCEPTED. Widening the halves rather than loosening the
+# whole gate keeps "Fine: Best" and "YCbCr4:4:4 (1 1)" checked: a space
+# still disqualifies, which is what separates a key from a display
+# string.
+_TAG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z][A-Za-z0-9_.-]*$")
+
+# A BARE CamelCase tag name with no group prefix ("VolumeDescriptorType")
+# is deliberately NOT suppressed, though the same 2026-07-26 measurement
+# surfaced one via a block-arm return in tail-1. Shape cannot separate it
+# from a genuine display value: "RhsOnly" and "VolumeDescriptorType" are
+# identical to any rule expressible here, and a bare-CamelCase exemption
+# would hand a fabricator a trivial evasion -- return an invented
+# CamelCase value and it is never byte-checked.
+#
+# So this over-flags that one shape on purpose. The asymmetry decides it:
+# an over-flag costs one recoverable quarantine plus a POLICY_VERSION
+# retry, while an under-flag auto-merges a fabricated display value to
+# main and stays there. Widening the group-qualified form above already
+# removes 3 of the 4 measured over-flags; this is the remaining 1.
 
 
 def looks_like_tag_key(value):
-    """True for an oxidex metadata key like "EXIF:PreviewImageStart".
+    """True for an oxidex metadata key like "EXIF:PreviewImageStart" or
+    "EXIF:TIFF-EPStandardID".
 
-    Requires BOTH halves to be bare identifiers (no spaces, no
-    punctuation beyond the single separating colon), so display strings
-    that happen to contain a colon are not swallowed.
+    Requires BOTH halves to be identifier-shaped -- letters, digits,
+    `_`, `-`, `.`, and nothing else -- around a single separating colon.
+    A space anywhere disqualifies, which is what keeps display strings
+    that merely contain a colon ("Fine: Best", "YCbCr4:4:4 (1 1)")
+    byte-checked. A BARE name with no colon is not matched here; see
+    the comment above _TAG_KEY_RE for why that is deliberate.
     """
     return bool(_TAG_KEY_RE.match(value or ""))
 
@@ -277,6 +436,114 @@ def is_identifier_not_printconv(value, code_line):
 _BARE_STRING_ELEMENT_RE = re.compile(
     r'^\s*(?:"(?:[^"\\]|\\.)*"\s*,\s*)*"(?:[^"\\]|\\.)*"\s*,?\s*$'
 )
+
+# The same idea for a KEYED table element -- `(12, "3:2 (APS-H crop)"),`
+# -- which is what a mid-table insert into a const_decoder!/array-of-
+# tuples table looks like when the declaring `[` is outside the hunk.
+# The key side excludes quotes and parens so this cannot match a nested
+# call or a ("key", "value") pair whose first element is itself a string
+# (that shape is left to the bare-string rule at its own line).
+#
+# Whole-line anchored, like its sibling, which leaves a known gap: a
+# table written entirely on one line by something that is not a
+# recognised opener (`let m = HashMap::from([(1, "Fabricated")]);`) is
+# not read. Zero occurrences in the 2,348-diff corpus; recorded here so
+# the next person knows it was weighed, not missed.
+_BARE_TUPLE_ELEMENT_RE = re.compile(
+    r'^\s*\(\s*[^",()]+,\s*"(?:[^"\\]|\\.)*"\s*\)\s*,?\s*$'
+)
+
+
+def strip_trailing_comment(code):
+    """`code` with any trailing `//...` or `/*...*/` comment removed.
+
+    A SCANNER, not a regex, because `//` inside a string literal is not a
+    comment: `"http://x.example//y",` must survive intact. Escapes are
+    honoured so a `\\"` cannot end the literal early.
+
+    This exists because _BARE_STRING_ELEMENT_RE is `$`-anchored, and
+    src/parsers/icc/registries.rs -- the file whose indexed display-value
+    tables the POLICY_VERSION 5 note below specifically claims to protect
+    -- writes its elements in the column-aligned house style
+    `"F2",             // 4`. Measured 2026-07-26 against the real
+    ILLUMINANT_TYPES table with the real perl-lib: inserting
+    `"FAB PLAIN VALUE",` gave printconv-mismatch, while the identical
+    value written `"FAB COMMENT VALUE", // 42` (or `/* 42 */`, or aligned
+    house style) gave ok=True with NO flags at all. The file's own style
+    was the evasion; no adversarial intent was needed. Stripping before
+    extraction also stops a string that only exists inside a comment from
+    being byte-checked as if it were code.
+    """
+    out = []
+    i = 0
+    in_string = False
+    while i < len(code):
+        char = code[i]
+        if in_string:
+            if char == "\\":
+                out.append(code[i:i + 2])
+                i += 2
+                continue
+            if char == '"':
+                in_string = False
+            out.append(char)
+            i += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            i += 1
+            continue
+        if code.startswith("//", i):
+            break
+        if code.startswith("/*", i):
+            end = code.find("*/", i + 2)
+            if end == -1:
+                break  # unterminated block comment: the rest is comment
+            i = end + 2
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def _insert_call_value_text(code):
+    """The argument text AFTER the first top-level comma of the first
+    `.insert(` call on `code`, or None when there is no such call.
+
+    Top-level means at the insert call's own paren depth, so
+    `md.insert(format!("ICC_Profile:{}", tag), value)` splits after the
+    `format!(...)` argument and not inside it -- otherwise the format
+    template would be harvested as a display value.
+    """
+    match = _INSERT_CALL_RE.search(code)
+    if not match:
+        return None
+    depth = 0
+    in_string = False
+    i = match.end()
+    while i < len(code):
+        char = code[i]
+        if in_string:
+            if char == "\\":
+                i += 2
+                continue
+            if char == '"':
+                in_string = False
+            i += 1
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return None  # call closed before any second argument
+            depth -= 1
+        elif char == "," and depth == 0:
+            return code[i + 1:]
+        i += 1
+    return None
 
 # git writes the enclosing declaration into every hunk header, after the
 # second "@@":
@@ -314,6 +581,19 @@ _BARE_STRING_ELEMENT_RE = re.compile(
 # CHECKED is the safe direction: over-checking costs one recoverable
 # flag and a POLICY_VERSION retry, under-checking ships a fabricated
 # value to main silently and forever.
+#
+# CORRECTION (2026-07-26, POLICY_VERSION 6): "including all four ICC
+# value tables" was true of this NAME gate and false of the extractor as
+# a whole. ILLUMINANT_TYPES is 9 elements long, so a mid-table insert
+# puts its declaring line outside git's 3-line context and the value
+# arrives as a bare element -- and every element in that file is written
+# `"F2",             // 4`, whose trailing comment the `$`-anchored
+# _BARE_STRING_ELEMENT_RE could not match. Measured against the real
+# file with the real perl-lib: the plain style flagged
+# printconv-mismatch, the house style returned ok=True with no flags.
+# The same delta hit PACKER_SECTIONS and SUSPICIOUS_IMPORTS (the 3 of 12
+# >=8-element bare-string tables in src/ that are checked at all).
+# strip_trailing_comment makes the claim true again.
 _STR_SLICE_REGISTRY_RE = re.compile(
     r"\b(?:const|static)\s+(\w*(?:_TAGS|_KEYS|_FIELDS|_NAMES|_EXTENSIONS|_GROUPS|_MARKERS)"
     r"|SUPPORTED_\w+)\s*:\s*&?\s*\[\s*&(?:'\w+\s+)?str\s*\]"
@@ -609,17 +889,34 @@ def extract_added_map_values(diff_text):
       - lines containing `=>` (match arms, phf_map!/HashMap entries):
         the quoted strings on the RIGHT of the `=>` are values; quoted
         keys on the left are not checked;
-      - const/static array literals (`const_decoder`-style tables):
-        every quoted string on added lines inside the literal. The
-        literal is tracked across lines by bracket depth, and a context
-        (unchanged) line can open the array so that inserting one value
-        into an existing table is still seen;
-      - added lines that are NOTHING BUT bare string-literal array
-        element(s) ("Some Value", possibly several per line), even at
-        bracket depth 0: a value inserted mid-table in a large existing
-        array produces a hunk whose context lines are just neighboring
-        entries -- the declaring `const ... = [` line never appears, so
-        depth tracking alone would silently pass a fabricated value.
+      - the BODY of a match arm whose right-hand side opens a block
+        (`260 => {` ... `}`), tracked across lines by brace depth: the
+        value lives on a later line there, wrapped in whatever converts
+        it (`.to_string()`, `String::from(...)`, `Some(...)`). See the
+        note above _WRAPPED_STRING_VALUE_RE for why this is rustfmt's own
+        output rather than an exotic shape, and for what is deliberately
+        NOT taken from a body;
+      - array literals: `const`/`static` declarations, oxidex's
+        `const_decoder!(...)` table macro, and inline `for ... in [...]`
+        tables. Every quoted string on added lines inside the literal is
+        a value. The literal is tracked across lines by bracket depth,
+        and a context (unchanged) line can open it so that inserting one
+        value into an existing table is still seen;
+      - added lines that are NOTHING BUT a bare table element -- one or
+        more bare string literals ("Some Value"), or one `(key,
+        "value")` tuple -- even at bracket depth 0: a value inserted
+        mid-table in a large existing array produces a hunk whose
+        context lines are just neighboring entries, so the declaring
+        `const ... = [` line never appears and depth tracking alone
+        would silently pass a fabricated value;
+      - `.insert(<key>, "<value>")` calls: the text after the call's
+        first TOP-LEVEL comma, so the quoted metadata key that normally
+        occupies the first argument is not mistaken for a display value.
+
+    Every one of those tests runs against the line with any trailing
+    `//` / `/* */` comment stripped (strip_trailing_comment), because the
+    house style in this repo writes indexed tables as
+    `"F2",             // 4` and the bare-element rules are anchored.
 
     An added `=>` line whose right-hand side has no quoted string and is
     not a benign literal (number/bool/None) is COMPUTED -- reported in
@@ -631,18 +928,24 @@ def extract_added_map_values(diff_text):
     first-seen order."""
     values = []
     unverifiable = []
-    depth = 0  # bracket depth inside a const/static array literal
+    depth = 0  # bracket depth inside an array literal
+    arm_depth = 0  # brace depth inside a block-bodied match arm
     assert_depth = 0  # paren depth inside a multi-line assert!/panic! call
+    table_pending = False  # saw a table macro; its `[` is on a later line
     hunk_ctx = ""  # git's record of the declaration enclosing this hunk
     for raw in diff_text.splitlines():
         if raw.startswith("diff --git"):
-            depth = 0  # never let array state leak across files/hunks
+            depth = 0  # never let array/arm state leak across files/hunks
+            arm_depth = 0
             assert_depth = 0
+            table_pending = False
             hunk_ctx = ""
             continue
         if raw.startswith("@@"):
             depth = 0
+            arm_depth = 0
             assert_depth = 0
+            table_pending = False
             # "@@ -a,b +c,d @@ <enclosing declaration>" -- everything
             # after the second "@@" is git's funcname context.
             parts = raw.split("@@")
@@ -654,6 +957,10 @@ def extract_added_map_values(diff_text):
             continue  # removed lines and diff noise
         added = raw[0] == "+"
         code = raw[1:]
+        # Every shape test below reads the comment-stripped text; the
+        # ORIGINAL line is still what _keep_printconv_values sees, because
+        # is_identifier_not_printconv needs the raw `b"..."` spelling.
+        bare = strip_trailing_comment(code)
         if assert_depth > 0 or _ASSERT_LINE_RE.search(code):
             # An assert/panic message is prose ABOUT a value, not the
             # value. rustfmt routinely splits these across lines:
@@ -670,21 +977,53 @@ def extract_added_map_values(diff_text):
             # inside an assert call.
             assert_depth = max(0, assert_depth + code.count("(") - code.count(")"))
             depth = max(0, depth + code.count("[") - code.count("]"))
+            arm_depth = max(0, arm_depth + code.count("{") - code.count("}"))
             continue
+        # Being inside a block-bodied match arm ADDS one rule (the arm's
+        # own wrapped value counts as a map value) and takes none away:
+        # every other rule below still runs, because a body routinely
+        # contains further map-like content -- a nested `match` whose arms
+        # are ordinary same-line `1 => Some("Rectangular".to_string()),`
+        # entries, a `map.insert(...)`, a nested table literal. Measured
+        # 2026-07-26: an earlier cut of this change made the body a
+        # SEPARATE branch that skipped the rest of the chain, and that
+        # silently stopped extracting the nested arms of three real DNG
+        # heads (786ea09b9475, a688591c5a2f, c446aaf8cc80) -- 16 genuine
+        # display values, including "Even rows offset up by 1/2 row, even
+        # columns offset left by 1/2 column", went from checked to
+        # unchecked. Closing one hole must not open another; the brace
+        # bookkeeping happens here, once, and the rules stay additive.
+        in_arm_body = arm_depth > 0
+        if in_arm_body:
+            arm_depth = max(0, arm_depth + bare.count("{") - bare.count("}"))
+            if added and _WRAPPED_STRING_VALUE_RE.match(bare):
+                # The arm's return value. No printconv-unverifiable is
+                # raised for a `format!` body here, deliberately, unlike
+                # the same-line `=>` branch: a template cannot be a
+                # fabricated ExifTool value -- its `{}` placeholders
+                # appear in no tag table, which is what
+                # _FORMAT_PLACEHOLDER_RE already encodes -- so the flag
+                # would buy no fabrication detection. Measured over the
+                # 2,348 worker diffs on 2026-07-26: raising it in bodies
+                # newly flags 227 of them against the 100 that carry the
+                # flag today, a 3.3x increase in a BLOCKING flag for no
+                # detection gain (head 4a71eb0a4b72, a real CR2 LensInfo
+                # fix whose body is all `format!("{:.1}", ...)`, is one).
+                values.extend(_keep_printconv_values(_QUOTED_RE.findall(bare), code))
+                continue
         if depth > 0:
             if added:
-                values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
-            depth = max(0, depth + code.count("[") - code.count("]"))
+                values.extend(_keep_printconv_values(_QUOTED_RE.findall(bare), code))
+            depth = max(0, depth + bare.count("[") - bare.count("]"))
             continue
-        if _CONST_STATIC_RE.search(code) and "=" in code:
-            rhs = code.split("=", 1)[1]
-            if "[" in rhs:
-                if added:
-                    values.extend(_keep_printconv_values(_QUOTED_RE.findall(rhs), code))
-                depth = max(0, rhs.count("[") - rhs.count("]"))
-                continue
-        if added and "=>" in code:
-            rhs = code.split("=>", 1)[1]
+        table_tail, table_pending = _table_literal_tail(bare, table_pending)
+        if table_tail is not None:
+            if added:
+                values.extend(_keep_printconv_values(_QUOTED_RE.findall(table_tail), code))
+            depth = max(0, table_tail.count("[") - table_tail.count("]"))
+            continue
+        if added and "=>" in bare:
+            rhs = bare.split("=>", 1)[1]
             if _STRING_BUILDING_MACRO_RE.search(rhs):
                 # Runtime-built string: the literal in the diff is a
                 # template, not a value, so there is nothing to
@@ -695,6 +1034,16 @@ def extract_added_map_values(diff_text):
             found = _QUOTED_RE.findall(rhs)
             if found:
                 values.extend(_keep_printconv_values(found, code))
+            if not in_arm_body and rhs.count("{") > rhs.count("}"):
+                # `260 => {` -- the arm's value is in the block body, so
+                # keep scanning until the brace closes. Opened on brace
+                # BALANCE rather than on an exact `=> {` match so
+                # `=> Foo {` (a struct literal spanning lines) and
+                # `=> { let x = 1;` are covered too. When already inside
+                # a body the counter was updated for the whole line above,
+                # so assigning here would discard the outer arm's depth.
+                arm_depth = rhs.count("{") - rhs.count("}")
+                continue
             # A right-hand side with NO quoted string carries no display
             # text, so it cannot possibly hide a fabricated PrintConv
             # value -- there are no bytes to compare. It used to be
@@ -706,27 +1055,87 @@ def extract_added_map_values(diff_text):
             # `Ok(bo) => bo,`, `Err(_) => return,`) and on byte-order
             # switches, quarantining 12 valid fixes as of 2026-07-25
             # while never once catching a real fabrication.
-        elif added and _BARE_STRING_ELEMENT_RE.match(code):
-            # Bare string element(s) added at depth 0: the enclosing
-            # const table's declaration is outside the hunk (mid-table
-            # insert). Treat them as map values so the byte check runs;
-            # over-catching a stray string list here is fine (spec open
-            # question 6: over-flagging routes to the human queue,
-            # under-flagging auto-ships a fabricated value).
-            #
-            # The ONE exception is when git's hunk header positively
-            # identifies the table as a `&[&str]` key registry, whose
-            # elements are identifiers by construction. This is a
-            # NEGATIVE gate on purpose: absent or unparseable context
-            # falls through to the check as before, so a fabricated value
-            # inserted into a table declared indented inside an fn/impl
-            # -- which git's default funcname driver never surfaces,
-            # since it only reports column-0 declarations -- is still
-            # caught.
-            if _STR_SLICE_REGISTRY_RE.search(hunk_ctx):
-                continue
-            values.extend(_keep_printconv_values(_QUOTED_RE.findall(code), code))
+        elif added:
+            values.extend(_element_values(bare, code, hunk_ctx))
     return list(dict.fromkeys(values)), unverifiable
+
+
+def _element_values(bare, code, hunk_ctx):
+    """Values read out of ONE added line taken on its own -- the depth-0
+    safety nets, used both at depth 0 and inside a match-arm body.
+
+    Two shapes:
+
+    A bare table element -- string element(s) `"Some Value",` or a keyed
+    tuple `(12, "Some Value"),` -- means the enclosing table's
+    declaration is outside the hunk (a mid-table insert, which is the
+    commonest shape of this fix class). Treat them as map values so the
+    byte check runs; over-catching a stray string list here is fine (spec
+    open question 6: over-flagging routes to the human queue,
+    under-flagging auto-ships a fabricated value).
+
+    The ONE exception is when git's hunk header positively identifies the
+    table as a `&[&str]` key registry, whose elements are identifiers by
+    construction. This is a NEGATIVE gate on purpose: absent or
+    unparseable context falls through to the check as before, so a
+    fabricated value inserted into a table declared indented inside an
+    fn/impl -- which git's default funcname driver never surfaces, since
+    it only reports column-0 declarations -- is still caught.
+
+    `map.insert(2u16, "Fine Detail")` is a map entry with no `=>`
+    anywhere, so no other rule here could see it. Only the text after the
+    call's first top-level comma is read, which is why the 1,029
+    `md.insert("EXIF:Make", value)`-shaped sites in src/ (counted
+    2026-07-26) contribute nothing: their quoted argument is a metadata
+    KEY.
+    """
+    if _BARE_STRING_ELEMENT_RE.match(bare) or _BARE_TUPLE_ELEMENT_RE.match(bare):
+        if _STR_SLICE_REGISTRY_RE.search(hunk_ctx):
+            return []
+        return _keep_printconv_values(_QUOTED_RE.findall(bare), code)
+    insert_value = _insert_call_value_text(bare)
+    if insert_value is not None:
+        return _keep_printconv_values(_QUOTED_RE.findall(insert_value), code)
+    return []
+
+
+def _table_literal_tail(bare, table_pending):
+    """(text that opens an array-literal table on this line, still-pending)
+    or (None, still-pending).
+
+    Three openers, all measured against real fleet diffs:
+      * `const`/`static ... = [`   -- the original rule;
+      * `const_decoder!(...)`      -- oxidex's own table macro, which the
+        original `\\b(?:const|static)\\b` regex cannot match (see
+        _TABLE_MACRO_RE). rustfmt puts the table's `[` on a LATER line
+        for the multi-line form, so a macro seen without a `[` sets
+        table_pending and the next line that starts with `[` opens it;
+      * `for (bit, name) in [`     -- an inline table iterated in place.
+    """
+    if _CONST_STATIC_RE.search(bare) and "=" in bare:
+        rhs = bare.split("=", 1)[1]
+        if "[" in rhs:
+            return rhs, False
+    match = _TABLE_MACRO_RE.search(bare)
+    if match:
+        tail = bare[match.end():]
+        if "[" in tail:
+            return tail, False
+        # `const_decoder!(` alone: pub NAME, ty, then `[` on its own
+        # line. Only pend while the macro call is still OPEN, so a
+        # tableless `some_decoder!(a, b);` cannot make an unrelated `[`
+        # three lines later look like a table.
+        return None, ")" not in tail
+    match = _INLINE_TABLE_RE.search(bare)
+    if match:
+        return bare[match.start():], False
+    if table_pending:
+        if bare.lstrip().startswith("["):
+            return bare, False
+        # Still in the macro's argument list (`pub ASPECT_RATIO,` / `i32,`)
+        # unless the call has already closed without ever opening a table.
+        return None, ")" not in bare
+    return None, False
 
 
 def resolve_perl_module(perl_ref, perl_lib):
