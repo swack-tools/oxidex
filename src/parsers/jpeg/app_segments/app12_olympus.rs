@@ -40,6 +40,7 @@ const KNOWN_TAGS: &[&str] = &[
     "ID",
     "Type",
     "CameraType",
+    "Protect",
     "Version",
     "SerialNumber",
     "InternalSerialNumber",
@@ -62,6 +63,7 @@ const KNOWN_TAGS: &[&str] = &[
     "Contrast",
     "Saturation",
     "ISOSetting",
+    "REV",
     "ColorMode",
     "DriveMode",
     "ContTake",
@@ -87,16 +89,27 @@ const KNOWN_TAGS: &[&str] = &[
     "MTR2",
     "MTRX1",
     "FCS1",
+    "STB1",
+    "STB2",
     "FCS2",
     "FCS3",
     "FCS4",
     "FCS5",
     "FCS6",
     "FCS7",
+    "STB3",
+    "STB4",
+    "STB5",
+    "STB6",
     "IMbb",
     "IMbg",
     "IMgb",
     "IMgr",
+    "WB2",
+    "WB3",
+    "WB4",
+    "WB5",
+    "WB6",
     "IMrg",
     "IMbr",
     "IMgg",
@@ -273,6 +286,15 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert("APP12:ID".to_string(), TagValue::String(value.clone()));
             }
 
+            // ExifTool exposes SerialNumber in the APP12 group for legacy
+            // Picture Info records (including Agfa variants).
+            if key.eq_ignore_ascii_case("SerialNumber") {
+                metadata.insert(
+                    "APP12:SerialNumber".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
             // Olympus Picture Info calls this field ExposureBias. ExifTool
             // exposes it as APP12:ExposureCompensation. Preserve the textual
             // representation because these records include the explicit sign
@@ -329,8 +351,18 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
             // Flash is part of ExifTool's JPEG Picture Info table and belongs
             // to the APP12 group. Preserve its display-ready textual value,
             // such as "Off", while retaining the Olympus compatibility tag.
+            // ExifTool's PrintConv maps numeric values: 0 => "Off", 1 => "On".
             if key.eq_ignore_ascii_case("Flash") {
-                metadata.insert("APP12:Flash".to_string(), TagValue::String(value.clone()));
+                let flash_value = if let Ok(num) = value.parse::<i64>() {
+                    match num {
+                        0 => TagValue::String("Off".to_string()),
+                        1 => TagValue::String("On".to_string()),
+                        _ => TagValue::Integer(num),
+                    }
+                } else {
+                    TagValue::String(value.clone())
+                };
+                metadata.insert("APP12:Flash".to_string(), flash_value);
             }
 
             // The source field in JPEG Picture Info records is normally named
@@ -611,6 +643,30 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                 metadata.insert(app12_tag.to_string(), app12_value);
             }
 
+            // ExifTool exposes the Olympus STB3-STB6 diagnostic fields in the
+            // APP12 group using their original names.
+            if key.eq_ignore_ascii_case("STB3")
+                || key.eq_ignore_ascii_case("STB4")
+                || key.eq_ignore_ascii_case("STB5")
+                || key.eq_ignore_ascii_case("STB6")
+            {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                let app12_tag = if key.eq_ignore_ascii_case("STB3") {
+                    "APP12:STB3"
+                } else if key.eq_ignore_ascii_case("STB4") {
+                    "APP12:STB4"
+                } else if key.eq_ignore_ascii_case("STB5") {
+                    "APP12:STB5"
+                } else {
+                    "APP12:STB6"
+                };
+
+                metadata.insert(app12_tag.to_string(), app12_value);
+            }
+
             // ExifTool exposes the continuous-take diagnostic field in the
             // APP12 group using its original name.
             if key.eq_ignore_ascii_case("ContTake") {
@@ -620,6 +676,35 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
                     .unwrap_or_else(|_| TagValue::String(value.clone()));
 
                 metadata.insert("APP12:ContTake".to_string(), app12_value);
+            }
+
+            // ExifTool exposes Protect in the APP12 group for legacy
+            // Picture Info records.
+            if key.eq_ignore_ascii_case("Protect") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:Protect".to_string(), app12_value);
+            }
+
+            // REV is a text field (e.g., "DCPT") exposed by ExifTool
+            // in the APP12 Picture Info group.
+            if key.eq_ignore_ascii_case("REV") {
+                metadata.insert(
+                    "APP12:REV".to_string(),
+                    TagValue::String(value.clone()),
+                );
+            }
+
+            // ExifTool exposes STB1 in the APP12 group using its original
+            // name.  OlympusD620L.jpg carries STB1=0.
+            if key.eq_ignore_ascii_case("STB1") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:STB1".to_string(), app12_value);
             }
 
             // MTR1 is an Olympus Picture Info diagnostic field. ExifTool
@@ -634,6 +719,46 @@ fn parse_key_value_pairs(text: &str, metadata: &mut MetadataMap) {
 
                 metadata.insert("APP12:MTR1".to_string(), app12_value);
             }
+
+            // ExifTool exposes WB2-WB6 in the APP12 group, preserving the
+            // exact textual representation (some values contain commas, e.g.
+            // "188,4" for WB3 in OlympusD620L.jpg).
+            for wb_tag in ["WB2", "WB3", "WB4", "WB5", "WB6"] {
+                if key.eq_ignore_ascii_case(wb_tag) {
+                    metadata.insert(
+                        format!("APP12:{}", wb_tag),
+                        TagValue::String(value.clone()),
+                    );
+                }
+            }
+
+            // ExifTool exposes STB2 in the APP12 group using its original
+            // name.  Retain unexpected non-numeric values for robustness.
+            if key.eq_ignore_ascii_case("STB2") {
+                let app12_value = value
+                    .parse::<i64>()
+                    .map(TagValue::Integer)
+                    .unwrap_or_else(|_| TagValue::String(value.clone()));
+                metadata.insert("APP12:STB2".to_string(), app12_value);
+            }
+
+            // The generic Olympus fallback (with Olympus: prefix) for every
+            // parsed field.  Keep this after all APP12-specific handlers so
+            // that callers can still obtain the Olympus-namespaced value.
+            // (No code change – this block already exists.)
+
+            // ExifTool exposes the Olympus diagnostic CAM1 field in the
+            // APP12 group using its original name.
+            if key.eq_ignore_ascii_case("CAM1") {
+                let app12_value = match value.parse::<i64>() {
+                    Ok(number) => TagValue::Integer(number),
+                    Err(_) => TagValue::String(value.clone()),
+                };
+                metadata.insert("APP12:CAM1".to_string(), app12_value);
+            }
+
+            // (The existing "Olympus:" insert follows immediately after
+            //  this block, preserving backward compatibility.)
 
             metadata.insert(format!("Olympus:{}", tag_name), tag_value);
 
@@ -786,6 +911,43 @@ mod fcs_tests {
 #[cfg(test)]
 mod camera_type_tests {
     use super::*;
+
+    #[test]
+    fn test_parse_olympus_app12_stb3() {
+        // Diagnostic data from OlympusD620L.jpg.
+        let data = b"OLYMPUS OPTICAL CO.,LTD.\0\r\n[diag info]\r\nSTB3=0\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Olympus Picture Info APP12 data should parse");
+
+        assert_eq!(
+            metadata.get_integer("APP12:STB3"),
+            Some(0),
+            "STB3 should be exposed in ExifTool's APP12 group"
+        );
+    }
+
+    #[test]
+    fn test_parse_picture_info_serial_number() {
+        // ExifTool.jpg contains a legacy Picture Info SerialNumber field.
+        let data = b"Type=SR84\r\nSerialNumber=#00000001\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:SerialNumber"), Some("#00000001"));
+    }
+
+    #[test]
+    fn test_parse_picture_info_flash_off_numeric() {
+        // ExifTool's APP12 Flash PrintConv maps 0 to "Off".
+        let data = b"[picture info]\r\nFlash=0\r\n";
+
+        let metadata = parse_app12_olympus(data)
+            .expect("valid Picture Info APP12 data should parse");
+
+        assert_eq!(metadata.get_string("APP12:Flash"), Some("Off"));
+    }
 
     #[test]
     fn test_legacy_picture_info_camera_type() {
