@@ -315,7 +315,7 @@ fn thumbnail_guard_accounts_for_gps_and_interop_pointer_shapes() {
 }
 
 #[test]
-fn preview_value_after_app1_remains_readable_through_jpeg() {
+fn preview_make_after_app1_is_refused_without_losing_other_tags() {
     let mut data = source();
     let (tiff, ifd0) = preview_ifd0(&data);
     let make = entry(&data, ifd0, 0x010f);
@@ -324,11 +324,14 @@ fn preview_value_after_app1_remains_readable_through_jpeg() {
     ));
     let app1_end = tiff - 8 + app1_length;
     let value_at = app1_end + 4;
-    assert!(value_at + 10 <= data.len());
+    assert!(value_at + 11 <= data.len());
+    data[make + 4..make + 8].copy_from_slice(&11u32.to_le_bytes());
     data[make + 8..make + 12]
         .copy_from_slice(&u32::try_from(value_at - tiff).unwrap().to_le_bytes());
-    data[value_at..value_at + 10].copy_from_slice(b"Panasonic\0");
+    data[value_at..value_at + 11].copy_from_slice(b"PreviewFoo\0");
 
+    // Pinned ExifTool warns "Bad offset for IFD0 Make" for the preview.
+    // The outer RW2 Make remains Panasonic and other preview reads survive.
     let metadata = parse(&data);
     assert_eq!(metadata.get_string("IFD0:Make"), Some("Panasonic"));
     assert_eq!(
@@ -336,6 +339,27 @@ fn preview_value_after_app1_remains_readable_through_jpeg() {
         Some("R98 - DCF basic file (sRGB)")
     );
     assert_eq!(metadata.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+}
+
+#[test]
+fn preview_ifd0_software_after_app1_is_refused() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let software = entry(&data, ifd0, 0x0131);
+    let app1_length = usize::from(u16::from_be_bytes(
+        data[tiff - 8..tiff - 6].try_into().unwrap(),
+    ));
+    let app1_end = tiff - 8 + app1_length;
+    let value_at = app1_end + 4;
+    assert!(value_at + 10 <= data.len());
+    data[software + 4..software + 8].copy_from_slice(&10u32.to_le_bytes());
+    data[software + 8..software + 12]
+        .copy_from_slice(&u32::try_from(value_at - tiff).unwrap().to_le_bytes());
+    data[value_at..value_at + 10].copy_from_slice(b"Preview-X\0");
+
+    // Pinned ExifTool warns "Bad offset for IFD0 Software" and reports no
+    // preview Software, despite the value existing in the enclosing JPEG.
+    assert!(parse(&data).get("IFD0:Software").is_none());
 }
 
 #[test]

@@ -1669,20 +1669,17 @@ fn extract_rw2_embedded_exif_tags(
         .get(4..8)
         .ok_or_else(|| ExifToolError::parse_error("Truncated TIFF header in RW2 preview EXIF"))?;
     let first_ifd_offset = u64::from(read_u32(first_ifd_bytes, byte_order));
-    // ProcessExif may seek through the JPEG RAF for a value whose offset is
-    // beyond APP1. Keep the TIFF-relative base, but expose those bytes to
-    // the reader instead of ending it at the APP1 payload boundary.
-    let reader = SliceReader::new(&jpeg[tiff_start_in_jpeg..]);
+    // ProcessExif reads ordinary preview IFD values from this APP1 payload.
+    // The enclosing JPEG may hold other bytes, but source-derived mutations
+    // of IFD0 Software and ExifIFD A411 outside APP1 are both bad offsets.
+    let reader = SliceReader::new(tiff_data);
     let directory_limit = tiff_data.len() as u64;
-    // IFD0 is read with the enclosing JPEG RAF and can fetch values beyond
-    // APP1 (for example Make). ProcessExif enters ExifIFD/Interop without
-    // that RAF; ordinary out-of-line values there stop at the APP1 payload.
-    let subdir_reader = SliceReader::new(tiff_data);
     let ifd0_tags = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
         &reader,
         first_ifd_offset,
         byte_order,
         directory_limit,
+        &[0xC4A5, 0x011A, 0x011B, 0x0128, 0x0131, 0x0132, 0x0213],
     )?;
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
@@ -1802,6 +1799,7 @@ fn extract_rw2_embedded_exif_tags(
             thumbnail_ifd_offset,
             byte_order,
             directory_limit,
+            &[0x0201, 0x0202],
         )
     {
         let mut thumbnail_offset = None;
@@ -1863,10 +1861,14 @@ fn extract_rw2_embedded_exif_tags(
     // A complete embedded ExifIFD can end without a next-IFD footer. A
     // malformed optional ExifIFD must not discard IFD0 or IFD1 values.
     let Ok(exif_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
-        &subdir_reader,
+        &reader,
         exif_ifd_offset,
         byte_order,
         directory_limit,
+        &[
+            0x9101, 0x9102, 0x9208, 0xA403, 0xA405, 0xA407, 0xA000, 0xA001, 0xA002, 0xA003, 0xA302,
+            0xA401, 0xA402, 0xA404, 0xA408, 0xA409, 0xA217, 0xA301, 0xA406, 0xA40A, 0xA005,
+        ],
     ) else {
         return Ok(());
     };
@@ -1941,7 +1943,7 @@ fn extract_rw2_embedded_exif_tags(
     // Model was known when this ExifIFD was entered. The pointer walk captured
     // the Model at ExifOffset, so a later IFD0 Model cannot activate it.
     for entry in crate::core::tiff_helpers::reached_integral_ifd_entries_with_known_model(
-        &subdir_reader,
+        &reader,
         exif_ifd_offset,
         byte_order,
         &[0xA411, 0xA412],
@@ -1968,7 +1970,7 @@ fn extract_rw2_embedded_exif_tags(
         let Some((value_pos, value_len)) = entry.raw_value else {
             continue;
         };
-        let Ok(raw) = subdir_reader.read(value_pos, value_len) else {
+        let Ok(raw) = reader.read(value_pos, value_len) else {
             continue;
         };
         let Some(decoded) = crate::exiftool_tables::ifd_engine::decode_reached_tiff_value(
@@ -2074,7 +2076,7 @@ fn extract_rw2_embedded_exif_tags(
             })
     {
         extract_interop_index(
-            &subdir_reader,
+            &reader,
             interop_offset,
             byte_order,
             directory_limit,
@@ -2113,6 +2115,7 @@ fn extract_interop_index(
         interop_offset,
         byte_order,
         directory_limit,
+        &[0x0001],
     ) else {
         eprintln!("Warning: Failed to parse Interoperability IFD");
         return;

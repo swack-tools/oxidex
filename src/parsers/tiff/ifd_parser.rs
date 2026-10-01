@@ -239,21 +239,29 @@ pub fn parse_ifd(
     ifd_offset: u64,
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
-    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, reader.size(), true)
+    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, reader.size(), true, None)
 }
 
-/// Parse an embedded subdirectory whose complete entry array may end without
-/// the optional next-IFD pointer (Exif.pm:6394-6400). `directory_limit`
-/// names the enclosing APP1 payload boundary; out-of-line values can still
-/// be read through the wider `reader`. Ordinary TIFF IFDs still use
-/// `parse_ifd` and require the pointer field.
+/// Parse selected values from an embedded subdirectory whose complete entry
+/// array may end without the optional next-IFD pointer (Exif.pm:6394-6400).
+/// The entry array and ordinary values stay within the enclosing APP1 payload.
+/// All physical entries still spend their warning budget in order, but values
+/// that this caller will never emit are not copied out of the reader.
 pub(crate) fn parse_ifd_without_next_offset(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
     directory_limit: u64,
+    selected_tags: &[u16],
 ) -> Result<IfdEntries> {
-    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, directory_limit, false)
+    parse_ifd_with_footer_requirement(
+        reader,
+        ifd_offset,
+        byte_order,
+        directory_limit,
+        false,
+        Some(selected_tags),
+    )
 }
 
 fn parse_ifd_with_footer_requirement(
@@ -262,6 +270,7 @@ fn parse_ifd_with_footer_requirement(
     byte_order: ByteOrder,
     directory_limit: u64,
     require_next_offset: bool,
+    selected_tags: Option<&[u16]>,
 ) -> Result<IfdEntries> {
     let file_size = reader.size();
     if directory_limit > file_size {
@@ -380,7 +389,11 @@ fn parse_ifd_with_footer_requirement(
         let total_size = type_size * entry.value_count as usize;
 
         // Extract value bytes using Cow for zero-copy optimization
+        let selected = selected_tags.is_none_or(|tags| tags.contains(&entry.tag_id));
         let value_bytes = if total_size <= 4 {
+            if !selected {
+                continue;
+            }
             // Value is stored inline in the value_offset field
             // We need to create owned data since it's derived from the field value
             Cow::Owned(extract_inline_value(
@@ -413,6 +426,9 @@ fn parse_ifd_with_footer_requirement(
             let end = value_offset.saturating_add(total_size as u64);
             if end > file_size {
                 warn_count += 1;
+                continue;
+            }
+            if !selected {
                 continue;
             }
 
@@ -635,6 +651,57 @@ fn parse_ifd_entry_be(input: &[u8]) -> IResult<&[u8], IfdEntry> {
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    #[test]
+    fn selected_embedded_ifd_does_not_materialize_unknown_large_value() {
+        use std::cell::Cell;
+
+        struct CountingReader {
+            data: Vec<u8>,
+            large_reads: Cell<usize>,
+        }
+        impl FileReader for CountingReader {
+            fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+                if length >= 100_000 {
+                    self.large_reads.set(self.large_reads.get() + 1);
+                }
+                let start = usize::try_from(offset)
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))?;
+                let end = start
+                    .checked_add(length)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof)?;
+                self.data
+                    .get(start..end)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof.into())
+            }
+
+            fn size(&self) -> u64 {
+                self.data.len() as u64
+            }
+        }
+
+        let mut data = vec![0u8; 101_000];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        data[8..10].copy_from_slice(&2u16.to_le_bytes());
+        data[10..22].copy_from_slice(&[0xAD, 0xDE, 7, 0, 0xA0, 0x86, 1, 0, 0xE8, 3, 0, 0]);
+        data[22..34].copy_from_slice(&[0x31, 1, 2, 0, 5, 0, 0, 0, 100, 0, 0, 0]);
+        data[100..105].copy_from_slice(b"GOOD\0");
+        let reader = CountingReader {
+            data,
+            large_reads: Cell::new(0),
+        };
+        let tags = parse_ifd_without_next_offset(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            reader.size(),
+            &[0x0131],
+        )
+        .expect("selected embedded IFD");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].3.as_ref(), b"GOOD\0");
+        assert_eq!(reader.large_reads.get(), 0);
+    }
 
     /// Creates a minimal TIFF IFD with 3 tags in little-endian format.
     ///
