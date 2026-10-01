@@ -3419,18 +3419,11 @@ mod tests {
         }
     }
 
-    /// PR #959 review (Codex, round 4, P2): the generic enum-inversion arm is
-    /// gated on `Some(ValueType::Integer)`, which only a registry descriptor
-    /// (or, now, this fallback) can produce -- `EXIF:ShadingCorrection`
-    /// (0xa411) and `EXIF:NoiseReduction` (0xa412) are writable `int16u` enum
-    /// rows in the transcribed table with NO registry descriptor at all, so
-    /// `declared` was unconditionally `None` and the function returned a
-    /// `String` before the enum-inversion arm ever ran.
-    /// `declared_value_type_from_transcribed_table` closes that gap by
-    /// deriving the type from the transcribed row itself when the registry
-    /// has nothing.
+    /// The transcribed fallback supplied these Exif 3.1 enum types before
+    /// the source-generated registry had rows. Either route must invert the
+    /// pinned PrintConv labels under the correct numeric address.
     #[test]
-    fn registry_absent_transcribed_enum_rows_still_invert() {
+    fn transcribed_enum_rows_still_invert_after_registry_capture() {
         let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
         let modern = match crate::exiftool_oracle::repo_pin() {
             "11.78" | "12.64" => false,
@@ -3442,10 +3435,6 @@ mod tests {
             (0xa412, "NoiseReduction", "No", 0),
         ] {
             let key = format!("EXIF:{name}");
-            assert!(
-                get_tag_descriptor(&key).is_none(),
-                "{key} gained a registry row"
-            );
             assert_eq!(
                 table.tag(id).is_some(),
                 modern,
@@ -3453,6 +3442,11 @@ mod tests {
             );
             match table.tag(id) {
                 Some(row) => {
+                    assert_eq!(
+                        get_tag_descriptor(&key).map(|descriptor| descriptor.id()),
+                        Some(&crate::core::TagId::new_numeric(id)),
+                        "{key} must use the source address"
+                    );
                     assert_eq!(row.name, name);
                     assert!(row.writable.is_some());
                     assert!(matches!(
@@ -3462,6 +3456,7 @@ mod tests {
                     assert_eq!(parse(&key, label).unwrap(), TagValue::Integer(code));
                 }
                 None => {
+                    assert!(get_tag_descriptor(&key).is_none());
                     // Exif 3.1's 0xa411/0xa412 do not exist in the selected
                     // 11.78/12.64 source. No enum inverse may be invented.
                     assert!(table.tags.iter().all(|row| row.name != name));
@@ -4345,13 +4340,30 @@ mod tests {
 
     #[test]
     fn bare_create_date_uses_its_declared_datetime_type() {
-        let TagValue::DateTime(dt) = parse("CreateDate", "2024:02:03 04:05:06").unwrap() else {
-            panic!("bare CreateDate did not parse as DateTime");
-        };
-        assert_eq!(
-            crate::core::date_shift::format_exif_datetime(&dt),
-            "2024:02:03 04:05:06"
-        );
+        for name in ["CreateDate", "ExifIFD:CreateDate", "EXIF:CreateDate"] {
+            let TagValue::DateTime(dt) = parse(name, "2024:02:03 04:05:06").unwrap() else {
+                panic!("{name} did not parse as DateTime");
+            };
+            assert_eq!(
+                crate::core::date_shift::format_exif_datetime(&dt),
+                "2024:02:03 04:05:06",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn modify_date_preserves_source_datetime_inverse() {
+        for name in ["ModifyDate", "IFD0:ModifyDate", "ExifIFD:ModifyDate"] {
+            let TagValue::DateTime(dt) = parse(name, "2024-01-15T10:30:00").unwrap() else {
+                panic!("{name} did not use the Exif date inverse");
+            };
+            assert_eq!(
+                crate::core::date_shift::format_exif_datetime(&dt),
+                "2024:01:15 10:30:00",
+                "{name}"
+            );
+        }
     }
 
     // -- String / unknown tags ---------------------------------------------

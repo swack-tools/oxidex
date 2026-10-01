@@ -1429,13 +1429,9 @@ fn all_dates_raw_suffix_expands_like_the_oracle() {
     }
 }
 
-/// PR #959 review `4112816750`: `Exif::Main` repeats
-/// ChromaticAberrationCorrection/DistortionCorrection. Pinned 13.59 writes
-/// `-ExifIFD:ChromaticAberrationCorrection=Yes` to the ExifIFD row 0xa410 and
-/// refuses the Sony SubIFD row's `Auto`. oxidex's EXIF writer takes the id
-/// from the tag registry (0x7034), so it refuses the write by name rather
-/// than store the value under the wrong tag -- which `=Auto` and `#=1` used
-/// to do (0x7034 in ExifIFD).
+/// Exif::Main has Sony SubIFD and Exif 3.1 rows with the same names.
+/// Pinned 13.59 writes the ExifIFD labels under 0xa410/0xa40f, while a Sony
+/// label cannot be planted at 0x7034/0x7036 in an ExifIFD.
 #[test]
 fn duplicate_enum_rows_never_write_the_wrong_row() {
     let Some(oracle) = exiftool_oracle::graded() else {
@@ -1532,24 +1528,28 @@ fn duplicate_enum_rows_never_write_the_wrong_row() {
         let tag = arg[1..].split('=').next().unwrap();
         assert_write_matches_oracle(oracle, &base, &[arg], &[arg], &[tag]);
     }
-    // The oracle writes 0xa410/0xa40f; oxidex refuses by name, never the
-    // registry's SubIFD id.
-    for arg in [
-        "-ExifIFD:ChromaticAberrationCorrection=Yes",
-        "-ExifIFD:ChromaticAberrationCorrection#=1",
-        "-IFD0:DistortionCorrection=Yes",
+    // The source registry now selects the Exif 3.1 addresses. Compare the
+    // written value with the oracle for both display and raw input forms.
+    for (arg, tag) in [
+        (
+            "-ExifIFD:ChromaticAberrationCorrection=Yes",
+            "ExifIFD:ChromaticAberrationCorrection",
+        ),
+        (
+            "-ExifIFD:ChromaticAberrationCorrection#=1",
+            "ExifIFD:ChromaticAberrationCorrection",
+        ),
+        (
+            "-IFD0:DistortionCorrection=Yes",
+            "ExifIFD:DistortionCorrection",
+        ),
     ] {
-        let dir = tempfile::tempdir().unwrap();
-        let path = copy_into(&dir, &base, "dup.jpg");
-        let before = std::fs::read(&path).unwrap();
-        let out = oxidex(&[arg, path.to_str().unwrap()]);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "oxidex {arg} must be refused");
+        let out = assert_write_matches_oracle(oracle, &base, &[arg], &[arg], &[tag]);
         assert!(
-            stderr.contains("oxidex's tag registry addresses it as 0x70"),
-            "oxidex {arg}: {stderr}"
+            out.status.success(),
+            "oxidex {arg}: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(std::fs::read(&path).unwrap(), before, "{arg}");
     }
 }
 
@@ -1963,14 +1963,11 @@ fn unsupported_inverse_refusals_are_atomic_with_a_valid_companion() {
         .expect("selected Exif::Main table")
         .tag(0xa410)
         .is_some();
-    let mut unsupported = vec![
+    let unsupported = [
         "-GPS:GPSDateStamp#=20240102",
         "-GPS:GPSDateStamp=2024:01:02 00:30:00+02:00",
         "-ExifIFD:DateTimeOriginal#=2020-01-02 03:04:05",
     ];
-    if has_exif_chromatic_row {
-        unsupported.push("-ExifIFD:ChromaticAberrationCorrection=Yes");
-    }
     for arg in unsupported {
         for companion_first in [true, false] {
             let dir = tempfile::tempdir().unwrap();

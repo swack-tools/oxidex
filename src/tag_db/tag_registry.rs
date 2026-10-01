@@ -3,8 +3,7 @@
 //! This module provides a static registry of 500+ metadata tags covering EXIF (300+),
 //! GPS (30+), XMP (100+), IPTC (50+), PDF (10+), and QuickTime (10+) formats.
 //! This is a manual implementation. Automated tag generation now lives in
-//! `src/tag_sync/` and `src/bin/sync_tags.rs` (run explicitly via
-//! `cargo run --bin sync_tags`, not as part of the build).
+//! `src/tag_sync/` and `src/bin/gen_tag_registry.rs` (run by Tier 1).
 
 use crate::core::{FormatFamily, TagDescriptor, TagId, ValueType};
 use crate::tag_db::generated_scalar_descriptor_fallback::{self, SourceValueClass};
@@ -546,6 +545,21 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
         ),
     );
 
+    // Exif.pm 0x0132 stores a string with ValidateExifDate and
+    // InverseDateTime. Preserve its public date-time value semantics.
+    registry.insert(
+        "EXIF:ModifyDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x0132),
+            "EXIF:ModifyDate".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::DateTime,
+            "File change date and time".to_string(),
+            vec!["2024:03:15 14:30:45".to_string()],
+        ),
+    );
+
     registry.insert(
         "EXIF:DateTimeOriginal",
         TagDescriptor::new(
@@ -575,6 +589,22 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
                 "2024:03:15 14:30:45".to_string(),
                 "2024:11:26 10:20:30".to_string(),
             ],
+        ),
+    );
+
+    // Exif.pm 0x9004 stores a string but uses ValidateExifDate and
+    // InverseDateTime. Keep its public date-time semantics when the source
+    // registry projects the raw Writable type as string.
+    registry.insert(
+        "EXIF:CreateDate",
+        TagDescriptor::new(
+            TagId::new_numeric(0x9004),
+            "EXIF:CreateDate".to_string(),
+            FormatFamily::EXIF,
+            true,
+            ValueType::DateTime,
+            "Date and time when image was digitized".to_string(),
+            vec!["2024:03:15 14:30:45".to_string()],
         ),
     );
 
@@ -7183,18 +7213,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_scalar_descriptor_replaces_stale_yaml_when_manual_entry_is_absent() {
+    fn source_scalar_descriptor_precedes_yaml_when_manual_entry_is_absent() {
         let source = generated_scalar_descriptor("EXIF:DocumentName")
             .expect("generated final/public/address join supplies DocumentName");
         let yaml = &YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor;
         assert!(source.is_writable());
         assert_eq!(source.value_type(), ValueType::String);
-        assert!(
-            !yaml.is_writable(),
-            "fixture must retain the stale YAML fact"
+        assert!(yaml.is_writable(), "source capture repaired old YAML");
+        let stale_yaml = TagDescriptor::new(
+            TagId::new_numeric(0x010d),
+            "EXIF:DocumentName".to_string(),
+            FormatFamily::EXIF,
+            false,
+            ValueType::String,
+            "stale fixture".to_string(),
+            Vec::new(),
         );
         assert!(std::ptr::eq(
-            select_descriptor(None, None, Some(source), Some(yaml))
+            select_descriptor(None, None, Some(source), Some(&stale_yaml))
                 .expect("source fallback wins when no manual descriptor remains"),
             source,
         ));

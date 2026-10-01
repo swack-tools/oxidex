@@ -27,7 +27,7 @@ sys.path.insert(0,str(root/'tools/exiftool-tables'))
 import artifacts
 lib=pathlib.Path(os.environ['OXIDEX_EXIFTOOL_LIB']).resolve()
 assert (lib/'marker').read_text()=='explicit-A'
-name='rustfmt' if mode=='rustfmt' else pathlib.Path(args.pop(0)).name
+name='gen_tag_registry' if mode=='cargo' else ('rustfmt' if mode=='rustfmt' else pathlib.Path(args.pop(0)).name)
 key=name+(':check' if '--check' in args else '')
 with open(os.environ['CONTROL_LOG'],'a') as log:
     log.write(json.dumps({'tool':key,'argv':args,'source':str(lib),
@@ -43,7 +43,13 @@ def artifact_path(key):
     items=[item for item in artifacts.ARTIFACTS if item.key==key]
     assert len(items)==1
     return root/items[0].path
-if mode=='rustfmt':
+if mode=='cargo':
+    assert args[:4]==['run','--quiet','--bin','gen_tag_registry']
+    assert args[4]=='--' and pathlib.Path(args[5]).name.startswith('tables-')
+    dump(args[5]);assert pathlib.Path(args[6]).resolve()==lib
+    for item in artifacts.select(producer='gen_tag_registry'):
+        output(root/item.path,name)
+elif mode=='rustfmt':
     paths={str(pathlib.Path(x).resolve()) for x in args if x.endswith('.rs')}
     assert paths in [{str(root/a.path) for a in artifacts.select(tier,kind='rust')} for tier in (1,2)]
 elif mode=='chosen-perl':
@@ -327,7 +333,7 @@ class RegenerationShellTests(unittest.TestCase):
         (self.cache / ('exiftool-' + self.pin)).symlink_to(self.base / 'cache source B')
         self.bin = self.base / 'bin'
         self.bin.mkdir()
-        for name in ('python3', 'chosen-perl', 'rustfmt'):
+        for name in ('python3', 'chosen-perl', 'rustfmt', 'cargo'):
             path = self.bin / name
             path.write_text('#!' + sys.executable + '\n' + LEAF)
             path.chmod(0o755)
@@ -426,6 +432,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('scene_type_inverse_codegen.py'), int(full), names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
+                self.assertEqual(names.count('gen_tag_registry'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))
                 self.assertEqual(names.count('checkexif_rust_codegen.py'), int(full))
                 self.assertEqual(names.count('sanitize_rust_codegen.py'), int(full))
@@ -454,6 +461,7 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('helper_oracle.py:check'), names.index('dump_tables.pl'))
                     self.assertEqual(len(dump_calls), 3)
                     self.assertEqual(dump_calls[0]['argv'], [str(self.source / 'lib')])
+                    self.assertLess(names.index('dump_tables.pl'), names.index('gen_tag_registry'))
                     self.assertEqual(dump_calls[1]['argv'],
                                      ['--reader-only', '--hydrated-layouts', str(self.source / 'lib')])
                     self.assertEqual(dump_calls[2]['argv'], ['--reader-only', str(self.source / 'lib')])

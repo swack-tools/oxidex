@@ -5507,9 +5507,9 @@
   "source": {
     "exiftool_version": "13.59",
     "table_sha256": {
-      "ItemList": "4a27ed4ec6b2f8ccac5f7dee94e75641b0608fefbf580f37f938cb15182f1fda",
-      "Keys": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb",
-      "UserData": "123b7ca6ce34b1979cf2dc707fef3e3938d326e1b3ecadc69796816d15efbd4e"
+      "ItemList": "9a9b75d9d955a462d97fffc60a61d4b79c1f217e4fba843b7c2417d5ae539cbc",
+      "Keys": "68d4d87d30a24e9ba2ebbba360497e17087673ca9aebee0bfe7600111f7b2fe5",
+      "UserData": "facad094fb7293ff37a69ae5c2db168c31619f69cb73f0237a7da502cba7af94"
     }
   },
   "specs": [

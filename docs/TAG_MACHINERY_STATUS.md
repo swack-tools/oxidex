@@ -197,10 +197,9 @@ establish today's automation share or an hours-per-upgrade estimate.
 - Preserve a separate check for generated Composite computations: the scalar
   expression oracle excludes that input domain. Composite dependency generation,
   hand computations and generated computations already exist.
-- The original step 30 catalog consolidation is unfinished: `src/tag_sync/` and
-  `src/bin/sync_tags.rs` still use the separate `-listx` path. Retire that path
-  only after dump-based generation preserves the existing catalog/writer contract;
-  assess its upgrade benefit after the release rehearsal.
+- The six internal tag registries are regenerated from the pinned
+  `dump_tables.pl` document in Tier 1. `-listx` remains an independent
+  documentation oracle; an upgrade benefit still needs a release rehearsal.
 - Audit unsupported custom processing procedures and handwritten MakerNote
   dispatch. Inventory omissions as omissions; a missing emitted table is not
   evidence that ExifTool has no declaration.

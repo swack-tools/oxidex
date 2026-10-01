@@ -24,7 +24,7 @@ pub static IFD_MICROSOFT_MP: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 9)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 8)],
     },
     tags: &[],
     variants: &[],
@@ -42,7 +42,7 @@ pub static IFD_MICROSOFT_MP1: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 16)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 15)],
     },
     tags: &[],
     variants: &[],
@@ -60,7 +60,7 @@ pub static IFD_MICROSOFT_XMP: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 13)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 12)],
     },
     tags: &[],
     variants: &[],
