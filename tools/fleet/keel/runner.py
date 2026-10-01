@@ -1913,15 +1913,11 @@ def register_cycle(client, runner_id: str, session: dict,
         server that is down costs one attempt per `REGISTER_BACKOFF_MAX_S`
         instead of one per cycle.
 
-    `backoff=None` (the default, and what every direct caller in the tests
-    passes) disables the ladder and preserves the retry-on-the-very-next-
-    cycle behaviour exactly. A payload-build failure is NOT counted into
-    it: that is a local defect, it costs no wall-clock on the loop, and
-    backing off from it would only delay noticing that the server is fine.
-
-    `build_payload` is a callable, not a payload, so nothing is measured
-    on the cycles where no registration is sent -- which is nearly all of
-    them.
+    `backoff=None` disables the ladder. `build_payload` is a callable,
+    so nothing is measured on cycles without registration; on a server
+    clone it runs inside the one bounded announcement worker. A stalled
+    local probe therefore cannot hold the reconcile thread, and failures
+    use the same bounded backoff as network failures.
     """
     if client is None:
         return None
@@ -1947,18 +1943,23 @@ def register_cycle(client, runner_id: str, session: dict,
             _register_backoff_note(backoff, now, True, log)
             return None
         reason = "reconnect"
-    try:
+    payload_box: dict = {}
+    def bounded_payload() -> dict:
         payload = build_payload()
-    except Exception as exc:  # noqa: BLE001 -- an announcement must not stop gating
-        log(f"REGISTER payload build failed ({type(exc).__name__}: {exc})")
-        return None
-    reply = register_once(client, runner_id, payload, log)
+        payload_box["payload"] = payload
+        return payload
+
+    # The server clone builds this inside its single bounded worker, before
+    # DNS/connect/send. A stalled local capability probe cannot delay the
+    # next reconcile or send an abandoned registration later.
+    reply = register_once(client, runner_id, bounded_payload, log)
     if reply is None:
         _register_backoff_note(backoff, now, False, log)
         return None
     _register_backoff_note(backoff, now, True, log)
     session.clear()
     session.update(reply)
+    payload = payload_box.get("payload", {})
     log(f"REGISTERED ({reason}) boot_id={reply.get('boot_id')} "
         f"settle_until={reply.get('settle_until')} "
         f"lease_expires_at={reply.get('lease_expires_at')} "

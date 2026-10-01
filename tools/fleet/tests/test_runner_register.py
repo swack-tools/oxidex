@@ -819,6 +819,58 @@ class TestRegistrationLatencyBound(HermeticCase):
         self.assertLess(time.monotonic() - t0, 1.2,
                         "steady-state health probes need the same total deadline")
 
+    def test_payload_probe_stall_is_bounded_without_a_late_register(self):
+        client = runner.server_client(self.hub)
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+        def stalled_payload():
+            calls.append(1)
+            entered.set()
+            release.wait(timeout=1.5)
+            return {"id": self.host}
+        with mock.patch.object(client, "_headers", wraps=client._headers) as headers:
+            try:
+                t0 = time.monotonic()
+                self.assertIsNone(runner.register_cycle(client, self.host, {}, stalled_payload,
+                                                        lambda _m: None))
+                self.assertTrue(entered.is_set())
+                self.assertLess(time.monotonic() - t0, 1.2)
+                t0 = time.monotonic()
+                self.assertIsNone(runner.register_cycle(client, self.host, {}, stalled_payload,
+                                                        lambda _m: None))
+                self.assertLess(time.monotonic() - t0, 0.3)
+                self.assertEqual(calls, [1], "a stalled probe must not spawn a worker per cycle")
+            finally:
+                release.set()
+            self.assertTrue(client._announcement_inflight.wait(timeout=1.0))
+            headers.assert_not_called()  # timed-out payload cannot send later
+
+    def test_pause_after_connect_cannot_send_after_deadline(self):
+        client = runner.server_client(self.hub)
+        entered = threading.Event()
+        release = threading.Event()
+        original_headers = client._headers
+        def paused_headers(*args, **kwargs):
+            entered.set()
+            release.wait(timeout=1.5)
+            return original_headers(*args, **kwargs)
+        with mock.patch.object(client, "_headers", side_effect=paused_headers):
+            try:
+                t0 = time.monotonic()
+                self.assertIsNone(runner.register_once(client, self.host, {"id": self.host},
+                                                       lambda _m: None))
+                self.assertTrue(entered.is_set(), "the test must pass the connect boundary")
+                self.assertLess(time.monotonic() - t0, 1.2)
+            finally:
+                release.set()
+            self.assertTrue(client._announcement_inflight.wait(timeout=1.0))
+        self.assertTrue(self.blackhole._held)
+        peer = self.blackhole._held[0]
+        peer.settimeout(0.3)
+        self.assertEqual(peer.recv(4096), b"",
+                         "the canceled client must not send a late HTTP request")
+
     def test_dns_stall_is_bounded_without_starting_more_resolver_threads(self):
         client = runner.server_client(self.hub)
         entered = threading.Event()
@@ -1027,6 +1079,20 @@ class TestHeartbeatEnrichment(ServerFixture):
                     "fallback_writes", "ambiguous_writes", "last_primary_error"):
             self.assertIn(key, hb["fallback"])
         self.assertEqual(hb["fallback"]["route"], "primary")
+
+    def test_heartbeat_records_failover_caused_by_its_own_write(self):
+        self._seed_desired()
+        original_sha = self.hub.primary.sha
+        heartbeat_ref = runner.HOSTS_PREFIX + self.host
+        def fail_heartbeat_read(ref):
+            if ref == heartbeat_ref:
+                raise PrimaryFailure("injected before-send failure", request_sent=False)
+            return original_sha(ref)
+        with mock.patch.object(self.hub.primary, "sha", side_effect=fail_heartbeat_read):
+            hb = self._heartbeat([], lambda: set())
+        self.assertEqual(self.hub.status()["route"], "github")
+        self.assertEqual(hb["fallback"]["route"], "github",
+                         "the persisted heartbeat must reflect failover during its own write")
 
     def test_the_heartbeats_live_workers_is_the_in_memory_list_not_a_hub_listing(self):
         """Claim 5's negative half, at the HEARTBEAT layer (it was only

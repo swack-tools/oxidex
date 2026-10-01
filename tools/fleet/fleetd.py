@@ -1161,6 +1161,14 @@ def reconcile_once(
         res.heartbeat_written = False
     else:
         res.heartbeat_written = write_heartbeat(hub, host, hb)
+        if res.heartbeat_written and isinstance(hub, FallbackHub):
+            # The heartbeat's own CAS can be the call that switches routes.
+            # Correct the durable route once, while the fallback is sticky;
+            # do not report an accurate heartbeat if correction fails.
+            current = hub.status()
+            if current["route"] != hb["fallback"]["route"]:
+                hb["fallback"] = current
+                res.heartbeat_written = write_heartbeat(hub, host, hb)
 
     if hub_failures:
         # The step did every local thing it could -- reaped, killed lost

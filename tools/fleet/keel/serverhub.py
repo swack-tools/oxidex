@@ -81,7 +81,7 @@ import time
 import sys
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/fleet
 
@@ -422,7 +422,7 @@ class ServerHub:
             )
         self._unexpected("GET", "/v1/health", status, body)
 
-    def register(self, runner_id: str, body: dict) -> dict:
+    def register(self, runner_id: str, body: Union[dict, Callable[[], dict]]) -> dict:
         """Announce a runner on the server-only route, never through CAS fallback."""
         path = f"/v1/runners/{urllib.parse.quote(str(runner_id), safe='')}/register"
         status, reply = self._announcement_request("POST", path, body=body)
@@ -531,17 +531,18 @@ class ServerHub:
         return headers
 
     def _announcement_request(
-        self, method: str, path: str, body: Optional[dict] = None,
+        self, method: str, path: str,
+        body: Optional[Union[dict, Callable[[], dict]]] = None,
     ) -> Tuple[int, Union[dict, None]]:
-        """Bound the registration clone even when DNS ignores socket timeouts.
+        """Bound payload probes and transport on the registration clone.
 
-        A timed-out resolver may remain blocked in libc. Reusing one daemon
-        worker per clone caps that cost at one thread; retries fail promptly
-        until it exits, and cancellation prevents a late registration send.
-        The ordinary CAS client has no total timeout and remains synchronous.
+        A timed-out local probe or resolver may remain blocked. One daemon
+        worker per clone caps that cost; retries fail promptly until it exits.
+        Cancellation also shuts down any connected socket so a paused worker
+        cannot send after the caller's deadline. CAS stays synchronous.
         """
         if self.total_timeout_s is None:
-            return self._request(method, path, body=body)
+            return self._request(method, path, body=body() if callable(body) else body)
         done = threading.Event()
         cancelled = threading.Event()
         outcome: dict = {}
@@ -555,15 +556,38 @@ class ServerHub:
 
         def exchange() -> None:
             try:
-                outcome["reply"] = self._request(method, path, body=body, cancelled=cancelled)
+                built_body = body() if callable(body) else body
+                if cancelled.is_set():
+                    raise PrimaryFailure(
+                        f"{method} {self.base_url}{path}: announcement deadline exceeded before send",
+                        request_sent=False,
+                    )
+                outcome["reply"] = self._request(
+                    method, path, body=built_body, cancelled=cancelled,
+                    connection=outcome,
+                )
             except Exception as exc:
                 outcome["error"] = exc
             finally:
                 done.set()
 
-        threading.Thread(target=exchange, name="keel-announcement", daemon=True).start()
+        try:
+            threading.Thread(target=exchange, name="keel-announcement", daemon=True).start()
+        except RuntimeError as exc:
+            done.set()
+            raise PrimaryFailure(
+                f"{method} {self.base_url}{path}: could not start announcement worker",
+                request_sent=False,
+            ) from exc
         if not done.wait(self.connect_timeout_s + self.total_timeout_s):
             cancelled.set()
+            conn = outcome.get("connection")
+            sock = conn.sock if conn is not None else None
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
             raise PrimaryFailure(
                 f"{method} {self.base_url}{path}: announcement deadline exceeded",
                 request_sent=True,
@@ -579,13 +603,21 @@ class ServerHub:
         body: Optional[dict] = None,
         headers: Optional[Dict[str, str]] = None,
         cancelled: Optional[threading.Event] = None,
+        connection: Optional[dict] = None,
     ) -> Tuple[int, Union[dict, None]]:
         """One HTTP exchange on a fresh connection. Returns
         `(status, parsed-JSON-body-or-None)`; raises `PrimaryFailure`
         with the r2 phase vocabulary on any transport failure."""
+        if cancelled is not None and cancelled.is_set():
+            raise PrimaryFailure(
+                f"{method} {self.base_url}{path}: announcement deadline exceeded before send",
+                request_sent=False,
+            )
         data = json.dumps(body).encode("utf-8") if body is not None else None
         conn_cls = http.client.HTTPSConnection if self.scheme == "https" else http.client.HTTPConnection
         conn = conn_cls(self.host, self.port, timeout=self.connect_timeout_s)
+        if connection is not None:
+            connection["connection"] = conn
         try:
             # Phase 1: establish the connection. Nothing of the request
             # has left this process, so any failure here -- refused, DNS,
@@ -632,6 +664,8 @@ class ServerHub:
                 timer.daemon = True
                 timer.start()
             try:
+                if cancelled is not None and cancelled.is_set():
+                    raise TimeoutError("announcement deadline exceeded before send")
                 conn.request(method, path, body=data, headers=self._headers(headers, data is not None))
                 resp = conn.getresponse()
                 raw = resp.read()
