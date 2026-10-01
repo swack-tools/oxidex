@@ -1630,7 +1630,10 @@ def _preflight_owned_signing(repository: Path, output_root: Path) -> stage_adapt
             raise Refused("Task19 signing trust changes in the owned checkout") from error
         if owned_trust != trust:
             raise Refused("Task19 signing trust changes in the owned checkout")
-        run("-C", str(owned), "-c", "core.hooksPath=/dev/null", *snapshot._signing_options(trust),
+        # This one-off probe must not launch detached Git auto-maintenance:
+        # its child subreaper correctly refuses to accept a surviving process.
+        run("-C", str(owned), "-c", "core.hooksPath=/dev/null",
+            "-c", "maintenance.auto=false", *snapshot._signing_options(trust),
             "commit", "--quiet", "--allow-empty", "-S", "-m", "Task19 signing preflight",
             cwd=owned)
         run("-C", str(owned), *snapshot._verification_options(trust),
