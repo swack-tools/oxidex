@@ -5,6 +5,7 @@ are intentionally text-level and buildless so the CI tools discovery catches
 regressions before a stale package instruction becomes user-facing again.
 """
 
+import json
 import tomllib
 import unittest
 from pathlib import Path
@@ -12,6 +13,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 README = (REPO / "README.md").read_text(encoding="utf-8")
+STATUS = json.loads(
+    (REPO / "docs/public/measurements/status.json").read_text(encoding="utf-8")
+)
 CARGO_TOML = (REPO / "Cargo.toml").read_text(encoding="utf-8")
 PACKAGING_GUIDE = (REPO / "docs/reference/packaging/packaging-guide.md").read_text(
     encoding="utf-8"
@@ -100,7 +104,8 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertNotIn("cargo publish --workspace --exclude oxidex", RELEASE_PAGE)
 
     def test_beta_docs_keep_format_and_detection_scopes_explicit(self):
-        self.assertIn("16,683 generated metadata tag", README)
+        definitions = STATUS["catalog"]["tag_definitions"]
+        self.assertIn(f"{definitions:,} generated metadata tag", README)
         self.assertIn("131 formats for detection and 129 to a", README)
         self.assertNotIn("140+ formats", README)
         package_description = next(

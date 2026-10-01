@@ -1884,12 +1884,13 @@ mod tests {
                 exif_main_row_for_destination(key).map(|row| row.id),
                 Some(0xa410)
             );
-            assert!(
-                exif_row_misaddressed(key)
-                    .unwrap()
-                    .to_string()
-                    .contains("registry addresses it as 0x7034")
+            // The source-generated registry now addresses the genuine Exif
+            // 3.1 row, so the ordinary ExifIFD request is correctly routed.
+            assert_eq!(
+                crate::tag_db::tag_registry::get_tag_descriptor(key).map(|tag| tag.id()),
+                Some(&crate::core::TagId::new_numeric(0xa410))
             );
+            assert!(exif_row_misaddressed(key).is_none());
         } else {
             // In the actual 12.64/11.78 generated table, the Sony row is
             // alone. Exercise the production guard, not only the helper.

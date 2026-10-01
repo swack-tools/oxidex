@@ -537,6 +537,10 @@ my $EXIFTOOL_LIB = shift @ARGV
 unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
+my $CORE_SOURCE = "$EXIFTOOL_LIB_ABS/Image/ExifTool.pm";
+open(my $core_source_fh, '<:raw', $CORE_SOURCE) or die "cannot read $CORE_SOURCE: $!\n";
+my $CORE_SOURCE_SHA256 = do { local $/; sha256_hex(<$core_source_fh>) };
+close($core_source_fh) or die "cannot close $CORE_SOURCE: $!\n";
 my $pristine_utf8 = OxiDex::Utf8PrimitiveContract::capture_pristine($^X);
 
 # Table facts are a property of the selected native tree, never of the
@@ -559,6 +563,7 @@ my %TABLE_META = map { $_ => 1 } qw(
     FIRST_ENTRY DATAMEMBER VARS PRIORITY TAG_PREFIX WRITE_GROUP
     SET_GROUP1 PREFERRED IS_OFFSET IS_SUBDIR NAMESPACE PARSE_PROC
     AVOID LANG_INFO DID_TAG_ID PERMANENT INIT_TABLE
+    PRINT_CONV TABLE_DESC TABLE_NAME SHORT_NAME EXTRACT_UNKNOWN SRC_TABLE
 );
 
 # Per-tag keys worth carrying across.  Anything not listed is dropped rather
@@ -2060,6 +2065,10 @@ my $json = JSON::PP->new->utf8->canonical->pretty;
 my $final_utf8 = OxiDex::Utf8PrimitiveContract::capture_final();
 my %document = (
     exiftool_version => $Image::ExifTool::VERSION,
+    source_provenance => {
+        library_relative_path => 'Image/ExifTool.pm',
+        sha256 => $CORE_SOURCE_SHA256,
+    },
     modules_ok       => $ok,
     modules_failed   => $failed,
     modules          => \%out,

@@ -382,7 +382,9 @@ mod tests {
 
     #[test]
     fn test_cloned_unreliable_yaml_descriptor_remains_strict() {
-        let descriptor = crate::tag_db::tag_registry::get_tag_descriptor("PNG:ImageWidth")
+        // PNG:ImageWidth is now source-typed int32u. ImageHeader remains a
+        // source-declared unknown type and tests strict cloned validation.
+        let descriptor = crate::tag_db::tag_registry::get_tag_descriptor("PNG:ImageHeader")
             .expect("expected YAML-backed PNG descriptor")
             .clone();
         let value = TagValue::new_integer(640);
@@ -391,7 +393,7 @@ mod tests {
 
         assert!(result.is_err());
         if let Err(ExifToolError::InvalidTagValue { tag_name, reason }) = result {
-            assert_eq!(tag_name, "PNG:ImageWidth");
+            assert_eq!(tag_name, "PNG:ImageHeader");
             assert!(reason.contains("expected String"));
             assert!(reason.contains("got Integer"));
         } else {

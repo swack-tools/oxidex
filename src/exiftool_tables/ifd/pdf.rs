@@ -24,7 +24,7 @@ pub static IFD_PDF_AIPRIVATE: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 7)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 6)],
     },
     tags: &[],
     variants: &[],
@@ -184,7 +184,7 @@ pub static IFD_PDF_INFO: IfdTable = IfdTable {
     set_group1: None,
     priority: Some(0),
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 12)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 11)],
     },
     tags: &[],
     variants: &[],
@@ -364,7 +364,7 @@ pub static IFD_PDF_PROPERTIES: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 2)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
     },
     tags: &[],
     variants: &[],
@@ -488,7 +488,7 @@ pub static IFD_PDF_XOBJECT: IfdTable = IfdTable {
     set_group1: None,
     priority: None,
     gate_a: GateA {
-        blocked_by: &[("ifd_tag_id_unrepresentable", 2)],
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
     },
     tags: &[],
     variants: &[],

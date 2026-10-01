@@ -23,6 +23,13 @@ class UserDataCompilerTests(unittest.TestCase):
         self.assertEqual(sum(x['source_format']['kind']=='unsigned' for x in r['specs']),4)
         self.assertEqual(sum('unsupported_userdata_implicit_format' in x['reasons'] and len(x['reasons'])==1 for x in r['ledger']),82)
 
+    def test_hydrated_table_identity_is_accepted_only_when_exact(self):
+        d=snapshot();meta=d['modules']['QuickTime']['tables']['UserData']['meta']
+        meta.update(TABLE_NAME='Image::ExifTool::QuickTime::UserData', SHORT_NAME='QuickTime::UserData')
+        self.assertEqual(len(compiler.compile_document(d)['specs']),17)
+        meta['SHORT_NAME']='QuickTime::Other'
+        self.assertEqual(compiler.compile_document(d)['specs'],[])
+
     def test_declarative_new_id_name_width_group_enum_priority_propagate(self):
         d=snapshot();table=d['modules']['QuickTime']['tables']['UserData']
         table['tags']['new!']={'Name':'FutureCounter','Format':'int32u','Avoid':'1','Groups':{'1':'FutureGroup'},'PrintConv':{'kind':'enum','map':{'42':'Answer'},'directives':None}}
