@@ -1068,9 +1068,27 @@ exit 0
         a = self.start_fleetd("a")
         self.wait_for(lambda: self.gate_claim_ref() is not None, 60,
                       f"fleetd A to claim a gate\n{self.log_of('a')}")
+        # The stub writes gate.pid before start_gate's post-spawn renew
+        # publishes that PGID in the claim. Under a slow store, merely
+        # seeing the pid file can kill A in that publication window.
+        def published_gate():
+            ref = self.gate_claim_ref()
+            pid_file = self.tmp / "gate.pid"
+            if ref is None or not pid_file.exists():
+                return False
+            try:
+                pgid = int(pid_file.read_text().strip())
+            except ValueError:
+                return False
+            payload = self.hub.read(ref)
+            return (payload is not None and payload.get("pgid") == pgid
+                    and pgid in fleetd.live_pgids())
+
+        self.wait_for(published_gate, 60,
+                      "a live gate whose PGID is published in its claim")
         ref = self.gate_claim_ref()
-        self.wait_for(lambda: (self.tmp / "gate.pid").exists(), 30, "the stub gate to start")
         gate_pgid = int((self.tmp / "gate.pid").read_text().strip())
+        self.assertEqual(self.hub.read(ref).get("pgid"), gate_pgid)
 
         watcher = ClaimWatcher(Hub(str(self.bare), workdir=self.tmp / "watch"), ref).start()
 

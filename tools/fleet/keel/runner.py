@@ -460,10 +460,10 @@ def _journal_group_identity(pgid: int, scope_token: str,
     """Return scoped, other, or missing from one same-uid process listing.
 
     A kernel-live group omitted by ps is `missing`, not proof of a
-    recycled group. Only a visible group with no scoped worker can be
-    classified `other` for stale-journal cleanup.
+    recycled group. Only a live, unscoped group leader proves `other`;
+    a zombie leader with unmarked children may be the original worker.
     """
-    lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,command="], env=_ps_env())
+    lines = _ps_lines(["ps", "-wweo", "pgid=,pid=,uid=,stat=,command="], env=_ps_env())
     try:
         uid = os.getuid()
     except AttributeError:
@@ -471,12 +471,21 @@ def _journal_group_identity(pgid: int, scope_token: str,
     leader_present = False
     markers = worker_markers() if markers is None else markers
     for line in lines:
-        spgid, spid, suid, command = _ps_fields(line, 4)
-        if int(spgid) != pgid or int(spid) == 0:
+        fields = line.split(None, 4)
+        if len(fields) != 5:
+            raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}")
+        spgid, spid, suid, state, command = fields
+        try:
+            group, pid, row_uid = int(spgid), int(spid), int(suid)
+        except ValueError as exc:
+            raise ProcessListingUnavailable(f"malformed ps row: {line[:120]!r}") from exc
+        if group != pgid or pid == 0:
             continue
-        if uid is not None and int(suid) != uid:
+        if uid is not None and row_uid != uid:
             continue
-        if int(spid) == pgid:
+        if state.startswith("Z"):
+            continue
+        if pid == pgid:
             leader_present = True
         if scope_token in command and any(marker in command for marker in markers):
             return "scoped"
@@ -853,6 +862,55 @@ def _journal_run_matches_worker(journal, worker: "Worker") -> bool:
                 job.claim_ref == worker.claim.ref and
                 job.started_at == claim_mod._iso(worker.claim._started_at) and
                 job.pgid == worker.pgid)
+
+
+def stop_superseded_workers(workers: list, store_workers: list,
+                            journal, host: str) -> bool:
+    """Quiesce stale handles and stop distinct groups before remote reconcile.
+
+    Both initial and retry adoption use this phase. A store-backed claim is
+    authoritative for its ref. The same PGID has one physical worker and
+    needs only the store handle; a different PGID remains supervised until
+    local termination is proved. False means starts must remain disabled.
+    """
+    store_by_ref = {w.claim.ref: w for w in store_workers}
+    for old in list(workers):
+        authoritative = store_by_ref.get(old.claim.ref)
+        if authoritative is None or authoritative is old:
+            continue
+        if old.pgid == authoritative.pgid:
+            old.claim.stop_renewer(timeout=2)
+            if not old.claim.renewer_running():
+                workers.remove(old)
+        else:
+            old.claim._mark_lost("store has a different process group for this job")
+    stop_lost_workers(workers, journal, host)
+    return not any(w.claim.lost or
+                   (store_by_ref.get(w.claim.ref) is not None and
+                    store_by_ref[w.claim.ref] is not w and
+                    store_by_ref[w.claim.ref].pgid == w.pgid)
+                   for w in workers)
+
+
+def resolve_known_orphans(pgids: set[int], scope_token: str,
+                          markers: Optional[Sequence[str]] = None) -> bool:
+    """Retain an unclaimed group until kernel absence or replacement is proved.
+
+    Store adoption retries the actual orphan signal after reading current
+    claims. This local phase must not kill by stale PGID alone: another
+    process could have acquired that number while the store was unavailable.
+    """
+    for pgid in list(pgids):
+        if not _pgid_alive(pgid):
+            pgids.remove(pgid)
+            continue
+        try:
+            identity = _journal_group_identity(pgid, scope_token, markers)
+        except ProcessListingUnavailable:
+            continue
+        if identity == "other":
+            pgids.remove(pgid)
+    return not pgids
 
 
 def _spawn_env(hub: Hub) -> dict:
@@ -1574,6 +1632,7 @@ class AdoptionResult:
     adopted: list = field(default_factory=list)  # (kind, key, pgid)
     released: list = field(default_factory=list)  # (ref, reason)
     orphans_killed: list = field(default_factory=list)  # (pgid, outcome)
+    claim_pgids_by_ref: dict = field(default_factory=dict)  # every readable claim
     # Marker-matched, claim-less groups that do NOT carry this daemon's
     # scope token: a fixture daemon's view of the real fleet, or a human's
     # hand-launched gate. Reported, never killed -- absence of provenance
@@ -1733,6 +1792,7 @@ def adopt_workers(
                 # orphan sweep's exclusion list, and a claim we decline to
                 # adopt still protects its process from being swept.
                 claimed_pgids.add(pgid)
+                res.claim_pgids_by_ref[ref] = pgid
 
             if payload.get("holder_host") != host:
                 res.skipped.append((ref, f"held by {payload.get('holder_host')!r}"))
@@ -1778,6 +1838,20 @@ def adopt_workers(
             # worker across the upgrade boundary it finishes unsupervised,
             # which the drained-fleet deployment makes moot.
             member = _scoped_worker_in_group(pgid, markers, scope_token)
+            if member is None:
+                try:
+                    identity = _journal_group_identity(pgid, scope_token, markers)
+                except ProcessListingUnavailable as exc:
+                    identity = "missing"
+                    res.skipped.append((ref, f"identity listing unavailable: {exc}"))
+                if identity == "missing":
+                    reason = (f"recorded pgid {pgid} is kernel-live but worker "
+                              "identity is inconclusive")
+                    res.skipped.append((ref, reason))
+                    res.unreadable.append((ref, reason))
+                    continue
+                if identity == "scoped":
+                    member = "verified by second identity listing"
             if member is None:
                 reason = (f"recorded pgid {pgid} is not a scoped fleet "
                           f"worker (recycled, or pre-scope)")
@@ -2517,7 +2591,13 @@ def _run_daemon_locked(
         adoption = journal_mod.adopt_at_startup(
             hub, host, workers, journal=jn,
             allow_store_adoption=singleton_owned)
-        if adoption.mode == "store":
+        known_orphans = set(adoption.unresolved_orphan_pgids)
+        orphans_cleared = resolve_known_orphans(
+            known_orphans, fleet_scope_token(hub.url))
+        adoption.unresolved_orphan_pgids = set(known_orphans)
+        supersession_cleared = stop_superseded_workers(
+            workers, adoption.store_workers, jn, host)
+        if adoption.spawn_allowed and supersession_cleared and orphans_cleared:
             reconcile_journal_runs(jn, hub, host, workers, label=label)
         print(f"{label}[{host}] adoption: {adoption.summary()}", flush=True)
     except (HubError, journal_mod.JournalError, ProcessListingUnavailable) as e:
@@ -2530,7 +2610,8 @@ def _run_daemon_locked(
             worker.claim.stop_renewer(timeout=2)
         singleton.release()
         return 5
-    spawn_allowed = adoption.spawn_allowed and singleton_owned
+    spawn_allowed = (adoption.spawn_allowed and singleton_owned and
+                     supersession_cleared and orphans_cleared)
     owed_releases = adoption.journal_result
     if adoption.offline:
         print(f"{label}[{host}] OFFLINE START: adopting only identity-verified "
@@ -2604,6 +2685,8 @@ def _run_daemon_locked(
             # Local safety is independent of host-lease or journal-store
             # reads. An already-lost worker is signalled first.
             pre_killed = stop_lost_workers(workers, jn, host)
+            if not resolve_known_orphans(known_orphans, reg_scope_token):
+                spawn_allowed = False
             # A hub failure degrades THIS ITERATION, never the daemon --
             # bounded by RECONCILE_HUB_FAILURE_LIMIT, see its comment. Only
             # `HubError` is caught: a bug in this file, a KeyboardInterrupt
@@ -2716,27 +2799,19 @@ def _run_daemon_locked(
                             ):
                                 old.claim.start_renewer()
                                 refreshed.append(old)
-                        # A different live group under a superseded token
-                        # must stop before it can run beside the store's
-                        # current claim. Two handles for one PGID describe
-                        # one physical group: keep the store-backed handle.
-                        store_by_ref = ({w.claim.ref: w for w in current.store_workers}
-                                        if current is not None else {})
-                        for old in list(refreshed):
-                            authoritative = store_by_ref.get(old.claim.ref)
-                            if authoritative is None or authoritative is old:
-                                continue
-                            if (old.pgid == authoritative.pgid and
-                                    old.claim._started_at != authoritative.claim._started_at):
-                                old.claim.stop_renewer(timeout=2)
-                                refreshed.remove(old)
-                            elif (old.pgid != authoritative.pgid and
-                                  old.claim._started_at != authoritative.claim._started_at):
-                                old.claim._mark_lost("store has a different token for this job")
                         workers[:] = refreshed
-                        stop_lost_workers(workers, jn, host)
-                        if (current is not None and current.mode == "store" and
-                                not any(w.claim.lost for w in workers)):
+                        supersession_cleared = stop_superseded_workers(
+                            workers, current.store_workers if current is not None else [],
+                            jn, host)
+                        if current is not None:
+                            known_orphans.update(current.unresolved_orphan_pgids)
+                            orphans_cleared = resolve_known_orphans(
+                                known_orphans, reg_scope_token)
+                            current.unresolved_orphan_pgids = set(known_orphans)
+                        else:
+                            orphans_cleared = not known_orphans
+                        if (current is not None and current.spawn_allowed and
+                                supersession_cleared and orphans_cleared):
                             reconcile_journal_runs(jn, hub, host, workers, label=label)
                             spawn_allowed = True
                             print(f"{label}[{host}] STORE BACK: authoritative "

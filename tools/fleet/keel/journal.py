@@ -464,7 +464,13 @@ class Journal:
         unreadable: List[Tuple[str, str]] = []
         torn: List[Tuple[str, int]] = []
         try:
-            paths = sorted(root.glob("*" + SUFFIX)) if root.is_dir() else []
+            if root.is_dir():
+                paths = sorted(root.glob("*" + SUFFIX))
+            elif root.exists() or root.is_symlink():
+                return JournalScan(root=str(root),
+                                   unreadable=((str(root), "journal root is not a directory"),))
+            else:
+                paths = []
         except OSError as exc:
             return JournalScan(root=str(root), unreadable=((str(root), str(exc)),))
         for path in paths:
@@ -498,8 +504,15 @@ class Journal:
         single-job read has no `unreadable` bucket to fail closed into,
         so it fails loudly instead."""
         path = self.path_for(job_key)
-        if not path.is_file():
-            return None
+        try:
+            if (self.root.exists() or self.root.is_symlink()) and not self.root.is_dir():
+                raise JournalError(f"{self.root}: journal root is not a directory")
+            if not path.is_file():
+                if path.exists() or path.is_symlink():
+                    raise JournalError(f"{path}: journal job is not a regular file")
+                return None
+        except OSError as exc:
+            raise JournalError(f"{path}: {exc}") from exc
         try:
             raw = path.read_bytes()
         except OSError as exc:
@@ -898,9 +911,11 @@ def adopt_from_journal(
                runner's own scope token. `fleetd.adopt_workers` demands
                exactly this of a claim payload's pgid and for exactly
                this reason: "a pgid is a name that gets recycled".
-      RELEASE  our job whose pgid is gone, or whose pgid is alive but
-               fails the identity check (recycled, or pre-scope). The
-               work died; the claim should stop blocking the branch.
+      RELEASE  our job whose pgid is kernel-proven gone, or whose pgid has
+               a positively different live leader (recycled, or pre-scope).
+               An omitted row, zombie leader, or unmarked child alone is
+               inconclusive and cannot authorize release. The proven-dead
+               work's claim should stop blocking the branch.
                There is no route to CAS-delete it right now, so it is
                recorded as owed and `release_pending` does it later.
       REFUSE   anything we cannot prove is ours to touch: a journaled
@@ -1176,8 +1191,8 @@ def _close(journal: Journal, job_key: str, reason: str) -> None:
 class StartupAdoption:
     """The result of the whole startup adoption pass.
 
-    `mode` is `"store"` when the store answered (hub claims were truth,
-    exactly as today) or `"journal"` when neither route did.
+    `mode` is `"store"` when store adoption completed (hub claims are
+    authoritative), or `"journal"` when it could not complete.
     """
 
     mode: str
@@ -1188,18 +1203,21 @@ class StartupAdoption:
     hub_error: Optional[BaseException] = None
     sweep_skipped: Optional[str] = None
     suppressed_kills: List[int] = field(default_factory=list)
+    local_conflict_unresolved: bool = False
+    unresolved_orphan_pgids: set = field(default_factory=set)
 
     @property
     def offline(self) -> bool:
         return self.mode == "journal"
 
     @property
+    def local_work_unresolved(self) -> bool:
+        return self.local_conflict_unresolved or bool(self.unresolved_orphan_pgids)
+
+    @property
     def spawn_allowed(self) -> bool:
-        """False while the store is away: SPEC §5.3's offline runner
-        "sweeps nothing, spawns nothing, and retries the store every
-        30 s". Starting work whose claim cannot be CAS-arbitrated is the
-        duplicate-gate hazard leases exist for."""
-        return self.mode == "store"
+        """Require store authority and resolved local run conflicts."""
+        return self.mode == "store" and not self.local_work_unresolved
 
     def summary(self) -> str:
         parts = [f"mode={self.mode}"]
@@ -1209,6 +1227,8 @@ class StartupAdoption:
             parts.append(self.journal_result.summary())
         if self.sweep_skipped:
             parts.append(f"SWEEP-SKIPPED({self.sweep_skipped})")
+        if self.local_work_unresolved:
+            parts.append("LOCAL-WORK-UNRESOLVED(starts disabled)")
         return " ".join(parts)
 
 
@@ -1298,13 +1318,78 @@ def adopt_at_startup(
             raise HubError("host singleton ownership is not established")
         res.hub_result = hub_adopt(hub, host, workers, **kwargs)
         res.store_workers = list(workers)
+        if res.hub_result.unreadable:
+            raise HubError("store adoption has unreadable claims or process identity")
+        from keel.runner import _pgid_alive, fleet_scope_token, kill_process_group
+        res.unresolved_orphan_pgids = {
+            pgid for pgid, _outcome in res.hub_result.orphans_killed
+            if _pgid_alive(pgid)
+        }
+        if scan.open_jobs:
+            # Every durable local run is an obligation, including one with
+            # no current store claim. The same classifier runs at initial
+            # startup, store recheck, and restart. Journal evidence may
+            # trigger local stop-work but never confer claim ownership. A
+            # good file beside a corrupt one still gives a known PGID to
+            # gate on; the incomplete scan cannot authorize adoption/kill.
+            suspects: list = []
+            store_by_ref = {w.claim.ref: w for w in res.store_workers}
+            claimed_by_ref = res.hub_result.claim_pgids_by_ref
+            claimed_pgids = set(claimed_by_ref.values())
+            local_scope = scope_token or fleet_scope_token(hub.url)
+            obligations = [
+                job for job in scan.open_jobs
+                if job.spawned and isinstance(job.pgid, int) and job.pgid > 1
+                and job.holder_host in (None, host)
+                and job.scope_token in (None, local_scope)
+                and (job.claim_ref not in store_by_ref or
+                     job.pgid != store_by_ref[job.claim_ref].pgid)
+            ]
+            attempted_orphans = {pgid for pgid, _ in res.hub_result.orphans_killed}
+            if obligations and scan.sweep_armed:
+                local = journal_adopt(
+                    journal, host, suspects, hub=hub, scan=scan, markers=markers,
+                    scope_token=scope_token, ttl=ttl, renew_interval=renew_interval,
+                    renew_claims=False,
+                )
+                adopted = {(w.job_key, w.pgid): w for w in suspects}
+                released = {owed.job_key for owed in local.to_release}
+            else:
+                adopted = {}
+                released = set()
+            for job in obligations:
+                current = store_by_ref.get(job.claim_ref)
+                if job.pgid in claimed_pgids:
+                    # A readable claim still names this group, perhaps at
+                    # another ref or under another host/token. A journal
+                    # ref alone cannot authorize killing that worker.
+                    if _pgid_alive(job.pgid):
+                        res.local_conflict_unresolved = True
+                    continue
+                old = adopted.get((job.job_key, job.pgid))
+                if old is not None:
+                    if current is not None:
+                        workers.append(old)
+                    else:
+                        # Fresh complete claim listing says this group has
+                        # no lease. Do not re-signal an orphan already tried
+                        # by the store sweep, but cover a missed worker row.
+                        if job.pgid not in attempted_orphans:
+                            kill_process_group(job.pgid)
+                        if _pgid_alive(job.pgid):
+                            res.unresolved_orphan_pgids.add(job.pgid)
+                elif job.job_key not in released and _pgid_alive(job.pgid):
+                    if current is not None:
+                        res.local_conflict_unresolved = True
+                    else:
+                        res.unresolved_orphan_pgids.add(job.pgid)
     except HubError as exc:
         res.store_workers = list(workers)
-        # BOTH routes are down. This is the exit-5 path, and it is now an
-        # adoption from local evidence instead of a refusal to start.
+        # The store pass is unavailable or incomplete. Use local evidence
+        # only until a complete store retry can arbitrate starts.
         res.mode = "journal"
         res.hub_error = exc
-        source = "store unreachable" if allow_store_adoption else "host lease unowned"
+        source = "store adoption incomplete" if allow_store_adoption else "host lease unowned"
         log(f"keel-runner[{host}] {source} at startup ({exc}); adopting "
             f"from the local job journal instead of refusing to start")
         res.journal_result = journal_adopt(

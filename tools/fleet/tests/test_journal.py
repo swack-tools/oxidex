@@ -53,6 +53,7 @@ sys.path.insert(0, str(FLEET_DIR))
 
 import claim as claim_mod  # noqa: E402
 import fleetd  # noqa: E402
+from keel import runner as runner_mod  # noqa: E402
 from fleetlib import HubError  # noqa: E402
 from keel import journal as jr  # noqa: E402
 from _env import HermeticCase, scrub_env  # noqa: E402
@@ -431,6 +432,20 @@ class TestJournalScan(JournalCase):
         self.assertTrue(scan.readable)
         self.assertTrue(scan.sweep_armed)
 
+    def test_non_directory_journal_root_is_unreadable(self):
+        regular = self.tmp / "journal-root-file"
+        regular.write_text("not a journal directory")
+        broken = self.tmp / "journal-root-broken-link"
+        broken.symlink_to(self.tmp / "missing-target")
+        for root in (regular, broken):
+            with self.subTest(root=root.name):
+                scan = jr.Journal(root).scan()
+                self.assertFalse(scan.readable)
+                self.assertFalse(scan.sweep_armed)
+                self.assertIn("not a directory", scan.why_not_readable())
+                with self.assertRaisesRegex(jr.JournalError, "not a directory"):
+                    jr.Journal(root).read_job("staging-one")
+
     def test_a_corrupt_line_makes_the_whole_journal_unreadable(self):
         self.journal_job("staging-one", pgid=1234)
         path = self.j.path_for("staging-one")
@@ -513,6 +528,12 @@ class TestJournalScan(JournalCase):
         self.journal_job("staging-one", pgid=1)
         self.j.path_for("staging-one").write_text("nope\n")
         with self.assertRaises(jr.JournalError):
+            self.j.read_job("staging-one")
+
+    def test_read_job_refuses_an_existing_non_file_entry(self):
+        path = self.j.path_for("staging-one")
+        path.mkdir(parents=True)
+        with self.assertRaisesRegex(jr.JournalError, "not a regular file"):
             self.j.read_job("staging-one")
 
     def test_prune_removes_closed_jobs_and_never_open_ones(self):
@@ -789,7 +810,7 @@ class TestAdoptFromJournal(JournalCase):
     def test_only_unmarked_child_visible_does_not_prove_recycled_group(self):
         p = self.spawn_stub()
         self.journal_job("staging-one", pgid=p.pid)
-        row = f"{p.pid} {p.pid + 1} {os.getuid()} cargo build"
+        row = f"{p.pid} {p.pid + 1} {os.getuid()} S cargo build"
         with mock.patch("keel.runner._ps_lines", return_value=[row]):
             res = self.adopt(pgid_probe=lambda: {p.pid},
                              identity_probe=lambda *_args: None)
@@ -797,6 +818,18 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(res.adopted, [])
         self.assertTrue(self.j.read_job("staging-one").open)
         self.assertIsNone(p.poll())
+
+    def test_zombie_leader_with_live_unmarked_child_is_inconclusive(self):
+        p = self.spawn_stub()
+        self.journal_job("staging-one", pgid=p.pid)
+        rows = [f"{p.pid} {p.pid} {os.getuid()} Z [bash] <defunct>",
+                f"{p.pid} {p.pid + 1} {os.getuid()} S cargo build"]
+        with mock.patch("keel.runner._ps_lines", return_value=rows):
+            res = self.adopt(pgid_probe=lambda: {p.pid},
+                             identity_probe=lambda *_args: None)
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(res.adopted, [])
+        self.assertTrue(self.j.read_job("staging-one").open)
 
     def test_a_journal_entry_from_another_hubs_scope_is_refused(self):
         """The scope token is derived from the HUB URL, so a
@@ -1193,6 +1226,8 @@ class TestAdoptAtStartup(JournalCase):
         self.assertIsNotNone(res.sweep_skipped)
         self.assertEqual(res.suppressed_kills, [orphan.pid])
         self.assertIsNone(orphan.poll(), "the orphan must be alive")
+        self.assertIn(orphan.pid, res.unresolved_orphan_pgids)
+        self.assertFalse(res.spawn_allowed)
         self.assertTrue(any("DISARMED" in line for line in self.logged),
                         f"a suppressed sweep must never be silent: {self.logged}")
 
@@ -1219,6 +1254,48 @@ class TestAdoptAtStartup(JournalCase):
 
         self.assertEqual(res.suppressed_kills, [orphan.pid])
         self.assertIsNone(orphan.poll())
+
+    def test_torn_journal_known_live_run_blocks_starts_without_claim(self):
+        live = self.spawn_stub()
+        self.journal_job("staging-one", pgid=live.pid)
+        with open(self.j.path_for("staging-one"), "a", encoding="utf-8") as fh:
+            fh.write('{"v":1,"event":"spawn"')
+        res = self.startup()
+        self.assertIn(live.pid, res.unresolved_orphan_pgids)
+        self.assertFalse(res.spawn_allowed)
+        self.assertIsNone(live.poll())
+
+    def test_readable_prefix_obligation_survives_global_scan_failure(self):
+        real_adopt = fleetd.adopt_workers
+
+        def omitted_worker_scan(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              worker_probe=lambda _markers: {}, **kwargs)
+
+        for case in ("clean", "sibling-corrupt", "torn", "missing"):
+            with self.subTest(case=case):
+                live = self.spawn_stub()
+                self.j = jr.Journal(self.tmp / f"journal-{case}")
+                if case != "missing":
+                    self.journal_job("staging-one", pgid=live.pid)
+                if case == "sibling-corrupt":
+                    self.j.root.mkdir(parents=True, exist_ok=True)
+                    (self.j.root / "other.jsonl").write_text("{invalid json}\n")
+                elif case == "torn":
+                    with open(self.j.path_for("staging-one"), "a",
+                              encoding="utf-8") as fh:
+                        fh.write('{"v":1,"event":"spawn"')
+                scan = self.j.scan()
+                self.assertEqual(bool(scan.open_jobs), case != "missing")
+                with mock.patch.object(fleetd, "_scoped_worker_in_group",
+                                       return_value=None), \
+                        mock.patch("keel.runner._journal_group_identity",
+                                   return_value="missing"):
+                    res = self.startup(hub_adopt=omitted_worker_scan)
+                self.assertEqual(live.pid in res.unresolved_orphan_pgids,
+                                 case != "missing")
+                self.assertEqual(res.spawn_allowed, case == "missing")
+                self.assertIsNone(live.poll())
 
     # -- neither route answers --------------------------------------- #
 
@@ -1284,6 +1361,253 @@ class TestAdoptAtStartup(JournalCase):
         self.assertEqual(len(res.store_workers), 1)
         self.assertEqual(res.store_workers[0].pgid, new.pid)
         self.assertEqual(len(res.journal_result.adopted), 1)
+
+    def test_store_identity_omission_does_not_release_live_claim(self):
+        p = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=p.pid, started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=p.pid,
+                               started_at=started)
+        with mock.patch("keel.runner._scoped_worker_in_group", return_value=None), \
+                mock.patch("keel.runner._journal_group_identity",
+                           return_value="missing"):
+            res = self.startup()
+        self.assertEqual(res.mode, "journal")
+        self.assertFalse(res.spawn_allowed)
+        self.assertTrue(res.hub_result.unreadable)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNone(p.poll())
+
+    def test_store_positive_replacement_leader_can_release_stale_claim(self):
+        bystander = self.spawn_stub(scoped=False, marked=False)
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=bystander.pid,
+                               started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=bystander.pid,
+                               started_at=started)
+        res = self.startup()
+        self.assertEqual(res.mode, "store")
+        self.assertIsNone(self.hub.sha(ref))
+        self.assertIsNone(bystander.poll())
+
+    def test_complete_store_pass_keeps_failed_orphan_sweep_for_stop_retry(self):
+        old = self.spawn_stub()
+        new = self.spawn_stub()
+        old_token = iso(datetime.now(timezone.utc) - timedelta(seconds=60))
+        new_token = iso(datetime.now(timezone.utc) - timedelta(seconds=10))
+        ref = self.journal_job("staging-one", pgid=old.pid, started_at=old_token)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=new.pid,
+                               started_at=new_token)
+        real_adopt = fleetd.adopt_workers
+
+        def failed_orphan_sweep(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              killer=lambda *_args, **_kw: "injected signal refusal",
+                              **kwargs)
+
+        res = self.startup(hub_adopt=failed_orphan_sweep)
+        self.assertEqual(res.mode, "store")
+        self.assertEqual([w.pgid for w in res.store_workers], [new.pid])
+        self.assertEqual({w.pgid for w in self.workers}, {old.pid, new.pid})
+        with mock.patch("keel.runner.kill_process_group",
+                        return_value="injected signal refusal"):
+            self.assertFalse(runner_mod.stop_superseded_workers(
+                self.workers, res.store_workers, self.j, HOST))
+        self.assertTrue(any(w.pgid == old.pid and w.claim.lost
+                            for w in self.workers))
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIsNone(old.poll())
+        self.assertIsNone(new.poll())
+
+    def test_complete_store_inconclusive_old_group_blocks_each_retry(self):
+        old = self.spawn_stub()
+        new = self.spawn_stub()
+        old_token = iso(datetime.now(timezone.utc) - timedelta(seconds=60))
+        new_token = iso(datetime.now(timezone.utc) - timedelta(seconds=10))
+        ref = self.journal_job("staging-one", pgid=old.pid, started_at=old_token)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=new.pid,
+                               started_at=new_token)
+        real_adopt = fleetd.adopt_workers
+        real_identity = runner_mod._scoped_worker_in_group
+
+        def failed_orphan_sweep(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              killer=lambda *_args, **_kw: "injected signal refusal",
+                              **kwargs)
+
+        def omitted_old(pgid, markers, scope_token):
+            if pgid == old.pid:
+                return None
+            return real_identity(pgid, markers, scope_token)
+
+        def group_identity(pgid, *_args):
+            return "missing" if pgid == old.pid else "scoped"
+
+        with mock.patch("keel.runner._scoped_worker_in_group",
+                        side_effect=omitted_old), \
+                mock.patch.object(fleetd, "_scoped_worker_in_group",
+                                  side_effect=omitted_old), \
+                mock.patch("keel.runner._journal_group_identity",
+                           side_effect=group_identity):
+            first = self.startup(hub_adopt=failed_orphan_sweep)
+            self.assertEqual(first.mode, "store")
+            self.assertTrue(first.local_work_unresolved)
+            self.assertFalse(first.spawn_allowed)
+            self.assertEqual([w.pgid for w in first.store_workers], [new.pid])
+            first.store_workers[0].claim.stop_renewer(timeout=2)
+            self.workers = []
+            second = self.startup(hub_adopt=failed_orphan_sweep)
+        self.assertEqual(second.mode, "store")
+        self.assertTrue(second.local_work_unresolved)
+        self.assertFalse(second.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertTrue(self.j.read_job("staging-one").open)
+        self.assertIsNone(old.poll())
+        self.assertIsNone(new.poll())
+
+    def test_failed_unclaimed_orphan_kill_blocks_starts_without_store_worker(self):
+        orphan = self.spawn_stub()
+        self.journal_job("unrelated", pgid=None)
+        real_adopt = fleetd.adopt_workers
+
+        def refuse_kill(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              killer=lambda *_args, **_kw: "injected signal refusal",
+                              **kwargs)
+
+        first = self.startup(hub_adopt=refuse_kill)
+        self.assertEqual(first.mode, "store")
+        self.assertEqual(first.store_workers, [])
+        self.assertIn(orphan.pid, first.unresolved_orphan_pgids)
+        self.assertFalse(first.spawn_allowed)
+        self.assertIsNone(orphan.poll())
+        second = self.startup(hub_adopt=refuse_kill)
+        self.assertIn(orphan.pid, second.unresolved_orphan_pgids)
+        self.assertFalse(second.spawn_allowed)
+
+    def test_failed_unrelated_orphan_kill_blocks_starts_with_store_worker(self):
+        claimed = self.spawn_stub()
+        orphan = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=claimed.pid,
+                               started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host=HOST, pgid=claimed.pid,
+                               started_at=started)
+        real_adopt = fleetd.adopt_workers
+
+        def refuse_kill(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              killer=lambda *_args, **_kw: "injected signal refusal",
+                              **kwargs)
+
+        res = self.startup(hub_adopt=refuse_kill)
+        self.assertEqual(res.mode, "store")
+        self.assertEqual([w.pgid for w in res.store_workers], [claimed.pid])
+        self.assertIn(orphan.pid, res.unresolved_orphan_pgids)
+        self.assertFalse(res.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIsNone(claimed.poll())
+        self.assertIsNone(orphan.poll())
+
+    def test_successful_orphan_kill_clears_local_start_gate(self):
+        orphan = self.spawn_stub()
+        self.journal_job("unrelated", pgid=None)
+        res = self.startup()
+        self.assertIn(orphan.pid, [pgid for pgid, _ in res.hub_result.orphans_killed])
+        orphan.wait(timeout=10)
+        pending = set(res.unresolved_orphan_pgids)
+        self.assertTrue(runner_mod.resolve_known_orphans(
+            pending, self.token, [self.marker]))
+        res.unresolved_orphan_pgids = pending
+        self.assertTrue(res.spawn_allowed)
+
+    def test_journaled_unclaimed_group_omitted_by_store_scan_blocks_restart(self):
+        live = self.spawn_stub()
+        self.journal_job("staging-one", pgid=live.pid)
+        real_adopt = fleetd.adopt_workers
+
+        def omitted_worker_scan(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              worker_probe=lambda _markers: {}, **kwargs)
+
+        with mock.patch.object(fleetd, "_scoped_worker_in_group",
+                               return_value=None), \
+                mock.patch("keel.runner._journal_group_identity",
+                           return_value="missing"):
+            first = self.startup(hub_adopt=omitted_worker_scan)
+            second = self.startup(hub_adopt=omitted_worker_scan)
+        self.assertEqual(first.hub_result.orphans_killed, [])
+        self.assertEqual(first.unresolved_orphan_pgids, {live.pid})
+        self.assertEqual(second.unresolved_orphan_pgids, {live.pid})
+        self.assertFalse(first.spawn_allowed)
+        self.assertFalse(second.spawn_allowed)
+        self.assertIsNone(live.poll())
+        self.assertTrue(self.j.read_job("staging-one").open)
+
+    def test_journaled_scoped_orphan_missed_by_store_scan_is_signalled(self):
+        live = self.spawn_stub()
+        self.journal_job("staging-one", pgid=live.pid)
+        real_adopt = fleetd.adopt_workers
+
+        def omitted_worker_scan(hub, host, workers, **kwargs):
+            return real_adopt(hub, host, workers,
+                              worker_probe=lambda _markers: {}, **kwargs)
+
+        res = self.startup(hub_adopt=omitted_worker_scan)
+        self.assertEqual(res.hub_result.orphans_killed, [])
+        live.wait(timeout=10)
+        self.assertIsNone(self.hub.sha(claim_mod.claim_ref("gate", "staging-one")))
+        pending = set(res.unresolved_orphan_pgids)
+        self.assertTrue(runner_mod.resolve_known_orphans(
+            pending, self.token, [self.marker]))
+
+    def test_journaled_unclaimed_replacement_leader_does_not_block(self):
+        bystander = self.spawn_stub(scoped=False, marked=False)
+        self.journal_job("staging-one", pgid=bystander.pid)
+        res = self.startup()
+        self.assertEqual(res.unresolved_orphan_pgids, set())
+        self.assertTrue(res.spawn_allowed)
+        self.assertIsNone(bystander.poll())
+
+    def test_journaled_unclaimed_kernel_absent_group_does_not_block(self):
+        self.journal_job("staging-one", pgid=424242)
+        res = self.startup()
+        self.assertEqual(res.unresolved_orphan_pgids, set())
+        self.assertTrue(res.spawn_allowed)
+
+    def test_foreign_claim_same_pgid_is_not_killed_as_journal_orphan(self):
+        live = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        ref = self.journal_job("staging-one", pgid=live.pid,
+                               started_at=started)
+        self.seed_claim_on_hub(self.hub, ref, host="another-host",
+                               pgid=live.pid, started_at=started)
+        res = self.startup()
+        self.assertEqual(res.store_workers, [])
+        self.assertEqual(res.hub_result.claim_pgids_by_ref[ref], live.pid)
+        self.assertEqual(res.hub_result.orphans_killed, [])
+        self.assertTrue(res.local_conflict_unresolved)
+        self.assertFalse(res.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(ref))
+        self.assertIsNone(live.poll())
+
+    def test_unrelated_claim_same_pgid_is_not_killed_as_journal_orphan(self):
+        live = self.spawn_stub()
+        started = iso(datetime.now(timezone.utc) - timedelta(seconds=30))
+        self.journal_job("staging-one", pgid=live.pid, started_at=started)
+        other_ref = claim_mod.claim_ref("gate", "unrelated")
+        self.seed_claim_on_hub(self.hub, other_ref, host=HOST,
+                               pgid=live.pid, started_at=started)
+        res = self.startup()
+        self.assertEqual([w.pgid for w in res.store_workers], [live.pid])
+        self.assertEqual(res.hub_result.claim_pgids_by_ref[other_ref], live.pid)
+        self.assertEqual(res.hub_result.orphans_killed, [])
+        self.assertTrue(res.local_conflict_unresolved)
+        self.assertFalse(res.spawn_allowed)
+        self.assertIsNotNone(self.hub.sha(other_ref))
+        self.assertIsNone(live.poll())
 
     def test_an_offline_runner_is_not_allowed_to_spawn(self):
         """SPEC §5.3: "sweeps nothing, spawns nothing, and retries the

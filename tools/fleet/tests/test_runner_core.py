@@ -672,7 +672,9 @@ class TestJournalWiring(RunnerFixture):
                 log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
                 reconcile=lambda *_a, **_kw: fleetd.ReconcileResult())
         self.assertEqual(rc, 0)
-        self.assertEqual(events[:2], ["signal", "host-retry"])
+        self.assertIn("host-retry", events)
+        self.assertIn("signal", events[:events.index("host-retry")],
+                      "lost-worker signal must precede the first host store call")
         self.assertFalse(worker.alive())
 
     def test_lost_worker_during_host_retry_is_stopped_before_held_exit(self):
@@ -911,6 +913,72 @@ class TestJournalWiring(RunnerFixture):
         refreshed[0].claim.stop_renewer(timeout=2)
         self.assertTrue(j.read_job(w.job_key).open)
 
+    def test_complete_store_with_unresolved_local_conflict_stays_paused_on_retry(self):
+        real_adopt = journal_mod.adopt_at_startup
+        adoptions = []
+        allowed = []
+
+        def unresolved(*args, **kwargs):
+            result = real_adopt(*args, **kwargs)
+            self.assertEqual(result.mode, "store")
+            result.local_conflict_unresolved = True
+            adoptions.append(result)
+            return result
+
+        def step(_hub, _host, _workers, *_args, **kwargs):
+            allowed.append(kwargs["spawn_allowed"])
+            if len(allowed) >= 2:
+                os.kill(os.getpid(), signal_mod.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(journal_mod, "adopt_at_startup",
+                               side_effect=unresolved), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0,
+                reconcile=step), 0)
+        self.assertGreaterEqual(len(adoptions), 2)
+        self.assertEqual(allowed, [False, False])
+
+    def test_known_orphan_stays_paused_when_next_store_scan_omits_it(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        orphan = subprocess.Popen(
+            [str(self.stub), "orphan", "orphan", runner.fleet_scope_token(self.hub.url)],
+            start_new_session=True, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        self.addCleanup(orphan.wait, timeout=10)
+        self.addCleanup(lambda: (self.tmp / "stop-orphan").write_text(""))
+        adoptions = []
+        allowed = []
+
+        def staged(*_args, **_kwargs):
+            unresolved = {orphan.pid} if not adoptions else set()
+            result = journal_mod.StartupAdoption(
+                mode="store", hub_result=fleetd.AdoptionResult(),
+                unresolved_orphan_pgids=unresolved)
+            adoptions.append(result)
+            return result
+
+        def step(_hub, _host, _workers, *_args, **kwargs):
+            allowed.append(kwargs["spawn_allowed"])
+            if len(allowed) >= 2:
+                os.kill(os.getpid(), signal_mod.SIGTERM)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(journal_mod, "adopt_at_startup",
+                               side_effect=staged), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, interval=0,
+                reconcile=step), 0)
+        self.assertGreaterEqual(len(adoptions), 2)
+        self.assertEqual(allowed, [False, False])
+        self.assertIsNone(orphan.poll())
+
     def test_store_recheck_quiesces_old_renewer_before_claim_adoption(self):
         os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
         journal = journal_mod.Journal()
@@ -1026,6 +1094,68 @@ class TestJournalWiring(RunnerFixture):
         self.assertIsNotNone(self.hub.sha(old.claim.ref))
         self.assertIsNone(new.poll())
         for worker in recovered[0]:
+            worker.claim.stop_renewer(timeout=2)
+
+    def test_initial_partial_adoption_stops_old_group_before_first_reconcile(self):
+        os.environ["FLEET_WORKER_MARKERS"] = str(self.stub)
+        journal = journal_mod.Journal()
+        old = runner.start_gate(self.hub, "staging/one", "old", [str(self.stub)],
+                                self.host, self.log_dir, journal=journal)
+        self.workers.append(old)
+        old.claim.stop_renewer(timeout=2)
+        new = subprocess.Popen(
+            [str(self.stub), runner.fleet_scope_token(self.hub.url), "new"],
+            start_new_session=True, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: new.wait(timeout=10))
+        self.addCleanup(lambda: (self.tmp / "stop-new").write_text(""))
+        payload = self.hub.read(old.claim.ref)
+        payload["started_at"] = claim_mod._iso(claim_mod._utcnow())
+        payload["expires_at"] = claim_mod._iso(
+            claim_mod._utcnow() + claim_mod.timedelta(seconds=600))
+        payload["pid"] = payload["pgid"] = new.pid
+        self.assertTrue(self.hub.update(old.claim.ref, payload,
+                                        expect_sha=self.hub.sha(old.claim.ref)))
+        real_list = claim_mod.list_claims
+        signals = []
+        seen = []
+
+        def list_claims(hub, *, kind):
+            if kind == "agent":
+                raise HubUnreachableError("agent listing unavailable")
+            return real_list(hub, kind=kind)
+
+        def refuse_signal(pgid, **_kwargs):
+            if pgid == old.pgid:
+                signals.append(pgid)
+            return "injected signal refusal"
+
+        def step(_hub, _host, workers, *_args, **kwargs):
+            self.assertIn(old.pgid, signals,
+                          "local stop-work must precede first reconcile")
+            self.assertFalse(kwargs["spawn_allowed"])
+            self.assertEqual({w.pgid for w in workers}, {old.pgid, new.pid})
+            self.assertTrue(next(w for w in workers if w.pgid == old.pgid).claim.lost)
+            self.assertTrue(journal.read_job(old.job_key).open)
+            seen.append(workers)
+            return fleetd.ReconcileResult()
+
+        with mock.patch.object(claim_mod, "list_claims", side_effect=list_claims), \
+                mock.patch.object(runner, "kill_process_group",
+                                  side_effect=refuse_signal), \
+                mock.patch.object(runner, "check_toolchain_agreement",
+                                  return_value=(True, None)):
+            self.assertEqual(runner.run_daemon(
+                self.hub, self.host, gate_command=[str(self.stub)],
+                log_dir=self.log_dir, repo_root=REPO_ROOT, once=True,
+                reconcile=step), 0)
+        self.assertEqual(len(seen), 1)
+        self.assertIsNone(old.popen.poll())
+        self.assertIsNone(new.poll())
+        runner.stop_lost_workers(seen[0], journal, self.host)
+        old.popen.wait(timeout=10)
+        runner.stop_lost_workers(seen[0], journal, self.host)
+        for worker in seen[0]:
             worker.claim.stop_renewer(timeout=2)
 
     def test_hub_startup_closes_a_run_after_releasing_its_dead_claim(self):
