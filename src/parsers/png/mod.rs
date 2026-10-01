@@ -313,15 +313,9 @@ pub fn parse_png_metadata_with_diagnostics(
                 }
 
                 b"PLTE" => {
-                    // Parse PLTE chunk (palette)
-                    // Perl ExifTool shows "(Binary data N bytes, use -b option to extract)"
-                    metadata.insert(
-                        "PNG:Palette".to_string(),
-                        TagValue::new_string(format!(
-                            "(Binary data {} bytes, use -b option to extract)",
-                            chunk.data.len()
-                        )),
-                    );
+                    // PLTE's bytes are the Palette value. Keep the source
+                    // payload alongside ExifTool's ordinary binary summary.
+                    metadata.insert_available_binary_with_display("PNG:Palette", chunk.data);
                 }
 
                 b"tEXt" | b"zTXt" | b"iTXt" => {

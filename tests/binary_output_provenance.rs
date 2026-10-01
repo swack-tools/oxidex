@@ -147,3 +147,19 @@ fn icc_red_trc_extracts_retained_curve_bytes() {
         include_bytes!("fixtures/icc/red_trc_apple.bin")
     );
 }
+
+#[test]
+fn png_palette_extracts_chunk_payload_instead_of_display_summary() {
+    // Expected bytes are pinned ExifTool 13.59's `-b -Palette` result for
+    // this existing PNG fixture (741 bytes, SHA-256 44fd7ac15e4400e1...).
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/png/sample.png"
+    ));
+    let output = run(&["-b", "-Palette"], path);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        include_bytes!("fixtures/png/palette_sample.bin")
+    );
+}
