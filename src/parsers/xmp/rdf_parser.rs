@@ -907,17 +907,28 @@ fn parse_xmp_packet_in_directory(
                             |tag| tag.lang_alt,
                         );
                         if language_alternatives {
-                            // Only x-default owns the bare name. A missing
-                            // default never removes another language's suffix.
+                            // ExifTool replaces earlier values within one language
+                            // alternative. Unlabelled entries and x-default share
+                            // the bare name; each other language has its own slot.
+                            let suffixes: Vec<String> = collection_langs
+                                .iter()
+                                .map(|lang| match lang.as_deref() {
+                                    Some(lang) if !lang.eq_ignore_ascii_case("x-default") => {
+                                        format!("-{lang}")
+                                    }
+                                    _ => String::new(),
+                                })
+                                .collect();
+                            let last: std::collections::HashMap<&str, usize> = suffixes
+                                .iter()
+                                .enumerate()
+                                .map(|(index, suffix)| (suffix.as_str(), index))
+                                .collect();
                             for (index, value) in collection_values.iter().enumerate() {
-                                let suffix =
-                                    match collection_langs.get(index).and_then(Clone::clone) {
-                                        Some(lang) if lang.eq_ignore_ascii_case("x-default") => {
-                                            String::new()
-                                        }
-                                        Some(lang) => format!("-{lang}"),
-                                        None => String::new(),
-                                    };
+                                let suffix = &suffixes[index];
+                                if last.get(suffix.as_str()) != Some(&index) {
+                                    continue;
+                                }
                                 let tag = format!("{prefixed_name}{suffix}");
                                 if current_default_namespace {
                                     default_namespace_tags.insert(tag.clone());
@@ -8586,6 +8597,22 @@ mod entry_tests {
 #[cfg(test)]
 mod language_flatname_recovery_tests {
     use super::*;
+
+    #[test]
+    fn duplicate_language_alternatives_keep_last_value() {
+        for lang in ["", " xml:lang=\"fr\"", " xml:lang=\"x-default\""] {
+            let xml = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li{lang}>A</rdf:li><rdf:li{lang}>B</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF>"#
+            );
+            let tags = parse_xmp(xml.as_bytes()).unwrap();
+            let dc: Vec<_> = tags
+                .iter()
+                .filter(|(key, _)| key.starts_with("XMP-dc:"))
+                .collect();
+            assert_eq!(dc.len(), 1, "{lang}: {dc:?}");
+            assert_eq!(dc[0].1, "B", "{lang}");
+        }
+    }
 
     #[test]
     fn known_language_alternatives_follow_source_schema() {
