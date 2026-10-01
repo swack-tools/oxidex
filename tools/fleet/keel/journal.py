@@ -138,11 +138,13 @@ _parse_iso = claim_mod._parse_iso
 DEFAULT_ROOT = Path.home() / ".keel" / "journal"
 
 #: Bumped whenever the meaning of an existing field changes or a new
-#: EVENT is added. A record whose `v` is greater than this makes its file
-#: unreadable rather than partially understood -- an older runner rolled
+#: EVENT is added. Version 2 permits another run after an exit in the same
+#: file; version 1 readers consider any exit final. A record whose `v` is
+#: greater than this makes its file unreadable rather than partially
+#: understood -- an older runner rolled
 #: back onto a host a newer one journaled must fail closed, not quietly
 #: skip the records it does not recognize.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 OFFER = "offer"
 CLAIM = "claim"

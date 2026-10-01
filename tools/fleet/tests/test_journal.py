@@ -380,6 +380,39 @@ class TestJournalScan(JournalCase):
         self.assertTrue(self.j.read_job("staging-one").closed)
         self.assertEqual(self.j.scan().open_jobs, ())
 
+    def test_legacy_v1_single_run_remains_readable(self):
+        path = self.j.path_for("staging-one")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {"v": 1, "event": "offer", "job_key": "staging-one",
+             "ts": iso(datetime.now(timezone.utc)), "kind": "gate"},
+            {"v": 1, "event": "spawn", "job_key": "staging-one",
+             "ts": iso(datetime.now(timezone.utc)), "pgid": 1234},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        job = self.j.read_job("staging-one")
+        self.assertTrue(job.open)
+        self.assertEqual(job.pgid, 1234)
+        self.assertEqual(job.prior_runs, 0)
+
+    def test_new_run_after_legacy_v1_exit_uses_current_schema(self):
+        path = self.j.path_for("staging-one")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {"v": 1, "event": "offer", "job_key": "staging-one",
+             "ts": iso(datetime.now(timezone.utc)), "kind": "gate"},
+            {"v": 1, "event": "exit", "job_key": "staging-one",
+             "ts": iso(datetime.now(timezone.utc)), "rc": 0},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        self.j.offer(job_key="staging-one", kind="gate", work_key="staging/one",
+                     tag="second")
+        written = json.loads(path.read_text().splitlines()[-1])
+        self.assertEqual(written["v"], 2)
+        job = self.j.read_job("staging-one")
+        self.assertTrue(job.open)
+        self.assertEqual(job.prior_runs, 1)
+
     def test_torn_second_offer_keeps_closed_run_and_disarms_sweep(self):
         self.journal_job("staging-one", pgid=111, closed=True)
         with self.j.path_for("staging-one").open("ab") as fh:
