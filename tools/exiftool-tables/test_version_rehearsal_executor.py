@@ -701,6 +701,14 @@ class ExecutorTests(unittest.TestCase):
             copy.chmod(0o700)
             copies.append(str(copy))
 
+        probe_read, probe_write = os.pipe()
+        try:
+            capacity = fcntl.fcntl(probe_write, fcntl.F_SETPIPE_SZ, 4096)
+            if capacity != 4096:
+                self.skipTest(f"kernel minimum pipe capacity is {capacity}; requires 4096 bytes")
+        finally:
+            os.close(probe_read)
+            os.close(probe_write)
         actual_handshake = executor._await_supervised_exec
 
         def shrink_status_pipe(child):
