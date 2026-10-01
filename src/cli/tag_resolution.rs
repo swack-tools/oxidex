@@ -405,11 +405,29 @@ pub fn render_binary_requested_tags(
     }
     let mut out = Vec::new();
     for entry in resolve_requested_tags(metadata, &requested, args.all_tags) {
-        // Binary extraction bypasses the ordinary display placeholder.
+        if entry.occurrence.binary_payload_unavailable {
+            return Err(format!(
+                "binary payload is unavailable for {}",
+                entry.lookup_key
+            ));
+        }
         if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::ValueConv).as_ref()
         {
             out.extend_from_slice(bytes);
             continue;
+        }
+        // Some source bytes belong to decoded text tags; only an explicit
+        // parser declaration permits extracting `stored` as the binary value.
+        if entry.occurrence.binary_extract_from_stored {
+            if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::Stored).as_ref()
+            {
+                out.extend_from_slice(bytes);
+                continue;
+            }
+            return Err(format!(
+                "binary payload is unavailable for {}",
+                entry.lookup_key
+            ));
         }
         let value = resolved_display_value(entry.occurrence, !args.exiftool_compat());
         match value {
@@ -529,6 +547,74 @@ mod binary_text_tests {
     use super::*;
 
     #[test]
+    fn binary_mpf_uid_request_returns_original_payload() {
+        for count in [3u32, 33] {
+            let payload: Vec<u8> = (0..count as u8).collect();
+            let mut segment = b"MPF\0II\x2a\0\x08\0\0\0".to_vec();
+            segment.extend_from_slice(&1u16.to_le_bytes());
+            segment.extend_from_slice(&0xb003u16.to_le_bytes());
+            segment.extend_from_slice(&7u16.to_le_bytes());
+            segment.extend_from_slice(&count.to_le_bytes());
+            if count <= 4 {
+                let mut slot = [0; 4];
+                slot[..payload.len()].copy_from_slice(&payload);
+                segment.extend_from_slice(&slot);
+            } else {
+                segment.extend_from_slice(&26u32.to_le_bytes());
+            }
+            segment.extend_from_slice(&0u32.to_le_bytes());
+            if count > 4 {
+                segment.extend_from_slice(&payload);
+            }
+            let mut metadata = MetadataMap::new();
+            crate::parsers::jpeg::mpf_parser::parse_mpf_segment(&segment, 0, &mut metadata)
+                .unwrap();
+            let args =
+                CliArgs::parse_from(["-b".into(), "-ImageUIDList".into(), "fixture.jpg".into()])
+                    .unwrap();
+            assert_eq!(
+                render_binary_requested_tags(&metadata, &args).unwrap(),
+                payload
+            );
+            if count > 4 {
+                segment.pop();
+                let mut truncated = MetadataMap::new();
+                crate::parsers::jpeg::mpf_parser::parse_mpf_segment(&segment, 0, &mut truncated)
+                    .unwrap();
+                assert!(!truncated.contains_key("MPF0:ImageUIDList"));
+            }
+        }
+    }
+
+    #[test]
+    fn binary_request_refuses_unavailable_payload_summary() {
+        let args = CliArgs::parse_from(["-b".into(), "-PreviewImage".into(), "fixture.jpg".into()])
+            .unwrap();
+        let mut metadata = MetadataMap::new();
+        metadata.insert_unavailable_binary("MPImage2:PreviewImage", 50000, "");
+        assert!(
+            render_binary_requested_tags(&metadata, &args)
+                .unwrap_err()
+                .contains("PreviewImage")
+        );
+
+        let mut merged = MetadataMap::new();
+        merged.merge_winners_keeping_group1(&metadata);
+        assert!(
+            render_binary_requested_tags(&merged, &args)
+                .unwrap_err()
+                .contains("PreviewImage"),
+            "merging a parser map must retain unavailable-payload state"
+        );
+        *merged.get_mut("MPImage2:PreviewImage").unwrap() =
+            TagValue::new_string("replacement text");
+        assert_eq!(
+            render_binary_requested_tags(&merged, &args).unwrap(),
+            b"replacement text"
+        );
+    }
+
+    #[test]
     fn binary_request_returns_payload_not_display_placeholder() {
         let args =
             CliArgs::parse_from(["-b".into(), "-ThumbnailImage".into(), "fixture.jpg".into()])
@@ -539,6 +625,27 @@ mod binary_text_tests {
         assert_eq!(
             render_binary_requested_tags(&metadata, &args).unwrap(),
             payload
+        );
+    }
+
+    #[test]
+    fn binary_request_keeps_decoded_text_when_stored_form_is_binary() {
+        let args = CliArgs::parse_from(["-b".into(), "-Description".into(), "fixture.jpg".into()])
+            .unwrap();
+        let text = TagValue::new_string("decoded description");
+        let mut metadata = MetadataMap::new();
+        metadata.insert_occurrence_with_forms(
+            "XMP-dc:Description",
+            text.clone(),
+            text,
+            Some(TagValue::Binary(vec![0, 1, 2])),
+            1,
+            "",
+            Instance::default(),
+        );
+        assert_eq!(
+            render_binary_requested_tags(&metadata, &args).unwrap(),
+            b"decoded description"
         );
     }
 
@@ -1853,6 +1960,8 @@ mod tests {
             priority: priority.into(),
             is_list: false,
             order: 999,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             origin: Provenance {
                 module: Some("Olympus"),
                 table: Some("CameraSettings"),
@@ -2023,6 +2132,8 @@ mod tests {
                 priority: priority.into(),
                 is_list: false,
                 order: u32::MAX,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Olympus"),
                     table: Some("CameraSettings"),

@@ -472,12 +472,7 @@ pub(crate) fn parse_photoshop_irb_with_context(
                 RES_PHOTOSHOP_THUMBNAIL => {
                     if let Some(len) = block.data.len().checked_sub(PHOTOSHOP_THUMBNAIL_HEADER_LEN)
                     {
-                        metadata.insert(
-                            "Photoshop:PhotoshopThumbnail",
-                            TagValue::String(format!(
-                                "(Binary data {len} bytes, use -b option to extract)"
-                            )),
-                        );
+                        metadata.insert_unavailable_binary("Photoshop:PhotoshopThumbnail", len, "");
                     }
                 }
                 // Resource 0x0404 (IPTCData) is parsed by the IPTC parser, and

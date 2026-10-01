@@ -323,14 +323,7 @@ pub fn parse_app11_jpeg_hdr(data: &[u8]) -> Result<MetadataMap> {
         // `$et->HandleTag($tagTablePtr, 'RatioImage', substr($$dataPt, $pos));`
         // `RatioImage` is `Binary => 1`, so without -b ExifTool prints a placeholder.
         let ratio_image_size = data.len() - (term + HDR_META_TERMINATOR.len());
-        metadata.insert_with_group1(
-            "APP11:RatioImage",
-            TagValue::String(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                ratio_image_size
-            )),
-            JPEG_HDR_GROUP1,
-        );
+        metadata.insert_unavailable_binary("APP11:RatioImage", ratio_image_size, JPEG_HDR_GROUP1);
 
         Ok(metadata)
     })

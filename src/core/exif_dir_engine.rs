@@ -78,6 +78,8 @@ struct Row {
     /// it (`TagOccurrence::stored`): what the PNG `eXIf` rebuild and
     /// `copy_metadata` serialize. See [`stored_value`].
     stored: Option<TagValue>,
+    /// The source table's `Binary` flag generated a display-only summary.
+    binary_payload_unavailable: bool,
     /// 0 iff the tag's effective priority is 0 (`Priority => 0`, or `Avoid`
     /// with no priority of its own; ExifTool.pm:9469-9473), else 1.
     priority: u8,
@@ -539,6 +541,8 @@ impl DirEngineRows {
                     priority: row.priority.into(),
                     is_list: tag.flags.list,
                     order: 0,
+                    binary_payload_unavailable: false,
+                    binary_extract_from_stored: false,
                     origin: Provenance {
                         module: Some("Exif"),
                         table: Some("Main"),
@@ -715,7 +719,7 @@ pub(crate) fn ifd0_walk_with_session(
 /// `ExifIFD`/`InteropIFD` to `EXIF`), and the `-n` form on the same
 /// occurrence, and its stored form when the caller asked for it.
 fn record(row: &Row, stored_forms: bool, metadata: &mut MetadataMap, key: String) {
-    metadata.insert_occurrence_with_forms(
+    metadata.insert_occurrence_with_forms_and_binary_state(
         key,
         row.display.clone(),
         row.no_print_conv.clone(),
@@ -723,6 +727,7 @@ fn record(row: &Row, stored_forms: bool, metadata: &mut MetadataMap, key: String
         row.priority,
         "",
         Instance::default(),
+        row.binary_payload_unavailable,
     );
 }
 
@@ -847,6 +852,9 @@ pub(crate) fn walk_with_session(
             display,
             no_print_conv,
             stored,
+            binary_payload_unavailable: entry
+                .and_then(|entry| table.tag(entry.tag_id))
+                .is_some_and(|tag| tag.flags.binary && tag.value_conv.is_none()),
             priority: if row.low_priority {
                 0
             } else {

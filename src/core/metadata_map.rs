@@ -536,6 +536,66 @@ impl MetadataMap {
         previous
     }
 
+    /// Record an ExifTool binary display summary when the parser has not
+    /// retained the payload. The occurrence carries this fact independently
+    /// of the summary's text, so `-b` can refuse without rejecting real text.
+    pub(crate) fn insert_unavailable_binary<K: Into<String>>(
+        &mut self,
+        key: K,
+        len: usize,
+        group1: &str,
+    ) -> Option<TagValue> {
+        self.insert_unavailable_binary_display(
+            key,
+            TagValue::String(format!(
+                "(Binary data {len} bytes, use -b option to extract)"
+            )),
+            group1,
+        )
+    }
+
+    /// Same state for a source that has already computed its display form.
+    /// The caller must know from the parsed tag definition that it is binary.
+    pub(crate) fn insert_unavailable_binary_display<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        group1: &str,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.binary_payload_unavailable = true;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    /// Keep an available binary tag's ordinary summary and its real bytes in
+    /// separate occurrence channels. Explicit `-b` extracts the stored bytes;
+    /// both ordinary and `--no-print-conv` display keep the source summary.
+    pub(crate) fn insert_available_binary_with_display<K: Into<String>>(
+        &mut self,
+        key: K,
+        bytes: Vec<u8>,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let display = TagValue::String(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            bytes.len()
+        ));
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display.clone(), order);
+        occurrence.value = Some(display.clone());
+        occurrence.print = Some(display);
+        occurrence.stored = Some(TagValue::Binary(bytes));
+        occurrence.binary_extract_from_stored = true;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     /// [`insert`](Self::insert) with ExifTool's family-1 group recorded
     /// beside the key.
     ///
@@ -594,28 +654,23 @@ impl MetadataMap {
         previous
     }
 
-    /// Copies every winner of `source` into this map through
-    /// [`insert_with_group1`](Self::insert_with_group1), so a family-1 group
-    /// the sub-parser recorded survives the copy -- and so does the
-    /// `--no-print-conv` form it attached
-    /// ([`insert_with_group1_and_value`](Self::insert_with_group1_and_value)):
-    /// dropping it made `-n` reprint the label (APP6 `NITF:ImageColor`
-    /// `Monochrome` where ExifTool prints `0`). A source built only with
-    /// `insert()` copies exactly as `for (k, v) in source.iter() {
-    /// self.insert(k, v) }` would.
+    /// Copies every winner of `source` with its family-1 group, ValueConv
+    /// form, stored writer value, and binary extraction state. Dropping the
+    /// ValueConv form made `-n` reprint the label (APP6 `NITF:ImageColor`
+    /// `Monochrome` where ExifTool prints `0`). Flattening an unavailable
+    /// binary summary to a plain string would let `-b` emit fake payload.
+    /// A source built only with `insert()` keeps the old winner behavior.
     pub(crate) fn merge_winners_keeping_group1(&mut self, source: &MetadataMap) {
         for (key, occurrence) in source.sink.winner_occurrences() {
-            match &occurrence.value {
-                Some(value) => self.insert_with_group1_and_value(
-                    key.clone(),
-                    occurrence.raw.clone(),
-                    value.clone(),
-                    &occurrence.group1,
-                ),
-                None => {
-                    self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1)
-                }
-            };
+            let order = self.sink.next_order();
+            let mut copied = TagOccurrence::from_insert_shim(key, occurrence.raw.clone(), order);
+            copied.group1 = occurrence.group1.clone();
+            copied.value = occurrence.value.clone();
+            copied.print = occurrence.value.as_ref().map(|_| occurrence.raw.clone());
+            copied.stored = occurrence.stored.clone();
+            copied.binary_payload_unavailable = occurrence.binary_payload_unavailable;
+            copied.binary_extract_from_stored = occurrence.binary_extract_from_stored;
+            self.sink.record(key.clone(), copied);
             self.set_last_assigned(source.is_assigned(key));
         }
     }
@@ -753,6 +808,32 @@ impl MetadataMap {
         group1: &str,
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms_and_binary_state(
+            key,
+            display_value,
+            no_print_conv_value,
+            stored,
+            priority,
+            group1,
+            instance,
+            false,
+        )
+    }
+
+    /// Source-declared binary summary that retains the usual display and
+    /// writer forms but cannot currently satisfy `-b`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_forms_and_binary_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        binary_payload_unavailable: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -763,6 +844,7 @@ impl MetadataMap {
         occurrence.value = Some(no_print_conv_value);
         occurrence.print = Some(occurrence.raw.clone());
         occurrence.stored = stored;
+        occurrence.binary_payload_unavailable = binary_payload_unavailable;
         self.sink.record(key, occurrence);
         previous
     }
@@ -796,6 +878,8 @@ impl MetadataMap {
         occurrence.value = source.value.clone();
         occurrence.print = source.value.as_ref().map(|_| occurrence.raw.clone());
         occurrence.stored = source.stored.clone();
+        occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
+        occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
         occurrence.is_list = source.is_list;
         self.sink.record(key, occurrence);
         previous
@@ -825,6 +909,8 @@ impl MetadataMap {
         occurrence.value = source.value.clone();
         occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
+        occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
+        occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
         self.sink.record(key, occurrence);
         previous
     }
@@ -1830,6 +1916,8 @@ mod tests {
             priority: 1,
             is_list: false,
             order: 999,
+            binary_payload_unavailable: false,
+            binary_extract_from_stored: false,
             origin: Provenance {
                 module: Some("Olympus"),
                 table: Some("CameraSettings"),
@@ -1851,6 +1939,8 @@ mod tests {
         value: Option<TagValue>,
         print: Option<TagValue>,
         stored: Option<TagValue>,
+        binary_payload_unavailable: bool,
+        binary_extract_from_stored: bool,
         priority: i16,
         is_list: bool,
         order: u32,
@@ -1870,6 +1960,8 @@ mod tests {
             value: occurrence.value.clone(),
             print: occurrence.print.clone(),
             stored: occurrence.stored.clone(),
+            binary_payload_unavailable: occurrence.binary_payload_unavailable,
+            binary_extract_from_stored: occurrence.binary_extract_from_stored,
             priority: occurrence.priority,
             is_list: occurrence.is_list,
             order: occurrence.order,
@@ -1900,6 +1992,8 @@ mod tests {
                 priority: 3,
                 is_list: true,
                 order: 0,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Olympus"),
                     table: Some("CameraSettings"),
@@ -1921,6 +2015,8 @@ mod tests {
                 priority: 0,
                 is_list: false,
                 order: 1,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Olympus"),
                     table: Some("CameraSettings"),
@@ -1942,6 +2038,8 @@ mod tests {
                 priority: 2,
                 is_list: true,
                 order: 2,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("Olympus"),
                     table: Some("NamedCoordinates"),
@@ -1963,6 +2061,8 @@ mod tests {
                 priority: 1,
                 is_list: false,
                 order: 3,
+                binary_payload_unavailable: false,
+                binary_extract_from_stored: false,
                 origin: Provenance {
                     module: Some("FujiFilm"),
                     table: Some("Main"),
