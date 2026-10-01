@@ -3494,18 +3494,12 @@ fn enterable_ifd(
     let Some(bytes_from_end) = directory_limit.checked_sub(dir_end) else {
         return false;
     };
-    if matches!(bytes_from_end, 0 | 2) {
-        // Exif.pm:6394-6400 accepts a complete entry array with no 4-byte
-        // next-IFD field (or only two trailing bytes). parse_ifd requires it.
-        return reader.read(entries_start, entries_len).is_ok();
-    }
-    crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
-        reader,
-        offset,
-        byte_order,
-        directory_limit,
-    )
-    .is_ok()
+    // Exif.pm:6394-6400 accepts a complete entry array without a next-IFD
+    // field (or with only two trailing bytes), but one or three bytes are
+    // malformed. Enterability is structural: ProcessDirectory checks a
+    // duplicate physical target before decoding any of its values. Parsing
+    // here would copy a large value once for every repeated pointer.
+    !matches!(bytes_from_end, 1 | 3) && reader.read(entries_start, entries_len).is_ok()
 }
 
 fn followed_subdirectories(
@@ -3650,6 +3644,53 @@ mod followed_directory_tests {
         put16(data, at + 2, format);
         put32(data, at + 4, count);
         put32(data, at + 8, value);
+    }
+
+    #[test]
+    fn duplicate_pointer_guard_does_not_decode_large_target_values() {
+        use std::cell::Cell;
+
+        struct CountingReader {
+            data: Vec<u8>,
+            large_reads: Cell<usize>,
+        }
+        impl FileReader for CountingReader {
+            fn read(&self, offset: u64, length: usize) -> std::io::Result<&[u8]> {
+                if length >= 100_000 {
+                    self.large_reads.set(self.large_reads.get() + 1);
+                }
+                let start = usize::try_from(offset)
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))?;
+                let end = start
+                    .checked_add(length)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof)?;
+                self.data
+                    .get(start..end)
+                    .ok_or(std::io::ErrorKind::UnexpectedEof.into())
+            }
+
+            fn size(&self) -> u64 {
+                self.data.len() as u64
+            }
+        }
+
+        let mut data = vec![0u8; 101_000];
+        data[..8].copy_from_slice(b"II*\0\x08\0\0\0");
+        put16(&mut data, 8, 2);
+        entry(&mut data, 10, 0x8825, 4, 1, 200);
+        entry(&mut data, 22, 0x8825, 4, 1, 200);
+        put32(&mut data, 34, 100);
+        put16(&mut data, 200, 1);
+        entry(&mut data, 202, 0x0001, 7, 100_000, 1_000);
+        let reader = CountingReader {
+            data,
+            large_reads: Cell::new(0),
+        };
+        assert_eq!(
+            legal_ifd1_offset(&reader, 8, 2, ByteOrder::LittleEndian),
+            Some(100)
+        );
+        assert_eq!(reader.large_reads.get(), 0);
     }
 
     fn thumbnail_ifd(data: &mut [u8], at: usize, image_offset: u32) {

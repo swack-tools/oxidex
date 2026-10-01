@@ -1674,6 +1674,10 @@ fn extract_rw2_embedded_exif_tags(
     // the reader instead of ending it at the APP1 payload boundary.
     let reader = SliceReader::new(&jpeg[tiff_start_in_jpeg..]);
     let directory_limit = tiff_data.len() as u64;
+    // IFD0 is read with the enclosing JPEG RAF and can fetch values beyond
+    // APP1 (for example Make). ProcessExif enters ExifIFD/Interop without
+    // that RAF; ordinary out-of-line values there stop at the APP1 payload.
+    let subdir_reader = SliceReader::new(tiff_data);
     let ifd0_tags = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
         &reader,
         first_ifd_offset,
@@ -1859,7 +1863,7 @@ fn extract_rw2_embedded_exif_tags(
     // A complete embedded ExifIFD can end without a next-IFD footer. A
     // malformed optional ExifIFD must not discard IFD0 or IFD1 values.
     let Ok(exif_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
-        &reader,
+        &subdir_reader,
         exif_ifd_offset,
         byte_order,
         directory_limit,
@@ -1937,7 +1941,7 @@ fn extract_rw2_embedded_exif_tags(
     // Model was known when this ExifIFD was entered. The pointer walk captured
     // the Model at ExifOffset, so a later IFD0 Model cannot activate it.
     for entry in crate::core::tiff_helpers::reached_integral_ifd_entries_with_known_model(
-        &reader,
+        &subdir_reader,
         exif_ifd_offset,
         byte_order,
         &[0xA411, 0xA412],
@@ -1964,7 +1968,7 @@ fn extract_rw2_embedded_exif_tags(
         let Some((value_pos, value_len)) = entry.raw_value else {
             continue;
         };
-        let Ok(raw) = reader.read(value_pos, value_len) else {
+        let Ok(raw) = subdir_reader.read(value_pos, value_len) else {
             continue;
         };
         let Some(decoded) = crate::exiftool_tables::ifd_engine::decode_reached_tiff_value(
@@ -2070,7 +2074,7 @@ fn extract_rw2_embedded_exif_tags(
             })
     {
         extract_interop_index(
-            &reader,
+            &subdir_reader,
             interop_offset,
             byte_order,
             directory_limit,

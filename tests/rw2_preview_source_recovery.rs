@@ -339,6 +339,32 @@ fn preview_value_after_app1_remains_readable_through_jpeg() {
 }
 
 #[test]
+fn preview_exif_value_after_app1_is_refused() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    let slot = entry(&data, exif_ifd, 0xA405);
+    let app1_length = usize::from(u16::from_be_bytes(
+        data[tiff - 8..tiff - 6].try_into().unwrap(),
+    ));
+    let app1_end = tiff - 8 + app1_length;
+    let value_at = app1_end + 4;
+    assert!(value_at + 6 <= data.len());
+    data[slot..slot + 2].copy_from_slice(&0xA411u16.to_le_bytes());
+    data[slot + 2..slot + 4].copy_from_slice(&3u16.to_le_bytes());
+    data[slot + 4..slot + 8].copy_from_slice(&3u32.to_le_bytes());
+    data[slot + 8..slot + 12]
+        .copy_from_slice(&u32::try_from(value_at - tiff).unwrap().to_le_bytes());
+    data[value_at..value_at + 6].copy_from_slice(&[1, 0, 0, 0, 0, 0]);
+
+    // The pinned native reader warns "Bad offset for ExifIFD
+    // ShadingCorrection" and emits no A411, although IFD0 Make can be read
+    // beyond APP1 through the enclosing preview JPEG.
+    assert!(parse(&data).get("ExifIFD:ShadingCorrection").is_none());
+}
+
+#[test]
 fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
