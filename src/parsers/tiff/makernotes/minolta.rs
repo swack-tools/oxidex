@@ -612,12 +612,7 @@ fn insert_binary_or_placeholder(
             );
         }
         None => {
-            metadata.insert(
-                "MakerNotes:PreviewImage",
-                TagValue::new_string(format!(
-                    "(Binary data {total} bytes, use -b option to extract)"
-                )),
-            );
+            metadata.insert_unavailable_binary("MakerNotes:PreviewImage", total, "");
         }
     }
 }

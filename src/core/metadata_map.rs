@@ -745,6 +745,25 @@ impl MetadataMap {
         self.sink.record(key, occurrence);
     }
 
+    /// An XMP table declares this property binary, but the reader has only
+    /// retained its public display form. Keep the source declaration so an
+    /// explicit byte request refuses instead of emitting that display text.
+    pub(crate) fn insert_xmp_binary_unavailable<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        priority: i16,
+        group1: &str,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.binary_payload_unavailable = true;
+        self.sink.record(key, occurrence);
+    }
+
     /// Records a row whose physical family-0 group differs from its public
     /// lookup-key prefix, as with Google's HDRP MakerNote fields.
     #[allow(clippy::too_many_arguments)]
@@ -765,6 +784,31 @@ impl MetadataMap {
         occurrence.group0 = super::tag_occurrence::intern(group0);
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    /// A family-0 override whose source is binary but whose bytes were not
+    /// retained by the reader.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_group0_binary_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        priority: u8,
+        group0: &str,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.priority = priority.into();
+        occurrence.group0 = super::tag_occurrence::intern(group0);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.instance = instance;
+        occurrence.binary_payload_unavailable = true;
         self.sink.record(key, occurrence);
         previous
     }

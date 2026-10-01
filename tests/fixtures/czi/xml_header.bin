@@ -1,0 +1,19 @@
+<ImageDocument>
+  <Metadata>
+    <HardwareSetting>
+      <Microscope Id="Microscope" Name="Axio Observer.Z1" UniqueName="AquilaZ.Stand" Model="" IsAvailable="true" IsBroken="false" IsBrokenReason="" Motorization="Motorized" IsLightSource="false" IsLightSink="false">
+        <StandSpecification>Inverted</StandSpecification>
+        <Devices>
+          <DeviceRef Id="MTBCameraAdapter_MTBSideportChanger_Left"></DeviceRef>
+        </Devices>
+      </Microscope>
+      <EyePiece Id="MTBEyePiece" Name="10x Eyepiece SF23" UniqueName="Eyepiece.10x_23" Model="" IsAvailable="true" IsBroken="false" IsBrokenReason="" Motorization="None" IsLightSource="false" IsLightSink="false">
+        <Magnification>10</Magnification>
+        <TotalMagnification>400</TotalMagnification>
+        <DepthOfField>0.487202380952381</DepthOfField>
+        <FieldOfView>23</FieldOfView>
+        <TotalFieldOfView>0.575</TotalFieldOfView>
+      </EyePiece>
+    </HardwareSetting>
+  </Metadata>
+</ImageDocument>

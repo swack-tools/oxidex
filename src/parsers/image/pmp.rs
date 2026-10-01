@@ -184,12 +184,7 @@ pub fn parse_pmp_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
                 && length > 0
                 && (JPEG_OFFSET as u64 + length as u64) <= reader.size()
             {
-                metadata.insert(
-                    "Sony:JpgFromRaw".to_string(),
-                    TagValue::new_string(format!(
-                        "(Binary data {length} bytes, use -b option to extract)"
-                    )),
-                );
+                metadata.insert_unavailable_binary("Sony:JpgFromRaw", length as usize, "");
             }
         }
 

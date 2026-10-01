@@ -387,9 +387,8 @@ fn parse_exif_chunk(
 
         // Handle different tag types
         if tag_id == b"emnt" {
-            // MakerNotes is binary data - store as binary indicator (match ExifTool format)
-            let binary_msg = format!("(Binary data {} bytes, use -b option to extract)", tag_size);
-            metadata.insert(tag_name.to_string(), TagValue::new_string(binary_msg));
+            // MakerNotes is binary; keep the source bytes behind its summary.
+            metadata.insert_available_binary_with_display(tag_name, tag_value_bytes.to_vec());
         } else {
             // Other tags are ASCII strings (null-terminated)
             let (tag_value, _, _) = WINDOWS_1252.decode(tag_value_bytes);

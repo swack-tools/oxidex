@@ -1124,12 +1124,7 @@ pub fn parse_sony_preview_image_tag(ctx: &MakerNoteContext<'_>, metadata: &mut M
     match raw {
         Some(raw) => parse_sony_preview_image(raw, metadata),
         None => {
-            metadata.insert(
-                "MakerNotes:PreviewImage",
-                TagValue::new_string(format!(
-                    "(Binary data {total} bytes, use -b option to extract)"
-                )),
-            );
+            metadata.insert_unavailable_binary("MakerNotes:PreviewImage", total, "");
         }
     }
 }
@@ -1182,10 +1177,8 @@ pub fn parse_sony_preview_image(raw: &[u8], metadata: &mut MetadataMap) {
         fixed.extend_from_slice(rest);
         TagValue::new_binary(fixed)
     } else {
-        TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            raw.len()
-        ))
+        metadata.insert_unavailable_binary("MakerNotes:PreviewImage", raw.len(), "");
+        return;
     };
     metadata.insert("MakerNotes:PreviewImage", value);
 }

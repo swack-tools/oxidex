@@ -516,12 +516,7 @@ pub fn parse_casio_preview_image_tag(
             );
         }
         None => {
-            metadata.insert(
-                "MakerNotes:PreviewImage",
-                TagValue::new_string(format!(
-                    "(Binary data {total} bytes, use -b option to extract)"
-                )),
-            );
+            metadata.insert_unavailable_binary("MakerNotes:PreviewImage", total, "");
         }
     }
 }

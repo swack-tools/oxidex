@@ -87,6 +87,17 @@ fn xmp_literal_binary_summary_is_extractable_text() {
 }
 
 #[test]
+fn xmp_declared_binary_summary_refuses_without_payload() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("depth.xmp");
+    fs::write(&path, r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/"><rdf:Description GDepth:DepthImage="AQIDBA=="/></rdf:RDF></x:xmpmeta>"#).unwrap();
+    let binary = run(&["-b", "-DepthImage"], &path);
+    assert!(!binary.status.success());
+    assert!(binary.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&binary.stderr).contains("binary payload is unavailable"));
+}
+
+#[test]
 fn binary_orientation_uses_value_conversion() {
     let path = Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -175,4 +186,37 @@ fn png_short_palette_extracts_source_value_conversion() {
     let output = run(&["-b", "-Palette"], path);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"255 0 0");
+}
+
+#[test]
+fn xisf_binary_tags_extract_native_source_bytes() {
+    // Fixture and expected payloads come from pinned ExifTool 13.59's
+    // t/images/XISF.xisf. Both XML and ImageData have ordinary summaries.
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/xisf/pinned.xisf"
+    ));
+    for (name, expected) in [
+        ("-XML", &include_bytes!("fixtures/xisf/xml_header.bin")[..]),
+        (
+            "-ImageData",
+            &include_bytes!("fixtures/xisf/image_data.bin")[..],
+        ),
+    ] {
+        let output = run(&["-b", name], path);
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert_eq!(output.stdout, expected, "{name}");
+    }
+}
+
+#[test]
+fn czi_xml_extracts_native_source_block() {
+    // Pinned ExifTool 13.59's t/images/ZISRAW.czi and -b -XML result.
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ));
+    let output = run(&["-b", "-XML"], path);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
 }

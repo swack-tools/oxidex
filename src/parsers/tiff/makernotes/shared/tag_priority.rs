@@ -225,7 +225,10 @@ fn record_dispatched_row(
     priority: u8,
     group1_override: &str,
 ) {
+    let binary_payload_unavailable =
+        matches!(&display, crate::core::TagValue::String(_)) && legacy_binary_summary_source(key);
     let mut row = crate::core::TagOccurrence::from_insert_shim(key, display, 0);
+    row.binary_payload_unavailable = binary_payload_unavailable;
     row.priority = priority.into();
     if let Some(value) = value {
         row.print = Some(row.raw.clone());
@@ -253,9 +256,55 @@ fn record_dispatched_row(
     metadata.record_occurrence(key.to_string(), row);
 }
 
+/// Source-declared binary fields that still pass through the legacy MakerNote
+/// string map. The map has discarded their bytes before this merge boundary;
+/// these exact table keys retain that provenance independently of display.
+fn legacy_binary_summary_source(key: &str) -> bool {
+    // Exif.pm's shared OffsetPair/DataTag preview derivation is binary for
+    // whichever MakerNote directory supplied the pair, not just Nikon.
+    let derived_preview = key.split_once(':').is_some_and(|(group, name)| {
+        name == "PreviewImage" && crate::writers::exif_surgical::is_makernote_group(group)
+    });
+    matches!(
+        key,
+        // Canon::Main 0x0097; generated Canon table marks Binary.
+        "Canon:DustRemovalData"
+            // PhaseOne::Main 0x010f, 0x021c, 0x0223 and
+            // PhaseOne::SensorCalibration 0x0400.
+            | "PhaseOne:RawData"
+            | "PhaseOne:StripOffsets"
+            | "PhaseOne:BlackLevelData"
+            | "PhaseOne:SensorDefects"
+    ) || derived_preview
+        || key
+            .strip_prefix("Sony:TextInfo")
+            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod dispatched_group_tests {
     use super::*;
+
+    #[test]
+    fn legacy_binary_source_is_recorded_without_matching_display_text() {
+        let mut metadata = crate::core::MetadataMap::new();
+        let summary =
+            crate::core::TagValue::new_string("(Binary data 16 bytes, use -b option to extract)");
+        record_makernote_tag(
+            &mut metadata,
+            "Canon:DustRemovalData".to_string(),
+            summary.clone(),
+        );
+        record_makernote_tag(&mut metadata, "Canon:LensModel".to_string(), summary);
+        record_makernote_tag(
+            &mut metadata,
+            "Pentax:PreviewImage".to_string(),
+            crate::core::TagValue::new_string("unreadable range"),
+        );
+        assert!(metadata.occurrences_for("Canon:DustRemovalData")[0].binary_payload_unavailable);
+        assert!(!metadata.occurrences_for("Canon:LensModel")[0].binary_payload_unavailable);
+        assert!(metadata.occurrences_for("Pentax:PreviewImage")[0].binary_payload_unavailable);
+    }
 
     #[test]
     fn phaseone_matrix_retains_parser_print_form_after_group_assignment() {

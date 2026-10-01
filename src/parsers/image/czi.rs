@@ -359,13 +359,9 @@ fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &m
         return;
     };
 
-    // ZISRAW.pm:194, `$et->FoundTag('XML', $buff)` -- "extract as a block".
-    metadata.insert(
-        "XML:XML",
-        TagValue::new_string(format!(
-            "(Binary data {len} bytes, use -b option to extract)"
-        )),
-    );
+    // ZISRAW.pm:194, `$et->FoundTag('XML', $buff)` -- retain that exact
+    // source block for -b while keeping its ordinary binary summary.
+    metadata.insert_available_binary_with_display_and_group1("XML:XML", xml.to_vec(), "XML");
 
     let options = XmlWalkOptions {
         // `%Image::ExifTool::XMP::XML`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`.

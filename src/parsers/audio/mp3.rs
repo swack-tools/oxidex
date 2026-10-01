@@ -1224,8 +1224,7 @@ fn parse_picture_frame(
     };
 
     // Picture data size
-    let _data_pos = description_end + if encoding == 1 || encoding == 2 { 2 } else { 1 };
-    let picture_size = data.len().saturating_sub(_data_pos);
+    let data_pos = description_end + if encoding == 1 || encoding == 2 { 2 } else { 1 };
 
     // Store metadata
     let format_str = if mime_type.contains("jpeg") || mime_type == "JPG" {
@@ -1255,12 +1254,9 @@ fn parse_picture_frame(
             group1,
         );
     }
-    metadata.insert_with_group1(
+    metadata.insert_available_binary_with_display_and_group1(
         "ID3:Picture",
-        TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            picture_size
-        )),
+        data.get(data_pos..).unwrap_or_default().to_vec(),
         group1,
     );
 

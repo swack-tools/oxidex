@@ -926,12 +926,10 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                     "IFD1:ThumbnailLength".to_string(),
                                     TagValue::new_integer(value as i64),
                                 );
-                                metadata.insert(
-                                    "EXIF:ThumbnailImage".to_string(),
-                                    TagValue::new_string(format!(
-                                        "(Binary data {} bytes, use -b option to extract)",
-                                        value
-                                    )),
+                                metadata.insert_unavailable_binary(
+                                    "EXIF:ThumbnailImage",
+                                    value as usize,
+                                    "",
                                 );
                                 continue;
                             }
@@ -6423,12 +6421,10 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
         && let Some(image) = payload.get(PREVIEW_IMAGE_DATA_OFFSET..)
         && !image.is_empty()
     {
-        metadata.insert(
-            "QuickTime:PreviewImage".to_string(),
-            TagValue::new_string(format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                image.len()
-            )),
+        metadata.insert_available_binary_with_display_and_group1(
+            "QuickTime:PreviewImage",
+            image.to_vec(),
+            "QuickTime",
         );
     }
 
@@ -9433,12 +9429,10 @@ fn parse_fujifilm_raf(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                                         // data with a placeholder unless -b is used to
                                         // extract binary data.
                                         if let Some(len) = thumbnail_length {
-                                            metadata.insert(
-                                                "IFD1:ThumbnailImage".to_string(),
-                                                TagValue::new_string(format!(
-                                                    "(Binary data {} bytes, use -b option to extract)",
-                                                    len
-                                                )),
+                                            metadata.insert_unavailable_binary(
+                                                "IFD1:ThumbnailImage",
+                                                len as usize,
+                                                "",
                                             );
                                         }
                                     }
@@ -9789,14 +9783,14 @@ fn extract_nef_subifd_jpg_from_raw(
 
     let start = offset as usize;
     let end = start.saturating_add(length as usize);
-    let image = match data.get(start..end) {
-        Some(bytes) => TagValue::new_binary(bytes.to_vec()),
-        None => TagValue::new_string(format!(
-            "(Binary data {} bytes, use -b option to extract)",
-            length
-        )),
-    };
-    metadata.insert("EXIF:JpgFromRaw".to_string(), image);
+    match data.get(start..end) {
+        Some(bytes) => {
+            metadata.insert("EXIF:JpgFromRaw", TagValue::new_binary(bytes.to_vec()));
+        }
+        None => {
+            metadata.insert_unavailable_binary("EXIF:JpgFromRaw", length as usize, "");
+        }
+    }
 }
 
 /// Format TIFF/EP tag 0x9216 (TIFF-EPStandardID).
@@ -9936,12 +9930,19 @@ fn extract_dng_subifd_preview(
     // `core::tiff_helpers::read_or_placeholder`, which this mirrors for a
     // byte slice instead of a `FileReader`.
     if length > 0 {
-        metadata.insert_occurrence(
+        let image = dng_binary_or_placeholder(data, offset, length);
+        // This helper's String branch is reached only when the declared
+        // source range cannot be read. Keep that fact with this SubIFD copy.
+        let unavailable = matches!(image, TagValue::String(_));
+        metadata.insert_occurrence_with_forms_and_binary_state(
             image_key,
-            dng_binary_or_placeholder(data, offset, length),
+            image.clone(),
+            image,
+            None,
             1,
             &directory,
             crate::core::tag_occurrence::Instance::default(),
+            unavailable,
         );
     }
 }

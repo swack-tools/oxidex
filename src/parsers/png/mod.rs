@@ -335,8 +335,17 @@ pub fn parse_png_metadata_with_diagnostics(
                     // handler rejects before naming yields no record.
                     if let Some(record) = parse_text_record(&chunk.chunk_type, &chunk.data) {
                         match text_namer.row(&record) {
-                            TextRow::Tag { name, value, .. } => {
-                                metadata.insert(format!("PNG:{name}"), value);
+                            TextRow::Tag {
+                                name,
+                                value,
+                                binary,
+                            } => {
+                                let key = format!("PNG:{name}");
+                                if binary {
+                                    metadata.insert_unavailable_binary_display(key, value, "PNG");
+                                } else {
+                                    metadata.insert(key, value);
+                                }
                             }
                             TextRow::Xmp(packet) => {
                                 match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
@@ -377,12 +386,13 @@ pub fn parse_png_metadata_with_diagnostics(
                 b"hIST" => {
                     // Parse hIST chunk (histogram)
                     if let Ok(histogram) = parse_hist_chunk(&chunk.data) {
-                        metadata.insert(
-                            "PNG:Histogram".to_string(),
+                        metadata.insert_unavailable_binary_display(
+                            "PNG:Histogram",
                             TagValue::new_string(format!(
                                 "(Binary data {} entries, use -b option to extract)",
                                 histogram.len()
                             )),
+                            "",
                         );
                     }
                 }
