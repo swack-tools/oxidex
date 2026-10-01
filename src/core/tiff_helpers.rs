@@ -3297,7 +3297,7 @@ pub(crate) fn reached_integral_ifd_entries_with_known_model(
     known_model: &str,
     directory_limit: u64,
 ) -> Vec<ReachedIntegralEntry> {
-    scan_reached_integral_ifd_entries(
+    process_exif_directory_walk(
         reader,
         ifd_offset,
         byte_order,
@@ -3305,40 +3305,52 @@ pub(crate) fn reached_integral_ifd_entries_with_known_model(
         known_model,
         directory_limit,
     )
-    .0
+    .requested_entries
 }
 
-/// Return both reached values and whether ProcessExif completed the IFD loop.
-/// A stopped subdirectory retains earlier values; a stopped IFD0 must not
-/// proceed to its next-IFD pointer (Exif.pm:7197-7232).
-fn scan_reached_integral_ifd_entries(
+/// One ProcessExif admission decision for selected values, reached integral
+/// pointers, and the next-IFD walk. A stopped directory retains earlier
+/// entries; only a completed IFD0 may follow its next-IFD pointer.
+pub(crate) struct ProcessExifDirectoryWalk {
+    pub(crate) requested_entries: Vec<ReachedIntegralEntry>,
+    pub(crate) eligible_indices: Vec<usize>,
+    pub(crate) completed: bool,
+    pub(crate) final_model: Arc<str>,
+}
+
+pub(crate) fn process_exif_directory_walk(
     reader: &dyn FileReader,
     ifd_offset: u64,
     byte_order: ByteOrder,
     requested_tags: &[u16],
     known_model: &str,
     directory_limit: u64,
-) -> (Vec<ReachedIntegralEntry>, bool) {
+) -> ProcessExifDirectoryWalk {
+    let mut walk = ProcessExifDirectoryWalk {
+        requested_entries: Vec::new(),
+        eligible_indices: Vec::new(),
+        completed: false,
+        final_model: Arc::from(known_model),
+    };
     if ifd_offset
         .checked_add(2)
         .is_none_or(|end| end > directory_limit)
     {
-        return (Vec::new(), false);
+        return walk;
     }
     let Some(count) = ifd_entry_count(reader, ifd_offset, byte_order) else {
-        return (Vec::new(), false);
+        return walk;
     };
     let Some(dir_end) = ifd_offset
         .checked_add(2)
         .and_then(|n| n.checked_add(u64::from(count) * 12))
     else {
-        return (Vec::new(), false);
+        return walk;
     };
     if dir_end > directory_limit {
-        return (Vec::new(), false);
+        return walk;
     }
 
-    let mut reached = Vec::new();
     let mut current_model: Arc<str> = Arc::from(known_model);
     let mut warnings = 0u32;
     let mut completed = true;
@@ -3421,6 +3433,7 @@ fn scan_reached_integral_ifd_entries(
             let model = String::from_utf8_lossy(&bytes[..size as usize]);
             current_model = Arc::from(model.split('\0').next().unwrap_or("").trim_end());
         }
+        walk.eligible_indices.push(index as usize);
         if !requested_tags.contains(&tag_id) {
             continue;
         }
@@ -3433,7 +3446,7 @@ fn scan_reached_integral_ifd_entries(
             continue;
         }
         if matches!(tag_id, 0xA411 | 0xA412) {
-            reached.push(ReachedIntegralEntry {
+            walk.requested_entries.push(ReachedIntegralEntry {
                 tag_id,
                 field_type,
                 count: value_count,
@@ -3462,7 +3475,7 @@ fn scan_reached_integral_ifd_entries(
             9 => i64::from(read_u32(chunk, byte_order) as i32),
             _ => unreachable!(),
         };
-        reached.push(ReachedIntegralEntry {
+        walk.requested_entries.push(ReachedIntegralEntry {
             tag_id,
             field_type,
             count: value_count,
@@ -3471,7 +3484,9 @@ fn scan_reached_integral_ifd_entries(
             known_model: current_model.clone(),
         });
     }
-    (reached, completed)
+    walk.completed = completed;
+    walk.final_model = current_model;
+    walk
 }
 
 /// Enumerate only parseable subdirectories that ExifTool would actually enter.
@@ -3514,7 +3529,7 @@ fn followed_subdirectories(
         return Vec::new();
     }
     let mut followed = Vec::new();
-    for entry in scan_reached_integral_ifd_entries(
+    for entry in process_exif_directory_walk(
         reader,
         ifd_offset,
         byte_order,
@@ -3522,7 +3537,7 @@ fn followed_subdirectories(
         known_model,
         directory_limit,
     )
-    .0
+    .requested_entries
     {
         if entry.tag_id == 0x8769 && entry.count != 1 {
             continue;
@@ -3547,6 +3562,7 @@ pub(crate) fn first_unvisited_exif_ifd(
     reader: &dyn FileReader,
     ifd0_offset: u64,
     byte_order: ByteOrder,
+    known_model: &str,
     directory_limit: u64,
 ) -> Option<(u64, Arc<str>)> {
     let mut visited = vec![ifd0_offset];
@@ -3555,7 +3571,7 @@ pub(crate) fn first_unvisited_exif_ifd(
         ifd0_offset,
         byte_order,
         &[0x8825, 0x8769],
-        "",
+        known_model,
         directory_limit,
     ) {
         if visited.contains(&target) {
@@ -4256,6 +4272,7 @@ pub(crate) fn legal_ifd1_offset_with_directory_limit(
     ifd0_offset: u64,
     ifd0_entry_count: usize,
     byte_order: ByteOrder,
+    known_model: &str,
     directory_limit: u64,
 ) -> Option<u64> {
     legal_ifd1_offset_with_known_model(
@@ -4263,7 +4280,7 @@ pub(crate) fn legal_ifd1_offset_with_directory_limit(
         ifd0_offset,
         ifd0_entry_count,
         byte_order,
-        "",
+        known_model,
         directory_limit,
     )
 }
@@ -4281,7 +4298,7 @@ fn legal_ifd1_offset_with_known_model(
 ) -> Option<u64> {
     // ProcessExif returns before the linked IFD when IFD0 aborts on its first
     // invalid entry, warning limit, or unreadable value (Exif.pm:6475, 7197).
-    if !scan_reached_integral_ifd_entries(
+    if !process_exif_directory_walk(
         reader,
         ifd0_offset,
         byte_order,
@@ -4289,7 +4306,7 @@ fn legal_ifd1_offset_with_known_model(
         known_model,
         directory_limit,
     )
-    .1
+    .completed
     {
         return None;
     }

@@ -363,6 +363,80 @@ fn preview_ifd0_software_after_app1_is_refused() {
 }
 
 #[test]
+fn bad_first_preview_ifd0_entry_aborts_later_tags_and_ifd1() {
+    let mut data = source();
+    let (_, ifd0) = preview_ifd0(&data);
+    data[ifd0 + 4..ifd0 + 6].copy_from_slice(&99u16.to_le_bytes());
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    data[exif_pointer..exif_pointer + 2].copy_from_slice(&0xC7FFu16.to_le_bytes());
+
+    // Pinned ExifTool warns about IFD0 entry 0 and abandons the preview IFD.
+    // The outer RW2 Model is still present, but no later preview value is.
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:Model"), Some("DMC-LX3"));
+    assert!(metadata.get("IFD0:ResolutionUnit").is_none());
+    assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+}
+
+#[test]
+fn bad_first_preview_exififd_entry_aborts_later_exif_values() {
+    let mut data = source();
+    let (tiff, ifd0) = preview_ifd0(&data);
+    let exif_pointer = entry(&data, ifd0, 0x8769);
+    let exif_ifd = tiff + read_u32(&data, exif_pointer + 8) as usize;
+    data[exif_ifd + 4..exif_ifd + 6].copy_from_slice(&99u16.to_le_bytes());
+
+    // The ExifIFD abort does not retroactively discard IFD0 or IFD1.
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("inches"));
+    assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
+    assert!(metadata.get("ExifIFD:ColorSpace").is_none());
+}
+
+#[test]
+fn prior_outer_ilce_model_allows_bad_first_preview_entry_and_ifd1() {
+    let mut data = source();
+    let outer_ifd = read_u32(&data, 4) as usize;
+    let model = entry(&data, outer_ifd, 0x0110);
+    let jpeg = entry(&data, outer_ifd, 0x002e);
+    assert!(model > jpeg);
+    assert_eq!(read_u32(&data, model + 4), 8);
+    let model_value = read_u32(&data, model + 8) as usize;
+    data[model_value..model_value + 8].copy_from_slice(b"ILCE-T\0\0");
+    let model_entry = data[model..model + 12].to_vec();
+    let jpeg_entry = data[jpeg..jpeg + 12].to_vec();
+    data[model..model + 12].copy_from_slice(&jpeg_entry);
+    data[jpeg..jpeg + 12].copy_from_slice(&model_entry);
+    let (_, ifd0) = preview_ifd0(&data);
+    data[ifd0 + 4..ifd0 + 6].copy_from_slice(&99u16.to_le_bytes());
+
+    // Model was known when JpgFromRaw was entered. Exif.pm's Sony ILCE
+    // exception skips the bad first entry and continues through IFD1.
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:Model"), Some("ILCE-T"));
+    assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("inches"));
+    assert_eq!(metadata.get_string("ExifIFD:ColorSpace"), Some("sRGB"));
+    assert_eq!(metadata.get_integer("IFD1:ThumbnailOffset"), Some(11976));
+}
+
+#[test]
+fn late_outer_ilce_model_does_not_revive_bad_preview_ifd0() {
+    let mut data = source();
+    let outer_ifd = read_u32(&data, 4) as usize;
+    let model = entry(&data, outer_ifd, 0x0110);
+    assert_eq!(read_u32(&data, model + 4), 8);
+    let model_value = read_u32(&data, model + 8) as usize;
+    data[model_value..model_value + 8].copy_from_slice(b"ILCE-T\0\0");
+    let (_, ifd0) = preview_ifd0(&data);
+    data[ifd0 + 4..ifd0 + 6].copy_from_slice(&99u16.to_le_bytes());
+
+    let metadata = parse(&data);
+    assert_eq!(metadata.get_string("IFD0:Model"), Some("ILCE-T"));
+    assert!(metadata.get("IFD0:ResolutionUnit").is_none());
+    assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
+}
+
+#[test]
 fn preview_exif_value_after_app1_is_refused() {
     let mut data = source();
     let (tiff, ifd0) = preview_ifd0(&data);
@@ -383,8 +457,8 @@ fn preview_exif_value_after_app1_is_refused() {
     data[value_at..value_at + 6].copy_from_slice(&[1, 0, 0, 0, 0, 0]);
 
     // The pinned native reader warns "Bad offset for ExifIFD
-    // ShadingCorrection" and emits no A411, although IFD0 Make can be read
-    // beyond APP1 through the enclosing preview JPEG.
+    // ShadingCorrection" and emits no A411. Ordinary preview values stay
+    // within the APP1 payload even when the enclosing JPEG has more bytes.
     assert!(parse(&data).get("ExifIFD:ShadingCorrection").is_none());
 }
 

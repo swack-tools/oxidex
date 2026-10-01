@@ -724,9 +724,17 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // `-WBRedLevel` is the outer IFD0's 570, not the
                         // preview MakerNote's 2283.
                         let mut preview = MetadataMap::new();
-                        if let Err(error) =
-                            extract_rw2_embedded_exif_tags(bytes, jpeg_file_offset, &mut preview)
-                        {
+                        let known_model = metadata
+                            .get_string("IFD0:Model")
+                            .or_else(|| metadata.get_string("EXIF:Model"))
+                            .unwrap_or("")
+                            .to_string();
+                        if let Err(error) = extract_rw2_embedded_exif_tags(
+                            bytes,
+                            jpeg_file_offset,
+                            &known_model,
+                            &mut preview,
+                        ) {
                             eprintln!("Warning: Failed to parse RW2 preview EXIF: {}", error);
                         }
                         metadata.merge_as_subdocument(preview, crate::core::Instance(1));
@@ -1651,6 +1659,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
 fn extract_rw2_embedded_exif_tags(
     jpeg: &[u8],
     jpeg_file_offset: usize,
+    known_model: &str,
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     let Some((tiff_start_in_jpeg, tiff_data)) = find_jpeg_exif_tiff(jpeg)? else {
@@ -1674,12 +1683,21 @@ fn extract_rw2_embedded_exif_tags(
     // of IFD0 Software and ExifIFD A411 outside APP1 are both bad offsets.
     let reader = SliceReader::new(tiff_data);
     let directory_limit = tiff_data.len() as u64;
+    let ifd0_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        &reader,
+        first_ifd_offset,
+        byte_order,
+        &[],
+        known_model,
+        directory_limit,
+    );
     let ifd0_tags = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
         &reader,
         first_ifd_offset,
         byte_order,
         directory_limit,
         &[0xC4A5, 0x011A, 0x011B, 0x0128, 0x0131, 0x0132, 0x0213],
+        &ifd0_walk.eligible_indices,
     )?;
 
     for (tag_id, _field_type, _value_count, raw_bytes) in &ifd0_tags {
@@ -1789,17 +1807,27 @@ fn extract_rw2_embedded_exif_tags(
         first_ifd_offset,
         ifd0_tags.len(),
         byte_order,
+        known_model,
         directory_limit,
     );
 
     if let Some(thumbnail_ifd_offset) = thumbnail_ifd_offset
         && thumbnail_ifd_offset != 0
+        && let thumbnail_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+            &reader,
+            thumbnail_ifd_offset,
+            byte_order,
+            &[],
+            &ifd0_walk.final_model,
+            directory_limit,
+        )
         && let Ok(thumbnail_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
             &reader,
             thumbnail_ifd_offset,
             byte_order,
             directory_limit,
             &[0x0201, 0x0202],
+            &thumbnail_walk.eligible_indices,
         )
     {
         let mut thumbnail_offset = None;
@@ -1852,6 +1880,7 @@ fn extract_rw2_embedded_exif_tags(
             &reader,
             first_ifd_offset,
             byte_order,
+            known_model,
             directory_limit,
         )
     else {
@@ -1860,6 +1889,14 @@ fn extract_rw2_embedded_exif_tags(
 
     // A complete embedded ExifIFD can end without a next-IFD footer. A
     // malformed optional ExifIFD must not discard IFD0 or IFD1 values.
+    let exif_walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        &reader,
+        exif_ifd_offset,
+        byte_order,
+        &[0xA005, 0xA411, 0xA412],
+        &preview_model,
+        directory_limit,
+    );
     let Ok(exif_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
         &reader,
         exif_ifd_offset,
@@ -1867,8 +1904,9 @@ fn extract_rw2_embedded_exif_tags(
         directory_limit,
         &[
             0x9101, 0x9102, 0x9208, 0xA403, 0xA405, 0xA407, 0xA000, 0xA001, 0xA002, 0xA003, 0xA302,
-            0xA401, 0xA402, 0xA404, 0xA408, 0xA409, 0xA217, 0xA301, 0xA406, 0xA40A, 0xA005,
+            0xA401, 0xA402, 0xA404, 0xA408, 0xA409, 0xA217, 0xA301, 0xA406, 0xA40A,
         ],
+        &exif_walk.eligible_indices,
     ) else {
         return Ok(());
     };
@@ -1942,14 +1980,11 @@ fn extract_rw2_embedded_exif_tags(
     // Exif.pm:6475-6477 skips a bad first entry for Sony ILCE only when
     // Model was known when this ExifIFD was entered. The pointer walk captured
     // the Model at ExifOffset, so a later IFD0 Model cannot activate it.
-    for entry in crate::core::tiff_helpers::reached_integral_ifd_entries_with_known_model(
-        &reader,
-        exif_ifd_offset,
-        byte_order,
-        &[0xA411, 0xA412],
-        preview_model.as_ref(),
-        directory_limit,
-    ) {
+    for entry in exif_walk
+        .requested_entries
+        .iter()
+        .filter(|entry| matches!(entry.tag_id, 0xA411 | 0xA412))
+    {
         let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
             .and_then(|table| table.tag(entry.tag_id))
             .filter(|row| {
@@ -2064,21 +2099,17 @@ fn extract_rw2_embedded_exif_tags(
     // The preview EXIF also carries an Interoperability IFD (ExifIFD tag
     // 0xA005 -> InteropOffset). ExifTool reports [InteropIFD] InteropIndex for
     // Panasonic.rw2; oxidex never descended into it (measured gap 2026-07-27).
-    if let Some(interop_offset) =
-        exif_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0xA005 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            })
+    if let Some(interop_entry) = exif_walk
+        .requested_entries
+        .iter()
+        .find(|entry| entry.tag_id == 0xA005 && entry.field_type == 4 && !entry.values.is_empty())
+        && let Ok(interop_offset) = u64::try_from(interop_entry.values[0])
     {
         extract_interop_index(
             &reader,
             interop_offset,
             byte_order,
+            &interop_entry.known_model,
             directory_limit,
             metadata,
         );
@@ -2107,15 +2138,25 @@ fn extract_interop_index(
     reader: &SliceReader<'_>,
     interop_offset: u64,
     byte_order: ByteOrder,
+    known_model: &str,
     directory_limit: u64,
     metadata: &mut MetadataMap,
 ) {
+    let walk = crate::core::tiff_helpers::process_exif_directory_walk(
+        reader,
+        interop_offset,
+        byte_order,
+        &[],
+        known_model,
+        directory_limit,
+    );
     let Ok(interop_tags) = crate::parsers::tiff::ifd_parser::parse_ifd_without_next_offset(
         reader,
         interop_offset,
         byte_order,
         directory_limit,
         &[0x0001],
+        &walk.eligible_indices,
     ) else {
         eprintln!("Warning: Failed to parse Interoperability IFD");
         return;
@@ -5363,7 +5404,7 @@ mod panasonic_rw2_tests {
         jpeg.extend_from_slice(&[0xff, 0xd9]);
 
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, 1000, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 1000, "", &mut metadata)
             .expect("synthetic preview EXIF should parse");
 
         assert_eq!(
@@ -11296,7 +11337,7 @@ mod rw2_embedded_exif_printconv_tests {
     fn extract(entries: &[Entry<'_>], big_endian: bool) -> MetadataMap {
         let jpeg = build_preview_jpeg(entries, big_endian);
         let mut metadata = MetadataMap::new();
-        extract_rw2_embedded_exif_tags(&jpeg, 0, &mut metadata)
+        extract_rw2_embedded_exif_tags(&jpeg, 0, "", &mut metadata)
             .expect("synthetic RW2 preview EXIF must parse");
         metadata
     }
@@ -11365,7 +11406,7 @@ mod rw2_embedded_exif_printconv_tests {
             for pointer in [None, Some(0), Some(u32::MAX)] {
                 let (jpeg, thumbnail) = preview_with_independent_ifds(big_endian, pointer);
                 let mut metadata = MetadataMap::new();
-                extract_rw2_embedded_exif_tags(&jpeg, 1000, &mut metadata).unwrap();
+                extract_rw2_embedded_exif_tags(&jpeg, 1000, "", &mut metadata).unwrap();
                 assert_eq!(
                     metadata.get_string("IFD0:ModifyDate"),
                     Some("2008:08:06 15:21:56"),

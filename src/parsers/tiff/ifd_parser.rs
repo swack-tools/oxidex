@@ -239,13 +239,22 @@ pub fn parse_ifd(
     ifd_offset: u64,
     byte_order: ByteOrder,
 ) -> Result<IfdEntries> {
-    parse_ifd_with_footer_requirement(reader, ifd_offset, byte_order, reader.size(), true, None)
+    parse_ifd_with_footer_requirement(
+        reader,
+        ifd_offset,
+        byte_order,
+        reader.size(),
+        true,
+        None,
+        None,
+    )
 }
 
 /// Parse selected values from an embedded subdirectory whose complete entry
 /// array may end without the optional next-IFD pointer (Exif.pm:6394-6400).
 /// The entry array and ordinary values stay within the enclosing APP1 payload.
-/// All physical entries still spend their warning budget in order, but values
+/// `eligible_indices` comes from the shared ProcessExif walk, which decides
+/// first-entry aborts, warning order and Model-sensitive continuation. Values
 /// that this caller will never emit are not copied out of the reader.
 pub(crate) fn parse_ifd_without_next_offset(
     reader: &dyn FileReader,
@@ -253,6 +262,7 @@ pub(crate) fn parse_ifd_without_next_offset(
     byte_order: ByteOrder,
     directory_limit: u64,
     selected_tags: &[u16],
+    eligible_indices: &[usize],
 ) -> Result<IfdEntries> {
     parse_ifd_with_footer_requirement(
         reader,
@@ -261,6 +271,7 @@ pub(crate) fn parse_ifd_without_next_offset(
         directory_limit,
         false,
         Some(selected_tags),
+        Some(eligible_indices),
     )
 }
 
@@ -271,6 +282,7 @@ fn parse_ifd_with_footer_requirement(
     directory_limit: u64,
     require_next_offset: bool,
     selected_tags: Option<&[u16]>,
+    eligible_indices: Option<&[usize]>,
 ) -> Result<IfdEntries> {
     let file_size = reader.size();
     if directory_limit > file_size {
@@ -353,9 +365,12 @@ fn parse_ifd_with_footer_requirement(
     // here is to stop consuming entries while keeping `result`, not to error.
     let mut warn_count = 0u32;
 
-    for entry in ifd_entries {
+    for (index, entry) in ifd_entries.into_iter().enumerate() {
         if warn_count > 10 {
             break;
+        }
+        if eligible_indices.is_some_and(|indices| indices.binary_search(&index).is_err()) {
+            continue;
         }
 
         // Get type information. ExifTool skips entries with an unknown/invalid
@@ -367,17 +382,10 @@ fn parse_ifd_with_footer_requirement(
         // harmless -- is skipped *without* spending warning budget. Only a
         // nonzero-but-unrecognised format counts.
         //
-        // Deliberate divergence, stated rather than implied: Exif.pm:6475-6477
-        // is stricter on the *first* entry --
-        // `next if $index or $$et{Model} =~ /^ILCE/; return 0;` -- so a bad
-        // format code at index 0 makes ExifTool abandon the whole directory
-        // ("assume corrupted IFD"), Sony ILCE excepted. We skip unconditionally
-        // instead. Nothing has been extracted at index 0, so ExifTool's
-        // `return 0` discards nothing and the two only differ in whether the
-        // remaining entries are attempted; skipping recovers more and still
-        // cannot fabricate a value, since a skipped entry is omitted outright.
-        // Matching ExifTool exactly would also need the Model, which is not
-        // resolved this early in the parse.
+        // Standalone parse_ifd skips an invalid first entry. Exif.pm:6475-6477
+        // instead abandons that directory unless Model already starts ILCE.
+        // The RW2 embedded path supplies eligible_indices from the shared
+        // ProcessExif walk, so this loop cannot emit entries after that abort.
         let Some(exif_type) = ExifType::from_u16(entry.field_type) else {
             if entry.field_type != 0 {
                 warn_count += 1;
@@ -696,6 +704,7 @@ mod tests {
             ByteOrder::LittleEndian,
             reader.size(),
             &[0x0131],
+            &[0, 1],
         )
         .expect("selected embedded IFD");
         assert_eq!(tags.len(), 1);
