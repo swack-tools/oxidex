@@ -35,6 +35,14 @@ class PinnedRustActionTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(output, '')
 
+    def test_rust_action_change_triggers_actual_read_gate_filter(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        gate = workflow.split('  read-regression-gate:', 1)[1].split('\n  verify-tables-', 1)[0]
+        expression = gate.split("grep -qE '", 1)[1].split("'", 1)[0]
+        result = subprocess.run(['grep', '-qE', expression],
+                                input='.github/actions/pinned-rust/action.yml\n', text=True)
+        self.assertEqual(result.returncode, 0)
+
     def test_all_ci_rust_installations_use_the_repository_pin(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         self.assertNotIn('uses: dtolnay/rust-toolchain@', workflow)
