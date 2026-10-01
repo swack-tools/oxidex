@@ -152,6 +152,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     kill_process_group,
     kill_worker,
     live_pgids,
+    live_workers_payload,
     owning_user,
     reap_dead_same_host_singleton,
     session_of,
@@ -162,6 +163,7 @@ from keel.runner import (  # noqa: E402,F401 -- re-exported, see above
     write_heartbeat,
 )
 import keel.runner as keel_runner  # noqa: E402
+from keel.fallbackhub import FallbackHub  # noqa: E402
 
 # --------------------------------------------------------------------- #
 # Constants (FLEET_PLAN.md "Shared contracts" is the authority)
@@ -1143,8 +1145,11 @@ def reconcile_once(
         # never spawned (`train.real_gate`, a hand-run `gate.sh`) surface
         # here too -- they surfaced NOWHERE before.
         "warnings": res.warnings,
+        "live_workers": live_workers_payload(workers),
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if isinstance(hub, FallbackHub):
+        hb["fallback"] = hub.status()
     if any(isinstance(err, HubUnreachableError) for _, err in hub_failures):
         # The transport is already known to be down. `write_heartbeat`'s
         # ladder would spend PUSH_RETRIES * PUSH_BACKOFF_S (~24s) finding

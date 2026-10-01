@@ -171,6 +171,17 @@ class ServerHub:
     def __repr__(self) -> str:  # no token, ever
         return f"ServerHub({self.base_url!r})"
 
+    def with_timeouts(self, *, connect_timeout_s: Optional[float] = None,
+                      read_timeout_s: Optional[float] = None) -> "ServerHub":
+        """Clone the authenticated client with a separate announcement budget."""
+        return ServerHub(
+            self.base_url, token=self._token,
+            connect_timeout_s=(self.connect_timeout_s if connect_timeout_s is None
+                               else connect_timeout_s),
+            read_timeout_s=(self.read_timeout_s if read_timeout_s is None
+                            else read_timeout_s),
+        )
+
     # ---------------------------------------------------------------- #
     # Reads
     # ---------------------------------------------------------------- #
@@ -400,6 +411,18 @@ class ServerHub:
                 request_sent=True, status=status,
             )
         self._unexpected("GET", "/v1/health", status, body)
+
+    def register(self, runner_id: str, body: dict) -> dict:
+        """Announce a runner on the server-only route, never through CAS fallback."""
+        path = f"/v1/runners/{urllib.parse.quote(str(runner_id), safe='')}/register"
+        status, reply = self._request("POST", path, body=body)
+        if (status == 200 and isinstance(reply, dict)
+                and isinstance(reply.get("boot_id"), str) and reply["boot_id"]):
+            return reply
+        if status == 200:
+            raise PrimaryFailure(f"POST {path}: malformed registration reply",
+                                 request_sent=True, status=status)
+        self._unexpected("POST", path, status, reply)
 
     def events(
         self, since: int = 0, *, follow: bool = False, timeout: Optional[float] = None,
