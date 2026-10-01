@@ -617,11 +617,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--field "prerelease=$PRERELEASE"', block)
         self.assertIn('--raw-field "make_latest=$MAKE_LATEST"', block)
 
-    def test_stable_docs_are_not_relabelled_by_a_prerelease(self):
-        block = job_block(self.text, "update-docs")
-        self.assertIn("verify-version", job_needs(block))
-        self.assertRegex(
-            block, r"(?m)^    if: needs\.verify-version\.outputs\.prerelease != 'true'\s*$")
+    def test_releases_do_not_rewrite_stable_documentation(self):
+        self.assertNotRegex(self.text, r"(?m)^  update-docs:")
+        self.assertNotIn("ref: gh-pages", self.text)
+        self.assertNotIn("git push origin gh-pages", self.text)
+        docs = (WORKFLOWS / "deploy-docs.yml").read_text()
+        trigger = docs.split("jobs:", 1)[0]
+        self.assertIn("branches: [main]", trigger)
+        self.assertIn("'docs/**'", trigger)
+        self.assertIn("'CHANGELOG.md'", trigger)
+        self.assertNotRegex(trigger, r"(?m)^  (release|workflow_run|workflow_call):")
+        self.assertIn("actions/upload-pages-artifact@", docs)
+        self.assertIn("actions/deploy-pages@", docs)
 
     def test_release_refuses_tags_not_reachable_from_origin_main(self):
         block = job_block(self.text, "verify-version")
