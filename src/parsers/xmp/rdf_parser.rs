@@ -907,8 +907,9 @@ fn parse_xmp_packet_in_directory(
                             |tag| tag.lang_alt,
                         );
                         if language_alternatives {
-                            // ExifTool replaces earlier values within one language
-                            // alternative. Unlabelled entries and x-default share
+                            // FoundTag promotes an existing priority-zero value
+                            // to one; equal nonzero priorities prefer the later value.
+                            // Unlabelled entries and x-default share
                             // the bare name; each other language has its own slot.
                             let suffixes: Vec<String> = collection_langs
                                 .iter()
@@ -919,11 +920,14 @@ fn parse_xmp_packet_in_directory(
                                     _ => String::new(),
                                 })
                                 .collect();
-                            let last: std::collections::HashMap<&str, usize> = suffixes
-                                .iter()
-                                .enumerate()
-                                .map(|(index, suffix)| (suffix.as_str(), index))
-                                .collect();
+                            let mut winners = std::collections::HashMap::new();
+                            for (index, suffix) in suffixes.iter().enumerate() {
+                                if current_priority == 0 {
+                                    winners.entry(suffix.as_str()).or_insert(index);
+                                } else {
+                                    winners.insert(suffix.as_str(), index);
+                                }
+                            }
                             for (index, value) in collection_values.iter().enumerate() {
                                 let suffix = &suffixes[index];
                                 let tag = format!("{prefixed_name}{suffix}");
@@ -933,8 +937,8 @@ fn parse_xmp_packet_in_directory(
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 legacy.push_priority(&legacy_tag, &tag, value, current_priority);
                                 // Keep every source occurrence for -a; only the
-                                // ordinary primary projection selects the last.
-                                if last.get(suffix.as_str()) != Some(&index) {
+                                // ordinary primary projection arbitrates by source priority.
+                                if winners.get(suffix.as_str()) != Some(&index) {
                                     continue;
                                 }
                                 if !results.iter().any(|result| result.tag == tag) {
@@ -8621,6 +8625,29 @@ mod language_flatname_recovery_tests {
                 .collect();
             assert_eq!(values.len(), 2, "{lang}: {values:?}");
             assert!(values.contains(&"A".to_string()) && values.contains(&"B".to_string()));
+        }
+    }
+
+    #[test]
+    fn priority_zero_language_duplicates_keep_first_and_all_occurrences() {
+        for lang in ["fr", "x-default"] {
+            let xml = format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:UserComment><rdf:Alt><rdf:li xml:lang="{lang}">A</rdf:li><rdf:li xml:lang="{lang}">B</rdf:li></rdf:Alt></exif:UserComment></rdf:Description></rdf:RDF>"#
+            );
+            let tags = parse_xmp(xml.as_bytes()).unwrap();
+            let values: Vec<_> = tags
+                .iter()
+                .filter(|(key, _)| key.starts_with("XMP-exif:UserComment"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(values, vec!["A"], "{lang}");
+            let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+            let all: Vec<_> = entries
+                .iter()
+                .filter(|entry| entry.tag.starts_with("XMP-exif:UserComment"))
+                .map(|entry| entry.value.clone().into_joined())
+                .collect();
+            assert_eq!(all, vec!["A", "B"], "{lang}");
         }
     }
 
