@@ -1023,8 +1023,11 @@ class DockerWorkflowTests(unittest.TestCase):
     def test_docker_builds_use_native_architecture_runners(self):
         build = job_block(self.text, "build")
         self.assertIn('runs-on: ${{ matrix.runner }}', build)
-        self.assertIn('"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-24.04"', build)
-        self.assertIn('"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"', build)
+        for arch, runner in (("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")):
+            self.assertRegex(
+                build,
+                rf"- arch: {arch}\n\s+platform: linux/{arch}\n\s+runner: {re.escape(runner)}\n",
+            )
         for job in ('verify-tag-on-main', 'merge'):
             self.assertIn('runs-on: ubuntu-24.04', job_block(self.text, job))
         self.assertNotIn('self-hosted', self.text)
