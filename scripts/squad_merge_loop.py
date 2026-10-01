@@ -704,6 +704,45 @@ def real_validate_commit(sha, repo, **kwargs):
 # Per-commit processing (spec M2 step (c)/(d))
 # ---------------------------------------------------------------------------
 
+def squad_that_already_staged(home, squad, patch_id):
+    """The OTHER squad that already green-stamped this exact patch, or None.
+
+    squads.toml deliberately lets several squads claim one format -- JPEG
+    carries every brand's makernotes, so canon/nikon/sony all care about it --
+    and squad_slot_branches discovers work by ref pattern with no ownership
+    filter at all. The result is that every squad consumes the same worker
+    commit and each pays a full cherry-pick + cargo test + corpus comparison
+    to reach the identical verdict.
+
+    Measured 2026-07-27 with the fleet up: 35 staged commits were only 7
+    distinct patches. fix(rar) had been consumed by 13 squads and fix(jpeg) by
+    12 -- about 80% of all merger work was redundant. It is also how the sweep
+    ended up with 12 no-op merges of one patch, which is the empty-revert case
+    #149 had to handle.
+
+    Deliberately keyed on PATCH-ID, not sha: the same fix reaches different
+    squads under different shas via cherry-pick.
+
+    This only ever SKIPS duplicate effort -- the first squad to see a patch
+    still consumes it normally, so nothing can be starved. A race between two
+    mergers checking at once degrades to exactly today's behaviour (both
+    consume), never to neither.
+    """
+    directory = squad_status_file(home, squad).parent
+    if not directory.is_dir():
+        return None
+    for path in sorted(directory.glob("*.json")):
+        other = path.stem
+        if other == squad:
+            continue
+        for entry in (load_squad_status(path).get("heads") or {}).values():
+            if (entry.get("patch_id") == patch_id
+                    and entry.get("status") == "consumed"
+                    and entry.get("work_done")):
+                return other
+    return None
+
+
 def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is_novel,
                     quarantine_entries, cache_dir, home, validate_fn, cargo_test_targeted_fn,
                     comparison_fn, sweep_review_log_path=None, validate_kwargs=None,
@@ -711,7 +750,8 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
     """Process exactly one candidate commit through the full merger
     pipeline. Returns a result dict with at least {"sha", "outcome",
     "patch_id"}; outcome is one of "consumed_no_work" (patch-id already
-    present upstream), "skipped_quarantined" (already in the ledger,
+    present upstream), "consumed_elsewhere" (another squad already
+    green-stamped this exact patch-id), "skipped_quarantined" (already in the ledger,
     zero work done), "quarantined" (freshly rejected this call), or
     "consumed" (green-stamped and fast-forwarded).
 
@@ -729,6 +769,18 @@ def process_commit(*, repo_root, staging_path, squad, squad_branch, sha, fmt, is
         log_fn(f"[{squad}] {sha[:12]} ({fmt}): patch-id already present upstream -- "
                "marked consumed, no work done")
         return {"sha": sha, "outcome": "consumed_no_work", "patch_id": patch_id}
+
+    # Before paying for a cherry-pick, a build and a corpus comparison, check
+    # whether another squad already did exactly this. See
+    # squad_that_already_staged -- 80% of merger work was this.
+    staged_by = squad_that_already_staged(home, squad, patch_id)
+    if staged_by:
+        record_head(status_path, sha, status="consumed", patch_id=patch_id,
+                    format_name=fmt, work_done=False, now_fn=now_fn)
+        log_fn(f"[{squad}] {sha[:12]} ({fmt}): identical patch already staged by "
+               f"squad/{staged_by} -- skipped without duplicating the work")
+        return {"sha": sha, "outcome": "consumed_elsewhere", "patch_id": patch_id,
+                "staged_by": staged_by}
 
     if patch_id in quarantine_entries and not stale_policy(
         {**quarantine_entries[patch_id], "status": "quarantined"}

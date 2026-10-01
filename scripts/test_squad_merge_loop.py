@@ -491,6 +491,47 @@ class SquadProcessFixture(GitRepoTestCase):
 
 
 class ProcessCommitTests(SquadProcessFixture):
+    def test_a_patch_another_squad_already_staged_costs_NO_work(self):
+        """The whole point: skip BEFORE validate/cherry-pick/build/compare.
+
+        Measured 2026-07-27: 35 staged commits were 7 distinct patches, so
+        ~80% of every merger's build+comparison budget went to re-deriving a
+        verdict another squad already had.
+        """
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        # canon got there first with this exact patch-id. It must be the REAL
+        # one process_commit will compute, not a placeholder -- the lookup is
+        # keyed on content, which is the whole point.
+        real_pid = sml.compute_patch_id_for_sha(repo, sha)
+        sml.record_head(sml.squad_status_file(home, "canon"), "canon-sha",
+                        status="consumed", patch_id=real_pid, format_name="NEF",
+                        work_done=True, squad_sha="canon-squad-sha", now_fn=lambda: 100)
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha,
+            validate_fn=lambda *a, **kw: did_work.append("validate") or {"ok": True, "flags": [], "patch_id": "p1"},
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+            comparison_fn=lambda *a: did_work.append("compare") or {"duplicate_emissions": [], "extra_in_oxidex": []},
+        )
+        self.assertEqual(result["outcome"], "consumed_elsewhere")
+        self.assertEqual(result["staged_by"], "canon")
+        self.assertEqual(did_work, [], f"must not validate/build/compare: {did_work}")
+        self.assertEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
+    def test_a_patch_NO_other_squad_staged_is_processed_normally(self):
+        """Nothing may be starved -- the first squad to see it still works."""
+        repo, staging, home, sha = self._setup_squad()
+        pre_tip = git_out(repo, "rev-parse", "squad/nikon").strip()
+        did_work = []
+        result = self._process(
+            repo, staging, home, sha,
+            cargo_test_targeted_fn=lambda *a: did_work.append("test") or (True, ""),
+        )
+        self.assertEqual(result["outcome"], "consumed")
+        self.assertIn("test", did_work)
+        self.assertNotEqual(git_out(repo, "rev-parse", "squad/nikon").strip(), pre_tip)
+
     def test_not_novel_marks_consumed_without_work_and_skips_validate(self):
         repo, staging, home, sha = self._setup_squad()
         called = []
@@ -725,6 +766,54 @@ class BatchCheckCadenceTests(unittest.TestCase):
     def test_not_due(self):
         state = {"commits_since": 3, "last_batch_ts": 100}
         self.assertFalse(sml.batch_check_due(state, batch_commits=10, batch_seconds=900, now_fn=lambda: 200))
+
+
+class CrossSquadDuplicateSkipTests(unittest.TestCase):
+    """80% of merger work was re-validating patches another squad already had.
+
+    Measured 2026-07-27 with the full fleet up: 35 staged commits were only 7
+    distinct patches -- fix(rar) consumed by 13 squads, fix(jpeg) by 12. Each
+    duplicate cost a cherry-pick, a cargo test and a full corpus comparison to
+    reach a verdict another squad had already reached.
+    """
+
+    def _status(self, tmp, squad, patch_id, *, work_done=True, status="consumed"):
+        path = sml.squad_status_file(tmp, squad)
+        sml.record_head(path, f"sha-{squad}", status=status, patch_id=patch_id,
+                        format_name="JPEG", work_done=work_done,
+                        squad_sha=f"squadsha-{squad}" if work_done else None,
+                        now_fn=lambda: 100)
+
+    def test_finds_the_squad_that_already_staged_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertEqual(sml.squad_that_already_staged(tmp, "nikon", "PID1"), "canon")
+
+    def test_a_squad_does_not_match_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "canon", "PID1"))
+
+    def test_a_no_work_stamp_does_not_count_as_staged(self):
+        # "consumed, no work done" means the patch was already upstream --
+        # it was never staged by that squad, so it must not suppress anyone.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1", work_done=False)
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
+
+    def test_a_quarantined_entry_does_not_count_as_staged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1", status="quarantined")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
+
+    def test_an_unseen_patch_is_not_suppressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._status(tmp, "canon", "PID1")
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID-OTHER"))
+
+    def test_missing_status_directory_never_suppresses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(sml.squad_that_already_staged(tmp, "nikon", "PID1"))
 
 
 class RunBatchCheckTests(unittest.TestCase):

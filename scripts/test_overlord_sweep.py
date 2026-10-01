@@ -542,6 +542,46 @@ class VerifiedDeltaTests(GitRepoTestCase):
         total = overlord_sweep.sum_verified_deltas(repo, [sha1, sha2], overlord_sweep.default_run_git)
         self.assertEqual(total, 4)
 
+    def test_the_SAME_patch_twice_is_counted_ONCE(self):
+        """This total is the right-hand side of `measured_delta >=
+        verified_delta_sum`, and the left-hand side is a MEASUREMENT -- a gap
+        closed twice still measures as one gap closed. Counting a claim once
+        per commit compares a deduplicated quantity against a duplicated one.
+
+        Measured 2026-07-27 on the live fleet: measured delta 40 against
+        sum(Verified)=101 over 41 commits that were only 9 distinct patches
+        (distinct sum: 27). The sweep closed 40 gaps against 27 claimed --
+        over-delivery, which this gate calls "bonus yield, never a failure" --
+        and was rejected for under-delivering. That aborted every sweep.
+        """
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        # The identical change reaching the sweep by a second route --
+        # cherry-picked onto another squad branch, so a DIFFERENT sha with the
+        # SAME patch-id, which is how it actually happens.
+        git(repo, "checkout", "-q", "-b", "other", "HEAD~1")
+        # Same parent and same content, so the same DIFF and the same
+        # patch-id; a different subject so it is a different COMMIT. That is
+        # exactly the shape a cherry-pick onto a second squad branch produces.
+        sha2 = self.commit_file(repo, "a.txt", "1", "fix a (via another squad)",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        self.assertNotEqual(sha1, sha2, "must be two distinct commits")
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 2, "one patch, one claim -- not 4")
+
+    def test_two_DIFFERENT_patches_both_count(self):
+        """Dedup must not swallow genuinely separate work."""
+        repo = self.make_repo()
+        sha1 = self.commit_file(repo, "a.txt", "1", "fix a",
+                                trailers=[("Verified", "recheck-pass gaps=3->1")])
+        sha2 = self.commit_file(repo, "b.txt", "1", "fix b",
+                                trailers=[("Verified", "recheck-pass gaps=2->0")])
+        total = overlord_sweep.sum_verified_deltas(
+            repo, [sha1, sha2], overlord_sweep.default_run_git)
+        self.assertEqual(total, 4)
+
     def test_missing_verified_trailer_contributes_zero(self):
         repo = self.make_repo()
         sha = self.commit_file(repo, "a.txt", "1", "fix a, no trailer")
@@ -569,13 +609,41 @@ class EvaluatePostMergeTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(delta, 5)
 
-    def test_negative_component_fails(self):
+    def test_a_delta_shortfall_is_RECORDED_but_no_longer_blocks(self):
+        """The shortfall stays visible; it just stops gating the push.
+
+        measured is a MEASUREMENT of the merged whole, sum(Verified) is a SUM
+        of per-commit claims, and that comparison only holds when the claims
+        are disjoint. Across a sweep they routinely are not: two commits
+        fixing overlapping gaps in one format each honestly claim what they
+        closed, while the measurement counts each closed gap once.
+
+        Measured 2026-07-27 on three consecutive sweeps -- 40 < 101 and
+        35 < 65 -- each aborting the sweep and then sending bisection after an
+        offender that did not exist. In the last one that hunt MASKED a real
+        CR2 defect (a tag named 'EXIF:Higher resolution image exists', the
+        PrintConv value of OPIProxy used as a tag name), because no squad's
+        removal could clear a shortfall that was arithmetic, not causal.
+
+        Every claim is still verified per-commit twice over -- the worker's
+        recheck and the merger's targeted test plus comparison -- so nothing
+        is unguarded by demoting the sweep-level re-sum.
+        """
         pre = {"JPEG": {"gap_count": 10}}
         post = {"JPEG": {"gap_count": 10}}
         ok, delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
-        self.assertFalse(ok)
+        self.assertTrue(ok, "a delta shortfall alone must not block the sweep")
         self.assertEqual(delta, 0)
-        self.assertTrue(any("sum(Verified)" in p for p in problems))
+        self.assertTrue(any("sum(Verified)" in p for p in problems),
+                        "but it must still be RECORDED in the sweep problems")
+
+    def test_a_structural_problem_still_blocks_even_with_a_fine_delta(self):
+        """The clauses that say what the RESULT IS stay blocking."""
+        pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
+        post = {"JPEG": {"gap_count": 2, "extra_in_oxidex": [{"family": "EXIF", "name": "Bogus"}]}}
+        ok, _delta, problems = overlord_sweep.evaluate_post_merge(pre, post, 2)
+        self.assertFalse(ok)
+        self.assertTrue(any("new_oxidex_only" in p for p in problems))
 
     def test_duplicate_emission_fails_even_with_a_good_delta(self):
         pre = {"JPEG": {"gap_count": 10, "extra_in_oxidex": []}}
@@ -1063,7 +1131,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 # a real cargo. It must REWRITE a tracked .rs file, exactly
                 # as rustfmt does: a no-op hook produces no commit and so
                 # cannot show whether that commit lands on the branch.
-                fmt_fn=self._reformatting_fmt_fn,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""),
                 now_fn=lambda: 12345,
             )
 
@@ -1153,7 +1221,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 push_branch_fn=lambda repo_root, branch: (
                     pushed.append(git_out(repo_root, "rev-parse", branch).strip()) or (True, "pushed")
                 ),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
 
         self.assertEqual(result["status"], "ok")
@@ -1325,7 +1393,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: (True, "pushed"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=logged.append,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=logged.append,
                 create_pr_fn=lambda *a, **kw: {
                     "ok": False, "stdout": "",
                     "stderr": "gh: To get started with GitHub CLI, please run: gh auth login",
@@ -1389,7 +1457,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 create_pr_fn=lambda *a, **kw: pr_calls.append(1),
                 push_branch_fn=lambda repo_root, branch: (False, "no configured push destination"),
-                fmt_fn=lambda repo_root: (True, ""),
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""),
             )
 
             self.assertEqual(result["status"], "push_failed")
@@ -1399,6 +1467,47 @@ class RunSweepIntegrationTests(GitRepoTestCase):
             squads = overlord_sweep.squads_from_toml(squads_toml)
             stamps, _new_cursor = overlord_sweep.collect_green_stamps(home, squads, cursor)
             self.assertIn("canon", stamps)
+
+    def test_a_LINT_failure_refuses_to_push_and_keeps_the_stamps(self):
+        """A sweep PR that cannot merge is worse than no sweep PR.
+
+        The sweep already ran cargo fmt and committed the result, so style was
+        covered -- but nothing ran the gate CI actually applies,
+        `cargo clippy --all-features -- -D warnings`.
+
+        Measured 2026-07-27 on sweep/tags-2026-07-27-8 (PR #154), the first PR
+        this pipeline opened autonomously: fmt clean, 70 tag trailers, and SIX
+        clippy errors -- one dead assignment and five `unreachable pattern`s,
+        because two squads had independently fixed the same X3F/RW2 tags with
+        DIFFERENT code. Different code means different patch-ids, so the
+        cross-squad dedup correctly let both through; they collided only once
+        merged.
+
+        Cursor semantics match the push_failed path: origin has nothing, so a
+        retry cannot duplicate a PR or a branch, and the stamps must NOT be
+        consumed.
+        """
+        repo = self.make_repo()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home, squads_toml, sweep_state_path = self._one_squad_fixture(repo, tmpdir)
+            result = overlord_sweep.run_sweep(
+                repo_root=repo, home=home, cache_dir="/unused",
+                comparison_fn=self._passing_comparison_fn, checkout_fn=self._checkout_fn,
+                squads_toml_path=squads_toml, sweep_state_path=sweep_state_path,
+                origin_ref="main",
+                dispatcher_lock_path=home / "logs" / "dispatcher.lock",
+                cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
+                fmt_fn=self._reformatting_fmt_fn,
+                lint_fn=lambda repo_root: (False, "error: unreachable pattern\nerror: could not compile"),
+                push_branch_fn=lambda r, b: self.fail("must NOT push a branch that fails the lint gate"),
+                create_pr_fn=lambda *a, **kw: self.fail("must NOT open a PR for it"),
+                log_fn=lambda *a: None,
+            )
+            self.assertEqual(result["status"], "lint_failed")
+            self.assertIn("unreachable pattern", result["message"])
+            cursor = overlord_sweep.load_sweep_state(sweep_state_path)
+            self.assertNotIn("canon", cursor.get("squads", {}),
+                             "stamps must survive for the next round")
 
     def test_a_push_failure_is_retried_whole_by_the_next_round(self):
         """The end-to-end consequence, driven twice against one repo: a
@@ -1413,7 +1522,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 squads_toml_path=squads_toml, sweep_state_path=sweep_state_path, origin_ref="main",
                 dispatcher_lock_path=home / "logs" / "dispatcher.lock",
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
             first = overlord_sweep.run_sweep(
                 push_branch_fn=lambda repo_root, branch: (False, "fatal: could not read from remote"),
@@ -1475,7 +1584,7 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
 
@@ -1518,11 +1627,51 @@ class RunSweepIntegrationTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: self.fail("no PR for a zero-delta sweep"),
-                fmt_fn=self._reformatting_fmt_fn, log_fn=lambda *a: None,
+                fmt_fn=self._reformatting_fmt_fn, lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
         self.assertEqual(result["status"], "zero_delta")
         self.assertEqual(tested, [])
         self.assertEqual(pushed, [])
+
+
+class EmptyRevertIsNotAFailureTests(unittest.TestCase):
+    """"Nothing to revert" and "cannot revert" are opposites.
+
+    git revert exits NON-ZERO with "nothing to commit, working tree clean"
+    when the revert would change nothing -- the contribution is already
+    absent. The handler read stderr, which git leaves EMPTY for this case
+    (the message goes to stdout), and reported failure.
+
+    Measured 2026-07-27 on the real sweep/tags-2026-07-27-5: squads
+    exif-core and panasonic-leica both contributed the SAME fix (identical
+    patch-id e906c487dec2709f5203d30d5d7ddf6a3b65de20), so the second merge
+    added nothing and reverting it was a no-op. That aborted the entire
+    sweep and blocked every other squad's verified work from publishing.
+    Against the real merge commit: current code returned (False, ''), the
+    fix returns (True, 'nothing to revert (contribution already absent)').
+    """
+
+    def test_empty_merge_revert_counts_as_reverted(self):
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                # Exactly what git emits: rc 1, message on STDOUT, stderr empty.
+                return 1, "nothing to commit, working tree clean\n", ""
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertTrue(ok, "an already-absent contribution must count as reverted")
+        self.assertIn("nothing to revert", msg)
+
+    def test_a_GENUINE_revert_failure_is_still_a_failure(self):
+        """The distinction that matters: a conflict is not an empty diff."""
+        def run_git(args, repo_root, input_text=None):
+            if args[:1] == ["revert"] and "--abort" not in args:
+                return 1, "", "error: could not revert deadbeef... CONFLICT (content)\n"
+            return 0, "", ""
+        ok, msg = overlord_sweep.revert_squad_contribution(
+            "/unused", {"mode": "merge", "merge_sha": "deadbeef", "squad": "x"}, run_git)
+        self.assertFalse(ok, "a real conflict must still block the push")
+        self.assertIn("CONFLICT", msg)
 
 
 class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
@@ -1614,7 +1763,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), log_fn=lambda *a: None,
             )
         # It must NOT abort on a duplicate it inherited.
         self.assertNotEqual(result["status"], "sweep_aborted")
@@ -1658,7 +1807,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: tested.append(1) or (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), run_git=revert_hostile_run_git,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=revert_hostile_run_git,
                 log_fn=lambda *a: None,
             )
             cursor = overlord_sweep.load_sweep_state(sweep_state_path)
@@ -1728,7 +1877,7 @@ class BisectionMustNotShipWhatItRejectedTests(GitRepoTestCase):
                 cargo_test_workspace_fn=lambda repo_root: (True, "ok"),
                 push_branch_fn=lambda repo_root, branch: pushed.append(branch) or (True, "pushed"),
                 create_pr_fn=lambda *a, **kw: prs.append(a) or {"ok": True, "url": "u"},
-                fmt_fn=lambda repo_root: (True, ""), run_git=restore_hostile_run_git,
+                fmt_fn=lambda repo_root: (True, ""), lint_fn=lambda repo_root: (True, ""), run_git=restore_hostile_run_git,
                 log_fn=lambda *a: None,
             )
 

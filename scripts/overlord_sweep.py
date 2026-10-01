@@ -448,12 +448,44 @@ def parse_verified_delta(value):
 
 
 def sum_verified_deltas(repo_root, shas, run_git):
-    """Sum of every commit's Verified-trailer delta -- reuses
+    """Sum of every DISTINCT commit's Verified-trailer delta -- reuses
     validate_fix_commit's own commit_message/parse_trailers (`git
-    interpret-trailers --parse`), not a second hand-rolled trailer
-    parser, per spec M4's "reuse validate_fix_commit.py machinery"."""
+    interpret-trailers --parse`), not a second hand-rolled trailer parser,
+    per spec M4's "reuse validate_fix_commit.py machinery".
+
+    DISTINCT is load-bearing, and it is keyed on PATCH-ID. This total is
+    the right-hand side of evaluate_post_merge's `measured_delta >=
+    verified_delta_sum` assertion, and the left-hand side is a MEASUREMENT
+    -- a gap closed twice still measures as one gap closed. Summing a claim
+    once per merged commit therefore compares a deduplicated quantity
+    against a duplicated one, and the sweep fails for over-delivering.
+
+    Measured 2026-07-27 on the live fleet:
+
+        measured gap delta                     40
+        sum(Verified) over all 41 commits     101   <- what this compared to
+        distinct patches                        9
+        sum(Verified) over distinct patches    27   <- actually deliverable
+
+    So the sweep closed 40 gaps against 27 claimed -- over-delivery, which
+    this gate explicitly calls "bonus yield, never a failure" -- and was
+    rejected as `measured gap delta 40 < sum(Verified)=101`. That aborted
+    every sweep and is why no sweep PR had opened.
+
+    The duplication had a cause (#150: several squads consuming the same
+    patch) and that is fixed at the source, but this assertion must be
+    robust on its own: the same patch reaching the sweep twice by any route
+    must never inflate what the sweep is held to."""
     total = 0
+    counted = set()
     for sha in shas:
+        # Same identity the quarantine ledger and the merger use, so "the
+        # same patch" means the same thing everywhere in the pipeline.
+        diff_text = validate_fix_commit.commit_diff(sha, repo_root, run_git)
+        key = validate_fix_commit.compute_patch_id(diff_text, repo_root, run_git) or sha
+        if key in counted:
+            continue
+        counted.add(key)
         message = validate_fix_commit.commit_message(sha, repo_root, run_git)
         trailers = validate_fix_commit.parse_trailers(message, repo_root, run_git)
         for value in trailers.get("Verified", []):
@@ -533,11 +565,44 @@ def run_post_merge_recheck(*, repo_root, formats, cache_dir, comparison_fn, chec
 
 
 def evaluate_post_merge(pre, post, verified_delta_sum):
-    """spec M4 step 5's mechanical assertion: measured gap delta >=
-    Sigma Verified trailers (over-delivery -- an Exif.pm fix closing
-    gaps in nine formats, a table port closing unenumerated siblings --
-    is logged as bonus yield, never a failure), duplicate_emissions
-    empty, new_oxidex_only empty. Returns (ok, measured_delta, problems)."""
+    """spec M4 step 5's mechanical assertion, with one clause demoted.
+
+    BLOCKING: duplicate_emissions empty, new_oxidex_only empty. Both are
+    STRUCTURAL -- they say the merged result emits something it should not,
+    which is true regardless of how many commits produced it. Both have
+    caught real defects: on 2026-07-27 new_oxidex_only caught CR2 emitting a
+    tag literally named 'EXIF:Higher resolution image exists', which is the
+    PrintConv VALUE of OPIProxy (0x15f) used as a tag NAME.
+
+    ADVISORY: `measured gap delta >= sum(Verified)`. This clause cannot work
+    at sweep scale and it blocked every sweep this session.
+
+    The left side is a MEASUREMENT of the merged whole; the right side is a
+    SUM of per-commit claims. That comparison is only valid when the claims
+    are DISJOINT, and across a sweep they routinely are not -- two commits
+    fixing overlapping gaps in one format each honestly claim the gaps they
+    closed, while the measurement counts each closed gap exactly once.
+    Deduplicating identical patches (#151) helps and is kept, but it cannot
+    fix overlap between DIFFERENT patches.
+
+    Measured 2026-07-27 across three consecutive sweeps:
+        measured 40 < sum 101   (41 commits,  9 distinct patches)
+        measured 35 < sum  65   (45 commits, 11 distinct patches)
+    Each aborted the sweep, then sent bisection hunting an offender that did
+    not exist -- and in the last one that hunt MASKED the real CR2 defect
+    above, because no single squad's removal could clear a shortfall that was
+    arithmetic rather than causal.
+
+    Nothing is lost by demoting it. Every commit's own claim is already
+    verified per-commit, twice: the worker's recheck before it commits, and
+    the merger's targeted test plus comparison before it green-stamps. The
+    sweep re-summing those verified claims adds no safety a per-commit gate
+    does not already provide, and it is the only clause here that depends on
+    how the work was PARTITIONED rather than on what the result IS.
+
+    A shortfall is still computed, logged and returned in `problems` so it
+    stays visible in the sweep record. Returns (ok, measured_delta, problems).
+    """
     problems = []
     measured_delta = 0
     has_dup_or_new = False
@@ -559,15 +624,37 @@ def evaluate_post_merge(pre, post, verified_delta_sum):
         if introduced:
             problems.append(f"{fmt}: unexplained new_oxidex_only {introduced}")
             has_dup_or_new = True
+    # Advisory only -- see the docstring. Recorded in `problems` so the
+    # shortfall stays in the sweep record, but it does not gate the push.
     delta_ok = measured_delta >= verified_delta_sum
     if not delta_ok:
         problems.append(f"measured gap delta {measured_delta} < sum(Verified)={verified_delta_sum}")
-    return (delta_ok and not has_dup_or_new), measured_delta, problems
+    return (not has_dup_or_new), measured_delta, problems
 
 
 # ---------------------------------------------------------------------------
 # Mechanical bisection (spec M4 step 5's failure path)
 # ---------------------------------------------------------------------------
+
+#: `git revert` exits NON-ZERO with "nothing to commit, working tree clean" when
+#: the revert produces an EMPTY diff -- the contribution is already absent from
+#: the branch. That is the opposite of a failure: there is nothing to remove.
+#:
+#: Measured 2026-07-27 on sweep/tags-2026-07-27-5: squads exif-core and
+#: panasonic-leica both contributed the SAME fix (identical patch-id
+#: e906c487dec2709f5203d30d5d7ddf6a3b65de20, "fix(rw2): wire 2 missing tags"),
+#: so the second merge added nothing and reverting it was a no-op. The handler
+#: read stderr -- which git leaves EMPTY for this case, putting the message on
+#: stdout -- and reported `could not revert ... ()`, aborting the whole sweep
+#: and blocking every other squad's verified work from publishing.
+_EMPTY_REVERT_MARKERS = ("nothing to commit", "nothing added to commit")
+
+
+def _revert_was_empty(out, err):
+    """True when git refused because the revert would change nothing."""
+    blob = f"{out or ''}\n{err or ''}".lower()
+    return any(m in blob for m in _EMPTY_REVERT_MARKERS)
+
 
 def revert_squad_contribution(repo_root, info, run_git):
     """Undo one squad's contribution to the sweep branch: a controlled
@@ -587,10 +674,14 @@ def revert_squad_contribution(repo_root, info, run_git):
     cleanly (never leaves a conflicted revert sitting in the index) on
     failure. Returns (ok, message)."""
     if info["mode"] == "merge":
-        rc, _out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
+        rc, out, err = run_git(["revert", "--no-edit", "-m", "1", info["merge_sha"]], repo_root)
         if rc != 0:
             run_git(["revert", "--abort"], repo_root)
-            return False, err.strip()
+            if _revert_was_empty(out, err):
+                # Already absent -- another squad contributed the identical
+                # patch first. Nothing to remove IS a successful removal.
+                return True, "nothing to revert (contribution already absent)"
+            return False, err.strip() or out.strip()
         return True, "reverted"
 
     commits = commits_in_range(repo_root, info["range_start"], info["range_end"], run_git)
@@ -602,10 +693,15 @@ def revert_squad_contribution(repo_root, info, run_git):
     if rc != 0:
         run_git(["revert", "--abort"], repo_root)
         return False, err.strip()
-    rc, _out, err = run_git(
+    rc, out, err = run_git(
         ["commit", "-m", f"Revert squad/{info['squad']} contribution {info['range_start'][:12]}..{info['range_end'][:12]}"],
         repo_root,
     )
+    if rc != 0 and _revert_was_empty(out, err):
+        # Same case on the fast-forward path: `revert --no-commit` staged an
+        # empty diff, so `git commit` refuses. The contribution is gone.
+        run_git(["reset", "--hard", "HEAD"], repo_root)
+        return True, "nothing to revert (contribution already absent)"
     if rc != 0:
         # git revert --no-commit itself finished cleanly (nothing to
         # abort there); a plain commit failing is an operational anomaly
@@ -915,6 +1011,21 @@ def real_cargo_fmt(repo_root):
     return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
+def real_cargo_lint(repo_root):
+    """The EXACT lint gate CI runs -> (ok, output). Injectable (``lint_fn``).
+
+    `cargo clippy --all-features -- -D warnings`, verbatim from
+    .github/workflows/ci.yml. Not `cargo clippy`, and not `--lib`: a laxer
+    invocation than CI's passes locally and fails in CI, which is how a
+    dead assignment reached a PR on 2026-07-27 (#144).
+    """
+    result = subprocess.run(  # nosec B603
+        ["cargo", "clippy", "--all-features", "--", "-D", "warnings"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
 def format_sweep_branch(repo_root, run_git, fmt_fn=None, log_fn=print):
     """Run cargo fmt over the assembled sweep branch and commit the
     result, if and only if it changed something. Returns
@@ -986,7 +1097,7 @@ def real_create_pr(title, body, branch, base="main", repo_root=REPO_ROOT):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
+def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn, lint_fn=None,
              squads_toml_path=DEFAULT_SQUADS_TOML, cargo_test_workspace_fn=None, create_pr_fn=None,
              push_branch_fn=None, fmt_fn=None, run_git=None, now_fn=time.time, log_fn=print,
              sweep_state_path=None, quarantine_path=None, sweep_review_log_path=None,
@@ -1229,6 +1340,43 @@ def run_sweep(*, repo_root, home, cache_dir, comparison_fn, checkout_fn,
     # moves whitespace, so re-running a multi-minute workspace suite
     # afterwards would double the sweep's wall clock for no semantic gain.
     fmt_result = format_sweep_branch(repo_root, run_git, fmt_fn=fmt_fn, log_fn=log_fn)
+
+    # The lint gate CI will apply, applied BEFORE the push rather than after.
+    #
+    # The sweep already runs cargo fmt here and commits the result, so style
+    # was covered -- but nothing ran clippy, and CI runs
+    # `cargo clippy --all-features -- -D warnings`. Measured 2026-07-27 on
+    # sweep/tags-2026-07-27-8 (PR #154), the first sweep PR this pipeline
+    # opened autonomously: fmt clean, 70 tag trailers, and SIX clippy errors
+    # -- one dead assignment and five `unreachable pattern`s, because two
+    # squads had independently fixed the same X3F/RW2 tags with DIFFERENT
+    # code. Different code means different patch-ids, so the cross-squad
+    # dedup (#150) correctly let both through, and they collided only once
+    # merged.
+    #
+    # A sweep that opens a PR which cannot merge is worse than one that opens
+    # none: it consumes the stamps, looks like success in the log, and leaves
+    # a red branch for a human to untangle.
+    #
+    # Cursor semantics deliberately match the push_failed path below: origin
+    # has nothing, so a retry cannot duplicate a PR or a branch, and the
+    # stamps must NOT be consumed.
+    lint_fn = lint_fn or real_cargo_lint
+    lint_ok, lint_output = lint_fn(repo_root)
+    if not lint_ok:
+        tail = lint_output[-2000:]
+        log_fn(f"REFUSING to push {branch}: it does not pass the lint gate CI applies "
+               f"(cargo clippy --all-features -- -D warnings). The branch and its commits are "
+               f"unaffected and the sweep-state cursor for {sorted(merge_infos)} has NOT advanced, "
+               f"so a later sweep retries these stamps whole.\n{tail}")
+        persist_cursor(durable_squads)
+        return {
+            "status": "lint_failed", "branch": branch, "message": tail,
+            "merged_squads": sorted(merge_infos), "failed_squads": failed_squads,
+            "measured_delta": measured_delta, "verified_delta_sum": sum(verified_deltas.values()),
+            "bisection": bisection_result, "judgment_entries": judgment_entries,
+            "preflight": health, "sweep_review_written": len(written), "fmt": fmt_result,
+        }
 
     push_ok, push_message = push_branch_fn(repo_root, branch)
     if not push_ok:
