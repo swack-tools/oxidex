@@ -43,6 +43,47 @@ class PinnedRustActionTests(unittest.TestCase):
                                 input='.github/actions/pinned-rust/action.yml\n', text=True)
         self.assertEqual(result.returncode, 0)
 
+    def test_readiness_rejects_shadowed_tools_and_compiler_override(self):
+        source = textwrap.dedent(ACTION.read_text().rsplit('      run: |\n', 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / 'tool'
+            script.write_text("""#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+name = Path(sys.argv[0]).name
+if name == 'rustup':
+    if sys.argv[1] == 'show':
+        print('1.97.1-test-host (override)')
+    elif sys.argv[1] == 'which':
+        print(Path(sys.argv[0]).parent / ('pin-' + sys.argv[-1]))
+    else:
+        print('release: 1.97.1\\ncommit-hash: pinned\\nhost: test-host')
+else:
+    tool = name.removeprefix('pin-')
+    version = '1.98.1' if name == os.environ.get('WRONG_VERSION') else '1.97.1'
+    commit = 'wrong' if name == os.environ.get('WRONG_COMMIT') else 'pinned'
+    if tool in ('rustc', 'override'):
+        print(f'release: {version}\\ncommit-hash: {commit}\\nhost: test-host')
+    else:
+        print(f'{tool} {version}')
+""")
+            script.chmod(0o755)
+            for name in ('rustup', 'rustc', 'cargo', 'rustfmt', 'override',
+                         'pin-rustc', 'pin-cargo', 'pin-rustfmt'):
+                (root / name).symlink_to(script)
+            env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
+                   'PINNED_RUST': '1.97.1'}
+            env.pop('RUSTC', None)
+            cases = ({}, {'WRONG_VERSION': 'rustc'}, {'WRONG_COMMIT': 'rustc'},
+                     {'WRONG_VERSION': 'cargo'}, {'WRONG_VERSION': 'rustfmt'},
+                     {'RUSTC': str(root / 'override'), 'WRONG_COMMIT': 'override'})
+            for changes in cases:
+                with self.subTest(changes=changes):
+                    result = subprocess.run(['bash', '-c', source], env={**env, **changes},
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, not changes, result.stderr)
+
     def test_all_ci_rust_installations_use_the_repository_pin(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         self.assertNotIn('uses: dtolnay/rust-toolchain@', workflow)

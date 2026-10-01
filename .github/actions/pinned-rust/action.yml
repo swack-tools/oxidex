@@ -33,6 +33,23 @@ runs:
       run: |
         set -euo pipefail
         test "$(rustup show active-toolchain | cut -d ' ' -f 1)" = "$(rustup run "$PINNED_RUST" rustc -vV | sed -n 's/^host: //p' | sed "s/^/$PINNED_RUST-/")"
+        pinned_rustc=$(rustup which --toolchain "$PINNED_RUST" rustc)
+        pinned_identity=$("$pinned_rustc" -vV)
+        test "$(printf '%s\n' "$pinned_identity" | sed -n 's/^release: //p')" = "$PINNED_RUST"
+        test -n "$(printf '%s\n' "$pinned_identity" | sed -n 's/^commit-hash: //p')"
+        for compiler in rustc "${RUSTC:-rustc}"; do
+          if [ "$("$compiler" -vV)" != "$pinned_identity" ]; then
+            echo "Compiler $compiler differs from the rustup-resolved repository pin" >&2
+            exit 1
+          fi
+        done
+        for tool in cargo rustfmt; do
+          pinned_tool=$(rustup which --toolchain "$PINNED_RUST" "$tool")
+          if [ "$("$tool" --version)" != "$("$pinned_tool" --version)" ]; then
+            echo "PATH-resolved $tool differs from the rustup-resolved repository pin" >&2
+            exit 1
+          fi
+        done
         rustc --version
         cargo --version
         rustfmt --version
