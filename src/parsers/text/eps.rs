@@ -16,7 +16,6 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
 };
-use crate::parsers::xmp::parse_xmp_history;
 use crate::parsers::xmp::rdf_parser::{
     insert_grouped_xmp_tag, insert_xmp_entry_with_source, parse_xmp_entries_with_source_forms,
 };
@@ -263,7 +262,15 @@ impl EPSParser {
                         parse_xmp_entries_with_source_forms(xmp_data)
                     {
                         for (entry, source) in entries.iter().zip(&gps_sources) {
-                            let mut value = entry.tag_value(false);
+                            // xmpMM History is a Seq of structures. Its
+                            // repeated native fields remain arrays in JSON;
+                            // joining then splitting would corrupt a value
+                            // containing a literal comma and space.
+                            let typed_history = matches!(
+                                entry.tag.as_str(),
+                                "XMP-xmpMM:HistoryAction" | "XMP-xmpMM:HistoryWhen"
+                            );
+                            let mut value = entry.tag_value(typed_history);
                             if matches!(
                                 entry.key.as_str(),
                                 "XMP:Subject"
@@ -283,14 +290,10 @@ impl EPSParser {
                         }
                     }
 
-                    // Parse XMP history for forensic metadata
+                    // The shared RDF parser supplies the native xmpMM History
+                    // fields. Keep numbered forensic projections out of public
+                    // EPS metadata, including bare-name arbitration.
                     if let Ok(xml_str) = std::str::from_utf8(xmp_data) {
-                        if let Ok(history_tags) = parse_xmp_history(xml_str) {
-                            for (key, value) in history_tags {
-                                metadata.insert(key, TagValue::new_string(value));
-                            }
-                        }
-
                         // A handful of properties from older (pre-RDF-namespace)
                         // XMP toolkit output aren't covered by the general-purpose
                         // shared RDF parser: the bare (non-"rdf:"-prefixed) `about`
