@@ -1830,16 +1830,16 @@ fn extract_rw2_embedded_exif_tags(
         }
     }
 
-    let exif_ifd_offset =
-        ifd0_tags
-            .iter()
-            .find_map(|(tag_id, field_type, value_count, raw_bytes)| {
-                if *tag_id == 0x8769 && *field_type == 4 && *value_count >= 1 {
-                    read_tiff_u32(raw_bytes.as_ref(), byte_order).map(u64::from)
-                } else {
-                    None
-                }
-            });
+    let exif_ifd_offset = crate::core::tiff_helpers::reached_integral_ifd_entries(
+        &reader,
+        first_ifd_offset,
+        byte_order,
+        &[0x8769],
+    )
+    .into_iter()
+    .find(|entry| entry.count == 1)
+    .and_then(|entry| u64::try_from(entry.first_value).ok())
+    .filter(|offset| *offset != 0);
     let Some(exif_ifd_offset) = exif_ifd_offset else {
         return Ok(());
     };
@@ -1851,43 +1851,9 @@ fn extract_rw2_embedded_exif_tags(
 
     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
         let (tag_id, field_type, value_count) = (*tag_id, *field_type, *value_count);
-        // Exif.pm:3006-3014 (13.59): these are scalar int16u entries with
-        // generated No/Yes PrintConv hashes. Keep this preview path tied to
-        // those source rows, including the hash's Unknown (N) fallback.
+        // A411/A412 use the physical reached-entry decoder below, including
+        // ExifTool's read support for TIFF type 13 that parse_ifd omits.
         if matches!(tag_id, 0xA411 | 0xA412) {
-            if field_type != 3 || value_count != 1 {
-                continue;
-            }
-            let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
-                .and_then(|table| table.tag(tag_id))
-                .filter(|row| {
-                    row.writable == Some("int16u")
-                        && row.omitted == crate::exiftool_tables::Omitted::NONE
-                        && row.condition.is_none()
-                        && row.raw_conv.is_none()
-                        && row.value_conv.is_none()
-                        && row.subdir.is_none()
-                        && matches!(
-                            row.print_conv,
-                            crate::exiftool_tables::PrintConv::IntEnum(_)
-                        )
-                })
-            else {
-                continue;
-            };
-            let Some(raw) = read_tiff_u16(raw_bytes.as_ref(), byte_order) else {
-                continue;
-            };
-            let Some(display) = crate::exiftool_tables::runtime::render(
-                row.print_conv,
-                &crate::exiftool_tables::DecodedValue::Integer(i64::from(raw)),
-            ) else {
-                continue;
-            };
-            metadata.insert(
-                format!("ExifIFD:{}", row.name),
-                TagValue::new_string(display),
-            );
             continue;
         }
         // Filter to the exact set of EXIF tags that ExifTool extracts from
@@ -1944,6 +1910,47 @@ fn extract_rw2_embedded_exif_tags(
             raw_bytes_to_simple_tag_value(raw_bytes.as_ref(), field_type, value_count, byte_order)
         };
         metadata.insert(tag_name, tag_value);
+    }
+
+    // Exif.pm:3006-3014 supplies names and PrintConv for these tags. Its
+    // Writable int16u describes serialization, while ProcessExif reads all
+    // seven integral formats, including IFD/type 13 (Exif.pm:82-132, 6782).
+    for entry in crate::core::tiff_helpers::reached_integral_ifd_entries(
+        &reader,
+        exif_ifd_offset,
+        byte_order,
+        &[0xA411, 0xA412],
+    ) {
+        if entry.count != 1 {
+            continue;
+        }
+        let Some(row) = crate::exiftool_tables::find_ifd_table("Exif", "Main")
+            .and_then(|table| table.tag(entry.tag_id))
+            .filter(|row| {
+                row.writable == Some("int16u")
+                    && row.omitted == crate::exiftool_tables::Omitted::NONE
+                    && row.condition.is_none()
+                    && row.raw_conv.is_none()
+                    && row.value_conv.is_none()
+                    && row.subdir.is_none()
+                    && matches!(
+                        row.print_conv,
+                        crate::exiftool_tables::PrintConv::IntEnum(_)
+                    )
+            })
+        else {
+            continue;
+        };
+        let Some(display) = crate::exiftool_tables::runtime::render(
+            row.print_conv,
+            &crate::exiftool_tables::DecodedValue::Integer(entry.first_value),
+        ) else {
+            continue;
+        };
+        metadata.insert(
+            format!("ExifIFD:{}", row.name),
+            TagValue::new_string(display),
+        );
     }
 
     // The Panasonic MakerNote lives in the preview's ExifIFD (0x927C) --

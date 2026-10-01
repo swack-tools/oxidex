@@ -6,7 +6,7 @@
 mod fixtures;
 
 use oxidex::core::TagValue;
-use oxidex::parsers::raw::{RawFormat, parse_raw_metadata};
+use oxidex::parsers::raw::{parse_raw_metadata, RawFormat};
 
 fn source() -> Vec<u8> {
     std::fs::read(fixtures::required_t_images_fixture_path("Panasonic.rw2"))
@@ -325,22 +325,27 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
     assert_eq!(read_u32(&original, slot + 4), 1);
     assert_eq!(read_u16(&original, slot + 8), 24);
 
+    // Exif.pm's Writable int16u is a write format. Its ProcessExif reader
+    // accepts every integral wire format, including type 13 (IFD).
     for (id, name) in [(0xA411u16, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
-        for (raw, expected) in [(0u16, "No"), (1, "Yes"), (2, "Unknown (2)")] {
-            let mut data = original.clone();
-            data[slot..slot + 2].copy_from_slice(&id.to_le_bytes());
-            data[slot + 8..slot + 10].copy_from_slice(&raw.to_le_bytes());
-            let metadata = parse(&data);
-            assert_eq!(
-                metadata.get_string(&format!("ExifIFD:{name}")),
-                Some(expected),
-                "{name}={raw}"
-            );
-            assert_eq!(
-                metadata.get_string("Panasonic:NoiseReduction"),
-                Some("Standard"),
-                "maker-note NoiseReduction must remain distinct"
-            );
+        for field_type in [1u16, 3, 4, 6, 8, 9, 13] {
+            for (raw, expected) in [(0u32, "No"), (1, "Yes"), (2, "Unknown (2)")] {
+                let mut data = original.clone();
+                data[slot..slot + 2].copy_from_slice(&id.to_le_bytes());
+                data[slot + 2..slot + 4].copy_from_slice(&field_type.to_le_bytes());
+                data[slot + 8..slot + 12].copy_from_slice(&raw.to_le_bytes());
+                let metadata = parse(&data);
+                assert_eq!(
+                    metadata.get_string(&format!("ExifIFD:{name}")),
+                    Some(expected),
+                    "{name} type={field_type} value={raw}"
+                );
+                assert_eq!(
+                    metadata.get_string("Panasonic:NoiseReduction"),
+                    Some("Standard"),
+                    "maker-note NoiseReduction must remain distinct"
+                );
+            }
         }
     }
 }
