@@ -270,13 +270,17 @@ jobs:
           esac
           echo "Pinned ExifTool: $V"
           echo "version=$V" >> "$GITHUB_OUTPUT"
-      # Caches only the extracted tarball, not the Archive::Zip install: that
+      # Caches only the source archive, not the Archive::Zip install: that
       # one goes into system perl dirs via sudo, and restoring those from a
       # cache is exactly the kind of half-populated perl tree that produces a
       # confidently-wrong coverage number instead of a crash. The download is
       # the network cost worth skipping; the cpan install stays unconditional.
+      # The archive cache path is a stable literal so actions/cache versions
+      # match across runs; only the extracted source is a fresh job-local path.
       #
-      # The key carries the resolved version and nothing else fuzzy -- no
+      # The archive-v1 schema distinguishes this tarball from older caches
+      # of the extracted tree. The key carries the resolved version and nothing
+      # else fuzzy -- no
       # restore-keys -- so a `.exiftool-version` bump always misses and
       # re-downloads. A loosely-matched key here would serve a stale ExifTool.
       # restore + save as separate steps rather than the combined action: the
@@ -292,22 +296,43 @@ jobs:
       # would win it, and the other workflow would then get cache-hit: true,
       # skip its download, and fail its -ver assertion on a path that was
       # never populated. Keep these two key families distinct.
+      - name: Prepare isolated ExifTool source
+        id: exiftool-work
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "${RUNNER_TEMP:?}/oxidex-exiftool.XXXXXXXX")
+          source="$work/source"
+          archive="$GITHUB_WORKSPACE/.ci-cache/exiftool-source.tar.gz"
+          mkdir "$source"
+          mkdir -p "$(dirname "$archive")"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "EXIFTOOL_SOURCE=$source" >> "$GITHUB_ENV"
+          echo "EXIFTOOL_ARCHIVE=$archive" >> "$GITHUB_ENV"
       - name: Restore pinned ExifTool source
         id: exiftool-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/exiftool-src
-          key: exiftool-src-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
+          path: .ci-cache/exiftool-source.tar.gz
+          key: exiftool-src-archive-v1-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
       - name: Download pinned ExifTool
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
         env:
           V: ${{ steps.exiftool-version.outputs.version }}
         run: |
           set -euo pipefail
-          curl -sSL "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
-            -o /tmp/exiftool.tar.gz
-          mkdir -p /tmp/exiftool-src
-          tar xzf /tmp/exiftool.tar.gz -C /tmp/exiftool-src --strip-components=1
+          download=$(mktemp "$GITHUB_WORKSPACE/.ci-cache/exiftool-source.XXXXXXXX")
+          trap 'rm -f -- "$download"' EXIT
+          curl --fail --silent --show-error --location \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/$V.tar.gz" \
+            -o "$download"
+          tar tzf "$download" >/dev/null
+          mv -f -- "$download" "$EXIFTOOL_ARCHIVE"
+      - name: Extract pinned ExifTool into isolated source
+        run: |
+          set -euo pipefail
+          test -f "$EXIFTOOL_ARCHIVE"
+          tar tzf "$EXIFTOOL_ARCHIVE" >/dev/null
+          tar xzf "$EXIFTOOL_ARCHIVE" -C "$EXIFTOOL_SOURCE" --strip-components=1
       # Archive::Zip gates every ZIP-container format. Without it a .docx
       # reports FileType: ZIP and container coverage silently collapses,
       # while -ver still prints the right release -- so install it and
@@ -323,30 +348,30 @@ jobs:
           set -euo pipefail
           sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
           perl -MArchive::Zip -e 1
-          echo "/tmp/exiftool-src" >> "$GITHUB_PATH"
-          GOT=$(/tmp/exiftool-src/exiftool -ver)
+          echo "$EXIFTOOL_SOURCE" >> "$GITHUB_PATH"
+          GOT=$("$EXIFTOOL_SOURCE/exiftool" -ver)
           [ "$GOT" = "$V" ] || { echo "::error::installed ExifTool $GOT, expected $V"; exit 1; }
           # Exported for the nextest step below: EXIFTOOL points the oracle
           # at the pinned checkout explicitly rather than relying on PATH
           # order, so a runner image shipping its own exiftool cannot
           # quietly win the lookup.
-          echo "EXIFTOOL=/tmp/exiftool-src/exiftool" >> "$GITHUB_ENV"
+          echo "EXIFTOOL=$EXIFTOOL_SOURCE/exiftool" >> "$GITHUB_ENV"
           # The capability half of "verified": a .docx must read as DOCX.
-          FT=$(/tmp/exiftool-src/exiftool -s3 -FileType /tmp/exiftool-src/t/images/OOXML.docx)
+          FT=$("$EXIFTOOL_SOURCE/exiftool" -s3 -FileType "$EXIFTOOL_SOURCE/t/images/OOXML.docx")
           [ "$FT" = "DOCX" ] || { echo "::error::OOXML.docx reads as '$FT', expected DOCX"; exit 1; }
           # This job has the pinned oracle, so an oracle-graded test that
           # finds it unverified must fail here, never skip
           # (exiftool_oracle::REQUIRE_ENV).
           echo "OXIDEX_REQUIRE_EXIFTOOL_ORACLE=1" >> "$GITHUB_ENV"
-      # Only on a miss, and only once the step above has proved the tree is
-      # the right release -- default `success()` semantics are load-bearing
+      # Only on a miss, and only once the step above has proved the extracted
+      # tree is the right release -- default `success()` semantics are load-bearing
       # here, so a failed verify never persists a bad tree. Reuses the
       # restore step's cache-primary-key rather than recomputing it.
       - name: Save pinned ExifTool source
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/exiftool-src
+          path: .ci-cache/exiftool-source.tar.gz
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
       # ONE feature graph for the whole job. `--all-features` already implies
       # tag-comparison-binary and exiftool-comparison, so naming either again
