@@ -637,6 +637,23 @@ impl TTFParser {
                 continue;
             }
             let Some(charset) = Self::font_value_charset(record) else {
+                if record.platform_id == PLATFORM_MACINTOSH {
+                    let start = offset + string_start + u64::from(record.offset);
+                    let data = reader.read(start, record.length as usize)?;
+                    if data.is_ascii() {
+                        // Font.pm leaves an unsupported Mac charset's raw
+                        // bytes alone when they need no remapping. Its final
+                        // tag value drops NULs but retains later ASCII.
+                        let value = data
+                            .iter()
+                            .copied()
+                            .filter(|byte| *byte != 0)
+                            .map(char::from)
+                            .collect();
+                        metadata.insert(key, TagValue::String(value));
+                        continue;
+                    }
+                }
                 // Native name records replace earlier duplicates in order.
                 // An unreadable later value must not leave the earlier value
                 // looking like the final ExifTool value.
@@ -1574,6 +1591,32 @@ mod tests {
         let reader = TestReader::new(data);
         let tags = TTFParser::extract_exiftool_name_tags(&reader, &table).unwrap();
         assert!(!tags.contains_key("Font:FontFamily-ar"));
+    }
+
+    #[test]
+    fn unsupported_macintosh_charset_preserves_ascii_font_value() {
+        // Pinned Font.pm 13.59 returns A and AB for these Mac encodings,
+        // including a supported-but-unimplemented table (4), an absent
+        // table (9), an uninterpreted charset (32), and an unknown ID (33).
+        // Decode leaves bytes needing no remapping alone; a later record
+        // replaces the earlier same-key value.
+        for encoding in [4, 9, 21, 32, 33] {
+            for (last, expected) in [(&b"A"[..], "A"), (&b"A\0B"[..], "AB")] {
+                let tags = font_two_record_decode_case(
+                    PLATFORM_MACINTOSH,
+                    MAC_ENCODING_ROMAN,
+                    encoding,
+                    12,
+                    b"Earlier",
+                    last,
+                );
+                assert_eq!(
+                    tags.get("Font:FontFamily-ar"),
+                    Some(&TagValue::String(expected.to_string())),
+                    "Mac encoding {encoding} final record {last:?}"
+                );
+            }
+        }
     }
 
     #[test]
