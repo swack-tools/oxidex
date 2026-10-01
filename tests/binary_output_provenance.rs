@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 const BASE_JPEG: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/jpeg/sample_with_exif.jpg"
@@ -219,4 +222,66 @@ fn czi_xml_extracts_native_source_block() {
     let output = run(&["-b", "-XML"], path);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
+}
+
+#[test]
+fn printed_scalar_requests_extract_valueconv_not_the_label() {
+    let png = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/png/sample.png"
+    ));
+    for (name, expected) in [
+        ("-PNG:ColorType", "3"),
+        ("-PNG:Compression", "0"),
+        ("-PNG:Filter", "0"),
+        ("-PNG:Interlace", "0"),
+    ] {
+        let output = run(&["-b", name], png);
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert_eq!(output.stdout, expected.as_bytes(), "{name}");
+    }
+    let Some(mp3) = fixtures::pinned_t_images_fixture_path("MP3.mp3") else {
+        return;
+    };
+    let output = run(&["-b", "-MPEG:AudioBitrate"], &mp3);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"128000");
+}
+
+#[test]
+fn nikon_declared_binary_curve_never_extracts_its_summary_as_payload() {
+    let Some(nef) = fixtures::pinned_t_images_fixture_path("Nikon.nef") else {
+        return;
+    };
+    let output = run(&["-b", "-Nikon:ContrastCurve"], &nef);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("binary payload is unavailable"));
+
+    if let Some(rw2) = fixtures::pinned_t_images_fixture_path("Panasonic.rw2") {
+        let data_dump = run(&["-b", "-Panasonic:DataDump"], &rw2);
+        assert!(!data_dump.status.success(), "{data_dump:?}");
+        assert!(data_dump.stdout.is_empty(), "{data_dump:?}");
+        assert!(
+            String::from_utf8_lossy(&data_dump.stderr).contains("binary payload is unavailable")
+        );
+    }
+}
+
+#[test]
+fn invalid_cr3_preview_keeps_default_summary_but_refuses_binary_request() {
+    let Some(cr3) = fixtures::pinned_t_images_fixture_path("CanonRaw.cr3") else {
+        return;
+    };
+    let ordinary = run(&["-s"], &cr3);
+    assert!(ordinary.status.success(), "{ordinary:?}");
+    assert!(
+        String::from_utf8_lossy(&ordinary.stdout)
+            .lines()
+            .any(|line| line.starts_with("PreviewImage") && line.contains("Binary data 26 bytes"))
+    );
+    let output = run(&["-b", "-PreviewImage"], &cr3);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("binary payload is unavailable"));
 }

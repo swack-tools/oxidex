@@ -199,9 +199,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             6 => "RGB with Alpha".to_string(),
                             other => format!("Unknown ({})", other),
                         };
-                        metadata.insert(
-                            "PNG:ColorType".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:ColorType",
                             TagValue::new_string(color_type_str),
+                            TagValue::new_integer(color_type as i64),
+                            "",
                         );
 
                         // Compression method: `PrintConv => { 0 => 'Deflate/Inflate' }`
@@ -210,9 +212,11 @@ pub fn parse_png_metadata_with_diagnostics(
                         } else {
                             format!("Unknown ({})", compression)
                         };
-                        metadata.insert(
-                            "PNG:Compression".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Compression",
                             TagValue::new_string(compression_str),
+                            TagValue::new_integer(compression as i64),
+                            "",
                         );
 
                         // Filter method: `PrintConv => { 0 => 'Adaptive' }`
@@ -221,7 +225,12 @@ pub fn parse_png_metadata_with_diagnostics(
                         } else {
                             format!("Unknown ({})", filter)
                         };
-                        metadata.insert("PNG:Filter".to_string(), TagValue::new_string(filter_str));
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Filter",
+                            TagValue::new_string(filter_str),
+                            TagValue::new_integer(filter as i64),
+                            "",
+                        );
 
                         // Interlace method
                         let interlace_str = match interlace {
@@ -229,9 +238,11 @@ pub fn parse_png_metadata_with_diagnostics(
                             1 => "Adam7 Interlace".to_string(),
                             other => format!("Unknown ({})", other),
                         };
-                        metadata.insert(
-                            "PNG:Interlace".to_string(),
+                        metadata.insert_with_group1_and_value(
+                            "PNG:Interlace",
                             TagValue::new_string(interlace_str),
+                            TagValue::new_integer(interlace as i64),
+                            "",
                         );
 
                         // HasTransparency tag - true for color types with alpha channel (4, 6)

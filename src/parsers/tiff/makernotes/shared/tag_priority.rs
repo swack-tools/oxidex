@@ -275,6 +275,15 @@ fn legacy_binary_summary_source(key: &str) -> bool {
             | "PhaseOne:StripOffsets"
             | "PhaseOne:BlackLevelData"
             | "PhaseOne:SensorDefects"
+            // Nikon.pm::Main 0x008c, 0x0096, and 0x0010. The Nikon
+            // string-map parser renders their bytes to a length summary.
+            | "Nikon:ContrastCurve"
+            | "Nikon:NEFLinearizationTable"
+            | "Nikon:DataDump"
+            // Panasonic.pm::Main 0x0021 and 0x00a7 are binary payloads
+            // flattened to length summaries by its string-map parser.
+            | "Panasonic:DataDump"
+            | "Panasonic:OutputLUT"
     ) || derived_preview
         || key
             .strip_prefix("Sony:TextInfo")
@@ -304,6 +313,23 @@ mod dispatched_group_tests {
         assert!(metadata.occurrences_for("Canon:DustRemovalData")[0].binary_payload_unavailable);
         assert!(!metadata.occurrences_for("Canon:LensModel")[0].binary_payload_unavailable);
         assert!(metadata.occurrences_for("Pentax:PreviewImage")[0].binary_payload_unavailable);
+        for key in [
+            "Nikon:ContrastCurve",
+            "Nikon:NEFLinearizationTable",
+            "Nikon:DataDump",
+            "Panasonic:DataDump",
+            "Panasonic:OutputLUT",
+        ] {
+            record_makernote_tag(
+                &mut metadata,
+                key.to_string(),
+                crate::core::TagValue::new_string("source-rendered summary"),
+            );
+            assert!(
+                metadata.occurrences_for(key)[0].binary_payload_unavailable,
+                "{key}"
+            );
+        }
     }
 
     #[test]

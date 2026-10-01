@@ -836,9 +836,11 @@ fn parse_mpeg_audio_frame(
             // Bitrate (kbps)
             let bitrate = get_mpeg_bitrate(mpeg_version, layer, bitrate_index);
             if bitrate > 0 {
-                metadata.insert(
-                    "MPEG:AudioBitrate".to_string(),
+                metadata.insert_with_group1_and_value(
+                    "MPEG:AudioBitrate",
                     TagValue::new_string(format!("{} kbps", bitrate)),
+                    TagValue::new_integer(i64::from(bitrate) * 1000),
+                    "",
                 );
                 // Also add MP3:BitRate in kbps format for ExifTool compatibility
                 metadata.insert(
