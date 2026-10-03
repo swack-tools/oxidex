@@ -106,9 +106,16 @@ build:
     cargo build --workspace
 
 # Build the project in release mode (matches CI configuration)
-build-release: cbindgen-check
+build-release-local: cbindgen-check
     @echo "Building project (release, matching CI)..."
     cargo build --release --all-features
+
+# Select the least-used eligible remote builder and download a Linux binary.
+build-debug:
+    python3 tools/remote-build/build.py --profile debug
+
+build-release:
+    python3 tools/remote-build/build.py --profile release
 
 # Build just the binary
 build-bin:
@@ -381,7 +388,7 @@ ci:
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check cbindgen-check lint-release build-release test test-ffi-c
+ci-standard: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ C header up-to-date"
