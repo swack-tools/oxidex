@@ -44,10 +44,11 @@ env:
 # jobs when those runners are busy; no runner-status credential is needed.
 # The per-job
 # "2x/4x/8x" notes and the table below are historical sizing measurements
-# from the former hosted x64 runners (2x=2vCPU/7GB, 4x=4/16, 8x=8/32,
-# 16x=16/64), kept as evidence of what more cores buy each job. Larger
-# GitHub runners are billed even for public repositories; measure before
-# reaching for one.
+# taken on the retired pre-Spot third-party hosted x64 runners (2x=2vCPU/7GB,
+# 4x=4/16, 8x=8/32, 16x=16/64), kept as evidence of what more cores buy each
+# job. They are NOT Spot or GitHub-hosted baselines; re-measure on the target
+# pool before tuning. Larger GitHub runners are billed even for public
+# repositories; measure before reaching for one.
 #
 # Sizes below were chosen from measured step timings, not job wall-clock --
 # a slow job is not necessarily a CPU-bound one. See the per-job notes.
@@ -202,7 +203,8 @@ jobs:
     # [profile.test] carries codegen-units = 4; that setting and the
     # per-package opt-level = 2 overrides exist to stop the generated tag
     # crates OOMing a small machine. 16 units matches [profile.dev]. This was
-    # sized on a 32 GB 8-vCPU runner; the standard runner has 16 GB.
+    # sized on a retired pre-Spot 32 GB 8x hosted runner; the standard runner
+    # has 16 GB.
     #
     # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
     # workflow-wide) while skipping the full debuginfo this never reads.
@@ -629,10 +631,10 @@ jobs:
   # throwaway harness to execute the committed Start/Base forms.
   # The generated ExifTool tables are checked by five jobs that fan out from
   # one native capture, then report under the single "Verify Generated
-  # Tables" name below. Serially this was ~38 min on a 4-vCPU runner and
-  # ~70 min on a standard GitHub-hosted runner (single-threaded Perl/Python,
-  # so more cores on one runner did not help); fanned out, the long pole is
-  # the capture plus the slowest dependent job.
+  # Tables" name below. Serially this was ~38 min on a retired pre-Spot 4x
+  # hosted runner and ~70 min on a standard GitHub-hosted runner
+  # (single-threaded Perl/Python, so more cores on one runner did not help);
+  # fanned out, the long pole is the capture plus the slowest dependent job.
   #
   # The full dump is 1.25 GB of JSON (16 MB zstd); it is captured once and
   # passed as an artifact so every dependent job checks the same bytes.

@@ -658,7 +658,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertRegex(linux, r"(?m)^    runs-on: \$\{\{ matrix\.os \}\}$")
         self.assertIn("target: aarch64-unknown-linux-musl", linux)
         self.assertRegex(linux, r"target: aarch64-unknown-linux-musl\n\s+os: \[self-hosted, Linux, ARM64\]")
-        self.assertRegex(linux, r"target: x86_64-unknown-linux-musl\n\s+os: \[self-hosted, Linux, X64, spot\]")
+        self.assertRegex(linux, r"target: x86_64-unknown-linux-musl\n\s+os: spot\n")
 
     def test_universal_macos_asset_name_is_shared_by_release_contract_surfaces(self):
         expected = "oxidex-universal-apple-darwin"
