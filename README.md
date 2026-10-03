@@ -126,7 +126,9 @@ just fmt      # Format code
 using CPU and memory metrics, synchronize tracked working files over SSH, and
 build in a dedicated unprivileged container. These builds are independent of
 GitHub Actions jobs. The downloaded, checksum-verified Linux binaries are saved
-under `target/remote-linux/debug/oxidex` and `target/remote-linux/release/oxidex`.
+under `target/remote-linux/debug/<run_id>/oxidex` and
+`target/remote-linux/release/<run_id>/oxidex`. Each receipt prints the exact
+`artifact` path; run-specific directories keep parallel downloads separate.
 They cannot run natively on macOS. Remote release builds first run the pinned
 `cbindgen-check` inside the container and stop if the C header is stale. Use `just build-release-local` for the local
 all-features release build.

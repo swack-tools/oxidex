@@ -282,3 +282,39 @@ class ClientTests(unittest.TestCase):
             self.assertNotEqual(receipt['artifact'],second['artifact'])
             self.assertEqual(Path(second['artifact']).read_bytes(),b'verified binary')
             self.assertEqual(Path(receipt['artifact']),root.resolve()/'target'/'remote-linux'/'release'/receipt['run_id']/'oxidex')
+
+    def test_cleanup_failure_after_verified_download_is_not_success(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import json
+        events=[]
+        digest='a'*64
+        def output(command, **kwargs):
+            if command[0]=='gcloud':
+                return f'oxidex 2.0\n{digest}  /binary\n'
+            return 'commit\n'
+        def run(command, **kwargs):
+            if 'sudo rm -rf' in ' '.join(command):
+                raise subprocess.CalledProcessError(255,command)
+            return SimpleNamespace(returncode=0)
+        def download(instance,zone,project,binary,artifact,sha):
+            events.append('download')
+            artifact.write_bytes(b'verified binary')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build,'verify_remote_toolchain'), \
+                 patch.object(remote_build,'download_artifact',side_effect=download), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertTrue(receipt['verified'])
+            self.assertEqual(receipt['remote_cleanup'],'failed')
+            self.assertFalse(receipt.get('retryable',False))
+            self.assertEqual(Path(receipt['artifact']).read_bytes(),b'verified binary')

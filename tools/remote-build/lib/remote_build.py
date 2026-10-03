@@ -162,13 +162,16 @@ def main(argv=None):
     def ssh(command):
         return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
                 '--quiet',*SSH_KEEPALIVE,'--command='+command]
-    def cleanup():
+    def cleanup(strict=False):
         try:
             subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
             receipt['remote_cleanup']='complete'
         except Exception as cleanup_error:
             receipt['remote_cleanup']='failed'
             receipt['cleanup_error']=str(cleanup_error)
+            save()
+            if strict:
+                raise
         save()
     try:
         receipt['stage']='local_toolchain'
@@ -228,7 +231,8 @@ def main(argv=None):
         download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
         receipt['artifact']=str(artifact)
         receipt['verified']=True;save()
-        cleanup()
+        receipt['stage']='cleanup'
+        cleanup(strict=True)
     except Exception as exc:
         receipt['error']=str(exc)
         if isinstance(exc,subprocess.CalledProcessError):
@@ -239,7 +243,7 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain',):
+        if receipt.get('stage') not in ('local_toolchain','cleanup'):
             cleanup()
         raise
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
