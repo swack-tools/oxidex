@@ -518,6 +518,24 @@ impl MetadataMap {
     /// metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
     /// ```
     pub fn insert<K: Into<String>>(&mut self, key: K, value: TagValue) -> Option<TagValue> {
+        self.insert_with_list_flag(key, value, false)
+    }
+
+    /// Insert a value whose source dataset declares ExifTool List semantics.
+    pub(crate) fn insert_declared_list<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+    ) -> Option<TagValue> {
+        self.insert_with_list_flag(key, value, true)
+    }
+
+    fn insert_with_list_flag<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         // Replacing the visible tag invalidates any ValueConv form belonging
         // to its predecessor: `TagOccurrence::from_insert_shim` always
@@ -527,7 +545,8 @@ impl MetadataMap {
         // attach a new form explicitly afterwards via `set_value_form`.
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
-        let occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         // A public mutation: the caller's assignment, whatever the value
         // (a reader recording through `insert` is marked read when its
@@ -917,6 +936,33 @@ impl MetadataMap {
         )
     }
 
+    /// Inserts a producer-declared List occurrence. An array alone is not
+    /// enough evidence: native fixed-length tuples also use `TagValue::Array`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_forms_and_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        is_list: bool,
+    ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms_and_binary_list_state(
+            key,
+            display_value,
+            no_print_conv_value,
+            stored,
+            priority,
+            group1,
+            instance,
+            false,
+            is_list,
+        )
+    }
+
     /// Source-declared binary summary that retains the usual display and
     /// writer forms but cannot currently satisfy `-b`.
     #[allow(clippy::too_many_arguments)]
@@ -931,6 +977,32 @@ impl MetadataMap {
         instance: super::tag_occurrence::Instance,
         binary_payload_unavailable: bool,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms_and_binary_list_state(
+            key,
+            display_value,
+            no_print_conv_value,
+            stored,
+            priority,
+            group1,
+            instance,
+            binary_payload_unavailable,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_occurrence_with_forms_and_binary_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        binary_payload_unavailable: bool,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -942,6 +1014,7 @@ impl MetadataMap {
         occurrence.print = Some(occurrence.raw.clone());
         occurrence.stored = stored;
         occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         previous
     }

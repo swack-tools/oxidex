@@ -47,6 +47,17 @@ fn run(args: &[&str], path: &Path) -> Output {
 }
 
 #[test]
+fn native_iptc_list_keeps_newline_separator_in_binary_output() {
+    let Some(iptc) = fixtures::pinned_t_images_fixture_path("IPTC.jpg") else {
+        return;
+    };
+    // Pinned ExifTool 13.59: `-b -Keywords t/images/IPTC.jpg`.
+    let extracted = run(&["-b", "-Keywords"], &iptc);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(extracted.stdout, b"ExifTool\nTest\nIPTC");
+}
+
+#[test]
 fn native_numeric_tuple_keeps_space_separator_in_binary_output() {
     let Some(pgf) = fixtures::pinned_t_images_fixture_path("PGF.pgf") else {
         return;

@@ -508,18 +508,22 @@ pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(Str
 /// and duplicate semantics are migrated independently.
 pub(crate) fn extract_iptc_carrier_values_from_block(
     data: &[u8],
-) -> Vec<(String, TagValue, TagValue)> {
+) -> Vec<(String, TagValue, TagValue, bool)> {
     let Ok(records) = parse_all_iptc_records(data) else {
         return Vec::new();
     };
     let mut print_entries = Vec::new();
     let mut value_entries = Vec::new();
+    let mut list_names = std::collections::HashSet::new();
     for record in records {
         let Some(fact) =
             generated_iptc_dataset_facts::find(record.record_number, record.dataset_number)
         else {
             continue;
         };
+        if fact.list {
+            list_names.insert(fact.name);
+        }
         let displayed =
             dataset_value_to_string(record.record_number, record.dataset_number, &record.data);
         let value_form = carrier_value_before_printconv(
@@ -558,7 +562,8 @@ pub(crate) fn extract_iptc_carrier_values_from_block(
         .zip(collapse_iptc_carrier_typed_entries(value_entries))
         .map(|((print_name, print), (value_name, value))| {
             debug_assert_eq!(print_name, value_name);
-            (print_name, print, value)
+            let is_list = list_names.contains(print_name.as_str());
+            (print_name, print, value, is_list)
         })
         .collect()
 }
@@ -695,8 +700,8 @@ impl CarrierIptcBlocks {
         };
         let priority = if self.count == 0 { 1 } else { 0 };
         self.count = self.count.saturating_add(1);
-        for (name, print, value) in extract_iptc_carrier_values_from_block(payload) {
-            metadata.insert_occurrence_with_forms(
+        for (name, print, value, is_list) in extract_iptc_carrier_values_from_block(payload) {
+            metadata.insert_occurrence_with_forms_and_list_state(
                 name,
                 print,
                 value,
@@ -704,6 +709,7 @@ impl CarrierIptcBlocks {
                 priority,
                 &group,
                 Instance::default(),
+                is_list,
             );
         }
     }
@@ -811,6 +817,26 @@ pub fn app13_iptc_resource_count(segments: &[Segment]) -> usize {
 /// lists. See [`extract_iptc_from_segments`] for the string-valued variant.
 pub fn extract_iptc_values_from_segments(segments: &[Segment]) -> Result<Vec<(String, TagValue)>> {
     Ok(collapse_iptc_entries(iptc_entries_from_segments(segments)))
+}
+
+/// The JPEG aggregator needs the dataset's declared List flag as well as its
+/// collapsed value: a numeric tuple may also be represented by an array.
+pub(crate) fn extract_iptc_values_with_list_flags_from_segments(
+    segments: &[Segment],
+) -> Result<Vec<(String, TagValue, bool)>> {
+    let entries = iptc_entries_from_segments(segments);
+    let list_names: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|(record, dataset, _, _)| is_repeatable_iptc_dataset(*record, *dataset))
+        .map(|(_, _, name, _)| name.clone())
+        .collect();
+    Ok(collapse_iptc_entries(entries)
+        .into_iter()
+        .map(|(name, value)| {
+            let is_list = list_names.contains(&name);
+            (name, value, is_list)
+        })
+        .collect())
 }
 
 /// Returns ExifTool's `CurrentIPTCDigest` for the first standard JPEG IPTC
