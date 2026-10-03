@@ -33,7 +33,8 @@ class ClientTests(unittest.TestCase):
             return SimpleNamespace(returncode=1 if failed else 0)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}):
@@ -74,22 +75,21 @@ class ClientTests(unittest.TestCase):
         def ssh(command):
             commands.append(command)
             return [command]
-        with patch.object(remote_build,'pinned_toolchain',return_value=expected), \
-             patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+rustc,cargo]):
-            self.assertEqual(remote_build.verify_remote_toolchain(Path('.'),ssh, 'checkout'),expected)
+        with patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+rustc,cargo]):
+            self.assertEqual(remote_build.verify_remote_toolchain(expected,ssh, 'checkout'),expected)
         self.assertTrue(all('checkout' in command for command in commands))
         off_pin=rustc.replace(pin,'b'*40)
-        with patch.object(remote_build,'pinned_toolchain',return_value=expected), \
-             patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+off_pin,cargo]):
+        with patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+off_pin,cargo]):
             with self.assertRaisesRegex(RuntimeError,'does not match'):
-                remote_build.verify_remote_toolchain(Path('.'),lambda command:[command], 'checkout')
+                remote_build.verify_remote_toolchain(expected,lambda command:[command], 'checkout')
 
     def test_prepare_race_is_retryable_without_building(self):
         from lib import remote_build
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'prepare')) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -101,10 +101,10 @@ class ClientTests(unittest.TestCase):
             self.assertTrue(receipt['retryable'])
             self.assertEqual(receipt['worktree_namespace'],'checkout')
             self.assertEqual(len(receipt['run_id']),41)
-            self.assertIn(receipt['run_id'], ' '.join(run.call_args.args[0]))
-            self.assertEqual(run.call_count,1)
-            self.assertIn('--ssh-flag=-oServerAliveInterval=15',run.call_args.args[0])
-            self.assertIn('--ssh-flag=-oServerAliveCountMax=3',run.call_args.args[0])
+            self.assertIn(receipt['run_id'], ' '.join(run.call_args_list[0].args[0]))
+            self.assertEqual(run.call_count,2)  # failed prepare and best-effort cleanup
+            self.assertIn('--ssh-flag=-oServerAliveInterval=15',run.call_args_list[0].args[0])
+            self.assertIn('--ssh-flag=-oServerAliveCountMax=3',run.call_args_list[0].args[0])
 
     def test_scp_has_keepalives(self):
         from lib import remote_build
@@ -125,7 +125,8 @@ class ClientTests(unittest.TestCase):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
                  patch.object(remote_build,'verify_remote_toolchain',side_effect=RuntimeError('off pin')):
@@ -136,7 +137,7 @@ class ClientTests(unittest.TestCase):
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             self.assertEqual(receipt['stage'],'toolchain')
             self.assertNotIn('verified',receipt)
-            self.assertEqual(run.call_count,3)  # prepare, upload, extract only
+            self.assertEqual(run.call_count,4)  # prepare, upload, extract, cleanup
             self.assertFalse(any('cargo fetch' in value for call in run.call_args_list for value in call.args[0]))
 
     def test_sync_transport_retries_but_checksum_failure_stops(self):
@@ -156,7 +157,8 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             failed=subprocess.CalledProcessError(66,'ssh',stderr='OXIDEX_SOURCE_CHECKSUM_MISMATCH\n')
-            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=[SimpleNamespace(returncode=0),
                      SimpleNamespace(returncode=0),failed]):
@@ -186,7 +188,9 @@ class ClientTests(unittest.TestCase):
                 digest=hashlib.sha256(archive.read_bytes()).hexdigest()
                 command=source_sync_command(digest,upload,str(source))
                 subprocess.run(['sh','-c',command],cwd=root,check=True,capture_output=True)
+                self.assertFalse(archive.exists())
             self.assertEqual([path.name for path in source.iterdir()],['new.rs'])
+            archive.write_bytes(b'corrupt')
             command=source_sync_command('0'*64,upload,str(source))
             failed=subprocess.run(['sh','-c',command],cwd=root,capture_output=True,text=True)
             self.assertEqual(failed.returncode,66)
@@ -220,3 +224,55 @@ class ClientTests(unittest.TestCase):
         self.assertIn('/remote-build/targets/'+run_id,command)
         with self.assertRaisesRegex(ValueError,'invalid remote run identifier'):
             cleanup_command('../checkout')
+
+    def test_missing_local_pin_stops_before_remote_work(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'rust-toolchain.toml').write_text('[toolchain]\nchannel = "1.97.1"\n')
+            with patch.object(remote_build.subprocess,'check_output',side_effect=subprocess.CalledProcessError(1,'rustup')), \
+                 patch.object(remote_build.subprocess,'run') as run:
+                with self.assertRaisesRegex(RuntimeError,'Local rustup cannot resolve repository toolchain pin'):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+            import json
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['stage'],'local_toolchain')
+            self.assertFalse(receipt.get('retryable',False))
+            run.assert_not_called()
+
+    def test_success_downloads_before_exact_run_cleanup(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import json
+        events=[]
+        digest='a'*64
+        def output(command, **kwargs):
+            if command[0]=='gcloud':
+                return f'oxidex 2.0\n{digest}  /binary\n'
+            return 'commit\n'
+        def run(command, **kwargs):
+            if 'sudo rm -rf' in ' '.join(command):
+                events.append('cleanup')
+            return SimpleNamespace(returncode=0)
+        def download(instance,zone,project,binary,artifact,sha):
+            events.append('download')
+            artifact.write_bytes(b'verified binary')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build,'verify_remote_toolchain'), \
+                 patch.object(remote_build,'download_artifact',side_effect=download), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run):
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    '--worktree-id','checkout','--evidence-dir',str(root/'evidence')]),0)
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(events,['download','cleanup'])
+            self.assertTrue(receipt['verified'])
+            self.assertEqual(receipt['remote_cleanup'],'complete')
+            self.assertEqual(Path(receipt['artifact']).read_bytes(),b'verified binary')
+            self.assertEqual(Path(receipt['artifact']),root.resolve()/'target'/'remote-linux'/'release'/'oxidex')

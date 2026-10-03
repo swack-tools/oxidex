@@ -23,12 +23,15 @@ def pinned_toolchain(source):
     pin = tomllib.loads((source/'rust-toolchain.toml').read_text())['toolchain']['channel']
     if not re.fullmatch(r'\d+\.\d+\.\d+', pin):
         raise RuntimeError('A numeric Rust toolchain pin is required')
-    compiler = subprocess.check_output(
-        ['rustup','which','--toolchain',pin,'rustc'], text=True).strip()
-    cargo = subprocess.check_output(
-        ['rustup','which','--toolchain',pin,'cargo'], text=True).strip()
-    rustc_output = subprocess.check_output([compiler,'-vV'],text=True)
-    cargo_output = subprocess.check_output([cargo,'-V'],text=True).strip()
+    try:
+        compiler = subprocess.check_output(
+            ['rustup','which','--toolchain',pin,'rustc'], text=True).strip()
+        cargo = subprocess.check_output(
+            ['rustup','which','--toolchain',pin,'cargo'], text=True).strip()
+        rustc_output = subprocess.check_output([compiler,'-vV'],text=True)
+        cargo_output = subprocess.check_output([cargo,'-V'],text=True).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        raise RuntimeError(f'Local rustup cannot resolve repository toolchain pin {pin}: {exc}') from exc
     commit = re.search(r'^commit-hash: ([0-9a-f]{40})$', rustc_output, re.M)
     release = re.search(r'^release: (\S+)$', rustc_output, re.M)
     if not commit or not release or release[1] != pin or not cargo_output.startswith('cargo '+pin+' '):
@@ -36,8 +39,7 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
-def verify_remote_toolchain(source, ssh, project):
-    expected = pinned_toolchain(source)
+def verify_remote_toolchain(expected, ssh, project):
     rustc_output = subprocess.check_output(
         ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} rustc -vV'), text=True)
     cargo_output = subprocess.check_output(
@@ -66,13 +68,15 @@ def cleanup_command(run_id):
     root='/mnt/runner-data/remote-build'
     source=shlex.quote(f'{root}/sources/{run_id}')
     target=shlex.quote(f'{root}/targets/{run_id}')
-    return f'sudo rm -rf -- {source} {target}'
+    archive=f'~/oxidex-remote-source-{run_id}.tar.gz'
+    return f'sudo rm -rf -- {source} {target} && rm -f -- {archive}'
 
 
 def source_sync_command(digest, upload, destination):
     archive = shlex.quote(upload)
     source = shlex.quote(destination)
-    return (f"echo '{digest}  {upload}' | sha256sum -c - "
+    return (f"trap 'rm -f -- {archive}' EXIT; "
+            f"echo '{digest}  {upload}' | sha256sum -c - "
             "|| { echo OXIDEX_SOURCE_CHECKSUM_MISMATCH >&2; exit 66; }; "
             f"tar -tzf {archive} >/dev/null "
             "|| { echo OXIDEX_SOURCE_ARCHIVE_INVALID >&2; exit 65; }; "
@@ -148,6 +152,8 @@ def main(argv=None):
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
+    if args.artifact_dir is None:
+        args.artifact_dir=source/'target'/'remote-linux'/args.profile
     evidence.mkdir(parents=True,exist_ok=True)
     receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
@@ -156,7 +162,18 @@ def main(argv=None):
     def ssh(command):
         return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
                 '--quiet',*SSH_KEEPALIVE,'--command='+command]
+    def cleanup():
+        try:
+            subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
+            receipt['remote_cleanup']='complete'
+        except Exception as cleanup_error:
+            receipt['remote_cleanup']='failed'
+            receipt['cleanup_error']=str(cleanup_error)
+        save()
     try:
+        receipt['stage']='local_toolchain'
+        receipt['toolchain']=pinned_toolchain(source)
+        save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
@@ -178,7 +195,8 @@ def main(argv=None):
         subprocess.run(ssh(command),check=True,capture_output=True,text=True)
         receipt['sync_seconds']=time.monotonic()-start;save()
         receipt['stage']='toolchain'
-        receipt['toolchain']=verify_remote_toolchain(source, ssh, project)
+        verify_remote_toolchain(receipt['toolchain'], ssh, project)
+        receipt['remote_toolchain_verified']=True
         save()
         # Dependencies are fetched separately; compile time excludes downloads.
         stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
@@ -203,22 +221,13 @@ def main(argv=None):
         print(verification,flush=True)
         digest=verification.splitlines()[-1].split()[0]
         receipt['binary_sha256']=digest
-        if args.artifact_dir:
-            output=args.artifact_dir.expanduser().resolve();output.mkdir(parents=True,exist_ok=True)
-            artifact=output/'oxidex'
-            receipt['stage']='download'
-            download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
-            receipt['artifact']=str(artifact)
-            # Only remove this invocation's remote source/target after the
-            # downloaded binary has passed its SHA-256 check.
-            try:
-                subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
-                receipt['remote_cleanup']='complete'
-            except subprocess.CalledProcessError as exc:
-                receipt['remote_cleanup']='failed'
-                receipt['cleanup_error']=str(exc)
-
+        output=args.artifact_dir.expanduser().resolve();output.mkdir(parents=True,exist_ok=True)
+        artifact=output/'oxidex'
+        receipt['stage']='download'
+        download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
+        receipt['artifact']=str(artifact)
         receipt['verified']=True;save()
+        cleanup()
     except Exception as exc:
         receipt['error']=str(exc)
         if isinstance(exc,subprocess.CalledProcessError):
@@ -228,6 +237,9 @@ def main(argv=None):
                 log.write_text((exc.stdout or '') + (exc.stderr or ''))
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
-        save();raise
+        save()
+        if receipt.get('stage') not in ('local_toolchain',):
+            cleanup()
+        raise
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
     return 0

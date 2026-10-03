@@ -143,12 +143,28 @@ project). `OXIDEX_REMOTE_WORKTREE` selects a namespace for remote source and tar
 directories (default: a hash of the local checkout path). Each build appends a
 random run suffix, so concurrent clients cannot overwrite each other's source
 or target directories even if they reuse the namespace. The Cargo download
-cache remains shared; compiled target output is scoped to one build. After
-automatic builds download and verify their artifacts, the client removes that
-run's remote source and target directories. Direct builds without an artifact
-directory retain their run directories for inspection; interrupted runs may
-need later host cleanup. Automatic builds choose a fresh instance and
-zone for every attempt. Direct `python3 tools/remote-build/direct.py` uses the configured
+cache remains shared; compiled target output is scoped to one build. Every
+successful build downloads a verified local binary (by default under
+`target/remote-linux/<profile>/`) before removing its exact remote source,
+target, and uploaded archive. Failed builds attempt the same exact-run cleanup
+while preserving local receipts and logs. An abruptly interrupted client may
+leave its run on the host; inspect the `run_id` and instance in its receipt,
+then dry-run the exact paths with `ls -ld` over authenticated SSH before any
+manual removal. For an interrupted run, this read-only command lists exactly
+the remote paths named by a receipt:
+
+```bash
+build_receipt=/path/to/remote-build.json
+build_run_id=$(jq -r .run_id "$build_receipt")
+build_instance=$(jq -r .instance "$build_receipt")
+build_zone=$(jq -r .zone "$build_receipt")
+build_project=$(jq -r .project "$build_receipt")
+gcloud compute ssh "$build_instance" --zone="$build_zone" --project="$build_project" \
+  --command="ls -ld -- /mnt/runner-data/remote-build/sources/$build_run_id /mnt/runner-data/remote-build/targets/$build_run_id ~/oxidex-remote-source-$build_run_id.tar.gz"
+```
+
+Inspect the output and follow the cleanup runbook before deleting any retained
+run. Automatic builds choose a fresh instance and zone for every attempt. Direct `python3 tools/remote-build/direct.py` uses the configured
 instance and zone. Settings may be environment variables or local
 `.cargo/config.toml` `[env]` entries; no personal VM or credentials are committed.
 
