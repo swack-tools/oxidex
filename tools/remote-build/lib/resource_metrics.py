@@ -20,6 +20,7 @@ def instant(value):
 def normalize(rows, identities, now):
     end = now - 120
     buckets = {}
+    invalid=set()
     try:
         for row in rows:
             labels = row['resource']['labels']
@@ -36,12 +37,17 @@ def normalize(rows, identities, now):
                     continue
                 value = float(point['value']['doubleValue']) / (100 if metric == MEMORY else 1)
                 if not math.isfinite(value) or not 0 <= value <= 1:
-                    return None
+                    invalid.add(identity)
+                    continue
                 if timestamp in points and points[timestamp] != value:
-                    return None
+                    invalid.add(identity)
+                    continue
                 points[timestamp] = value
         samples = []
         for identity in identities:
+            if identity in invalid:
+                samples.append(None)
+                continue
             pair = []
             for metric in (CPU, MEMORY):
                 values = buckets.get((identity, metric), {})
