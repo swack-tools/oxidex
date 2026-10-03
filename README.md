@@ -157,10 +157,10 @@ the remote paths named by a receipt:
 
 ```bash
 build_receipt=/path/to/remote-build.json
-build_run_id=$(jq -r .run_id "$build_receipt")
-build_instance=$(jq -r .instance "$build_receipt")
-build_zone=$(jq -r .zone "$build_receipt")
-build_project=$(jq -r .project "$build_receipt")
+build_run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$build_receipt")
+build_instance=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["instance"])' "$build_receipt")
+build_zone=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zone"])' "$build_receipt")
+build_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$build_receipt")
 gcloud compute ssh "$build_instance" --zone="$build_zone" --project="$build_project" \
   --command="ls -ld -- /mnt/runner-data/remote-build/sources/$build_run_id /mnt/runner-data/remote-build/targets/$build_run_id ~/oxidex-remote-source-$build_run_id.tar.gz"
 ```

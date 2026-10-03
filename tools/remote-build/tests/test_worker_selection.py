@@ -20,7 +20,7 @@ class WorkerSelectionTests(unittest.TestCase):
         inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
                    {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
         with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
-             patch('lib.worker_selection.read_utilization',side_effect=[[(.1,.1)],[(.2,.2)]]), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
              patch('lib.worker_selection.subprocess.run',side_effect=[SimpleNamespace(returncode=75),SimpleNamespace(returncode=0)]):
             vm,sample=select_worker('project')
         self.assertEqual(vm.name,'oxidex-runners-b')
@@ -38,7 +38,7 @@ class WorkerSelectionTests(unittest.TestCase):
         inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
                    {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
         with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
-             patch('lib.worker_selection.read_utilization',side_effect=[[(.1,.1)],[(.2,.2)]]), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
              patch('lib.worker_selection.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',60),SimpleNamespace(returncode=0)]) as run:
             vm,_=select_worker('project')
         self.assertEqual(vm.name,'oxidex-runners-b')
@@ -72,3 +72,17 @@ class WorkerSelectionTests(unittest.TestCase):
             launcher.chmod(0o755)
             launcher.write_text('#!/bin/sh\nexit 1\n')
             self.assertNotEqual(subprocess.run(['sh','-c',probe]).returncode,0)
+
+    def test_workers_share_one_metric_query_and_missing_host_does_not_block_others(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[None,(.2,.2)]) as metrics, \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)):
+            vm,_=select_worker('project')
+        self.assertEqual(vm.name,'oxidex-runners-b')
+        metrics.assert_called_once()
+        self.assertEqual([vm.instance_id for vm in metrics.call_args.args[1]],['1','2'])

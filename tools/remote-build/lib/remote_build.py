@@ -8,6 +8,7 @@ import secrets
 import subprocess
 import sys
 import tarfile
+import io
 import tomllib
 import time
 from pathlib import Path
@@ -131,8 +132,11 @@ def make_snapshot(source: Path, archive: Path) -> dict:
             path=source/name
             if path.name.startswith('.env') or path.suffix in {'.pem','.key'} or not path.is_file() or path.is_symlink():
                 continue
-            files.append({'path':name,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'bytes':path.stat().st_size})
-            tar.add(path,arcname=name,recursive=False)
+            data=path.read_bytes()
+            info=tar.gettarinfo(str(path),arcname=name)
+            info.size=len(data)
+            files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+            tar.addfile(info,io.BytesIO(data))
     return {'files':files,'file_count':len(files),'archive_bytes':archive.stat().st_size,
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
@@ -175,15 +179,20 @@ def main(argv=None):
             if strict:
                 raise
         save()
+    archive=evidence/'remote-source.tar.gz'
     try:
         receipt['stage']='local_toolchain'
         receipt['toolchain']=pinned_toolchain(source)
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
-        receipt['snapshot']=make_snapshot(source,archive)
-        receipt['packaging_seconds']=time.monotonic()-start
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        receipt['snapshot']=make_snapshot(source,archive)
+        receipt['packaging_seconds']=time.monotonic()-start
+        after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        if after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']:
+            raise RuntimeError('Checkout metadata changed during snapshot; retry with a stable checkout')
         save()
         project=shlex.quote(args.worktree_id)
         receipt['stage']='prepare'
@@ -248,5 +257,7 @@ def main(argv=None):
         if receipt.get('stage') not in ('local_toolchain','cleanup'):
             cleanup()
         raise
+    finally:
+        archive.unlink(missing_ok=True)
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
     return 0

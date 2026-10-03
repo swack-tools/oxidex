@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cargo external command adapter for a configured OxiDex checkout."""
+import argparse
 import hashlib
 import os
 import subprocess
@@ -12,8 +13,12 @@ from ops_paths import ops_root
 from lib.config import cargo_env_value
 from lib.remote_build import main
 
-if '--help' in sys.argv[1:] or '-h' in sys.argv[1:]:
-    raise SystemExit(main(sys.argv[1:]))
+parser=argparse.ArgumentParser(description='Build on a configured remote VM. Instance, zone, project and checkout are resolved from environment/Cargo configuration.')
+parser.add_argument('--profile',choices=['debug','release'],default='release')
+parser.add_argument('--evidence-dir',type=Path)
+parser.add_argument('--artifact-dir',type=Path)
+options=parser.parse_args()
+
 
 source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
 settings=tomllib.loads((source/'.cargo/config.toml').read_text()).get('env',{})
@@ -33,4 +38,9 @@ args=['--source',str(source),'--instance',setting('OXIDEX_REMOTE_INSTANCE'),
       '--zone',setting('OXIDEX_REMOTE_ZONE'),'--project',setting('OXIDEX_REMOTE_PROJECT'),
       '--worktree-id',setting('OXIDEX_REMOTE_WORKTREE'),
       '--evidence-dir',str(ops_root()/'evidence'/('cargo-remote-'+stamp))]
-raise SystemExit(main(args+sys.argv[1:]))
+args += ['--profile',options.profile]
+if options.evidence_dir:
+    args += ['--evidence-dir',str(options.evidence_dir)]
+if options.artifact_dir:
+    args += ['--artifact-dir',str(options.artifact_dir)]
+raise SystemExit(main(args))

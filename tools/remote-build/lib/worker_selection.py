@@ -44,7 +44,7 @@ def select_worker(project, excluded_ids=()):
     inventory = json.loads(subprocess.check_output([
         'gcloud', 'compute', 'instances', 'list', '--project='+project,
         '--format=json(name,id,zone,status,machineType)'], text=True))
-    observations = []
+    candidates = []
     for row in inventory:
         if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not row['name'].startswith(('oxidex-runners-', 'oxidex-buildbench-')):
             continue
@@ -54,8 +54,9 @@ def select_worker(project, excluded_ids=()):
             spec=json.loads(subprocess.check_output(['gcloud','compute','machine-types','describe',machine,
                 '--zone='+vm.zone,'--project='+project,'--format=json(guestCpus,memoryMb)'],text=True))
             vm.cpus=spec['guestCpus'];vm.memory_gib=spec['memoryMb']/1024
-        sample = read_utilization(project, [vm])
-        observations.append((vm, sample[0] if sample else None))
+        candidates.append(vm)
+    samples=read_utilization(project,candidates) if candidates else None
+    observations=list(zip(candidates,samples)) if samples else [(vm,None) for vm in candidates]
     # Probe only candidates with trustworthy low utilization, best first.
     probe = launcher_probe()
     for vm, sample in rank_workers(observations):

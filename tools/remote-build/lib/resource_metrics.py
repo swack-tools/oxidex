@@ -46,9 +46,9 @@ def normalize(rows, identities, now):
             for metric in (CPU, MEMORY):
                 values = buckets.get((identity, metric), {})
                 if len(values) < 4 or now - max(values) > 300:
-                    return None
+                    break
                 pair.append(sum(values.values()) / len(values) if metric == CPU else max(values.values()))
-            samples.append(tuple(pair))
+            samples.append(tuple(pair) if len(pair)==2 else None)
         return samples or None
     except (KeyError, TypeError, ValueError, OverflowError):
         return None

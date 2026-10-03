@@ -263,7 +263,7 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
-                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build,'make_snapshot',side_effect=lambda source,archive: (archive.write_bytes(b'upload'),{'archive_sha256':'0'*64})[1]), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
@@ -278,6 +278,7 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(events,['download','cleanup','download','cleanup'])
             self.assertTrue(receipt['verified'])
             self.assertEqual(receipt['remote_cleanup'],'complete')
+            self.assertFalse((root/'evidence'/'remote-source.tar.gz').exists())
             self.assertEqual(Path(receipt['artifact']).read_bytes(),b'verified binary')
             self.assertNotEqual(receipt['artifact'],second['artifact'])
             self.assertEqual(Path(second['artifact']).read_bytes(),b'verified binary')
@@ -318,3 +319,25 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(receipt['remote_cleanup'],'failed')
             self.assertFalse(receipt.get('retryable',False))
             self.assertEqual(Path(receipt['artifact']).read_bytes(),b'verified binary')
+
+    def test_snapshot_manifest_uses_exact_archived_bytes(self):
+        import hashlib
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'src';source.mkdir()
+            file=source/'code.rs';file.write_bytes(b'original')
+            subprocess.run(['git','init','-q',str(source)],check=True)
+            subprocess.run(['git','-C',str(source),'add','.'],check=True)
+            original=Path.read_bytes
+            def changing_read(path):
+                data=original(path)
+                if path==file:
+                    file.write_bytes(b'edited during packaging')
+                return data
+            archive=root/'source.tar.gz'
+            with patch.object(Path,'read_bytes',changing_read):
+                receipt=make_snapshot(source,archive)
+            with tarfile.open(archive) as tar:
+                data=tar.extractfile('code.rs').read()
+            self.assertEqual(receipt['files'][0]['sha256'],hashlib.sha256(data).hexdigest())
+            self.assertEqual(receipt['files'][0]['bytes'],len(data))
