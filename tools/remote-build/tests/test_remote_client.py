@@ -48,3 +48,16 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(retryable_exit(143))
         self.assertFalse(retryable_exit(101))
         self.assertFalse(retryable_exit(1))
+
+    def test_failed_download_preserves_verified_binary(self):
+        from lib.remote_build import download_artifact
+        from unittest.mock import patch
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            artifact=Path(directory)/'oxidex';artifact.write_bytes(b'previous verified')
+            def download(command, **kwargs):
+                Path(command[4]).write_bytes(b'corrupt')
+            with patch('lib.remote_build.subprocess.run',side_effect=download):
+                with self.assertRaisesRegex(RuntimeError,'checksum'):
+                    download_artifact('vm','z','p','/binary',artifact,hashlib.sha256(b'expected').hexdigest())
+            self.assertEqual(artifact.read_bytes(),b'previous verified')

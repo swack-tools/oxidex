@@ -13,6 +13,23 @@ def retryable_exit(code):
     return code in (75, 137, 143, 255)
 
 
+def download_artifact(instance, zone, project, binary, artifact, digest):
+    import tempfile
+    import os
+    fd,name=tempfile.mkstemp(prefix='.oxidex-download-',dir=artifact.parent)
+    os.close(fd)
+    temporary=Path(name)
+    try:
+        subprocess.run(['gcloud','compute','scp',instance+':'+binary,str(temporary),
+            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C'],check=True)
+        if hashlib.sha256(temporary.read_bytes()).hexdigest()!=digest:
+            raise RuntimeError('Downloaded binary checksum mismatch')
+        temporary.chmod(0o755)
+        temporary.replace(artifact)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def make_snapshot(source: Path, archive: Path) -> dict:
     names = subprocess.check_output(['git','-C',str(source),'ls-files','-z']).decode().split('\0')
     files=[]
@@ -97,10 +114,7 @@ def main(argv=None):
         if args.artifact_dir:
             output=args.artifact_dir.expanduser().resolve();output.mkdir(parents=True,exist_ok=True)
             artifact=output/'oxidex'
-            subprocess.run(['gcloud','compute','scp',args.instance+':'+binary,str(artifact),
-                            '--zone='+args.zone,'--project='+args.project,'--quiet','--scp-flag=-C'],check=True)
-            if hashlib.sha256(artifact.read_bytes()).hexdigest()!=digest:
-                raise RuntimeError('Downloaded binary checksum mismatch')
+            download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
             receipt['artifact']=str(artifact)
 
         receipt['verified']=True;save()

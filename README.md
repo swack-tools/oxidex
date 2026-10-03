@@ -205,7 +205,8 @@ this. Compiler and C-header validation errors stop immediately. Missing
 metrics or no eligible host produce an explicit error. Existing hosts need
 the updated root-owned launcher to propagate killed-container exit codes.
 The availability probe does not reserve capacity for concurrent clients.
-Receipts and timing logs remain under `$HOME/oxidex-ops/evidence/`.
+Receipts and timing logs use `$OXIDEX_OPS_DIR/evidence/` (default
+`$HOME/oxidex-ops/evidence/`).
 
 ## Contributing
 

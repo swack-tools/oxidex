@@ -7,6 +7,8 @@ import sys
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
+from ops_paths import ops_root
 from lib.worker_selection import select_worker
 
 
@@ -25,7 +27,7 @@ def main():
     if not project or project=='(unset)':
         raise RuntimeError('Set OXIDEX_REMOTE_PROJECT or configure a gcloud project')
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    evidence=Path.home()/'oxidex-ops'/'evidence'/('auto-remote-'+stamp)
+    evidence=ops_root()/'evidence'/('auto-remote-'+stamp)
     return run_attempts(project, source, args.profile, evidence, args.max_attempts)
 
 

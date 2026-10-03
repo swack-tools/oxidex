@@ -65,6 +65,8 @@ def read_utilization(project, vms, timestamp=None):
     for metric in (CPU, MEMORY):
         query = {'filter': f'metric.type = "{metric}" AND resource.type = "gce_instance"',
                  'interval.startTime': start, 'interval.endTime': end, 'view': 'FULL', 'pageSize': '1000'}
+        identifiers=' OR '.join(f'resource.labels.instance_id = "{vm.instance_id}"' for vm in vms)
+        query['filter'] += ' AND ('+identifiers+')'
         if metric == MEMORY:
             query['filter'] += ' AND metric.labels.state = "used"'
         seen = set()

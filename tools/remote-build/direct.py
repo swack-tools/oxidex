@@ -7,6 +7,8 @@ import sys
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
+from ops_paths import ops_root
 from lib.remote_build import main
 
 if '--help' in sys.argv[1:] or '-h' in sys.argv[1:]:
@@ -29,5 +31,5 @@ stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
 args=['--source',str(source),'--instance',setting('OXIDEX_REMOTE_INSTANCE'),
       '--zone',setting('OXIDEX_REMOTE_ZONE'),'--project',setting('OXIDEX_REMOTE_PROJECT'),
       '--worktree-id',setting('OXIDEX_REMOTE_WORKTREE'),
-      '--evidence-dir',str(Path.home()/'oxidex-ops'/'evidence'/('cargo-remote-'+stamp))]
+      '--evidence-dir',str(ops_root()/'evidence'/('cargo-remote-'+stamp))]
 raise SystemExit(main(args+sys.argv[1:]))
