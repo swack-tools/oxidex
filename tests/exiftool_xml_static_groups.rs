@@ -586,3 +586,52 @@ fn static_binary_named_text_is_extractable_verbatim() {
         );
     }
 }
+
+#[test]
+fn short_static_xmp_list_in_quicktime_retains_array_and_binary_elements() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping QuickTime static XMP list parity: pinned oracle unavailable");
+        return;
+    };
+    fn atom(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+    let packet = br#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Tags><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let mov = [
+        atom(b"ftyp", b"qt  \0\0\0\0qt  "),
+        atom(b"moov", &atom(b"udta", &atom(b"XMP_", packet))),
+    ]
+    .concat();
+    let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
+    std::fs::write(file.path(), mov).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(
+        theirs["XMP:XMP-dc:Tags"],
+        serde_json::json!(["alpha", "beta"])
+    );
+    assert_eq!(ours["XMP:XMP-dc:Tags"], theirs["XMP:XMP-dc:Tags"]);
+    for mut command in [oracle.command(), Command::new(env!("CARGO_BIN_EXE_oxidex"))] {
+        let output = command
+            .args(["-b", "-Tags"])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"alpha\nbeta");
+    }
+}
