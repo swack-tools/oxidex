@@ -293,6 +293,27 @@ def _keyed_values(rows: list[dict], status: int) -> dict[str, str]:
             for row in rows if _is_scored_read(row)}
 
 
+def _keyed_warnings(rows: list[dict], status: int) -> dict[str, str]:
+    if status != 0:
+        return {}
+    return {row["oracle_key"]: row["normalized"]
+            for row in rows if row["group"] == "ExifTool"
+            and row["name"] == "Warning"}
+
+
+def _candidate_warning_counter(row: dict) -> Counter:
+    return Counter((entry["group"], entry["name"], entry["normalized"])
+                   for entry in row["candidate"] if entry["name"] == "Warning")
+
+
+def _native_warning_counter(row: dict) -> Counter:
+    if row["native_status"] != 0:
+        return Counter()
+    return Counter((entry["group"], entry["name"], entry["normalized"])
+                   for entry in row["native"]
+                   if entry["group"] == "ExifTool" and entry["name"] == "Warning")
+
+
 def _matched_counter(row: dict) -> Counter:
     if row["native_status"] != 0:
         return Counter()
@@ -342,8 +363,8 @@ def _gap_entries(row: dict) -> tuple[list, list[dict]]:
     entries, diagnostics = [], []
 
     def native_diagnostic(name, value):
-        return (row["native_status"] != 0
-                and name in {"Error", "Warning"}
+        return ((name == "Warning"
+                 or (name == "Error" and row["native_status"] != 0))
                 and any(native["group"] == "ExifTool"
                         and native["name"] == name
                         and native["normalized"] == conformance.norm_value(value)
@@ -428,6 +449,71 @@ def _exact_missing_key(row: dict, native_row: dict) -> str | None:
     return missing[0] if len(missing) == 1 else None
 
 
+def _missing_keys_for_class(row: dict, member_class: dict) -> list[str]:
+    identity = (member_class["group"], member_class["name"],
+                member_class["normalized"])
+    missing = []
+    for report_key, (group, value) in row["discrepancies"]["missing"].items():
+        if (group == identity[0] and conformance.norm_value(value) == identity[2]
+                and re.sub(r" \([0-9]+\)$", "", report_key)
+                in {identity[1], f"{identity[0]}:{identity[1]}"}):
+            missing.append(report_key)
+    return sorted(missing)
+
+
+def _new_unread_class(row: dict, member_class: dict, old_native: dict,
+                      old_classes: dict) -> list[str] | None:
+    """Prove an entirely new duplicate class is unread without assigning keys."""
+    identity = (member_class["group"], member_class["name"],
+                member_class["normalized"])
+    if (member_class["native_count"] <= 1 or identity in old_classes
+            or any(key in old_native for key in member_class["native_keys"])):
+        return None
+    missing = _missing_keys_for_class(row, member_class)
+    if len(missing) != (member_class["native_count"]
+                        - member_class["matched_count"]):
+        return None
+    return missing
+
+
+def _whole_class_value_change(old: dict, new: dict, member_class: dict,
+                              old_classes: dict) -> list[str] | None:
+    """Accept only a complete duplicate-class value change retaining read credit."""
+    keys = member_class["native_keys"]
+    if member_class["native_count"] <= 1:
+        return None
+    old_rows = {entry["oracle_key"]: entry for entry in old["native"]}
+    if any(key not in old_rows for key in keys):
+        return None
+    prior = {(old_rows[key]["group"], old_rows[key]["name"],
+              old_rows[key]["normalized"]) for key in keys}
+    if len(prior) != 1:
+        return None
+    old_class = old_classes.get(next(iter(prior)))
+    if (old_class is None or old_class["native_keys"] != keys
+            or old_class["native_count"] != member_class["native_count"]
+            or member_class["matched_count"] == 0
+            or member_class["matched_count"] < old_class["matched_count"]):
+        return None
+    old_missing = _missing_keys_for_class(old, old_class)
+    new_missing = _missing_keys_for_class(new, member_class)
+    prior_identity = (old_class["group"], old_class["name"],
+                      old_class["normalized"])
+    later_identity = (member_class["group"], member_class["name"],
+                      member_class["normalized"])
+    old_values = sum(entry[0] == "value" and tuple(entry[1:4]) == prior_identity
+                     for entry in _gap_entries(old)[0])
+    new_values = sum(entry[0] == "value" and tuple(entry[1:4]) == later_identity
+                     for entry in _gap_entries(new)[0])
+    if (len(old_missing) + old_values !=
+            old_class["native_count"] - old_class["matched_count"]
+            or new_values
+            or len(new_missing) != member_class["native_count"]
+            - member_class["matched_count"]):
+        return None
+    return new_missing
+
+
 def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                 after_ledgers: list[dict], payload_floors: dict,
                 before_artifacts: dict, after_artifacts: dict,
@@ -486,8 +572,12 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                     raise ReadPolicyRefused(f"same-pin {field} differs for {key}")
         old_native = _keyed_values(old["native"], old["native_status"])
         new_native = _keyed_values(new["native"], new["native_status"])
-        for oracle_key in sorted(old_native.keys() | new_native.keys()):
-            prior, later = old_native.get(oracle_key), new_native.get(oracle_key)
+        old_changes = {**old_native, **_keyed_warnings(old["native"],
+                                                       old["native_status"])}
+        new_changes = {**new_native, **_keyed_warnings(new["native"],
+                                                       new["native_status"])}
+        for oracle_key in sorted(old_changes.keys() | new_changes.keys()):
+            prior, later = old_changes.get(oracle_key), new_changes.get(oracle_key)
             if prior != later:
                 native_delta.append({"logical_name": key[0], "fixture_sha256": key[1],
                                      "oracle_key": oracle_key, "before": prior,
@@ -507,6 +597,12 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
         if new_losses:
             raise ReadPolicyRefused("previously matched native-supported read was lost")
         if mode == "historical":
+            new_candidate_warnings = (_candidate_warning_counter(new)
+                                      - _candidate_warning_counter(old))
+            if new_candidate_warnings - _native_warning_counter(new):
+                raise ReadPolicyRefused("new candidate warning is unclassified")
+            classified_classes = set()
+            migrated_classes = set()
             for oracle_key, value in new_native.items():
                 if old_native.get(oracle_key) != value:
                     native_row = next(row for row in new["native"]
@@ -515,8 +611,42 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
                     member_class = new_classes[class_key]
                     if member_class["matched_count"] == member_class["native_count"]:
                         continue
+                    old_class = old_classes.get(class_key)
+                    if (old_class is not None
+                            and old_class["native_count"] == member_class["native_count"]
+                            and old_class["matched_count"] == member_class["matched_count"]):
+                        continue
                     if oracle_key in old_native:
+                        migrated_missing = _whole_class_value_change(
+                            old, new, member_class, old_classes)
+                        if migrated_missing is not None:
+                            if class_key not in migrated_classes:
+                                for missing_key in migrated_missing:
+                                    group, raw_value = new["discrepancies"]["missing"][missing_key]
+                                    allowed_new_missing[_missing_gap_id(
+                                        native_row["name"], group, raw_value)] += 1
+                                migrated_classes.add(class_key)
+                            continue
                         raise ReadPolicyRefused("changed native value lacks its new match")
+                    missing_keys = _new_unread_class(
+                        new, member_class, old_native, old_classes)
+                    if missing_keys is not None:
+                        if class_key not in classified_classes:
+                            newly_supported_unread.append({
+                                "kind": "native-new-unread-class",
+                                "logical_name": key[0], "fixture_sha256": key[1],
+                                "group": class_key[0], "name": class_key[1],
+                                "value": value,
+                                "native_keys": member_class["native_keys"],
+                                "native_count": member_class["native_count"],
+                                "matched_count": member_class["matched_count"],
+                                "missing_keys": missing_keys})
+                            for missing_key in missing_keys:
+                                group, raw_value = new["discrepancies"]["missing"][missing_key]
+                                allowed_new_missing[_missing_gap_id(
+                                    native_row["name"], group, raw_value)] += 1
+                            classified_classes.add(class_key)
+                        continue
                     missing_key = _exact_missing_key(new, native_row)
                     if missing_key is None:
                         raise ReadPolicyRefused("new native occurrence is not exact MISSING")
@@ -550,16 +680,20 @@ def replay_pair(*, mode: str, union: dict, before_ledgers: list[dict],
         classified = _evidence_index(
             native_change_evidence, required,
             {"logical_name", "fixture_sha256", "oracle_key", "before",
-             "after", "reason"}, "native", {"native-version", "native-new-unread"})
-        unread_keys = {(row["logical_name"], row["fixture_sha256"],
-                        row["oracle_key"]) for row in newly_supported_unread}
+             "after", "reason"}, "native",
+            {"native-version", "native-new-unread", "native-new-unread-class"})
+        unread_keys = {}
+        for row in newly_supported_unread:
+            for oracle_key in row.get("native_keys", [row.get("oracle_key")]):
+                unread_keys[(row["logical_name"], row["fixture_sha256"],
+                             oracle_key)] = row.get("kind", "native-new-unread")
         for row in native_delta:
             evidence_key = tuple(row[k] for k in sorted(
                 ("after", "before", "fixture_sha256", "logical_name", "oracle_key")))
             actual_reason = classified[evidence_key]["reason"]
-            expected_reason = ("native-new-unread" if
-                               (row["logical_name"], row["fixture_sha256"],
-                                row["oracle_key"]) in unread_keys else "native-version")
+            expected_reason = unread_keys.get(
+                (row["logical_name"], row["fixture_sha256"], row["oracle_key"]),
+                "native-version")
             if actual_reason != expected_reason:
                 raise ReadPolicyRefused("native change disposition differs")
     proof = {"schema": PAIR_SCHEMA, "mode": mode, "status": "passed",
