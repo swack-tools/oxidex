@@ -127,7 +127,8 @@ using CPU and memory metrics, synchronize tracked working files over SSH, and
 build in a dedicated unprivileged container. These builds are independent of
 GitHub Actions jobs. The downloaded, checksum-verified Linux binaries are saved
 under `target/remote-linux/debug/oxidex` and `target/remote-linux/release/oxidex`.
-They cannot run natively on macOS. Use `just build-release-local` for the local
+They cannot run natively on macOS. Remote release builds first run the pinned
+`cbindgen-check` inside the container and stop if the C header is stale. Use `just build-release-local` for the local
 all-features release build.
 
 ### Install the remote-build commands
@@ -193,7 +194,9 @@ reporting. Never commit `.env`, GitHub credentials, or SSH private keys.
 
 Provision hosts with `--remote-builder --resource-monitoring` in
 `src/spot_runner_manager.py`; preview first and use `--apply` to provision.
-The autoscaler enables the builder by default. The VM service account needs
+The autoscaler enables the builder by default. For manual provisioning, use an
+instance name starting with `oxidex-runners-` so automatic selection discovers
+the host. The VM service account needs
 `roles/monitoring.metricWriter` and the Monitoring write OAuth scope so the
 metrics-only Ops Agent can publish memory utilization. CPU utilization uses
 Compute Engine's built-in metric. Authenticated `gcloud compute ssh` must work;
