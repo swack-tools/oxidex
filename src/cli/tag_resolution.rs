@@ -471,7 +471,10 @@ pub fn unavailable_czi_binary_request(
     if xml_requests.is_empty() {
         return None;
     }
-    let xml_metadata = crate::parsers::image::czi::probe_czi_xml_metadata(path)?;
+    let xml_metadata = match crate::parsers::image::czi::probe_czi_xml_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => return Some(format!("CZI tag {}: {error}", xml_requests[0])),
+    };
     xml_requests
         .iter()
         .find(|token| {
@@ -720,11 +723,28 @@ mod binary_text_tests {
             let args =
                 CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
                     .unwrap();
-            assert!(
-                unavailable_czi_binary_request(&report, &args, path).is_some(),
-                "{tag}"
-            );
+            let error = unavailable_czi_binary_request(&report, &args, path).unwrap();
+            assert!(error.contains(tag), "{tag}: {error}");
         }
+        let removed_dir = tempfile::tempdir().unwrap();
+        let removed = removed_dir.path().join("removed.czi");
+        let xml_request = CliArgs::parse_from([
+            "-b".into(),
+            "-XML:MicroscopeName".into(),
+            "removed.czi".into(),
+        ])
+        .unwrap();
+        let error = unavailable_czi_binary_request(&report, &xml_request, &removed).unwrap();
+        assert!(error.contains("XML:MicroscopeName"), "{error}");
+        assert!(error.contains("cannot reopen CZI"), "{error}");
+        let mut bad_offset = std::fs::read(path).unwrap();
+        let beyond_end = bad_offset.len() as u64 + 4096;
+        bad_offset[92..100].copy_from_slice(&beyond_end.to_le_bytes());
+        let moved_section = removed_dir.path().join("moved-section.czi");
+        std::fs::write(&moved_section, bad_offset).unwrap();
+        let error = unavailable_czi_binary_request(&report, &xml_request, &moved_section).unwrap();
+        assert!(error.contains("XML:MicroscopeName"), "{error}");
+        assert!(error.contains("cannot read CZI XML section"), "{error}");
         let wildcard = CliArgs::parse_from([
             "-b".into(),
             "-XML".into(),
