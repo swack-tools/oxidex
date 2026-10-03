@@ -59,7 +59,7 @@ class MainCiWorkflowTests(unittest.TestCase):
 
     def test_no_workflow_or_lint_config_routes_to_warpbuild(self):
         github = CI_YAML.parents[1]
-        for path in sorted([github / "actionlint.yaml", *github.glob("workflows/*.yml")]):
+        for path in sorted([github / "actionlint.yaml", *github.glob("workflows/*.yml"), *github.glob("workflows/*.yaml")]):
             with self.subTest(path=path.name):
                 self.assertNotRegex(path.read_text(), r"(?i)warp")
 
