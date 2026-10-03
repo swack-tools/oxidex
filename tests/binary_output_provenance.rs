@@ -263,6 +263,49 @@ fn czi_xml_extracts_native_source_block() {
 }
 
 #[test]
+fn czi_missing_table_refuses_non_fixture_xml_property() {
+    let mut czi = fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ))
+    .unwrap();
+    let section = u64::from_le_bytes(czi[92..100].try_into().unwrap()) as usize;
+    let xml_len = u32::from_le_bytes(czi[section + 32..section + 36].try_into().unwrap()) as usize;
+    let xml_start = section + 288;
+    let xml_end = xml_start + xml_len;
+    let xml = std::str::from_utf8(&czi[xml_start..xml_end]).unwrap();
+    let expanded = xml.replace(
+        "    </HardwareSetting>",
+        "      <Detectors><Detector Name=\"Detector-1\"/></Detectors>\n    </HardwareSetting>",
+    );
+    assert_ne!(expanded, xml, "fixture lost HardwareSetting XML section");
+    czi.splice(xml_start..xml_end, expanded.bytes());
+    czi[section + 32..section + 36].copy_from_slice(&(expanded.len() as u32).to_le_bytes());
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("other-property.czi");
+    fs::write(&path, czi).unwrap();
+
+    let has_table = oxidex::exiftool_tables::find_table("ZISRAW", "Main").is_some();
+    for tag in ["-XML:DetectorName", "-DetectorName"] {
+        let output = run(&["-b", tag], &path);
+        if has_table {
+            assert!(output.status.success(), "{tag}: {output:?}");
+            assert_eq!(output.stdout, b"Detector-1", "{tag}");
+        } else {
+            assert!(!output.status.success(), "{tag}: {output:?}");
+            assert!(output.stdout.is_empty(), "{tag}: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+                "{tag}: {output:?}"
+            );
+        }
+    }
+    let unknown = run(&["-b", "-XML:NoSuchTag"], &path);
+    assert!(unknown.status.success(), "{unknown:?}");
+    assert!(unknown.stdout.is_empty(), "{unknown:?}");
+}
+
+#[test]
 fn czi_missing_table_never_leaves_partial_multi_file_binary_output() {
     if oxidex::exiftool_tables::EXIFTOOL_VERSION != "11.78" {
         return;

@@ -827,10 +827,10 @@ pub fn batch_read(files: Vec<PathBuf>, args: &CliArgs) -> Result<BatchStats> {
 fn output_binary_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliArgs) -> Result<()> {
     // Preflight named source-table refusals before streaming any bytes.
     // Do not buffer all payloads: a batch may contain large binary values.
-    for (_, result) in results {
+    for (path, result) in results {
         if let Ok(report) = result {
             if let Some(reason) =
-                super::tag_resolution::unavailable_czi_binary_request(report, args)
+                super::tag_resolution::unavailable_czi_binary_request(report, args, path)
             {
                 return Err(ExifToolError::parse_error(reason));
             }

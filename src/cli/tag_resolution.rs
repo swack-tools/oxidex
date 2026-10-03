@@ -417,46 +417,15 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
-// The CZI XML property names independently observed with the pinned 13.59
-// oracle's `-a -G1 -s` on tests/fixtures/czi/pinned.czi. These are names
-// produced by ZISRAW.pm's ShortenTagNames, not a guess from a requested token.
-const KNOWN_CZI_XML_TAGS: &[&str] = &[
-    "XML",
-    "MicroscopeId",
-    "MicroscopeName",
-    "MicroscopeUniqueName",
-    "MicroscopeModel",
-    "MicroscopeIsAvailable",
-    "MicroscopeIsBroken",
-    "MicroscopeIsBrokenReason",
-    "MicroscopeMotorization",
-    "MicroscopeIsLightSource",
-    "MicroscopeIsLightSink",
-    "MicroscopeStandSpecification",
-    "MicroscopeDeviceRefId",
-    "EyePieceId",
-    "EyePieceName",
-    "EyePieceUniqueName",
-    "EyePieceModel",
-    "EyePieceIsAvailable",
-    "EyePieceIsBroken",
-    "EyePieceIsBrokenReason",
-    "EyePieceMotorization",
-    "EyePieceIsLightSource",
-    "EyePieceIsLightSink",
-    "EyePieceMag",
-    "EyePieceTotalMag",
-    "EyePieceDepthOfField",
-    "EyePieceFieldOfView",
-    "EyePieceTotalFieldOfView",
-];
-
-/// Returns a missing CZI source-table refusal only for a known tag that
-/// depends on that table. An unmatched request still has the ordinary `-b`
-/// empty result, and unsupported request forms keep their own diagnostics.
+/// Returns a missing CZI source-table refusal only for a requested tag
+/// actually supplied by this CZI file's unavailable parser. Header names are
+/// declared by `ZISRAW::Main`; XML names are probed with the same schema-less
+/// walker the capable parser uses, so non-fixture properties are covered too.
+/// Unrelated and absent names keep the ordinary empty `-b` result.
 pub fn unavailable_czi_binary_request<'a>(
     report: &'a crate::core::ReadReport,
     args: &CliArgs,
+    path: &std::path::Path,
 ) -> Option<&'a str> {
     let reason = report.missing_czi_table()?;
     let requested = args.specific_tags()?;
@@ -467,30 +436,24 @@ pub fn unavailable_czi_binary_request<'a>(
     {
         return None;
     }
+    let xml_metadata = crate::parsers::image::czi::probe_czi_xml_metadata(path);
     requested
         .iter()
         .any(|token| {
-            let (qualifier, name) = split_request(token);
-            let from_czi = if KNOWN_CZI_XML_TAGS
-                .iter()
-                .any(|known| name.eq_ignore_ascii_case(known))
-            {
-                qualifier.is_none_or(|group| group.eq_ignore_ascii_case("XML"))
-            } else if ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
-                .iter()
-                .any(|known| name.eq_ignore_ascii_case(known))
-            {
-                qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"))
-            } else {
-                false
-            };
-            from_czi
-                && resolve_requested_tags(
-                    &report.metadata,
-                    std::slice::from_ref(token),
-                    args.all_tags,
-                )
+            if !resolve_requested_tags(&report.metadata, std::slice::from_ref(token), args.all_tags)
                 .is_empty()
+            {
+                return false;
+            }
+            let (qualifier, name) = split_request(token);
+            let header_tag = ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
+                .iter()
+                .any(|known| name.eq_ignore_ascii_case(known))
+                && qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"));
+            let xml_tag = xml_metadata.as_ref().is_some_and(|xml| {
+                !resolve_requested_tags(xml, std::slice::from_ref(token), args.all_tags).is_empty()
+            });
+            header_tag || xml_tag
         })
         .then_some(reason)
 }
@@ -697,7 +660,7 @@ mod binary_text_tests {
     }
 
     #[test]
-    fn missing_czi_table_only_refuses_known_unavailable_requests() {
+    fn missing_czi_table_refuses_present_file_tags() {
         use crate::core::{Diagnostic, ParseStatus, ReadReport};
 
         let mut metadata = MetadataMap::new();
@@ -709,12 +672,16 @@ mod binary_text_tests {
                 "CZI parse error: missing ZISRAW::Main table",
             )],
         };
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/czi/pinned.czi"
+        ));
         for tag in ["NoSuchTag", "EXIF:XML", "EXIF:FileGUID", "FileType"] {
             let args =
                 CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
                     .unwrap();
             assert_eq!(
-                unavailable_czi_binary_request(&report, &args),
+                unavailable_czi_binary_request(&report, &args, path),
                 None,
                 "{tag}"
             );
@@ -731,7 +698,7 @@ mod binary_text_tests {
                 CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
                     .unwrap();
             assert!(
-                unavailable_czi_binary_request(&report, &args).is_some(),
+                unavailable_czi_binary_request(&report, &args, path).is_some(),
                 "{tag}"
             );
         }
@@ -742,7 +709,10 @@ mod binary_text_tests {
             "fixture.czi".into(),
         ])
         .unwrap();
-        assert_eq!(unavailable_czi_binary_request(&report, &wildcard), None);
+        assert_eq!(
+            unavailable_czi_binary_request(&report, &wildcard, path),
+            None
+        );
     }
 
     #[test]

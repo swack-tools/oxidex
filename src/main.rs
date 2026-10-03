@@ -501,7 +501,7 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
 
             if args.binary_output
                 && let Some(reason) =
-                    oxidex::cli::tag_resolution::unavailable_czi_binary_request(&report, args)
+                    oxidex::cli::tag_resolution::unavailable_czi_binary_request(&report, args, file)
             {
                 eprintln!("Error: {reason}");
                 process::exit(1);

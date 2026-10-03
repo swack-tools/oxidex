@@ -43,6 +43,7 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/ZISRAW.pm`
 
+use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -51,7 +52,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
-use crate::io::ByteOrder;
+use crate::io::{ByteOrder, MMapReader};
 use crate::parsers::xmp::generic_xml::{
     XmlWalkOptions, extract_xml_properties_with, xml_table_priority,
 };
@@ -142,6 +143,25 @@ pub fn parse_czi_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 
         Ok(metadata)
     })
+}
+
+/// Re-read only the CZI XML section when the selected ExifTool source lacks
+/// `ZISRAW::Main`. The main parser correctly refuses the missing header layout,
+/// but a `-b -TAG` request must still distinguish a real XML property in this
+/// file from an unrelated or absent name. This uses the same section walker as
+/// a capable pin, without publishing any unsupported values as read metadata.
+pub(crate) fn probe_czi_xml_metadata(path: &Path) -> Option<MetadataMap> {
+    let reader = MMapReader::new(path).ok()?;
+    if reader.size() < HEADER_LEN as u64 {
+        return None;
+    }
+    let header = reader.read(0, HEADER_LEN).ok()?;
+    if !header.starts_with(CZI_SIGNATURE) {
+        return None;
+    }
+    let mut metadata = MetadataMap::new();
+    process_metadata_section(&reader, header, &mut metadata);
+    Some(metadata)
 }
 
 /// ZISRAW.pm:23-27's `int32u[2]` under `PrintConv => '$val =~ tr/ /./; $val'`.
