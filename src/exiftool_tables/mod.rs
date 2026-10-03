@@ -340,8 +340,11 @@ pub(crate) fn selected_binary_source_census() -> BinarySourceCensus {
         "12.64" => BinarySourceCensus {
             hook_fields: 27,
             subdir_primary: 58,
-            subdir_all: 63,
-            subdir_modeled: 59,
+            // The pinned 12.64 source capture reports 66 SubDirectory
+            // fields, including accepted variants; codegen models 62 and
+            // explicitly refuses four ProcessProc overrides.
+            subdir_all: 66,
+            subdir_modeled: 62,
             subdir_processproc_refused: 4,
             print_conv_refused: 23,
             print_conv_tables: 9,
