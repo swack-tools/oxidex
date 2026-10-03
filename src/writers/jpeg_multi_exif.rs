@@ -491,9 +491,18 @@ mod tests {
         ] {
             assert!(is_exif_family_key(key, &baseline), "{key}");
         }
-        for key in ["XMP:Title", "File:Comment", "IPTC:Keywords", "Title"] {
+        for key in ["XMP:Title", "File:Comment", "IPTC:Keywords"] {
             assert!(!is_exif_family_key(key, &baseline), "{key}");
         }
+        // Exif::Main 0xa436 is named Title in pinned 12.64, then renamed
+        // ImageTitle in 13.59. A bare Title therefore belongs to EXIF only
+        // for the historical 12.64 generated registry.
+        assert_eq!(
+            is_exif_family_key("Title", &baseline),
+            crate::exiftool_tables::EXIFTOOL_VERSION == "12.64",
+            "Title for pinned ExifTool {}",
+            crate::exiftool_tables::EXIFTOOL_VERSION
+        );
     }
 
     /// The reader files rows of the IFD chain past IFD1 under `IFD2`,
