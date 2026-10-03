@@ -32,10 +32,14 @@ def normalize(rows, identities, now):
                 continue
             points = buckets.setdefault((identity, metric), {})
             for point in row.get('points', []):
-                timestamp = instant(point['interval']['endTime'])
-                if not end - 300 <= timestamp <= end:
+                try:
+                    timestamp = instant(point['interval']['endTime'])
+                    if not end - 300 <= timestamp <= end:
+                        continue
+                    value = float(point['value']['doubleValue']) / (100 if metric == MEMORY else 1)
+                except (KeyError,TypeError,ValueError,OverflowError):
+                    invalid.add(identity)
                     continue
-                value = float(point['value']['doubleValue']) / (100 if metric == MEMORY else 1)
                 if not math.isfinite(value) or not 0 <= value <= 1:
                     invalid.add(identity)
                     continue
