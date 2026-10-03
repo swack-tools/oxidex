@@ -265,3 +265,65 @@ fn static_default_does_not_change_colliding_adobe_description() {
     ));
     assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }
+
+#[test]
+fn static_makernote_properties_do_not_activate_native_composites() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping maker-note activation parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/MakerNotes/Canon/1.0/"><q:MinFocalLength>24</q:MinFocalLength><q:MaxFocalLength>70</q:MaxFocalLength></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(theirs["MakerNotes:Canon:MinFocalLength"], 24);
+    assert_eq!(theirs["MakerNotes:Canon:MaxFocalLength"], 70);
+    assert!(!theirs.contains_key("Composite:Lens"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
+fn embedded_static_makernote_keeps_native_canon_composites_active() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping mixed native/static MakerNotes parity: pinned oracle unavailable");
+        return;
+    };
+    let canon = exiftool_oracle::capability_sample(oracle)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("Canon.jpg");
+    let original = std::fs::read(canon).unwrap();
+    assert!(original.starts_with(&[0xff, 0xd8]));
+    let packet = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/MakerNotes/Canon/1.0/"><q:MinFocalLength>24</q:MinFocalLength><q:MaxFocalLength>70</q:MaxFocalLength></rdf:Description></rdf:RDF>"#;
+    let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+    payload.extend_from_slice(packet);
+    let length = u16::try_from(payload.len() + 2).unwrap();
+    let mut mixed = vec![0xff, 0xd8, 0xff, 0xe1];
+    mixed.extend_from_slice(&length.to_be_bytes());
+    mixed.extend_from_slice(&payload);
+    mixed.extend_from_slice(&original[2..]);
+    let file = tempfile::Builder::new().suffix(".jpg").tempfile().unwrap();
+    std::fs::write(file.path(), mixed).unwrap();
+
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(theirs["Composite:Lens"], "18.0 - 55.0 mm");
+    assert_eq!(ours.get("Composite:Lens"), theirs.get("Composite:Lens"));
+    assert_eq!(
+        ours.get("Composite:Lens35efl"),
+        theirs.get("Composite:Lens35efl")
+    );
+}

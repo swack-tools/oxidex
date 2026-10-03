@@ -338,6 +338,23 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // `lens_id::OMITTED`.
     let olympus_lens_type_pair = resolve_indexed(map, &mut names, "LensTypeMake").is_some()
         && resolve_indexed(map, &mut names, "LensTypeModel").is_some();
+    // ExifTool's -X static MakerNotes URI restores reported source groups,
+    // but does not load the manufacturer's parser or Composite table. An
+    // embedded packet can coexist with a real MakerNote, so activation is
+    // determined per source module rather than by FileType or group name.
+    let mut static_makernote_modules = HashSet::new();
+    let mut native_makernote_modules = HashSet::new();
+    for occurrence in map.occurrences() {
+        if crate::cli::tag_resolution::family0_label(occurrence) != "MakerNotes" {
+            continue;
+        }
+        let module = crate::cli::tag_resolution::family1_label(occurrence);
+        if occurrence.origin.module == Some("XMP::StaticGroup") {
+            static_makernote_modules.insert(module.to_string());
+        } else {
+            native_makernote_modules.insert(module.to_string());
+        }
+    }
     // Composites this run produced, keyed by each definition's own index
     // into COMPOSITES -- NOT by `comp.name`. Two distinct table rows can
     // share one output Name (`Exif::LensID` and `Exif::LensID-2` both
@@ -361,11 +378,9 @@ pub fn apply(map: &mut MetadataMap) -> usize {
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
-            // A standalone ExifTool -X RDF export can restore Nikon-tagged
-            // values without ever loading Nikon's MakerNote reader. ExifTool
-            // does not activate Nikon's Composite table in that case (13.59
-            // `t/images/XMP.xml` has Nikon:FocusMode but no AutoFocus).
-            if comp.module == "Nikon" && map.get_string("File:FileType") == Some("XMP") {
+            if static_makernote_modules.contains(comp.module)
+                && !native_makernote_modules.contains(comp.module)
+            {
                 continue;
             }
             let key = keys[idx].as_str();
