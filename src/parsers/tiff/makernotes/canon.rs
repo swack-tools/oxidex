@@ -9583,7 +9583,7 @@ mod tests {
 
         // An id shared by several lenses prints ExifTool's own combined string;
         // only Composite:LensID narrows it, and that is not this tag.
-        // Canon.pm:480  `368 => 'Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens',`
+        // Shared IDs keep the source's combined label.
         assert_eq!(
             parser.lookup_lens(368),
             Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
@@ -9598,7 +9598,7 @@ mod tests {
         };
         assert_eq!(parser.lookup_lens(61182), Some(expected.to_string()));
 
-        // Canon.pm:652  `65535 => 'n/a',` - what a body with no lens reports.
+        // What a body with no lens reports.
         assert_eq!(parser.lookup_lens(65535), Some("n/a".to_string()));
 
         // Absent from %canonLensTypes.

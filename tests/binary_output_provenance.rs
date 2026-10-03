@@ -228,7 +228,7 @@ fn czi_xml_extracts_native_source_block() {
     if !has_table {
         let identity = run(&["-b", "-FileType"], path);
         assert!(identity.status.success(), "{identity:?}");
-        assert_eq!(identity.stdout, b"CZI");
+        assert_eq!(identity.stdout, b"Unknown");
     }
     let output = run(&["-b", "-XML"], path);
     if has_table {

@@ -137,12 +137,12 @@ fn test_canon_lens_database_integration() {
     // For now, verify that the lens database module compiles and links
     use oxidex::parsers::tiff::makernotes::canon_lens_database::lookup_lens_name;
 
-    // Canon.pm:561  `4156 => 'Canon EF 50mm f/1.8 STM',`
+    // Stable Canon lens IDs across the selected source releases.
     assert_eq!(
         lookup_lens_name(4156),
         Some("Canon EF 50mm f/1.8 STM".to_string())
     );
-    // Canon.pm:480  `368 => 'Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens',`
+
     assert_eq!(
         lookup_lens_name(368),
         Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
@@ -183,35 +183,19 @@ fn test_lens_database_coverage() {
         "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",
         pin => panic!("unverified Canon lens 61182 for ExifTool {pin}"),
     };
-    let test_lenses = vec![
-        // (id, name, Canon.pm line the name is copied from)
-        (4156, "Canon EF 50mm f/1.8 STM", 561),
-        (
-            368,
-            "Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens",
-            480,
-        ),
-        (61182, expected_61182, 583),
-        (186, "Canon EF 70-200mm f/4L USM", 390),
-        (50, "Canon EF-S 18-200mm f/3.5-5.6 IS", 201),
-        (4142, "Canon EF-S 18-135mm f/3.5-5.6 IS STM", 547),
-        (65535, "n/a", 652),
+    let test_lenses = [
+        (4156, "Canon EF 50mm f/1.8 STM"),
+        (368, "Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens"),
+        (61182, expected_61182),
+        (186, "Canon EF 70-200mm f/4L USM"),
+        (50, "Canon EF-S 18-200mm f/3.5-5.6 IS"),
+        (4142, "Canon EF-S 18-135mm f/3.5-5.6 IS STM"),
+        (65535, "n/a"),
     ];
 
-    for (lens_id, expected_name, pm_line) in test_lenses {
+    for (lens_id, expected_name) in test_lenses {
         let result = lookup_lens_name(lens_id);
-        assert!(
-            result.is_some(),
-            "Lens ID {} should be in database (Canon.pm:{})",
-            lens_id,
-            pm_line
-        );
-        assert_eq!(
-            result.unwrap(),
-            expected_name,
-            "Lens ID {} disagrees with Canon.pm:{}",
-            lens_id,
-            pm_line
-        );
+        assert!(result.is_some(), "Lens ID {lens_id} should be in database");
+        assert_eq!(result.unwrap(), expected_name, "Lens ID {lens_id}");
     }
 }
