@@ -198,6 +198,7 @@ STATIC_ARTIFACTS = (
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
     Artifact("xmp-priority-capture", 2, "capture_xmp_priorities", "tools/exiftool-tables/fixtures/xmp_priorities.json"),
     Artifact("xmp-priority-rust", 2, "xmp_priority_specs", "src/parsers/xmp/generated_priorities.rs"),
+    Artifact("canon-lens-fixture", 2, "gen_runtime_lens_types", "tools/exiftool-tables/fixtures/canon_lens_types.json"),
     Artifact("xmp-lens-maps", 2, "gen_xmp_lens_maps", "src/composite/xmp_lens_maps.rs"),
     Artifact("plus-media-matrix", 2, "gen_plus_media_matrix", "src/parsers/xmp/generated_plus_media_matrix.rs"),
     Artifact("iptc-dataset-facts", 2, "gen_iptc_dataset_facts", "src/parsers/jpeg/generated_iptc_dataset_facts.rs"),

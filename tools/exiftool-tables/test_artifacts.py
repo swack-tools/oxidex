@@ -20,8 +20,8 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
-        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 93)
-        self.assertEqual(len(all_items), 94 + members)
+        self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 94)
+        self.assertEqual(len(all_items), 95 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="png_shift_contract")},
                          {"png-shift-contract"})
         self.assertEqual({item.key for item in artifacts.select(producer="scene_type_inverse_codegen")},
@@ -35,6 +35,8 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual({item.key for item in artifacts.select(producer="conv_codegen")},
                          {"conv-registry", "conv-exif-main", "conv-exif-main-ledger",
                           "conv-exif-main-worklist"})
+        self.assertEqual({item.key for item in artifacts.select(producer="gen_runtime_lens_types")},
+                         {"canon-lens-fixture"})
         self.assertEqual({item.key for item in artifacts.select(producer="gen_xmp_lens_maps")},
                          {"xmp-lens-maps"})
         self.assertEqual({item.key for item in artifacts.select(producer="font_language_specs")},
@@ -43,7 +45,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual({item.key for item in artifacts.select(producer="gen_iptc_dataset_facts")},
                          {"iptc-dataset-facts"})
         self.assertEqual(len(artifacts.select(1)), 61 + members)
-        self.assertEqual(len(artifacts.select(2)), 33)
+        self.assertEqual(len(artifacts.select(2)), 34)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual({item.key for item in artifacts.select(producer='gen_tag_registry')},
                          {f'registry-{domain}' for domain in

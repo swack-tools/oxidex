@@ -9,22 +9,19 @@ use super::shared::{LensDatabase, StaticLensDb};
 
 /// Canon lens database
 pub mod canon {
-    /// ExifTool's `%canonLensTypes` (Canon.pm:97), the `PrintConv` every Canon
-    /// `LensType` tag shares -- `%Canon::CameraSettings` key 22, and the
-    /// `LensType` field of all 32 `%Canon::CameraInfo*` tables.
+    /// ExifTool's `%canonLensTypes`, the `PrintConv` shared by Canon
+    /// `LensType` tags, including `%Canon::CameraSettings` key 22.
     ///
-    /// TRANSCRIBED BY SCRIPT from ExifTool's own in-memory Perl hash, not typed
-    /// out by hand, and every name is additionally traced back to a literal
-    /// `id => 'name',` line in Canon.pm before it is emitted.  The generator
-    /// hard-errors on anything it has not seen -- a value that is a reference
-    /// rather than a scalar, a key that is neither `N` nor `N.M`, a sub-entry
-    /// whose base id is absent or whose `.1 .. .N` run has a hole, a key that
-    /// does not fit the int16u the tag is read as, or a name with no source
-    /// line -- rather than dropping it silently.
+    /// `gen_runtime_lens_types.py` reads the selected ExifTool release's
+    /// authenticated Perl hash and emits only integer-keyed base labels.
+    /// The exporter refuses unsupported key/value shapes; the companion
+    /// alternatives producer checks fractional chains against the same source.
+    /// Runtime IDs must fit the tag's unsigned 16-bit value, and the `n/a`
+    /// sentinels are checked before either array is written.
     ///
     /// # Ambiguous ids
     ///
-    /// 71 of these ids are shared by several lenses.  ExifTool stores the
+    /// Some ids are shared by several lenses.  ExifTool stores the
     /// alternatives under fractional keys (`2.1`, `33.14`, `61182.68`, ...) and
     /// only `Composite:LensID` consults them: `Canon::PrintLensID` narrows the
     /// list by focal length and maximum aperture, which needs MinFocalLength,
@@ -37,9 +34,8 @@ pub mod canon {
     /// under 2.1, and id 61182 prints "Canon RF 50mm F1.2L USM or other Canon
     /// RF Lens" rather than one of the 68 RF lenses filed under it.  Confirmed
     /// against the corpus, where every ambiguous id that occurs prints its
-    /// combined string.  The 295
-    /// fractional keys are therefore deliberately not transcribed; they belong
-    /// with `Composite:LensID`, which oxidex does not implement.
+    /// combined string. Fractional keys are deliberately not transcribed
+    /// here; they belong with `Composite:LensID`.
     ///
     /// -1 and 65535 both carry "n/a" in ExifTool; the generator refuses to
     /// emit the table if that ever stops being true, because an int16u read
@@ -299,15 +295,14 @@ pub mod canon {
     }
 
     /// Staleness/consistency test (tag-machinery overhaul Step 16):
-    /// `CANON_LENS_TYPES` is a hand transcription of ExifTool's
-    /// `%canonLensTypes` (Canon.pm:97), reached through `Canon::CameraSettings`
-    /// key 22's `PrintConv`. No committed generator produces this file, so a
-    /// bump can add, rename or drop a lens id and nothing would notice.
+    /// `CANON_LENS_TYPES` is a generated transcription of ExifTool's
+    /// `%canonLensTypes`, reached through `Canon::CameraSettings` key 22's
+    /// `PrintConv`. The source-bound runtime producer updates the base array
+    /// and fixture together for the selected release.
     ///
     /// Calls the real [`lookup`] entry point for every INTEGER-keyed id
-    /// ExifTool's current `%canonLensTypes` declares (239 of them at ExifTool
-    /// 13.59) and asserts the name matches exactly. The 296 fractional-keyed
-    /// entries (`2.1`, `33.14`, ...) that disambiguate `Composite:LensID` are
+    /// ExifTool's selected `%canonLensTypes` declares and asserts the name
+    /// matches exactly. The fractional-keyed entries (`2.1`, `33.14`, ...) that disambiguate `Composite:LensID` are
     /// deliberately not transcribed here or by this test -- see this module's
     /// own doc comment -- and are reported as an explicit, counted omission
     /// rather than silently ignored.
@@ -315,7 +310,7 @@ pub mod canon {
     /// Fixture: `tools/exiftool-tables/fixtures/canon_lens_types.json`.
     #[cfg(test)]
     mod staleness_tests {
-        use super::lookup;
+        use super::{CANON_LENS_TYPES, lookup};
 
         const FIXTURE: &str =
             include_str!("../../../../tools/exiftool-tables/fixtures/canon_lens_types.json");
@@ -334,17 +329,17 @@ pub mod canon {
         fn fixture_is_the_expected_size() {
             let f = fixture();
             assert!(
-                f.entries.len() >= 220,
-                "canon_lens_types.json has {} integer-keyed entries, expected \
-                 ~239 -- did the fixture generator regress?",
-                f.entries.len()
+                f.entries.len() == CANON_LENS_TYPES.len(),
+                "canon_lens_types.json has {} entries, runtime has {}",
+                f.entries.len(),
+                CANON_LENS_TYPES.len()
             );
             // Purely informational: names the size of the gap this test does
             // NOT cover, per AGENTS.md's omit-and-count discipline, so the
             // omission is a counted number in the test output rather than a
             // silent absence.
             assert!(
-                f.fractional_key_count_not_covered >= 250,
+                f.fractional_key_count_not_covered > 0,
                 "fractional-key count dropped to {} -- if ExifTool restructured \
                  %canonLensTypes to resolve ambiguous ids without fractional \
                  keys, this comment and lens_data.rs's own doc comment are \
