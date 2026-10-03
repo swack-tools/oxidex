@@ -79,6 +79,21 @@ class LedgerTests(unittest.TestCase):
         return conformance.transcript_row(
             "/staged/0000.xml", oracle, candidate, conformance.compare(oracle, candidate))
 
+    def test_counts_embedded_identity_names_as_xmp_xml_payload(self):
+        oracle = {
+            "XMP:XMP-File:Copy1:FileType": "JPEG",
+            "XMP:XMP-File:Copy1:FileTypeExtension": "jpg",
+            "XMP:XMP-File:Copy1:MIMEType": "image/jpeg",
+            "XML:XML-File:Copy1:FileType": "JPEG",
+            "XML:XML-File:Copy1:MIMEType": "image/jpeg",
+            "File:FileType": "XML",
+            "File:MIMEType": "application/xml",
+            "XML:XML-File:Warning": "not payload",
+        }
+        result = policy.occurrence_ledger(self.fixture, oracle, {},
+                                          self.transcript(oracle, {}), native_status=0)
+        self.assertEqual(result["payload_occurrences"], 5)
+
     def test_records_both_matched_full_oracle_keys_and_multiplicity(self):
         oracle = {"EXIF:IFD0:Copy1:CreateDate": "2020:01:01",
                   "EXIF:ExifIFD:Copy1:CreateDate": "2021:01:01"}
@@ -255,6 +270,67 @@ class PairTests(unittest.TestCase):
                                     "previously matched native-supported read"):
             self.replay(before, after, mode="historical")
 
+    def test_new_native_warning_value_paired_with_standing_candidate_warning(self):
+        stable = {"EXIF:IFD0:Make": "Pentax"}
+        warning = "iptcdigest is not current"
+        candidate = {"IFD0:Make": "Pentax",
+                     "File:Warning": "failed to parse jfxx extension"}
+        before = self.ledger(stable, candidate)
+        after = self.ledger({**stable, "ExifTool:Warning": warning}, candidate)
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": "ExifTool:Warning", "before": None,
+                     "after": warning, "reason": "native-version"}]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["diagnostic_gaps"][-1]["kind"], "value")
+        self.assertEqual(result["diagnostic_gaps"][-1]["name"], "Warning")
+
+    def test_changed_native_warning_requires_exact_change_evidence(self):
+        old = {"EXIF:IFD0:Make": "Pentax", "ExifTool:Warning": "old diagnostic"}
+        new = {"EXIF:IFD0:Make": "Pentax", "ExifTool:Warning": "new diagnostic"}
+        candidate = {"IFD0:Make": "Pentax"}
+        before = self.ledger(old, candidate)
+        after = self.ledger(new, candidate)
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": "ExifTool:Warning", "before": "old diagnostic",
+                     "after": "new diagnostic", "reason": "native-version"}]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(len(result["diagnostic_gaps"]), 2)
+        self.assertEqual(result["native_delta"][0]["oracle_key"], "ExifTool:Warning")
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, after, mode="historical")
+
+    def test_successful_native_warning_is_diagnostic_only_in_exiftool_group(self):
+        stable = {"EXIF:IFD0:Make": "Pentax"}
+        native = {**stable, "ExifTool:Warning": "new parser warning"}
+        before = self.ledger(stable, {"IFD0:Make": "Pentax"})
+        after = self.ledger(native, {"IFD0:Make": "Pentax"})
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": "ExifTool:Warning", "before": None,
+                     "after": "new parser warning", "reason": "native-version"}]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["diagnostic_gaps"][-1]["name"], "Warning")
+        self.assertEqual(result["standing"]["missing"], 0)
+        with self.assertRaisesRegex(policy.ReadPolicyRefused,
+                                    "new candidate warning is unclassified"):
+            self.replay(before, self.ledger(native, {"IFD0:Make": "Pentax",
+                        "File:Warning": "candidate-only warning"}), mode="historical",
+                        native_change_evidence=evidence)
+        matched_warning = self.ledger(native, {"IFD0:Make": "Pentax",
+                                              "ExifTool:Warning": "new parser warning"})
+        self.assertEqual(self.replay(before, matched_warning, mode="historical",
+                                     native_change_evidence=evidence)["status"], "passed")
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, self.ledger({**stable, "File:Warning":
+                        "new parser warning"}, {"IFD0:Make": "Pentax"}),
+                        mode="historical", native_change_evidence=[
+                            {**evidence[0], "oracle_key": "File:Warning"}])
+
     def test_native_error_diagnostic_gap_has_no_credit_but_retention_refuses(self):
         def manifest_two(side):
             return manifest((f"/{side}/t/images/legacy.bin", "b" * 64, 10),
@@ -318,6 +394,118 @@ class PairTests(unittest.TestCase):
         with self.assertRaises(policy.ReadPolicyRefused):
             self.replay(before, after, mode="historical",
                         native_change_evidence=[{**evidence[0], "reason": "native-version"}])
+
+    def test_historical_classifies_duplicate_new_native_class_without_key_attribution(self):
+        old = {"EXIF:IFD0:Make": "Pentax"}
+        new = {**old, "EXIF:IFD0:Copy1:Model": "Optio",
+               "EXIF:ExifIFD:Copy1:Model": "Optio"}
+        before = self.ledger(old, {"IFD0:Make": "Pentax"})
+        after = self.ledger(new, {"IFD0:Make": "Pentax", "IFD0:Model": "Optio"})
+        keys = ["EXIF:ExifIFD:Copy1:Model", "EXIF:IFD0:Copy1:Model"]
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": key, "before": None, "after": "optio",
+                     "reason": "native-new-unread-class"} for key in keys]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["newly_supported_unread"], [{
+            "kind": "native-new-unread-class", "logical_name": "XMP.xml",
+            "fixture_sha256": "f" * 64, "group": "EXIF", "name": "Model",
+            "value": "optio", "native_keys": keys, "native_count": 2,
+            "matched_count": 1, "missing_keys": ["EXIF:Model"]}])
+        self.assertEqual(result["new_losses"], [])
+        wrong = self.ledger(new, {"IFD0:Make": "Pentax", "IFD0:Model": "Wrong"})
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, wrong, mode="historical",
+                        native_change_evidence=evidence)
+
+    def test_historical_profile_value_change_gains_a_match_without_new_gap(self):
+        keys = ["QuickTime:Profile1:GeneralProfileIDC",
+                "QuickTime:Profile2:GeneralProfileIDC"]
+        old = {key: "Main Profile" for key in keys}
+        new = {key: "Main" for key in keys}
+        before = self.ledger(old, {"QuickTime:GeneralProfileIDC": "Main"})
+        after = self.ledger(new, {"QuickTime:GeneralProfileIDC": "Main"})
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": key, "before": "main profile", "after": "main",
+                     "reason": "native-version"} for key in keys]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["standing"]["value_diff"], 1)
+        self.assertEqual(result["newly_supported_unread"], [])
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, self.ledger(new, {"QuickTime:GeneralProfileIDC": "wrong"}),
+                        mode="historical", native_change_evidence=evidence)
+
+    def test_historical_accepts_key_swap_between_unchanged_classes(self):
+        first = "XML:Crop"
+        second = "XML:Copy1:Crop"
+        old = {first: "zero", second: "nonzero"}
+        new = {first: "nonzero", second: "zero"}
+        candidate = {"Crop": "nonzero"}
+        before = self.ledger(old, candidate)
+        after = self.ledger(new, candidate)
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": key, "before": old[key], "after": new[key],
+                     "reason": "native-version"} for key in sorted(old)]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["standing"]["matched"], 1)
+        self.assertEqual(result["newly_supported_unread"], [])
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, self.ledger(new, {}), mode="historical",
+                        native_change_evidence=evidence)
+
+    def test_historical_preserves_partial_duplicate_credit_on_whole_class_value_change(self):
+        keys = [f"QuickTime:Track{i}:Copy{i}:MediaCreateDate" for i in range(1, 5)]
+        old = {key: "2018:02:21 12:08:56" for key in keys}
+        new = {key: "2018:02:21 06:08:56-06:00" for key in keys}
+        before = self.ledger(old, {"Track1:MediaCreateDate": "2018:02:21 12:08:56"})
+        after = self.ledger(new, {"Track1:MediaCreateDate": "2018:02:21 06:08:56-06:00"})
+        evidence = [{"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+                     "oracle_key": key, "before": "2018:02:21 12:08:56",
+                     "after": "2018:02:21 06:08:56-06:00", "reason": "native-version"}
+                    for key in keys]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["newly_supported_unread"], [])
+        self.assertEqual(result["standing"]["matched"], 1)
+        for candidate in ({}, {"Track1:MediaCreateDate": "wrong"},
+                          {"Track1:MediaCreateDate": "2018:02:21 12:08:56"}):
+            with self.subTest(candidate=candidate), self.assertRaises(policy.ReadPolicyRefused):
+                self.replay(before, self.ledger(new, candidate), mode="historical",
+                            native_change_evidence=evidence)
+        split = dict(new)
+        split[keys[-1]] = "2018:02:21 12:08:56"
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, self.ledger(split, {"Track1:MediaCreateDate":
+                        "2018:02:21 06:08:56-06:00"}), mode="historical",
+                        native_change_evidence=evidence)
+
+    def test_historical_accepts_identical_canonical_class_after_native_rekey(self):
+        old = {"CanonVRD:CropRotation": "13.08"}
+        new = {"CanonVRD:CanonDR4:CropRotation": "13.08"}
+        candidate = {"CanonDR4:CropRotation": 0}
+        before = self.ledger(old, candidate)
+        after = self.ledger(new, candidate)
+        evidence = [
+            {"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+             "oracle_key": "CanonVRD:CropRotation", "before": "13.08", "after": None,
+             "reason": "native-version"},
+            {"logical_name": "XMP.xml", "fixture_sha256": "f" * 64,
+             "oracle_key": "CanonVRD:CanonDR4:CropRotation", "before": None,
+             "after": "13.08", "reason": "native-version"},
+        ]
+        result = self.replay(before, after, mode="historical",
+                             native_change_evidence=evidence)
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["newly_supported_unread"], [])
+        self.assertEqual(result["standing"]["value_diff"], 1)
+        with self.assertRaises(policy.ReadPolicyRefused):
+            self.replay(before, self.ledger(new, {}), mode="historical",
+                        native_change_evidence=evidence)
 
     def test_historical_requires_correct_changed_native_value_and_classification(self):
         old = {"EXIF:IFD0:Make": "Pentax"}
