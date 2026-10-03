@@ -966,18 +966,27 @@ def _read_policy_classifications(before: list[dict[str, Any]], after: list[dict[
             raise Refused("paired occurrence ledgers differ in frozen carrier order")
         old_native = read_policy._keyed_values(old["native"], old["native_status"])
         new_native = read_policy._keyed_values(new["native"], new["native_status"])
+        old_changes = {**old_native, **read_policy._keyed_warnings(
+            old["native"], old["native_status"])}
+        new_changes = {**new_native, **read_policy._keyed_warnings(
+            new["native"], new["native_status"])}
+        old_classes = read_policy._class_index(old)
         new_classes = read_policy._class_index(new)
-        for oracle_key in sorted(old_native.keys() | new_native.keys()):
-            prior, later = old_native.get(oracle_key), new_native.get(oracle_key)
+        for oracle_key in sorted(old_changes.keys() | new_changes.keys()):
+            prior, later = old_changes.get(oracle_key), new_changes.get(oracle_key)
             if prior == later:
                 continue
             reason = "native-version"
-            if prior is None and later is not None:
+            if prior is None and later is not None and oracle_key in new_native:
                 native_row = next(row for row in new["native"] if row["oracle_key"] == oracle_key)
                 member_class = new_classes[(native_row["group"], native_row["name"], later)]
                 if (member_class["matched_count"] < member_class["native_count"]
                         and read_policy._exact_missing_key(new, native_row) is not None):
                     reason = "native-new-unread"
+                elif (member_class["matched_count"] < member_class["native_count"]
+                      and read_policy._new_unread_class(
+                          new, member_class, old_native, old_classes) is not None):
+                    reason = "native-new-unread-class"
             native_evidence.append({"logical_name": fixture["logical_name"],
                                     "fixture_sha256": fixture["sha256"],
                                     "oracle_key": oracle_key, "before": prior,
