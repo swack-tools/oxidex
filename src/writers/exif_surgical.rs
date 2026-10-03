@@ -8079,11 +8079,22 @@ mod tests {
     #[test]
     fn declared_ieee_field_type_separates_float_from_double() {
         // Exif.pm: 0xCD49 JXLDistance is `Writable => 'float'`.
-        assert_eq!(declared_ieee_field_type("IFD0:JXLDistance"), Some(11));
+        let expected_jxl_distance = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" | "12.64" => None,
+            "13.59" => Some(11),
+            pin => panic!("unverified JXLDistance declaration for ExifTool {pin}"),
+        };
+        assert_eq!(
+            declared_ieee_field_type("IFD0:JXLDistance"),
+            expected_jxl_distance
+        );
         // Exif.pm: 0xC7A8 RawToPreviewGain is `Writable => 'double'`.
         assert_eq!(declared_ieee_field_type("IFD0:RawToPreviewGain"), Some(12));
         // The EXIF: spelling resolves identically to the IFD0: one.
-        assert_eq!(declared_ieee_field_type("EXIF:JXLDistance"), Some(11));
+        assert_eq!(
+            declared_ieee_field_type("EXIF:JXLDistance"),
+            expected_jxl_distance
+        );
         // A non-float tag declares no IEEE width and leaves the default alone.
         assert_eq!(declared_ieee_field_type("IFD0:Orientation"), None);
     }

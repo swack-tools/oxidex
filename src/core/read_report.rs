@@ -173,6 +173,16 @@ pub struct ReadReport {
 }
 
 impl ReadReport {
+    /// A CZI file cannot serve binary payloads without its generated header table.
+    /// Surface this named refusal before binary rendering can turn it into
+    /// an empty successful response.
+    pub fn missing_czi_table(&self) -> Option<&str> {
+        self.diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("missing ZISRAW::Main table"))
+            .map(|diagnostic| diagnostic.message.as_str())
+    }
+
     /// Discards `status` and `diagnostics`, keeping only the metadata.
     pub fn into_metadata(self) -> MetadataMap {
         self.metadata

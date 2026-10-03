@@ -147,13 +147,15 @@ fn test_canon_lens_database_integration() {
         lookup_lens_name(368),
         Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
     );
-    // Canon.pm:583  `61182 => 'Canon RF 50mm F1.2L USM or other Canon RF Lens',`
+    // Canon lens 61182's base name changed between the supported source pins.
     // Every RF lens reports this one id; ExifTool files the individual models
     // under 61182.1-61182.68 and only resolves them for Composite:LensID.
-    assert_eq!(
-        lookup_lens_name(61182),
-        Some("Canon RF 50mm F1.2L USM or other Canon RF Lens".to_string())
-    );
+    let expected_61182 = match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => "Canon RF 35mm F1.8 Macro IS STM or other Canon RF Lens",
+        "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",
+        pin => panic!("unverified Canon lens 61182 for ExifTool {pin}"),
+    };
+    assert_eq!(lookup_lens_name(61182), Some(expected_61182.to_string()));
     // Ids the table does not carry must stay absent rather than borrow a
     // neighbour's name. 61183-61193 were eleven invented RF entries.
     assert_eq!(lookup_lens_name(61183), None);
@@ -176,6 +178,11 @@ fn test_lens_database_coverage() {
     use oxidex::parsers::tiff::makernotes::canon_lens_database::lookup_lens_name;
 
     // Test coverage of major lens categories
+    let expected_61182 = match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => "Canon RF 35mm F1.8 Macro IS STM or other Canon RF Lens",
+        "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",
+        pin => panic!("unverified Canon lens 61182 for ExifTool {pin}"),
+    };
     let test_lenses = vec![
         // (id, name, Canon.pm line the name is copied from)
         (4156, "Canon EF 50mm f/1.8 STM", 561),
@@ -184,7 +191,7 @@ fn test_lens_database_coverage() {
             "Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens",
             480,
         ),
-        (61182, "Canon RF 50mm F1.2L USM or other Canon RF Lens", 583),
+        (61182, expected_61182, 583),
         (186, "Canon EF 70-200mm f/4L USM", 390),
         (50, "Canon EF-S 18-200mm f/3.5-5.6 IS", 201),
         (4142, "Canon EF-S 18-135mm f/3.5-5.6 IS STM", 547),

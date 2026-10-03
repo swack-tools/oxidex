@@ -11678,6 +11678,11 @@ mod rw2_embedded_exif_printconv_tests {
     #[test]
     fn rw2_preview_a411_a412_use_generated_exif_main_print_conv() {
         let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+        if matches!(crate::exiftool_tables::EXIFTOOL_VERSION, "11.78" | "12.64") {
+            assert!(table.tag(0xA411).is_none());
+            assert!(table.tag(0xA412).is_none());
+            return;
+        }
         for (id, name) in [(0xA411, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
             let row = table.tag(id).unwrap();
             assert_eq!(row.name, name);

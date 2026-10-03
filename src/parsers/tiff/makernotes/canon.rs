@@ -9592,10 +9592,12 @@ mod tests {
         // Canon.pm:583  `61182 => 'Canon RF 50mm F1.2L USM or other Canon RF Lens',`
         // The 68 RF lenses ExifTool files under 61182.1-61182.68 all report this
         // id; none of them has an id of its own.
-        assert_eq!(
-            parser.lookup_lens(61182),
-            Some("Canon RF 50mm F1.2L USM or other Canon RF Lens".to_string())
-        );
+        let expected = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => "Canon RF 35mm F1.8 Macro IS STM or other Canon RF Lens",
+            "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",
+            pin => panic!("unverified Canon lens 61182 for ExifTool {pin}"),
+        };
+        assert_eq!(parser.lookup_lens(61182), Some(expected.to_string()));
 
         // Canon.pm:652  `65535 => 'n/a',` - what a body with no lens reports.
         assert_eq!(parser.lookup_lens(65535), Some("n/a".to_string()));

@@ -219,9 +219,51 @@ fn czi_xml_extracts_native_source_block() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/czi/pinned.czi"
     ));
+    let has_table = oxidex::exiftool_tables::find_table("ZISRAW", "Main").is_some();
+    match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => assert!(!has_table, "11.78 has no native ZISRAW source"),
+        "12.64" | "13.59" => assert!(has_table, "capable pin lost ZISRAW::Main"),
+        pin => panic!("unverified CZI source capability for ExifTool {pin}"),
+    }
     let output = run(&["-b", "-XML"], path);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
+    if has_table {
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
+    } else {
+        assert!(!output.status.success(), "missing CZI table must refuse -b");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+fn czi_missing_table_never_leaves_partial_multi_file_binary_output() {
+    if oxidex::exiftool_tables::EXIFTOOL_VERSION != "11.78" {
+        return;
+    }
+    let valid = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/icc/red_trc_apple.icc"
+    ));
+    let czi = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-b", "-RedTRC", "-XML"])
+        .arg(valid)
+        .arg(czi)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+        "{output:?}"
+    );
 }
 
 #[test]
