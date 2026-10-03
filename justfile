@@ -106,9 +106,16 @@ build:
     cargo build --workspace
 
 # Build the project in release mode (matches CI configuration)
-build-release: cbindgen-check
+build-release-local: cbindgen-check
     @echo "Building project (release, matching CI)..."
     cargo build --release --all-features
+
+# Select the least-used eligible remote builder and download a Linux binary.
+build-debug:
+    cargo remote-debug
+
+build-release:
+    cargo remote-release
 
 # Build just the binary
 build-bin:

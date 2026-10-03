@@ -176,3 +176,6 @@ comparison.json
 # it is per-session state and would conflict across parallel step branches.
 OVERHAUL_PROGRESS.md
 HANDOFF.md
+
+# Local remote-builder infrastructure checkout
+/spot-github-runners/

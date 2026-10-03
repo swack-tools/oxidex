@@ -120,6 +120,93 @@ just lint     # Run clippy linter
 just fmt      # Format code
 ```
 
+## Remote Linux builds
+
+`just build-debug` and `just build-release` select a running remote builder
+using CPU and memory metrics, synchronize tracked working files over SSH, and
+build in a dedicated unprivileged container. These builds are independent of
+GitHub Actions jobs. The downloaded, checksum-verified Linux binaries are saved
+under `target/remote-linux/debug/oxidex` and `target/remote-linux/release/oxidex`.
+They cannot run natively on macOS. Use `just build-release-local` for the local
+all-features release build.
+
+### Install the remote-build commands
+
+The scripts live in [spot-github-runners](https://github.com/swack-tools/spot-github-runners),
+not in the operations evidence directory. From the OxiDex checkout, clone the
+infrastructure repository locally if you do not already have it. The remote
+build tooling is currently on the feature branch shown below:
+
+```bash
+git clone --branch codex/resource-scaling-remote-rust-builds \
+  git@github.com:swack-tools/spot-github-runners.git spot-github-runners
+python3 spot-github-runners/src/install_remote_commands.py
+```
+
+Alternatively, install from an existing sibling checkout:
+
+```bash
+python3 ../spot-instance-gha-runners/src/install_remote_commands.py
+```
+
+Installation writes small `cargo-oxidex-auto` and `cargo-oxidex-remote` shims into
+`$CARGO_HOME/bin` (default `~/.cargo/bin`). The shims execute scripts directly
+from the chosen Git checkout; keep it in place and put the bin directory on
+`PATH`. `.cargo/config.toml` provides the `remote-debug`, `remote-release`, and
+`remote-build` aliases. Its non-secret `OXIDEX_REMOTE_PROJECT` setting selects
+the GCP project (default: the active gcloud project);
+`OXIDEX_REMOTE_WORKTREE` selects the persistent source/target cache identifier
+(default: a unique identifier derived from the local checkout path). Give each local checkout a distinct worktree identifier.
+Automatic builds override the instance and zone for that invocation. Direct
+`cargo remote-build` uses the configured instance and zone. These settings may
+be environment variables or local `.cargo/config.toml` `[env]` entries; no
+personal VM identity or credential is checked into the command aliases.
+
+```bash
+export OXIDEX_REMOTE_PROJECT=YOUR_PROJECT
+just build-debug
+just build-release
+
+# Optional: use a specific worker instead of automatic selection.
+export OXIDEX_REMOTE_INSTANCE=YOUR_INSTANCE
+export OXIDEX_REMOTE_ZONE=YOUR_ZONE
+cargo remote-build --profile debug
+```
+
+### Credentials and VM setup
+
+Install Python 3.11+, Git, Cargo, just, Google Cloud CLI (`gcloud`), and GitHub
+CLI (`gh`). Authenticate GCP locally with `gcloud auth login` and select the
+project with `gcloud config set project YOUR_PROJECT`. The account needs Compute
+Engine VM/disk provisioning and SSH access plus Monitoring read access. Configure
+the project APIs and quotas according to the runner repository's README.
+
+For provisioning GitHub runners, copy `.env.example` to `.env` **inside the
+runner repository** and set `GH_TOKEN` to a renewable credential with organization
+self-hosted-runner management permission and access to the selected repository.
+A classic PAT needs `admin:org`; a fine-grained credential needs organization
+self-hosted runners read/write permission. The runner group must allow OxiDex.
+The manager creates short-lived registration tokens; do not store those tokens
+in `.env`, Cargo configuration, or an image. `GOOGLE_CLOUD_API_KEY` is optional
+for Billing Catalog lookups; `GCP_BILLING_EXPORT_TABLE` is optional for cost
+reporting. Never commit `.env`, GitHub credentials, or SSH private keys.
+
+Provision hosts with `--remote-builder --resource-monitoring` in
+`src/spot_runner_manager.py`; preview first and use `--apply` to provision.
+The autoscaler enables the builder by default. The VM service account needs
+`roles/monitoring.metricWriter` and the Monitoring write OAuth scope so the
+metrics-only Ops Agent can publish memory utilization. CPU utilization uses
+Compute Engine's built-in metric. Authenticated `gcloud compute ssh` must work;
+GCP manages the SSH access path, with no SSH server inside the build container.
+
+Building on an existing worker needs GCP/SSH/Monitoring access; it does not need
+a GitHub token. Selection considers running `oxidex-runners-*` and
+`oxidex-buildbench-*` hosts with complete recent metrics, CPU and memory both
+below 75%, an installed builder, and no active remote build or drain marker.
+It ranks by the higher utilization fraction. If none qualifies, retry later.
+The availability probe does not reserve a VM for concurrent clients. Build
+receipts and timing logs remain under `$HOME/oxidex-ops/evidence/`.
+
 ## Contributing
 
 Contributions are welcome. Before contributing, ensure:

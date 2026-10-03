@@ -32,3 +32,9 @@ rustflags = ["-C", "strip=none", "-C", "link-arg=-Wl,-S,-x"]
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "strip=none", "-C", "link-arg=-Wl,-S,-x"]
+
+# Dedicated remote Linux worker commands from spot-github-runners.
+[alias]
+remote-build = "oxidex-remote"
+remote-debug = "oxidex-auto --profile debug"
+remote-release = "oxidex-auto --profile release"
