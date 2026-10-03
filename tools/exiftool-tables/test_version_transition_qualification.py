@@ -879,6 +879,31 @@ class ReadUnionTests(unittest.TestCase):
                                                 f"{missing_stage}.*raw command report"):
                         qualification._replay_committed_read_snapshot(row, "before", root)
 
+    def test_duplicate_new_class_classification_does_not_assign_a_matched_key(self) -> None:
+        fixture = {"logical_name": "XMP.xml", "sha256": "f" * 64, "bytes": 100,
+                   "sources": {"before": "/old/t/images/XMP.xml",
+                               "after": "/new/t/images/XMP.xml"}}
+        before_native = {"EXIF:IFD0:Make": "Pentax"}
+        after_native = {**before_native,
+                        "EXIF:IFD0:Copy1:Model": "Optio",
+                        "EXIF:ExifIFD:Copy1:Model": "Optio"}
+        candidate = {"IFD0:Make": "Pentax", "IFD0:Model": "Optio"}
+
+        def ledger(native: dict) -> dict:
+            comparison = qualification.read_policy.conformance.compare(native, candidate)
+            transcript = qualification.read_policy.conformance.transcript_row(
+                "/staged/XMP.xml", native, candidate, comparison)
+            return qualification.read_policy.occurrence_ledger(
+                fixture, native, candidate, transcript, native_status=0)
+
+        native_evidence, artifact_evidence = qualification._read_policy_classifications(
+            [ledger(before_native)], [ledger(after_native)], {}, {})
+        self.assertEqual(artifact_evidence, [])
+        self.assertEqual({row["reason"] for row in native_evidence},
+                         {"native-new-unread-class"})
+        self.assertEqual({row["oracle_key"] for row in native_evidence},
+                         {"EXIF:IFD0:Copy1:Model", "EXIF:ExifIFD:Copy1:Model"})
+
     def test_same_pin_pair_replays_two_authenticated_side_reports(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
