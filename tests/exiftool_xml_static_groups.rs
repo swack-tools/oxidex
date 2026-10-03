@@ -219,3 +219,49 @@ fn static_xmp_family_and_adobe_schema_keep_distinct_value_conversions() {
     ));
     assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }
+
+#[test]
+fn static_uri_groups_and_print_values_are_source_defined() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static URI source parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:e="http://ns.exiftool.org/EXIF/ExifIFD/1.0/" xmlns:g="http://ns.exiftool.org/EXIF/Google/1.0/" xmlns:i="http://ns.exiftool.org/IFD0/Custom/1.0/"><e:FocalLength>50</e:FocalLength><g:Foo>bar</g:Foo><i:Foo>baz</i:Foo></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(theirs["EXIF:ExifIFD:FocalLength"], 50);
+    assert_eq!(theirs["EXIF:Google:Foo"], "bar");
+    assert_eq!(theirs["IFD0:Custom:Foo"], "baz");
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
+fn static_default_does_not_change_colliding_adobe_description() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static/ordinary default collision: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    let long_description = "x".repeat(65_537);
+    let packet = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><q:description>short</q:description><dc:description>{long_description}</dc:description></rdf:Description></rdf:RDF>"#
+    );
+    std::fs::write(file.path(), packet).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1:4"));
+    assert!(theirs.values().any(|value| value == &long_description));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1:4",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}

@@ -218,6 +218,8 @@ pub struct XmpEntry {
     /// Source table/default-property binary declaration, retained separately
     /// from the printed summary so literal text with the same words stays text.
     pub binary_payload_unavailable: bool,
+    /// The RDF property came from an ExifTool static-group namespace URI.
+    pub source_is_static: bool,
 }
 
 impl XmpEntry {
@@ -240,7 +242,13 @@ impl XmpEntry {
             shadowed,
             priority,
             binary_payload_unavailable,
+            source_is_static: false,
         }
+    }
+
+    fn with_static_source(mut self, source_is_static: bool) -> Self {
+        self.source_is_static = source_is_static;
+        self
     }
 
     /// An entry for a tag outside the XMP groups (history, HDR+ makernote),
@@ -254,6 +262,7 @@ impl XmpEntry {
             shadowed: false,
             priority: 1,
             binary_payload_unavailable: false,
+            source_is_static: false,
         }
     }
 
@@ -435,10 +444,7 @@ pub(crate) fn insert_xmp_entry_with_source(
     } else {
         entry.priority
     };
-    if !entry.group1.is_empty()
-        && !entry.group1.starts_with("XMP")
-        && entry.group1 != super::google_hdrp::HDRP_GROUP1
-    {
+    if entry.source_is_static {
         let group0 = entry.key.split_once(':').map_or("", |(group, _)| group);
         metadata.insert_xmp_static_occurrence(
             entry.key.clone(),
@@ -528,6 +534,7 @@ struct ResultOccurrence {
     value: String,
     elements: Option<Vec<String>>,
     path: Option<super::struct_flatten::RawPath>,
+    is_default: bool,
 }
 
 impl ResultOccurrence {
@@ -537,6 +544,7 @@ impl ResultOccurrence {
             value,
             elements: None,
             path: None,
+            is_default: false,
         }
     }
 
@@ -546,12 +554,22 @@ impl ResultOccurrence {
             value: elements.join(", "),
             elements: Some(elements),
             path: None,
+            is_default: false,
         }
     }
 
     fn with_path(mut self, path: super::struct_flatten::RawPath) -> Self {
         self.path = Some(path);
         self
+    }
+
+    fn with_default(mut self, is_default: bool) -> Self {
+        self.is_default = is_default;
+        self
+    }
+
+    fn default_property(&self) -> bool {
+        self.is_default || is_static_path(self.path.as_ref())
     }
 }
 
@@ -814,10 +832,8 @@ fn parse_xmp_packet_in_directory(
 
     let mut resolver = NamespaceResolver::new();
     let mut results: Vec<ResultOccurrence> = Vec::new();
-    // A namespace with no selected ExifTool table gives its properties
-    // `IsDefault`. Capture that at the property's source element, before
-    // prefixes may be rebound later in the packet.
-    let mut default_namespace_tags = std::collections::HashSet::new();
+    // `IsDefault` is carried on each source occurrence, before prefixes can
+    // be rebound or distinct namespaces collapse to the same display name.
     // The same emissions under the keys this reader used before XMP tags
     // carried their namespace group -- see `LegacyResults`.
     let mut legacy = LegacyResults::default();
@@ -900,7 +916,6 @@ fn parse_xmp_packet_in_directory(
                             &resolver,
                             &mut results,
                             &mut legacy,
-                            &mut default_namespace_tags,
                             low_default,
                         )?;
                     }
@@ -978,9 +993,6 @@ fn parse_xmp_packet_in_directory(
                     let prefixed_name = std::mem::take(&mut current_tag);
                     let legacy_name = std::mem::take(&mut current_legacy);
 
-                    if !property_is_struct && current_default_namespace {
-                        default_namespace_tags.insert(prefixed_name.clone());
-                    }
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
@@ -1020,9 +1032,6 @@ fn parse_xmp_packet_in_directory(
                             for (index, value) in collection_values.iter().enumerate() {
                                 let suffix = &suffixes[index];
                                 let tag = format!("{prefixed_name}{suffix}");
-                                if current_default_namespace {
-                                    default_namespace_tags.insert(tag.clone());
-                                }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 legacy.push_priority(&legacy_tag, &tag, value, current_priority);
                                 // Keep every source occurrence for -a; only the
@@ -1033,7 +1042,8 @@ fn parse_xmp_packet_in_directory(
                                 if !results.iter().any(|result| result.tag == tag) {
                                     results.push(
                                         ResultOccurrence::scalar(tag, value.clone())
-                                            .with_path(current_path.clone()),
+                                            .with_path(current_path.clone())
+                                            .with_default(current_default_namespace),
                                     );
                                 }
                             }
@@ -1054,7 +1064,11 @@ fn parse_xmp_packet_in_directory(
                                     collection_values.join(", "),
                                 )
                             };
-                            results.push(result.with_path(current_path.clone()));
+                            results.push(
+                                result
+                                    .with_path(current_path.clone())
+                                    .with_default(current_default_namespace),
+                            );
                         }
                     } else {
                         // Default properties reach FoundXMP with decoded
@@ -1077,7 +1091,8 @@ fn parse_xmp_packet_in_directory(
                         );
                         results.push(
                             ResultOccurrence::scalar(prefixed_name, value.to_string())
-                                .with_path(current_path.clone()),
+                                .with_path(current_path.clone())
+                                .with_default(current_default_namespace),
                         );
                     }
                     current_property = None;
@@ -1129,7 +1144,6 @@ fn parse_xmp_packet_in_directory(
                             &resolver,
                             &mut results,
                             &mut legacy,
-                            &mut default_namespace_tags,
                             low_default,
                         )?;
                     }
@@ -1519,52 +1533,53 @@ fn parse_xmp_packet_in_directory(
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
     // Format scalar values separately from each occurrence's list elements.
-    let mut format_value =
-        |tag: &str, value: &str, record_forms: bool, is_static: bool| -> XmpValue {
-            if !is_static && let Some(forms) = convert_xmp_gps(tag, value) {
-                return XmpValue::Scalar(forms.print);
+    let mut format_value = |tag: &str,
+                            value: &str,
+                            record_forms: bool,
+                            is_static: bool,
+                            is_default: bool|
+     -> XmpValue {
+        if !is_static && let Some(forms) = convert_xmp_gps(tag, value) {
+            return XmpValue::Scalar(forms.print);
+        }
+        if record_forms && !is_static && tag.starts_with("XMP") {
+            if matches!(
+                tag.rsplit(':').next(),
+                Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
+            ) {
+                rational_forms.push((tag.to_string(), value.to_string()));
             }
-            if record_forms && !is_static && tag.starts_with("XMP") {
-                if matches!(
-                    tag.rsplit(':').next(),
-                    Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
-                ) {
-                    rational_forms.push((tag.to_string(), value.to_string()));
-                }
-                // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
-                // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
-                // precision the composites need: BuildCompositeTags hands
-                // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
-                // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
-                // quotient (11109/1000 -> 11.109), never the printed
-                // "11.1 mm". Carry that ValueConv beside the print form --
-                // as the evaluated quotient, not the raw `n/d`, because
-                // (unlike the FocalPlane pair above, whose denominator
-                // Canon.pm:10152-10153 reads back out) nothing needs the
-                // fraction itself, and the quotient is also what
-                // `--no-print-conv` should show. Gated on the source
-                // actually being an `n/d` fraction: a plain-decimal
-                // source has no extra precision to preserve.
-                if matches!(tag.rsplit(':').next(), Some("FocalLength"))
-                    && parse_xmp_rational(value).is_some()
-                {
-                    rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
-                }
-                // A `DJI::XMP` coordinate prints through ToDMS but has no
-                // ValueConv: `exiftool -n` shows the packet's own text
-                // ("+32.0348174", DJI_FC2204.jpg), which is what composites and
-                // `--no-print-conv` must see.
-                if drone_dji_dms_ref(tag).is_some() {
-                    rational_forms.push((tag.to_string(), value.to_string()));
-                }
+            // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
+            // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
+            // precision the composites need: BuildCompositeTags hands
+            // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
+            // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
+            // quotient (11109/1000 -> 11.109), never the printed
+            // "11.1 mm". Carry that ValueConv beside the print form --
+            // as the evaluated quotient, not the raw `n/d`, because
+            // (unlike the FocalPlane pair above, whose denominator
+            // Canon.pm:10152-10153 reads back out) nothing needs the
+            // fraction itself, and the quotient is also what
+            // `--no-print-conv` should show. Gated on the source
+            // actually being an `n/d` fraction: a plain-decimal
+            // source has no extra precision to preserve.
+            if matches!(tag.rsplit(':').next(), Some("FocalLength"))
+                && parse_xmp_rational(value).is_some()
+            {
+                rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
             }
-            XmpValue::Scalar(format_xmp_value_with_default(
-                tag,
-                value,
-                default_namespace_tags.contains(tag),
-                is_static,
-            ))
-        };
+            // A `DJI::XMP` coordinate prints through ToDMS but has no
+            // ValueConv: `exiftool -n` shows the packet's own text
+            // ("+32.0348174", DJI_FC2204.jpg), which is what composites and
+            // `--no-print-conv` must see.
+            if drone_dji_dms_ref(tag).is_some() {
+                rational_forms.push((tag.to_string(), value.to_string()));
+            }
+        }
+        XmpValue::Scalar(format_xmp_value_with_default(
+            tag, value, is_default, is_static,
+        ))
+    };
 
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
@@ -1579,14 +1594,20 @@ fn parse_xmp_packet_in_directory(
                             format_xmp_value_with_default(
                                 &result.tag,
                                 element,
-                                default_namespace_tags.contains(&result.tag),
+                                result.default_property(),
                                 is_static,
                             )
                         })
                         .collect(),
                 )
             } else {
-                format_value(&result.tag, &result.value, true, is_static)
+                format_value(
+                    &result.tag,
+                    &result.value,
+                    true,
+                    is_static,
+                    result.default_property(),
+                )
             };
             (result.tag.clone(), value)
         })
@@ -1624,29 +1645,41 @@ fn parse_xmp_packet_in_directory(
             claimed[index] = true;
             let key = static_key_for_path(results[index].path.as_ref(), tag)
                 .unwrap_or_else(|| legacy_key.clone());
-            entries.push(XmpEntry::new(
-                &key,
-                tag,
-                formatted[index].1.clone(),
-                false,
-                *priority,
-                xmp_binary_source(
+            entries.push(
+                XmpEntry::new(
+                    &key,
                     tag,
-                    &results[index].value,
-                    default_namespace_tags.contains(tag),
-                ),
-            ));
+                    formatted[index].1.clone(),
+                    false,
+                    *priority,
+                    xmp_binary_source(
+                        tag,
+                        &results[index].value,
+                        results[index].default_property(),
+                    ),
+                )
+                .with_static_source(is_static_path(results[index].path.as_ref())),
+            );
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         } else {
             let key = static_key_for_path(path.as_ref(), tag).unwrap_or_else(|| legacy_key.clone());
-            entries.push(XmpEntry::new(
-                &key,
-                tag,
-                format_value(tag, value, false, is_static_path(path.as_ref())),
-                false,
-                *priority,
-                xmp_binary_source(tag, value, default_namespace_tags.contains(tag)),
-            ));
+            entries.push(
+                XmpEntry::new(
+                    &key,
+                    tag,
+                    format_value(
+                        tag,
+                        value,
+                        false,
+                        is_static_path(path.as_ref()),
+                        is_static_path(path.as_ref()),
+                    ),
+                    false,
+                    *priority,
+                    xmp_binary_source(tag, value, is_static_path(path.as_ref())),
+                )
+                .with_static_source(is_static_path(path.as_ref())),
+            );
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         }
     }
@@ -1654,18 +1687,17 @@ fn parse_xmp_packet_in_directory(
         if !claimed[index] {
             let key = static_key_for_path(result.path.as_ref(), &result.tag)
                 .unwrap_or_else(|| legacy.key_for(&result.tag, &result.value));
-            entries.push(XmpEntry::new(
-                &key,
-                &result.tag,
-                formatted[index].1.clone(),
-                true,
-                legacy.priority_for(&result.tag, &result.value),
-                xmp_binary_source(
+            entries.push(
+                XmpEntry::new(
+                    &key,
                     &result.tag,
-                    &result.value,
-                    default_namespace_tags.contains(&result.tag),
-                ),
-            ));
+                    formatted[index].1.clone(),
+                    true,
+                    legacy.priority_for(&result.tag, &result.value),
+                    xmp_binary_source(&result.tag, &result.value, result.default_property()),
+                )
+                .with_static_source(is_static_path(result.path.as_ref())),
+            );
             gps_sources
                 .push(convert_xmp_gps(&result.tag, &result.value).map(|_| result.value.clone()));
         }
@@ -3993,7 +4025,6 @@ fn extract_description_attributes(
     resolver: &NamespaceResolver,
     results: &mut Vec<ResultOccurrence>,
     legacy: &mut LegacyResults,
-    default_namespace_tags: &mut std::collections::HashSet<String>,
     low_default: bool,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
@@ -4058,9 +4089,6 @@ fn extract_description_attributes(
             }
             let prefixed_name = format_tag_name(key, resolver);
             let is_default = has_unregistered_namespace(key, resolver);
-            if is_default {
-                default_namespace_tags.insert(prefixed_name.clone());
-            }
             let legacy_name = legacy_simple_key(key, resolver, &prefixed_name);
             // FoundXMP sees the unescaped attribute value before its
             // >65536-byte IsDefault Binary check (XMP.pm:3650-3696).
@@ -4078,7 +4106,8 @@ fn extract_description_attributes(
             );
             results.push(
                 ResultOccurrence::scalar(prefixed_name, decoded)
-                    .with_path(vec![raw_property(key, resolver)]),
+                    .with_path(vec![raw_property(key, resolver)])
+                    .with_default(is_default),
             );
         }
     }
@@ -8404,6 +8433,7 @@ mod entry_tests {
             shadowed: false,
             priority: 0,
             binary_payload_unavailable: false,
+            source_is_static: false,
         };
         assert_eq!(entry.group1, "XMP-exif");
     }

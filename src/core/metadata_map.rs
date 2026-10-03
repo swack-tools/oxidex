@@ -765,6 +765,9 @@ impl MetadataMap {
         occurrence.priority = 0;
         occurrence.group0 = super::tag_occurrence::intern(group0);
         occurrence.group1 = super::tag_occurrence::intern(group1);
+        // The static URI property has already passed XMPAutoConv. Native
+        // EXIF/MakerNote formatters must not run again under its source label.
+        occurrence.print = Some(occurrence.raw.clone());
         occurrence.is_list = matches!(&occurrence.raw, TagValue::Array(_));
         occurrence.stored = source.map(|text| TagValue::new_string(text.to_owned()));
         occurrence.binary_payload_unavailable = binary_payload_unavailable;

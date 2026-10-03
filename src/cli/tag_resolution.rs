@@ -118,7 +118,11 @@ pub fn family1_label(occurrence: &TagOccurrence) -> &str {
 /// `-G0:1` (NikonCapture.pm:43 and Canon.pm `GROUPS => { 0 => 'MakerNotes'
 /// }`), never `[Nikon:NikonCapture]` or `[Canon:Canon]`.
 pub fn family0_label(occurrence: &TagOccurrence) -> &str {
-    resolve_family0(&occurrence.group0)
+    if occurrence.origin.module == Some("XMP::StaticGroup") {
+        &occurrence.group0
+    } else {
+        resolve_family0(&occurrence.group0)
+    }
 }
 
 /// The label for an arbitrary family number, for `-Gn` display.
