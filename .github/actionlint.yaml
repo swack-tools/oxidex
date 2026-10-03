@@ -5,7 +5,7 @@
 # This lists the labels that are *valid*, not the ones that are appropriate.
 # Which size a given job should use is a separate judgement, argued at each
 # `runs-on:` -- see the comments there. Linux x64 jobs use the `spot` pool;
-# Linux ARM64 jobs use the `oxidex-m4air` runners.
+# ARM64 and macOS jobs use GitHub-hosted runners.
 self-hosted-runner:
   labels:
     # Ubicloud (GitHub App): standard-N = N vCPU x64. Kept for workflows
