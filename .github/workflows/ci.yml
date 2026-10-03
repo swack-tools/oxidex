@@ -39,9 +39,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Runners: ordinary x64 CI jobs use the spot pool. The corpus read gate
-# and table capture use the Linux ARM64 M4 runners directly. GitHub queues
-# jobs when those runners are busy; no runner-status credential is needed.
+# Runners: every CI job, including the corpus read gate and table capture,
+# uses the x64 spot pool. GitHub queues jobs when those runners are busy; no
+# runner-status credential is needed.
 # The per-job
 # "2x/4x/8x" notes and the table below are historical sizing measurements
 # taken on the retired pre-Spot third-party hosted x64 runners (2x=2vCPU/7GB,
@@ -640,7 +640,7 @@ jobs:
   # passed as an artifact so every dependent job checks the same bytes.
   verify-tables-capture:
     name: Verify Generated Tables / capture
-    # Avoid competing with the read measurement on the same M4 host.
+    # Avoid competing with the read measurement on a shared Spot host.
     needs: [read-regression-gate]
     if: ${{ always() && !cancelled() }}
     runs-on: spot
