@@ -769,8 +769,17 @@ impl MetadataMap {
         // EXIF/MakerNote formatters must not run again under its source label.
         occurrence.print = Some(occurrence.raw.clone());
         occurrence.is_list = matches!(&occurrence.raw, TagValue::Array(_));
-        occurrence.stored = source.map(|text| TagValue::new_string(text.to_owned()));
-        occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        // FoundXMP displays oversized default text as Binary, but `-b`
+        // still extracts the original property bytes. The parser retains
+        // that scalar here, so mark it extractable instead of refusing or
+        // returning the display placeholder.
+        if binary_payload_unavailable && source.is_some() {
+            occurrence.stored = source.map(|text| TagValue::Binary(text.as_bytes().to_vec()));
+            occurrence.binary_extract_from_stored = true;
+        } else {
+            occurrence.stored = source.map(|text| TagValue::new_string(text.to_owned()));
+            occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        }
         occurrence.origin.module = Some("XMP::StaticGroup");
         self.sink.record(key, occurrence);
     }
@@ -1337,6 +1346,14 @@ impl MetadataMap {
     /// group/priority-aware request resolution (`cli::tag_resolution`).
     pub(crate) fn winner_occurrences(&self) -> impl Iterator<Item = (&String, &TagOccurrence)> {
         self.sink.winner_occurrences()
+    }
+
+    /// Whether the winning value came from an ExifTool static-group RDF URI.
+    /// Output writers must not apply a native table's name-keyed PrintConv to it.
+    pub(crate) fn is_xmp_static_source(&self, key: &str) -> bool {
+        self.sink
+            .winner_occurrence(key)
+            .is_some_and(|occurrence| occurrence.origin.module == Some("XMP::StaticGroup"))
     }
 
     /// [`MetadataMap::winner_occurrences`] in file order (`TagOccurrence::

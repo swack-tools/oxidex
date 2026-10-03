@@ -376,7 +376,12 @@ pub fn apply(map: &mut MetadataMap) -> usize {
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
-            if static_source_modules.contains(comp.module)
+            // Exif, GPS and XMP composites are available with the core
+            // reader. A static URI may supply their inputs without loading
+            // a format-specific table. Other modules need a native reader
+            // activation, even when a static URI displays their group name.
+            if !matches!(comp.module, "Exif" | "GPS" | "XMP")
+                && static_source_modules.contains(comp.module)
                 && !native_source_modules.contains(comp.module)
             {
                 continue;

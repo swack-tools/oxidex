@@ -212,7 +212,12 @@ impl OutputFormatter for HumanReadableFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
+            let schema_name = if metadata.is_xmp_static_source(tag_name) {
+                ""
+            } else {
+                tag_name.as_str()
+            };
+            let formatted_value = format_tag_value_with_mode(schema_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", tag_name, formatted_value));
         }
 
@@ -274,7 +279,10 @@ impl JsonFormatter {
             let json_value = if no_print_conv {
                 raw_tag_value_to_json(tag_value)
             } else {
-                tag_value_to_json(Some(tag_name.as_str()), tag_value)
+                tag_value_to_json(
+                    (!metadata.is_xmp_static_source(tag_name)).then_some(tag_name.as_str()),
+                    tag_value,
+                )
             };
             json_map.insert(tag_name.clone(), json_value);
         }
@@ -706,7 +714,12 @@ impl OutputFormatter for CsvFormatter {
                 continue;
             }
 
-            let formatted_value = format_tag_value_with_mode(tag_name, tag_value, no_print_conv);
+            let schema_name = if metadata.is_xmp_static_source(tag_name) {
+                ""
+            } else {
+                tag_name.as_str()
+            };
+            let formatted_value = format_tag_value_with_mode(schema_name, tag_value, no_print_conv);
             if wtr.write_record([tag_name, &formatted_value]).is_err() {
                 // Skip this record if write fails, but continue
                 continue;
@@ -790,8 +803,13 @@ impl OutputFormatter for ShortFormatter {
 
             // Extract short name (after last colon)
             let short_name = tag_name.rsplit(':').next().unwrap_or(tag_name);
+            let schema_name = if metadata.is_xmp_static_source(tag_name) {
+                ""
+            } else {
+                tag_name.as_str()
+            };
             let formatted_value =
-                format_tag_value_short_with_mode(tag_name, tag_value, no_print_conv);
+                format_tag_value_short_with_mode(schema_name, tag_value, no_print_conv);
             output.push_str(&format!("{}: {}\n", short_name, formatted_value));
         }
 

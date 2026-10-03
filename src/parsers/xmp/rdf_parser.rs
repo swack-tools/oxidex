@@ -373,7 +373,10 @@ pub(crate) fn insert_xmp_packet_with_context(
 ) -> Result<usize> {
     let (_, entries, _, gps_sources) = parse_xmp_packet_in_directory(xml_bytes, low_default)?;
     for (entry, source) in entries.iter().zip(&gps_sources) {
-        if priority_directory && entry.priority == 0 && entry.group1.starts_with("XMP") {
+        if priority_directory
+            && entry.priority == 0
+            && (entry.group1.starts_with("XMP") || entry.source_is_static)
+        {
             let mut promoted = entry.clone();
             promoted.priority = 1;
             insert_xmp_entry_with_source(
@@ -779,6 +782,15 @@ fn static_key_for_path(path: Option<&super::struct_flatten::RawPath>, tag: &str)
 fn is_static_path(path: Option<&super::struct_flatten::RawPath>) -> bool {
     path.and_then(|path| path.first())
         .is_some_and(|(uri, _)| super::namespace_resolver::exiftool_static_groups(uri).is_some())
+}
+
+fn xmp_source_scalar(
+    tag: &str,
+    raw: &str,
+    source_is_static: bool,
+    is_scalar: bool,
+) -> Option<String> {
+    ((source_is_static && is_scalar) || convert_xmp_gps(tag, raw).is_some()).then(|| raw.to_owned())
 }
 
 fn raw_path_priority(path: &[(String, String)], low_default: bool) -> i16 {
@@ -1619,6 +1631,8 @@ fn parse_xmp_packet_in_directory(
     // What callers store: every tag the reader used to report under its
     // legacy key first, then the rest of `formatted` (see `XmpEntry`).
     let mut entries: Vec<XmpEntry> = Vec::new();
+    // Ordinary XMP needs the scalar for GPS coordinate forms; static-group
+    // properties also need their exact scalar for `-b` extraction.
     let mut gps_sources: Vec<Option<String>> = Vec::new();
     let mut claimed = vec![false; results.len()];
     // Unclaimed `results` indices per (tag, value), earliest first.
@@ -1659,11 +1673,18 @@ fn parse_xmp_packet_in_directory(
                         tag,
                         &results[index].value,
                         results[index].default_property(),
+                        is_static_path(results[index].path.as_ref()),
+                        results[index].elements.is_none(),
                     ),
                 )
                 .with_static_source(is_static_path(results[index].path.as_ref())),
             );
-            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
+            gps_sources.push(xmp_source_scalar(
+                tag,
+                &results[index].value,
+                is_static_path(results[index].path.as_ref()),
+                results[index].elements.is_none(),
+            ));
         } else {
             let key = static_key_for_path(path.as_ref(), tag).unwrap_or_else(|| legacy_key.clone());
             entries.push(
@@ -1679,11 +1700,22 @@ fn parse_xmp_packet_in_directory(
                     ),
                     false,
                     *priority,
-                    xmp_binary_source(tag, value, is_static_path(path.as_ref())),
+                    xmp_binary_source(
+                        tag,
+                        value,
+                        is_static_path(path.as_ref()),
+                        is_static_path(path.as_ref()),
+                        true,
+                    ),
                 )
                 .with_static_source(is_static_path(path.as_ref())),
             );
-            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
+            gps_sources.push(xmp_source_scalar(
+                tag,
+                value,
+                is_static_path(path.as_ref()),
+                true,
+            ));
         }
     }
     for (index, result) in results.iter().enumerate() {
@@ -1697,12 +1729,22 @@ fn parse_xmp_packet_in_directory(
                     formatted[index].1.clone(),
                     true,
                     legacy.priority_for(&result.tag, &result.value),
-                    xmp_binary_source(&result.tag, &result.value, result.default_property()),
+                    xmp_binary_source(
+                        &result.tag,
+                        &result.value,
+                        result.default_property(),
+                        is_static_path(result.path.as_ref()),
+                        result.elements.is_none(),
+                    ),
                 )
                 .with_static_source(is_static_path(result.path.as_ref())),
             );
-            gps_sources
-                .push(convert_xmp_gps(&result.tag, &result.value).map(|_| result.value.clone()));
+            gps_sources.push(xmp_source_scalar(
+                &result.tag,
+                &result.value,
+                is_static_path(result.path.as_ref()),
+                result.elements.is_none(),
+            ));
         }
     }
 
@@ -4494,10 +4536,21 @@ const RAW_BINARY_TAGS: [&str; 3] = [
 /// The selected XMP source declares these scalar values binary before their
 /// public text is formatted. A default property becomes Binary only above
 /// FoundXMP's source-length threshold. Invalid base64 remains ordinary text.
-fn xmp_binary_source(tag: &str, raw: &str, is_default: bool) -> bool {
-    (is_default && raw.len() > 65536)
-        || RAW_BINARY_TAGS.contains(&tag)
-        || (BASE64_DECODED_BINARY_TAGS.contains(&tag) && base64_binary_placeholder(raw).is_some())
+fn xmp_binary_source(
+    tag: &str,
+    raw: &str,
+    is_default: bool,
+    source_is_static: bool,
+    is_scalar: bool,
+) -> bool {
+    // Name-keyed binary declarations belong to Adobe XMP table entries, not
+    // properties from ExifTool's static source URI. FoundXMP still applies
+    // its length limit to an unregistered default property from either source.
+    (is_default && is_scalar && raw.len() > 65536)
+        || (!source_is_static
+            && (RAW_BINARY_TAGS.contains(&tag)
+                || (BASE64_DECODED_BINARY_TAGS.contains(&tag)
+                    && base64_binary_placeholder(raw).is_some())))
 }
 
 /// Renders a base64 XMP property the way ExifTool renders a binary tag.

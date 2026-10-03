@@ -349,16 +349,185 @@ fn static_xmp_title_keeps_mov_priority_directory_promotion() {
         bytes.extend_from_slice(payload);
         bytes
     }
-    let packet = br#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Title>XMP TITLE</q:Title></rdf:Description></rdf:RDF></x:xmpmeta>"#;
-    let mut udta = atom(b"\xa9nam", b"\0\x0c\0\0NATIVE TITLE");
-    udta.extend_from_slice(&atom(b"XMP_", packet));
-    let mut mov = atom(b"ftyp", b"qt  \0\0\0\0qt  ");
-    mov.extend_from_slice(&atom(b"moov", &atom(b"udta", &udta)));
-    let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
-    std::fs::write(file.path(), mov).unwrap();
-    let read_title = |mut command: Command| -> Value {
+    for (uri, title) in [
+        ("http://ns.exiftool.org/XMP/XMP-dc/1.0/", "XMP TITLE"),
+        ("http://ns.exiftool.org/EXIF/IFD0/1.0/", "STATIC EXIF TITLE"),
+    ] {
+        let packet = format!(
+            r#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="{uri}"><q:Title>{title}</q:Title></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut udta = atom(b"\xa9nam", b"\0\x0c\0\0NATIVE TITLE");
+        udta.extend_from_slice(&atom(b"XMP_", packet.as_bytes()));
+        let mut mov = atom(b"ftyp", b"qt  \0\0\0\0qt  ");
+        mov.extend_from_slice(&atom(b"moov", &atom(b"udta", &udta)));
+        let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
+        std::fs::write(file.path(), mov).unwrap();
+        let read_title = |mut command: Command| -> Value {
+            let output = command
+                .args(["-j", "-Title"])
+                .arg(file.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let mut tags = rows[0].as_object().unwrap().clone();
+            tags.remove("SourceFile");
+            assert_eq!(tags.len(), 1, "{tags:?}");
+            tags.into_values().next().unwrap()
+        };
+        let theirs = read_title(oracle.command());
+        assert_eq!(theirs, title);
+        let ours = read_title(Command::new(env!("CARGO_BIN_EXE_oxidex")));
+        assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    }
+}
+
+#[test]
+fn static_exif_and_gps_sources_keep_global_composites_active() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping global composite parity: pinned oracle unavailable");
+        return;
+    };
+    for (uri, fields, required) in [
+        (
+            "http://ns.exiftool.org/EXIF/Exif/1.0/",
+            "<q:FNumber>2.8</q:FNumber><q:ExposureTime>1/100</q:ExposureTime><q:ISO>100</q:ISO>",
+            "Composite:Aperture",
+        ),
+        (
+            "http://ns.exiftool.org/GPS/GPS/1.0/",
+            "<q:GPSLatitude>10</q:GPSLatitude><q:GPSLatitudeRef>N</q:GPSLatitudeRef><q:GPSLongitude>20</q:GPSLongitude><q:GPSLongitudeRef>E</q:GPSLongitudeRef>",
+            "Composite:GPSPosition",
+        ),
+    ] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let packet = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="{uri}">{fields}</rdf:Description></rdf:RDF>"#
+        );
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        assert!(
+            theirs.contains_key(required),
+            "pinned source changed: {theirs:?}"
+        );
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1",
+        ));
+        assert_eq!(ours, theirs, "{uri}: current pin: {}", oracle.provenance());
+        if uri.contains("/GPS/") {
+            for tag in ["GPSLatitudeRef", "GPSLongitudeRef"] {
+                let read_short = |mut command: Command| {
+                    let output = command
+                        .args(["-s3", &format!("-{tag}")])
+                        .arg(file.path())
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    output.stdout
+                };
+                assert_eq!(
+                    read_short(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+                    read_short(oracle.command()),
+                    "{tag} short display"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn binary_list_extraction_uses_newlines_for_static_and_ordinary_xmp() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping XMP list byte parity: pinned oracle unavailable");
+        return;
+    };
+    for (uri, tag, first, second) in [
+        (
+            "http://ns.exiftool.org/XMP/XMP-GImage/1.0/",
+            "ImageData",
+            "alpha".to_string(),
+            "beta".to_string(),
+        ),
+        (
+            "http://ns.exiftool.org/XMP/XMP-GImage/1.0/",
+            "ImageData",
+            "A".repeat(40_000),
+            "B".repeat(40_000),
+        ),
+        (
+            "http://purl.org/dc/elements/1.1/",
+            "Subject",
+            "alpha".to_string(),
+            "beta".to_string(),
+        ),
+    ] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let packet = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="{uri}"><q:{tag}><rdf:Bag><rdf:li>{first}</rdf:li><rdf:li>{second}</rdf:li></rdf:Bag></q:{tag}></rdf:Description></rdf:RDF>"#
+        );
+        std::fs::write(file.path(), packet).unwrap();
+        let extract = |mut command: Command| {
+            let output = command
+                .arg("-b")
+                .arg(format!("-{tag}"))
+                .arg(file.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{tag}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        };
+        let theirs = extract(oracle.command());
+        let expected = format!("{first}\n{second}");
+        assert_eq!(theirs, expected.as_bytes(), "pinned list shape changed");
+        assert_eq!(
+            extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+            theirs,
+            "{tag} list bytes, current pin: {}",
+            oracle.provenance()
+        );
+    }
+}
+
+#[test]
+fn oversized_static_default_text_keeps_its_extractable_source_bytes() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping oversized static source parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    let raw = "A".repeat(65_537);
+    let packet = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-GImage/1.0/"><q:ImageData>{raw}</q:ImageData></rdf:Description></rdf:RDF>"#
+    );
+    std::fs::write(file.path(), packet).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(
+        theirs["XMP:XMP-GImage:ImageData"],
+        "(Binary data 65537 bytes, use -b option to extract)"
+    );
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    let extract = |mut command: Command| {
         let output = command
-            .args(["-j", "-Title"])
+            .args(["-b", "-ImageData"])
             .arg(file.path())
             .output()
             .unwrap();
@@ -367,14 +536,45 @@ fn static_xmp_title_keeps_mov_priority_directory_promotion() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let mut tags = rows[0].as_object().unwrap().clone();
-        tags.remove("SourceFile");
-        assert_eq!(tags.len(), 1, "{tags:?}");
-        tags.into_values().next().unwrap()
+        output.stdout
     };
-    let theirs = read_title(oracle.command());
-    assert_eq!(theirs, "XMP TITLE");
-    let ours = read_title(Command::new(env!("CARGO_BIN_EXE_oxidex")));
-    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    assert_eq!(extract(oracle.command()), raw.as_bytes());
+    assert_eq!(
+        extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+        raw.as_bytes()
+    );
+}
+
+#[test]
+fn static_binary_named_text_is_extractable_verbatim() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static binary text parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:g="http://ns.exiftool.org/XMP/XMP-GImage/1.0/" xmlns:c="http://ns.exiftool.org/XMP/XMP-GCamera/1.0/"><g:ImageData>YWJj</g:ImageData><c:ShotLogData>abcd</c:ShotLogData></rdf:Description></rdf:RDF>"#).unwrap();
+    for tag in ["ImageData", "ShotLogData"] {
+        let read = |mut command: Command| {
+            command
+                .arg("-b")
+                .arg(format!("-{tag}"))
+                .arg(file.path())
+                .output()
+                .unwrap()
+        };
+        let theirs = read(oracle.command());
+        assert!(theirs.status.success());
+        let ours = read(Command::new(env!("CARGO_BIN_EXE_oxidex")));
+        assert!(
+            ours.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&ours.stderr)
+        );
+        assert_eq!(
+            ours.stdout,
+            theirs.stdout,
+            "{tag}: current pin: {}",
+            oracle.provenance()
+        );
+    }
 }

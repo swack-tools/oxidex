@@ -520,6 +520,32 @@ pub fn render_binary_requested_tags(
             out.extend_from_slice(bytes);
             continue;
         }
+        // ExifTool's binary/list writer separates each value with LF, while
+        // ordinary human display joins a list with comma-space. Keep the
+        // selected ValueConv elements rather than stringifying the array.
+        if let TagValue::Array(values) = entry.occurrence.project(ValueChannel::ValueConv).as_ref()
+        {
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(b'\n');
+                }
+                match value {
+                    TagValue::String(text) => out.extend_from_slice(text.as_bytes()),
+                    TagValue::TextBytes(bytes) | TagValue::Binary(bytes) => {
+                        out.extend_from_slice(bytes)
+                    }
+                    other => out.extend_from_slice(
+                        super::output_formatter::format_tag_value_with_mode(
+                            &entry.lookup_key,
+                            other,
+                            true,
+                        )
+                        .as_bytes(),
+                    ),
+                }
+            }
+            continue;
+        }
         // Some source bytes belong to decoded text tags; only an explicit
         // parser declaration permits extracting `stored` as the binary value.
         if entry.occurrence.binary_extract_from_stored {
@@ -618,8 +644,13 @@ fn render_text_lines_bytes(
             format!("{}: ", entry.lookup_key)
         };
         out.extend_from_slice(prefix.as_bytes());
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
         out.extend_from_slice(&value_text_bytes(
-            &entry.lookup_key,
+            schema_name,
             &value,
             no_print_conv,
             short_level > 0,
@@ -639,7 +670,12 @@ fn render_map_text_bytes(metadata: &MetadataMap, no_print_conv: bool) -> Vec<u8>
         }
         out.extend_from_slice(key.as_bytes());
         out.extend_from_slice(b": ");
-        out.extend_from_slice(&value_text_bytes(key, value, no_print_conv, false));
+        let schema_name = if metadata.is_xmp_static_source(key) {
+            ""
+        } else {
+            key.as_str()
+        };
+        out.extend_from_slice(&value_text_bytes(schema_name, value, no_print_conv, false));
         out.push(b'\n');
     }
     out
@@ -1637,7 +1673,14 @@ pub fn build_display_map(
         };
         reserved.insert(base_key);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        out.insert(key, value);
+        // This is a display projection, but the output writer still needs
+        // the selected row's source kind: static RDF text must not acquire
+        // native name-keyed PrintConv after group/copy key synthesis.
+        let mut display = TagOccurrence::from_insert_shim(&key, value, 0);
+        if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            display.origin.module = Some("XMP::StaticGroup");
+        }
+        out.record_occurrence(key, display);
     }
     // A display projection of rows the read produced, never a caller's
     // assignment.
@@ -1677,11 +1720,13 @@ pub fn render_group_display_lines(
     for entry in resolved {
         let label = joined_family_label_for_entry(entry, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        let rendered = super::output_formatter::format_tag_value_with_mode(
-            &entry.lookup_key,
-            &value,
-            no_print_conv,
-        );
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
+        let rendered =
+            super::output_formatter::format_tag_value_with_mode(schema_name, &value, no_print_conv);
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
             entry.occurrence.name
@@ -1765,8 +1810,13 @@ pub fn render_short_lines(
         {
             continue;
         }
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
         let rendered = super::output_formatter::format_tag_value_short_with_mode(
-            &entry.lookup_key,
+            schema_name,
             &value,
             no_print_conv,
         );
@@ -1795,11 +1845,13 @@ pub fn render_human_lines(resolved: &[ResolvedOccurrence<'_>], no_print_conv: bo
         if super::output_formatter::hidden_from_ungrouped_short_listing(&entry.lookup_key, &value) {
             continue;
         }
-        let rendered = super::output_formatter::format_tag_value_with_mode(
-            &entry.lookup_key,
-            &value,
-            no_print_conv,
-        );
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
+        let rendered =
+            super::output_formatter::format_tag_value_with_mode(schema_name, &value, no_print_conv);
         out.push_str(&format!("{}: {rendered}\n", entry.lookup_key));
     }
     out
