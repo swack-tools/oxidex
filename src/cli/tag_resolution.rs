@@ -520,14 +520,31 @@ pub fn render_binary_requested_tags(
             out.extend_from_slice(bytes);
             continue;
         }
-        // ExifTool's binary/list writer separates each value with LF, while
-        // ordinary human display joins a list with comma-space. Keep the
-        // selected ValueConv elements rather than stringifying the array.
+        // Some source bytes belong to decoded text tags; only an explicit
+        // parser declaration permits extracting `stored` as the binary value.
+        if entry.occurrence.binary_extract_from_stored {
+            if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::Stored).as_ref()
+            {
+                out.extend_from_slice(bytes);
+                continue;
+            }
+            return Err(format!(
+                "binary payload is unavailable for {}",
+                entry.lookup_key
+            ));
+        }
+        // ExifTool's binary writer separates List elements with LF. A native
+        // fixed-length array is a numeric tuple, not a List, and uses spaces.
+        // Keep selected ValueConv elements rather than their display string.
         if let TagValue::Array(values) = entry.occurrence.project(ValueChannel::ValueConv).as_ref()
         {
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
-                    out.push(b'\n');
+                    out.push(if entry.occurrence.is_list {
+                        b'\n'
+                    } else {
+                        b' '
+                    });
                 }
                 match value {
                     TagValue::String(text) => out.extend_from_slice(text.as_bytes()),
@@ -545,19 +562,6 @@ pub fn render_binary_requested_tags(
                 }
             }
             continue;
-        }
-        // Some source bytes belong to decoded text tags; only an explicit
-        // parser declaration permits extracting `stored` as the binary value.
-        if entry.occurrence.binary_extract_from_stored {
-            if let TagValue::Binary(bytes) = entry.occurrence.project(ValueChannel::Stored).as_ref()
-            {
-                out.extend_from_slice(bytes);
-                continue;
-            }
-            return Err(format!(
-                "binary payload is unavailable for {}",
-                entry.lookup_key
-            ));
         }
         // ExifTool's -b disables PrintConv independently of -n. The
         // occurrence's ValueConv channel is the only honest source for text

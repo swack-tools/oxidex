@@ -465,6 +465,12 @@ fn binary_list_extraction_uses_newlines_for_static_and_ordinary_xmp() {
             "B".repeat(40_000),
         ),
         (
+            "http://ns.exiftool.org/XMP/XMP-GImage/1.0/",
+            "ImageData",
+            "A".repeat(65_537),
+            "B".to_string(),
+        ),
+        (
             "http://purl.org/dc/elements/1.1/",
             "Subject",
             "alpha".to_string(),
@@ -493,10 +499,12 @@ fn binary_list_extraction_uses_newlines_for_static_and_ordinary_xmp() {
         let theirs = extract(oracle.command());
         let expected = format!("{first}\n{second}");
         assert_eq!(theirs, expected.as_bytes(), "pinned list shape changed");
-        assert_eq!(
-            extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
-            theirs,
-            "{tag} list bytes, current pin: {}",
+        let ours = extract(Command::new(env!("CARGO_BIN_EXE_oxidex")));
+        assert!(
+            ours == theirs,
+            "{tag} list bytes differ: ours {} bytes, oracle {} bytes; current pin: {}",
+            ours.len(),
+            theirs.len(),
             oracle.provenance()
         );
     }

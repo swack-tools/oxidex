@@ -220,6 +220,9 @@ pub struct XmpEntry {
     pub binary_payload_unavailable: bool,
     /// The RDF property came from an ExifTool static-group namespace URI.
     pub source_is_static: bool,
+    /// Exact LF-joined source elements for a static list whose public values
+    /// include a binary placeholder. `-b` must extract the source bytes.
+    pub static_binary_list_source: Option<Vec<u8>>,
 }
 
 impl XmpEntry {
@@ -243,11 +246,22 @@ impl XmpEntry {
             priority,
             binary_payload_unavailable,
             source_is_static: false,
+            static_binary_list_source: None,
         }
     }
 
     fn with_static_source(mut self, source_is_static: bool) -> Self {
         self.source_is_static = source_is_static;
+        self
+    }
+
+    fn with_static_list_source(mut self, elements: Option<&[String]>) -> Self {
+        if self.source_is_static
+            && let Some(elements) = elements
+            && elements.iter().any(|element| element.len() > 65_536)
+        {
+            self.static_binary_list_source = Some(elements.join("\n").into_bytes());
+        }
         self
     }
 
@@ -263,6 +277,7 @@ impl XmpEntry {
             priority: 1,
             binary_payload_unavailable: false,
             source_is_static: false,
+            static_binary_list_source: None,
         }
     }
 
@@ -459,6 +474,7 @@ pub(crate) fn insert_xmp_entry_with_source(
             &entry.group1,
             priority,
             entry.binary_payload_unavailable,
+            entry.static_binary_list_source.as_deref(),
         );
         return;
     }
@@ -1677,7 +1693,8 @@ fn parse_xmp_packet_in_directory(
                         results[index].elements.is_none(),
                     ),
                 )
-                .with_static_source(is_static_path(results[index].path.as_ref())),
+                .with_static_source(is_static_path(results[index].path.as_ref()))
+                .with_static_list_source(results[index].elements.as_deref()),
             );
             gps_sources.push(xmp_source_scalar(
                 tag,
@@ -1737,7 +1754,8 @@ fn parse_xmp_packet_in_directory(
                         result.elements.is_none(),
                     ),
                 )
-                .with_static_source(is_static_path(result.path.as_ref())),
+                .with_static_source(is_static_path(result.path.as_ref()))
+                .with_static_list_source(result.elements.as_deref()),
             );
             gps_sources.push(xmp_source_scalar(
                 &result.tag,
@@ -8490,6 +8508,7 @@ mod entry_tests {
             priority: 0,
             binary_payload_unavailable: false,
             source_is_static: false,
+            static_binary_list_source: None,
         };
         assert_eq!(entry.group1, "XMP-exif");
     }
