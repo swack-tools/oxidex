@@ -274,6 +274,8 @@ python3 "$HERE/gen_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path dicom)"
 "$PERL" "$HERE/dump_lens_alternatives.pl" --exiftool-dir "$LIB/.." \
     --out "$(artifact_path lens-alternatives)"
+python3 "$HERE/gen_runtime_lens_types.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL"
 python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --out "$(artifact_path xmp-lens-maps)"
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \
@@ -328,6 +330,8 @@ python3 "$HERE/verify_dicom_dict.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --input "$(artifact_path dicom)"
 python3 "$HERE/verify_lens_alternatives.py" "$(artifact_path lens-alternatives)" \
     --exiftool-dir "$LIB/.." --perl "$PERL"
+python3 "$HERE/gen_runtime_lens_types.py" --exiftool-dir "$LIB/.." \
+    --perl "$PERL" --check
 python3 "$HERE/gen_xmp_lens_maps.py" --exiftool-dir "$LIB/.." \
     --perl "$PERL" --check
 python3 "$HERE/gen_plus_media_matrix.py" --exiftool-dir "$LIB/.." \

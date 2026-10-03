@@ -253,6 +253,17 @@ else:
         assert flag('--rust-out')==artifact_path('font-language-rust')
         output(flag('--fixture-out'),name)
         output(flag('--rust-out'),name)
+    elif name=='gen_runtime_lens_types.py':
+        assert flag('--exiftool-dir')==lib.parent
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        runtime=artifact_path('leica')
+        fixture=artifact_path('canon-lens-fixture')
+        if '--check' in args:
+            assert runtime.read_text()=='generated explicit-A '+name+'\n'
+            assert fixture.read_text()=='generated explicit-A '+name+'\n'
+        else:
+            output(runtime,name)
+            output(fixture,name)
     elif name=='gen_xmp_lens_maps.py':
         assert flag('--exiftool-dir')==lib.parent
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -424,7 +435,8 @@ class RegenerationShellTests(unittest.TestCase):
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
                 'dump_lens_alternatives.pl', 'capture_xmp_priorities.pl',
                 'xmp_priority_specs.py', 'capture_font_languages.pl',
-                'font_language_specs.py', 'gen_xmp_lens_maps.py',
+                'font_language_specs.py', 'gen_runtime_lens_types.py',
+                'gen_runtime_lens_types.py:check', 'gen_xmp_lens_maps.py',
                 'gen_xmp_lens_maps.py:check', 'gen_plus_media_matrix.py',
                 'gen_plus_media_matrix.py:check', 'gen_iptc_dataset_facts.py',
                 'gen_iptc_dataset_facts.py:check', 'verify_geotiff.py',
@@ -521,6 +533,9 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
+                self.assertLess(names.index('gen_runtime_lens_types.py'), names.index('gen_xmp_lens_maps.py'))
+                self.assertLess(names.index('gen_runtime_lens_types.py'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
+                self.assertGreater(names.index('gen_runtime_lens_types.py:check'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 self.assertLess(names.index('gen_xmp_lens_maps.py'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 self.assertGreater(names.index('gen_xmp_lens_maps.py:check'), max(i for i, n in enumerate(names) if n == 'rustfmt'))
                 self.assertLess(names.index('gen_iptc_dataset_facts.py'), names.index('gen_iptc_dataset_facts.py:check'))
