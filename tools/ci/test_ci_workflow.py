@@ -57,6 +57,12 @@ class MainCiWorkflowTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertIn("runs-on: spot", block(job))
 
+    def test_no_workflow_or_lint_config_routes_to_warpbuild(self):
+        github = CI_YAML.parents[1]
+        for path in sorted([github / "actionlint.yaml", *github.glob("workflows/*.yml"), *github.glob("workflows/*.yaml")]):
+            with self.subTest(path=path.name):
+                self.assertNotRegex(path.read_text(), r"(?i)warp")
+
     def test_workflow_uses_least_privilege_read_only_token(self):
         self.assertRegex(self.text, r"(?m)^permissions:\n  contents: read$")
 

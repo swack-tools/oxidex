@@ -57,7 +57,7 @@ jobs:
           # `cargo build --release` with no warm cache, which parallelises
           # across codegen units.
           - target: x86_64-unknown-linux-musl
-            os: [self-hosted, Linux, X64, spot]
+            os: spot
           # Linux ARM64 builds run natively on the M4 runner pool.
           - target: aarch64-unknown-linux-musl
             os: [self-hosted, Linux, ARM64]
