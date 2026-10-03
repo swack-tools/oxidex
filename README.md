@@ -120,6 +120,123 @@ just lint     # Run clippy linter
 just fmt      # Format code
 ```
 
+## Remote Linux builds
+
+`just build-debug` and `just build-release` select a running remote builder
+using CPU and memory metrics, synchronize tracked working files over SSH, and
+build in a dedicated unprivileged container. These builds are independent of
+GitHub Actions jobs. The downloaded, checksum-verified Linux binaries are saved
+under `target/remote-linux/debug/<run_id>/oxidex` and
+`target/remote-linux/release/<run_id>/oxidex`. Each receipt prints the exact
+`artifact` path; run-specific directories keep parallel downloads separate.
+They cannot run natively on macOS. Remote release builds first run the pinned
+`cbindgen-check` inside the container and stop if the C header is stale. Use `just build-release-local` for the local
+all-features release build.
+
+### Repository-owned remote-build commands
+
+The client lives in `tools/remote-build/` in this checkout. Just calls
+`build.py` directly. No global Cargo
+shim or infrastructure checkout is needed to submit a build. Python 3.11+
+is required, and the client uses only the Python standard library.
+
+`OXIDEX_REMOTE_PROJECT` selects the GCP project (default: the active gcloud
+project). `OXIDEX_REMOTE_WORKTREE` selects a namespace for remote source and target
+directories (default: a hash of the local checkout path). Each build appends a
+random run suffix, so concurrent clients cannot overwrite each other's source
+or target directories even if they reuse the namespace. The Cargo download
+cache remains shared; compiled target output is scoped to one build. Every
+successful build downloads a verified local binary (by default under
+`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source,
+target, and uploaded archive. Failed builds attempt the same exact-run cleanup
+while preserving local receipts and logs. An abruptly interrupted client may
+leave its run on the host; inspect the `run_id` and instance in its receipt,
+then dry-run the exact paths with `ls -ld` over authenticated SSH before any
+manual removal. For an interrupted run, this read-only command lists exactly
+the remote paths named by a receipt:
+
+```bash
+build_receipt=/path/to/remote-build.json
+build_run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$build_receipt")
+build_instance=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["instance"])' "$build_receipt")
+build_zone=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zone"])' "$build_receipt")
+build_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$build_receipt")
+gcloud compute ssh "$build_instance" --zone="$build_zone" --project="$build_project" \
+  --command="ls -ld -- /mnt/runner-data/remote-build/sources/$build_run_id /mnt/runner-data/remote-build/targets/$build_run_id ~/oxidex-remote-source-$build_run_id.tar.gz"
+```
+
+Inspect the output and follow the cleanup runbook before deleting any retained
+run. Automatic builds choose a fresh instance and zone for every attempt. Direct `python3 tools/remote-build/direct.py` uses the configured
+instance and zone. Settings may be environment variables or local
+`.cargo/config.toml` `[env]` entries; no personal VM or credentials are committed.
+
+```bash
+export OXIDEX_REMOTE_PROJECT=YOUR_PROJECT
+just build-debug
+just build-release
+
+# Optional: use a specific worker instead of automatic selection.
+export OXIDEX_REMOTE_INSTANCE=YOUR_INSTANCE
+export OXIDEX_REMOTE_ZONE=YOUR_ZONE
+python3 tools/remote-build/direct.py --profile debug
+```
+
+### Credentials and VM setup
+
+Install Python 3.11+, Git, Cargo, just, and Google Cloud CLI (`gcloud`). Authenticate GCP locally with `gcloud auth login` and select the
+project with `gcloud config set project YOUR_PROJECT`. The build account needs Compute Engine inventory/machine-type read, SSH access
+and Monitoring read access. Provisioning requires additional VM/disk permissions.
+VM provisioning and fleet scaling remain in
+[spot-github-runners](https://github.com/swack-tools/spot-github-runners).
+For new hosts, clone its `codex/resource-scaling-remote-rust-builds` branch,
+install its documented dependencies (including `gh`), and configure project APIs
+and quotas according to that repository's README.
+
+For provisioning GitHub runners, copy `.env.example` to `.env` **inside the
+runner repository** and set `GH_TOKEN` to a renewable credential with organization
+self-hosted-runner management permission and access to the selected repository.
+A classic PAT needs `admin:org`; a fine-grained credential needs organization
+self-hosted runners read/write permission. The runner group must allow OxiDex.
+The manager creates short-lived registration tokens; do not store those tokens
+in `.env`, Cargo configuration, or an image. `GOOGLE_CLOUD_API_KEY` is optional
+for Billing Catalog lookups; `GCP_BILLING_EXPORT_TABLE` is optional for cost
+reporting. Never commit `.env`, GitHub credentials, or SSH private keys.
+
+Provision hosts with `--remote-builder --resource-monitoring` in
+`src/spot_runner_manager.py`; preview first and use `--apply` to provision.
+The autoscaler enables the builder by default. For manual provisioning, use an
+instance name starting with `oxidex-runners-` so automatic selection discovers
+the host. The VM service account needs
+`roles/monitoring.metricWriter` and the Monitoring write OAuth scope so the
+metrics-only Ops Agent can publish memory utilization. CPU utilization uses
+Compute Engine's built-in metric. Authenticated `gcloud compute ssh` must work;
+GCP manages the SSH access path, with no SSH server inside the build container.
+
+Building on an existing worker needs GCP/SSH/Monitoring access; it does not need
+a GitHub token. Selection considers running `oxidex-runners-*` and
+`oxidex-buildbench-*` hosts with complete recent metrics, CPU and memory both
+below 75%, the pinned executable builder launcher, and no drain marker.
+The selection probe checks the launcher's exact revision and executes its
+side-effect-free argument-validation path, so existing hosts must receive the
+matching launcher before they are eligible. The client verifies the remote
+compiler and Cargo against this checkout's rustup-resolved toolchain pin before
+fetching or building; the pin must also be installed locally. It ranks available CPU
+and RAM as balanced capacity (four GiB per available core); job and container
+counts do not influence selection. Monitoring uses complete five-minute
+windows ending two minutes ago, so selection reflects recent utilization
+rather than an instantaneous reservation.
+
+SSH disconnects, draining hosts, and killed containers cause another attempt
+on a different VM, with fresh inventory/metrics and source resync. Three
+attempts are allowed by default; use
+`python3 tools/remote-build/build.py --profile debug --max-attempts 5` to change
+this. Compiler and C-header validation errors stop immediately. Missing
+metrics or no eligible host produce an explicit error. Existing hosts need
+the updated root-owned launcher to propagate killed-container exit codes.
+The availability probe does not reserve capacity for concurrent clients.
+Receipts and timing logs use `$OXIDEX_OPS_DIR/evidence/` (default
+`$HOME/oxidex-ops/evidence/`).
+
 ## Contributing
 
 Contributions are welcome. Before contributing, ensure:

@@ -244,7 +244,7 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 incremental = false
-debug = true  # Enable debug symbols for profiling
+debug = false  # Enable debug symbols for profiling
 # REQUIRED -- not a redundant restatement of the default. [profile.bench] has no
 # `inherits`, so it implicitly inherits [profile.release], and that carries
 # `panic = 'abort'` down with it. Without this line `cargo bench` compiles

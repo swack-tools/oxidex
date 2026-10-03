@@ -48,6 +48,11 @@ test:
     {{unwind}} cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
     @echo "Running doctests (requires panic=unwind)..."
     cargo test --all-features --features tag-comparison-binary --doc
+    just test-remote-build
+
+# Run the repository-owned remote-builder client tests.
+test-remote-build:
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
 
 # Run all tests with cargo-nextest (faster parallel execution)
 test-nextest:
@@ -106,9 +111,16 @@ build:
     cargo build --workspace
 
 # Build the project in release mode (matches CI configuration)
-build-release: cbindgen-check
+build-release-local: cbindgen-check
     @echo "Building project (release, matching CI)..."
     cargo build --release --all-features
+
+# Select the least-used eligible remote builder and download a Linux binary.
+build-debug:
+    python3 tools/remote-build/build.py --profile debug
+
+build-release:
+    python3 tools/remote-build/build.py --profile release
 
 # Build just the binary
 build-bin:
@@ -211,7 +223,7 @@ profile-simple:
 profile-flamegraph benchmark:
     @echo "Generating flamegraph for {{benchmark}}..."
     @echo "Note: Requires sudo on macOS. Use profile-simple for accessible alternative."
-    cargo flamegraph --bench parse_benchmarks --root -o flamegraph-{{benchmark}}.svg -- --bench {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none cargo flamegraph --bench parse_benchmarks --root -o flamegraph-{{benchmark}}.svg -- --bench {{benchmark}}
     @echo "Flamegraph saved to: flamegraph-{{benchmark}}.svg"
     @echo "Convert to text: python3 scripts/parse_flamegraph.py flamegraph-{{benchmark}}.svg"
 
@@ -223,12 +235,12 @@ flamegraph-to-text svg:
 # Profile a specific benchmark with samply
 profile benchmark:
     @echo "Profiling {{benchmark}} benchmark..."
-    samply record cargo bench --bench parse_benchmarks {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench parse_benchmarks {{benchmark}}
 
 # Profile integration benchmarks
 profile-integration benchmark:
     @echo "Profiling integration benchmark: {{benchmark}}..."
-    samply record cargo bench --bench integration_benchmarks {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench integration_benchmarks {{benchmark}}
 
 # Profile the CLI binary with arguments
 profile-bin *args:
@@ -239,7 +251,7 @@ profile-bin *args:
 # Profile all parse benchmarks (warning: takes a while)
 profile-all:
     @echo "Profiling all parse benchmarks..."
-    samply record cargo bench --bench parse_benchmarks
+    CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench parse_benchmarks
 
 # Update dependencies
 update:
@@ -381,7 +393,7 @@ ci:
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check cbindgen-check lint-release build-release test test-ffi-c
+ci-standard: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ C header up-to-date"

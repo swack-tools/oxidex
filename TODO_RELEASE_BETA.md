@@ -584,7 +584,7 @@ rustflags = [
       exactly one `-C strip=symbols` and no Darwin link arguments.
 - [ ] Validate both configured Darwin targets or explicitly document why only
       ARM64 is shipped and how x86_64 remains tested.
-- [ ] Run the release workflow's actual `just build-release` path on macOS.
+- [ ] Run the release workflow's actual `just build-release-local` path on macOS.
 - [ ] Sign the binary and verify it with `codesign --verify --strict --verbose`.
 - [ ] Build, notarize, staple, and validate the DMG.
 - [ ] Record artifact sizes and symbol/export inspection results before and

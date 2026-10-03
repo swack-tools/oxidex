@@ -456,8 +456,9 @@ cargo install flamegraph
 ### Usage (Linux - recommended)
 
 ```bash
-# Profile a benchmark
-cargo flamegraph --bench parse_benchmarks -o flamegraph.svg -- --bench full_read_metadata
+# Profile a benchmark; symbols are explicitly enabled for this invocation.
+CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none \
+  cargo flamegraph --bench parse_benchmarks -o flamegraph.svg -- --bench full_read_metadata
 
 # Profile the CLI
 cargo flamegraph --bin oxidex -o flamegraph.svg -- tests/fixtures/jpeg/sample_with_exif.jpg
