@@ -499,11 +499,12 @@ fn handle_read_operation(file: &std::path::Path, args: &CliArgs) {
                 process::exit(1);
             }
 
-            if args.binary_output {
-                if let Some(reason) = report.missing_czi_table() {
-                    eprintln!("Error: {reason}");
-                    process::exit(1);
-                }
+            if args.binary_output
+                && let Some(reason) =
+                    oxidex::cli::tag_resolution::unavailable_czi_binary_request(&report, args)
+            {
+                eprintln!("Error: {reason}");
+                process::exit(1);
             }
             let status = report.status;
             let raw_metadata = report.metadata;

@@ -225,6 +225,11 @@ fn czi_xml_extracts_native_source_block() {
         "12.64" | "13.59" => assert!(has_table, "capable pin lost ZISRAW::Main"),
         pin => panic!("unverified CZI source capability for ExifTool {pin}"),
     }
+    if !has_table {
+        let identity = run(&["-b", "-FileType"], path);
+        assert!(identity.status.success(), "{identity:?}");
+        assert_eq!(identity.stdout, b"CZI");
+    }
     let output = run(&["-b", "-XML"], path);
     if has_table {
         assert!(output.status.success(), "{output:?}");

@@ -417,6 +417,24 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
+/// Returns a missing CZI source-table refusal only when a requested binary
+/// tag is unavailable. Identity tags recovered by format detection remain
+/// readable even when the CZI parser could not run.
+pub fn unavailable_czi_binary_request<'a>(
+    report: &'a crate::core::ReadReport,
+    args: &CliArgs,
+) -> Option<&'a str> {
+    let reason = report.missing_czi_table()?;
+    let requested = args.specific_tags()?;
+    requested
+        .iter()
+        .any(|token| {
+            resolve_requested_tags(&report.metadata, std::slice::from_ref(token), args.all_tags)
+                .is_empty()
+        })
+        .then_some(reason)
+}
+
 /// The bytes selected by `-b`: Font.pm can return decoded text containing
 /// non-Unicode UTF-8 sequences, which must reach stdout unchanged. Separate
 /// selected values are concatenated, as pinned ExifTool does.

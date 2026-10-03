@@ -9589,9 +9589,8 @@ mod tests {
             Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
         );
 
-        // Canon.pm:583  `61182 => 'Canon RF 50mm F1.2L USM or other Canon RF Lens',`
-        // The 68 RF lenses ExifTool files under 61182.1-61182.68 all report this
-        // id; none of them has an id of its own.
+        // The base label for 61182 changed between the source pins; individual
+        // RF lens alternatives share the integer id and are Composite-only.
         let expected = match crate::exiftool_tables::EXIFTOOL_VERSION {
             "11.78" => "Canon RF 35mm F1.8 Macro IS STM or other Canon RF Lens",
             "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",

@@ -148,8 +148,8 @@ fn test_canon_lens_database_integration() {
         Some("Sigma 14-24mm f/2.8 DG HSM | A or other Sigma Lens".to_string())
     );
     // Canon lens 61182's base name changed between the supported source pins.
-    // Every RF lens reports this one id; ExifTool files the individual models
-    // under 61182.1-61182.68 and only resolves them for Composite:LensID.
+    // Individual RF lens alternatives share the integer id and resolve
+    // separately only through Composite:LensID.
     let expected_61182 = match oxidex::exiftool_tables::EXIFTOOL_VERSION {
         "11.78" => "Canon RF 35mm F1.8 Macro IS STM or other Canon RF Lens",
         "12.64" | "13.59" => "Canon RF 50mm F1.2L USM or other Canon RF Lens",

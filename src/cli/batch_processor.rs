@@ -829,7 +829,9 @@ fn output_binary_results(results: &[(PathBuf, Result<ReadReport>)], args: &CliAr
     // Do not buffer all payloads: a batch may contain large binary values.
     for (_, result) in results {
         if let Ok(report) = result {
-            if let Some(reason) = report.missing_czi_table() {
+            if let Some(reason) =
+                super::tag_resolution::unavailable_czi_binary_request(report, args)
+            {
                 return Err(ExifToolError::parse_error(reason));
             }
         }
