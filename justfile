@@ -211,7 +211,7 @@ profile-simple:
 profile-flamegraph benchmark:
     @echo "Generating flamegraph for {{benchmark}}..."
     @echo "Note: Requires sudo on macOS. Use profile-simple for accessible alternative."
-    cargo flamegraph --bench parse_benchmarks --root -o flamegraph-{{benchmark}}.svg -- --bench {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 cargo flamegraph --bench parse_benchmarks --root -o flamegraph-{{benchmark}}.svg -- --bench {{benchmark}}
     @echo "Flamegraph saved to: flamegraph-{{benchmark}}.svg"
     @echo "Convert to text: python3 scripts/parse_flamegraph.py flamegraph-{{benchmark}}.svg"
 
@@ -223,12 +223,12 @@ flamegraph-to-text svg:
 # Profile a specific benchmark with samply
 profile benchmark:
     @echo "Profiling {{benchmark}} benchmark..."
-    samply record cargo bench --bench parse_benchmarks {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 samply record cargo bench --bench parse_benchmarks {{benchmark}}
 
 # Profile integration benchmarks
 profile-integration benchmark:
     @echo "Profiling integration benchmark: {{benchmark}}..."
-    samply record cargo bench --bench integration_benchmarks {{benchmark}}
+    CARGO_PROFILE_BENCH_DEBUG=2 samply record cargo bench --bench integration_benchmarks {{benchmark}}
 
 # Profile the CLI binary with arguments
 profile-bin *args:
@@ -239,7 +239,7 @@ profile-bin *args:
 # Profile all parse benchmarks (warning: takes a while)
 profile-all:
     @echo "Profiling all parse benchmarks..."
-    samply record cargo bench --bench parse_benchmarks
+    CARGO_PROFILE_BENCH_DEBUG=2 samply record cargo bench --bench parse_benchmarks
 
 # Update dependencies
 update:
