@@ -267,12 +267,18 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
-                 patch.object(remote_build.subprocess,'run',side_effect=run):
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
                 self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence')]),0)
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    '--worktree-id','checkout','--evidence-dir',str(root/'evidence2')]),0)
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
-            self.assertEqual(events,['download','cleanup'])
+            second=json.loads((root/'evidence2'/'remote-build.json').read_text())
+            self.assertEqual(events,['download','cleanup','download','cleanup'])
             self.assertTrue(receipt['verified'])
             self.assertEqual(receipt['remote_cleanup'],'complete')
             self.assertEqual(Path(receipt['artifact']).read_bytes(),b'verified binary')
-            self.assertEqual(Path(receipt['artifact']),root.resolve()/'target'/'remote-linux'/'release'/'oxidex')
+            self.assertNotEqual(receipt['artifact'],second['artifact'])
+            self.assertEqual(Path(second['artifact']).read_bytes(),b'verified binary')
+            self.assertEqual(Path(receipt['artifact']),root.resolve()/'target'/'remote-linux'/'release'/receipt['run_id']/'oxidex')

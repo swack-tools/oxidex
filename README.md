@@ -145,7 +145,7 @@ random run suffix, so concurrent clients cannot overwrite each other's source
 or target directories even if they reuse the namespace. The Cargo download
 cache remains shared; compiled target output is scoped to one build. Every
 successful build downloads a verified local binary (by default under
-`target/remote-linux/<profile>/`) before removing its exact remote source,
+`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source,
 target, and uploaded archive. Failed builds attempt the same exact-run cleanup
 while preserving local receipts and logs. An abruptly interrupted client may
 leave its run on the host; inspect the `run_id` and instance in its receipt,

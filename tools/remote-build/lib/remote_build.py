@@ -221,7 +221,8 @@ def main(argv=None):
         print(verification,flush=True)
         digest=verification.splitlines()[-1].split()[0]
         receipt['binary_sha256']=digest
-        output=args.artifact_dir.expanduser().resolve();output.mkdir(parents=True,exist_ok=True)
+        output=args.artifact_dir.expanduser().resolve()/args.worktree_id
+        output.mkdir(parents=True,exist_ok=True)
         artifact=output/'oxidex'
         receipt['stage']='download'
         download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
