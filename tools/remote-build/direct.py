@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
 from ops_paths import ops_root
+from lib.config import cargo_env_value
 from lib.remote_build import main
 
 if '--help' in sys.argv[1:] or '-h' in sys.argv[1:]:
@@ -17,7 +18,7 @@ if '--help' in sys.argv[1:] or '-h' in sys.argv[1:]:
 source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
 settings=tomllib.loads((source/'.cargo/config.toml').read_text()).get('env',{})
 def setting(name):
-    value=os.environ.get(name) or settings.get(name)
+    value=os.environ.get(name) or cargo_env_value(settings, name)
     if value:
         return value
     if name=='OXIDEX_REMOTE_WORKTREE':

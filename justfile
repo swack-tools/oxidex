@@ -48,6 +48,11 @@ test:
     {{unwind}} cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
     @echo "Running doctests (requires panic=unwind)..."
     cargo test --all-features --features tag-comparison-binary --doc
+    just test-remote-build
+
+# Run the repository-owned remote-builder client tests.
+test-remote-build:
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
 
 # Run all tests with cargo-nextest (faster parallel execution)
 test-nextest:

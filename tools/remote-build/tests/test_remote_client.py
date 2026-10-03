@@ -35,7 +35,8 @@ class ClientTests(unittest.TestCase):
             root=Path(directory)
             with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
-                 patch.object(remote_build.subprocess,'run',side_effect=run):
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}):
                 with self.assertRaisesRegex(RuntimeError,'header failed'):
                     remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
@@ -61,3 +62,76 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'checksum'):
                     download_artifact('vm','z','p','/binary',artifact,hashlib.sha256(b'expected').hexdigest())
             self.assertEqual(artifact.read_bytes(),b'previous verified')
+
+    def test_remote_toolchain_refuses_off_pin_before_build(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        pin='a'*40
+        expected={'channel':'1.97.1','rustc_commit':pin,'cargo_version':'cargo 1.97.1 (abc)'}
+        rustc=f"rustc 1.97.1\ncommit-hash: {pin}\nrelease: 1.97.1\n"
+        cargo='rustc 1.97.1\ncargo 1.97.1 (abc)\ncargo 1.97.1 (abc)\n'
+        commands=[]
+        def ssh(command):
+            commands.append(command)
+            return [command]
+        with patch.object(remote_build,'pinned_toolchain',return_value=expected), \
+             patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+rustc,cargo]):
+            self.assertEqual(remote_build.verify_remote_toolchain(Path('.'),ssh, 'checkout'),expected)
+        self.assertTrue(all('checkout' in command for command in commands))
+        off_pin=rustc.replace(pin,'b'*40)
+        with patch.object(remote_build,'pinned_toolchain',return_value=expected), \
+             patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+off_pin,cargo]):
+            with self.assertRaisesRegex(RuntimeError,'does not match'):
+                remote_build.verify_remote_toolchain(Path('.'),lambda command:[command], 'checkout')
+
+    def test_prepare_race_is_retryable_without_building(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'prepare')) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+            import json
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['stage'],'prepare')
+            self.assertTrue(receipt['retryable'])
+            self.assertEqual(run.call_count,1)
+            self.assertIn('--ssh-flag=-oServerAliveInterval=15',run.call_args.args[0])
+            self.assertIn('--ssh-flag=-oServerAliveCountMax=3',run.call_args.args[0])
+
+    def test_scp_has_keepalives(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            def download(command, **kwargs):
+                self.assertIn('--scp-flag=-oServerAliveInterval=15',command)
+                self.assertIn('--scp-flag=-oServerAliveCountMax=3',command)
+                Path(command[4]).write_bytes(b'binary')
+            with patch.object(remote_build.subprocess,'run',side_effect=download):
+                remote_build.download_artifact('vm','z','p','/binary',root/'oxidex',hashlib.sha256(b'binary').hexdigest())
+
+    def test_toolchain_mismatch_stops_before_fetch(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
+                 patch.object(remote_build,'verify_remote_toolchain',side_effect=RuntimeError('off pin')):
+                with self.assertRaisesRegex(RuntimeError,'off pin'):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+            import json
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['stage'],'toolchain')
+            self.assertNotIn('verified',receipt)
+            self.assertEqual(run.call_count,3)  # prepare, upload, extract only
+            self.assertFalse(any('cargo fetch' in value for call in run.call_args_list for value in call.args[0]))

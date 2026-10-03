@@ -29,3 +29,46 @@ class WorkerSelectionTests(unittest.TestCase):
         rows=[(SimpleNamespace(name='small',cpus=4,memory_gib=16),(.1,.1)),
               (SimpleNamespace(name='large',cpus=32,memory_gib=128),(.4,.4))]
         self.assertEqual(rank_workers(rows)[0][0].name,'large')
+
+    def test_probe_requires_executable_protocol_and_bounds_hang(self):
+        import json
+        import subprocess
+        from unittest.mock import patch
+        from lib.worker_selection import LAUNCHER_SHA256, select_worker
+        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',side_effect=[[(.1,.1)],[(.2,.2)]]), \
+             patch('lib.worker_selection.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',60),SimpleNamespace(returncode=0)]) as run:
+            vm,_=select_worker('project')
+        self.assertEqual(vm.name,'oxidex-runners-b')
+        self.assertEqual(run.call_count,2)
+        args=run.call_args.args[0]
+        command=next(x for x in args if x.startswith('--command='))
+        for required in ('test -x /usr/local/bin/oxidex-remote-build',LAUNCHER_SHA256,
+                         'invalid.project prepare','Project must be a simple identifier'):
+            self.assertIn(required,command)
+        self.assertIn('--ssh-flag=-oServerAliveInterval=15',args)
+        self.assertIn('--ssh-flag=-oServerAliveCountMax=3',args)
+        self.assertEqual(run.call_args.kwargs['timeout'],60)
+
+    def test_launcher_probe_checks_real_executable_and_protocol(self):
+        import hashlib
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from lib.worker_selection import launcher_probe
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            config=root/'config';config.write_text('{}')
+            launcher=root/'launcher'
+            launcher.write_text('#!/bin/sh\necho "ValueError: Project must be a simple identifier, never a path" >&2\nexit 1\n')
+            launcher.chmod(0o755)
+            digest=hashlib.sha256(launcher.read_bytes()).hexdigest()
+            probe=launcher_probe(str(launcher),str(config),str(root/'draining'),digest,sudo='')
+            self.assertEqual(subprocess.run(['sh','-c',probe]).returncode,0)
+            launcher.chmod(0o644)
+            self.assertNotEqual(subprocess.run(['sh','-c',probe]).returncode,0)
+            launcher.chmod(0o755)
+            launcher.write_text('#!/bin/sh\nexit 1\n')
+            self.assertNotEqual(subprocess.run(['sh','-c',probe]).returncode,0)

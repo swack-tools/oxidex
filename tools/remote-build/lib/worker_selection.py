@@ -6,6 +6,27 @@ import subprocess
 from types import SimpleNamespace
 from .resource_metrics import read_utilization
 
+# Exact launcher bytes provisioned by spot-github-runners' builder_assets.py.
+# The launcher has no version verb, so update this digest with its protocol.
+LAUNCHER_SHA256 = 'd3781dd0d320477ac7201a1e9b94ed2b59b829efb88b38b794ae93a467d0d2f4'
+SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
+                 '--ssh-flag=-oServerAliveCountMax=3')
+
+
+def launcher_probe(launcher='/usr/local/bin/oxidex-remote-build',
+                   config='/etc/oxidex-remote-build.json',
+                   drain='/run/oxidex-build-draining',
+                   digest=LAUNCHER_SHA256, sudo='sudo '):
+    """Check the exact launcher and execute its side-effect-free protocol path."""
+    executable = shlex.quote(launcher)
+    return (f'test -f {shlex.quote(config)} && '
+            f'test ! -e {shlex.quote(drain)} && '
+            f'test -x {executable} && '
+            f'test "$(sha256sum {executable} | cut -d" " -f1)" = {shlex.quote(digest)} && '
+            f'output=$({sudo}{executable} invalid.project prepare 2>&1); '
+            'code=$?; test "$code" -eq 1 && '
+            'case "$output" in *"Project must be a simple identifier, never a path"*) true;; *) false;; esac')
+
 
 def rank_workers(rows):
     eligible = [(vm, sample) for vm, sample in rows if sample is not None
@@ -36,12 +57,12 @@ def select_worker(project, excluded_ids=()):
         sample = read_utilization(project, [vm])
         observations.append((vm, sample[0] if sample else None))
     # Probe only candidates with trustworthy low utilization, best first.
-    probe = ('test -f /etc/oxidex-remote-build.json && '
-             'test ! -e /run/oxidex-build-draining')
+    probe = launcher_probe()
     for vm, sample in rank_workers(observations):
         try:
             result = subprocess.run(['gcloud','compute','ssh',vm.name,'--zone='+vm.zone,
-            '--project='+project,'--quiet','--command=sudo sh -c '+shlex.quote(probe)],
+            '--project='+project,'--quiet',*SSH_KEEPALIVE,
+            '--command=sh -c '+shlex.quote(probe)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
         except subprocess.TimeoutExpired:
             continue

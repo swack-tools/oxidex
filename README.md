@@ -191,7 +191,12 @@ GCP manages the SSH access path, with no SSH server inside the build container.
 Building on an existing worker needs GCP/SSH/Monitoring access; it does not need
 a GitHub token. Selection considers running `oxidex-runners-*` and
 `oxidex-buildbench-*` hosts with complete recent metrics, CPU and memory both
-below 75%, an installed builder, and no drain marker. It ranks available CPU
+below 75%, the pinned executable builder launcher, and no drain marker.
+The selection probe checks the launcher's exact revision and executes its
+side-effect-free argument-validation path, so existing hosts must receive the
+matching launcher before they are eligible. The client verifies the remote
+compiler and Cargo against this checkout's rustup-resolved toolchain pin before
+fetching or building; the pin must also be installed locally. It ranks available CPU
 and RAM as balanced capacity (four GiB per available core); job and container
 counts do not influence selection. Monitoring uses complete five-minute
 windows ending two minutes ago, so selection reflects recent utilization

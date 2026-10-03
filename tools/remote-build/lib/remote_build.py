@@ -3,10 +3,53 @@ import argparse
 import hashlib
 import json
 import shlex
+import re
 import subprocess
 import tarfile
+import tomllib
 import time
 from pathlib import Path
+
+
+SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
+                 '--ssh-flag=-oServerAliveCountMax=3')
+SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
+                 '--scp-flag=-oServerAliveCountMax=3')
+
+
+def pinned_toolchain(source):
+    pin = tomllib.loads((source/'rust-toolchain.toml').read_text())['toolchain']['channel']
+    if not re.fullmatch(r'\d+\.\d+\.\d+', pin):
+        raise RuntimeError('A numeric Rust toolchain pin is required')
+    compiler = subprocess.check_output(
+        ['rustup','which','--toolchain',pin,'rustc'], text=True).strip()
+    cargo = subprocess.check_output(
+        ['rustup','which','--toolchain',pin,'cargo'], text=True).strip()
+    rustc_output = subprocess.check_output([compiler,'-vV'],text=True)
+    cargo_output = subprocess.check_output([cargo,'-V'],text=True).strip()
+    commit = re.search(r'^commit-hash: ([0-9a-f]{40})$', rustc_output, re.M)
+    release = re.search(r'^release: (\S+)$', rustc_output, re.M)
+    if not commit or not release or release[1] != pin or not cargo_output.startswith('cargo '+pin+' '):
+        raise RuntimeError('Local rustup cannot verify the repository toolchain pin')
+    return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
+
+
+def verify_remote_toolchain(source, ssh, project):
+    expected = pinned_toolchain(source)
+    rustc_output = subprocess.check_output(
+        ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} rustc -vV'), text=True)
+    cargo_output = subprocess.check_output(
+        ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} cargo -V'), text=True)
+    # The current entrypoint prints its selected pin before running the command.
+    # Check both that declaration and the executable's own output.
+    commits = re.findall(r'^commit-hash: ([0-9a-f]{40})$', rustc_output, re.M)
+    releases = re.findall(r'^release: (\S+)$', rustc_output, re.M)
+    cargo_versions = re.findall(r'^cargo \d+\.\d+\.\d+ [^\n]+$', cargo_output, re.M)
+    if (len(commits) != 2 or set(commits) != {expected['rustc_commit']}
+            or len(releases) != 2 or set(releases) != {expected['channel']}
+            or len(cargo_versions) != 2 or set(cargo_versions) != {expected['cargo_version']}):
+        raise RuntimeError('Remote builder compiler or Cargo does not match the pinned toolchain')
+    return expected
 
 
 def retryable_exit(code):
@@ -21,7 +64,7 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
     temporary=Path(name)
     try:
         subprocess.run(['gcloud','compute','scp',instance+':'+binary,str(temporary),
-            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C'],check=True)
+            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE],check=True)
         if hashlib.sha256(temporary.read_bytes()).hexdigest()!=digest:
             raise RuntimeError('Downloaded binary checksum mismatch')
         temporary.chmod(0o755)
@@ -68,7 +111,7 @@ def main(argv=None):
         (evidence/'remote-build.json').write_text(json.dumps(receipt,indent=2))
     def ssh(command):
         return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
-                '--quiet','--command='+command]
+                '--quiet',*SSH_KEEPALIVE,'--command='+command]
     try:
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['snapshot']=make_snapshot(source,archive)
@@ -77,10 +120,12 @@ def main(argv=None):
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
         save()
         project=shlex.quote(args.worktree_id)
+        receipt['stage']='prepare'
         subprocess.run(ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} prepare'),check=True)
+        receipt['stage']='sync'
         start=time.monotonic()
         subprocess.run(['gcloud','compute','scp',str(archive),args.instance+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
-                        '--zone='+args.zone,'--project='+args.project,'--quiet'],check=True)
+                        '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE],check=True)
         digest=receipt['snapshot']['archive_sha256']
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'
@@ -88,12 +133,16 @@ def main(argv=None):
                  f"&& tar -xzf {upload} -C {shlex.quote(destination)}")
         subprocess.run(ssh(command),check=True)
         receipt['sync_seconds']=time.monotonic()-start;save()
+        receipt['stage']='toolchain'
+        receipt['toolchain']=verify_remote_toolchain(source, ssh, project)
+        save()
         # Dependencies are fetched separately; compile time excludes downloads.
         stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
         stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
+            receipt['stage']=stage
             start=time.monotonic()
             remote=f'sudo /usr/local/bin/oxidex-remote-build {project} {command}'
             with (evidence/f'{stage}.log').open('w') as log:
@@ -104,8 +153,6 @@ def main(argv=None):
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
-        verify=f'sudo /usr/local/bin/oxidex-remote-build {project} cargo --version'
-        subprocess.run(ssh(verify),check=True)
         binary=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/{args.profile}/oxidex'
         verification=subprocess.check_output(ssh(shlex.quote(binary)+' --version && sha256sum '+shlex.quote(binary)),text=True)
         print(verification,flush=True)
@@ -121,7 +168,8 @@ def main(argv=None):
     except Exception as exc:
         receipt['error']=str(exc)
         if isinstance(exc,subprocess.CalledProcessError):
-            receipt['retryable']=retryable_exit(exc.returncode)
+            receipt['retryable']=(receipt.get('stage') in ('prepare','toolchain')
+                                  or retryable_exit(exc.returncode))
         save();raise
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
     return 0

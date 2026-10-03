@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
 from ops_paths import ops_root
+from lib.config import cargo_env_value
 from lib.worker_selection import select_worker
 
 
@@ -21,7 +22,7 @@ def main():
         parser.error("--max-attempts must be positive")
     source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
     settings=tomllib.loads((source/'.cargo/config.toml').read_text()).get('env',{})
-    project=os.environ.get('OXIDEX_REMOTE_PROJECT') or settings.get('OXIDEX_REMOTE_PROJECT')
+    project=os.environ.get('OXIDEX_REMOTE_PROJECT') or cargo_env_value(settings, 'OXIDEX_REMOTE_PROJECT')
     if not project:
         project=subprocess.check_output(['gcloud','config','get-value','project'],text=True).strip()
     if not project or project=='(unset)':
