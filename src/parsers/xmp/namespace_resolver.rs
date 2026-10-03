@@ -302,11 +302,10 @@ impl NamespaceResolver {
     /// it, so the group stays plain `XMP`. A prefix with no translation keeps
     /// its own spelling, declared or not, as ExifTool's does.
     ///
-    /// Not modelled here (the key is left as plain `XMP`):
-    /// - URIs under `http://ns.exiftool.org/<g0>/<g1>/` (ExifTool's own `-X`
-    ///   output), whose tags ExifTool files under the family-0/1 groups named
-    ///   in the URI (`StaticGroup1`, XMP.pm:3599-3615) -- groups outside the
-    ///   `XMP` family entirely.
+    /// ExifTool's own `-X` namespace URIs carry static family-0/1 groups;
+    /// [`Self::static_groups_for_prefix`] derives them from the resolved URI.
+    ///
+    /// Not modelled here:
     /// - ExifTool's clean-up of prefixes containing characters outside
     ///   `[-.0-9A-Z_a-z\x80-\xff]` (XMP.pm:3480-3486); a well-formed XML
     ///   prefix cannot contain them.
@@ -323,14 +322,19 @@ impl NamespaceResolver {
         if prefix.is_empty() {
             return "XMP".to_string();
         }
-        if self
-            .resolve_prefix(prefix)
-            .is_some_and(is_exiftool_static_group_uri)
-        {
-            return "XMP".to_string();
+        if let Some((_, group1)) = self.static_groups_for_prefix(prefix) {
+            return group1;
         }
         let effective = self.xlat.get(prefix).map_or(prefix, String::as_str);
         format!("XMP-{}", translated_prefix(effective))
+    }
+
+    /// `XMP.pm` 13.59:3599-3615 derives static groups from ExifTool's own
+    /// `-X` namespace URI. Prefix spelling is irrelevant; only its resolved
+    /// URI selects these groups. `System` and numeric family-1 components are
+    /// re-filed under XML to avoid colliding with this sidecar's File tags.
+    pub fn static_groups_for_prefix(&self, prefix: &str) -> Option<(String, String)> {
+        self.resolve_prefix(prefix).and_then(exiftool_static_groups)
     }
 
     /// [`Self::group_for_prefix`] for a qualified name (`dc:title`).
@@ -442,17 +446,41 @@ fn is_standard_prefix(prefix: &str) -> bool {
 
 /// ExifTool's own `-X` namespaces, which carry their groups in the URI
 /// (XMP.pm:3599: `m{^http://ns.exiftool.(?:ca|org)/(.*?)/(.*?)/}`).
-fn is_exiftool_static_group_uri(uri: &str) -> bool {
+pub(crate) fn exiftool_static_groups(uri: &str) -> Option<(String, String)> {
     let rest = uri
         .strip_prefix("http://ns.exiftool.org/")
-        .or_else(|| uri.strip_prefix("http://ns.exiftool.ca/"));
-    rest.is_some_and(|rest| {
-        let mut parts = rest.splitn(3, '/');
-        matches!(
-            (parts.next(), parts.next(), parts.next()),
-            (Some(_), Some(_), Some(_))
-        )
-    })
+        .or_else(|| uri.strip_prefix("http://ns.exiftool.ca/"))?;
+    let (group0, remainder) = rest.split_once('/')?;
+    let (group1, _) = remainder.split_once('/')?;
+    if group0.is_empty() || group1.is_empty() {
+        return None;
+    }
+    if group1 == "System" {
+        Some(("XML".to_string(), "XML-System".to_string()))
+    } else if group1.starts_with(|ch: char| ch.is_ascii_digit()) {
+        Some(("XML".to_string(), format!("XML-{group0}")))
+    } else {
+        Some((group0.to_string(), group1.to_string()))
+    }
+}
+
+/// GetXMPTagID normalizes unknown all-uppercase source components.
+/// Static-group properties from ExifTool `-X` are always default XMP entries.
+pub(crate) fn static_export_component(name: &str) -> String {
+    if name.bytes().any(|byte| byte.is_ascii_lowercase()) {
+        return name.to_string();
+    }
+    let lower = name.to_ascii_lowercase();
+    let mut output = String::with_capacity(name.len());
+    let mut chars = lower.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '_' && chars.peek().is_some_and(char::is_ascii_lowercase) {
+            output.push(chars.next().unwrap().to_ascii_uppercase());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
 }
 
 /// The standard prefix XMP.pm's `xmlns` handling finds for a declared URI
@@ -893,9 +921,13 @@ mod tests {
         assert_eq!(resolver.group_for_prefix(""), "XMP");
         // An undeclared prefix keeps its own spelling.
         assert_eq!(resolver.group_for_prefix("undeclared"), "XMP-undeclared");
-        // ExifTool's own -X namespaces carry non-XMP groups; not modelled.
+        // ExifTool's own -X namespaces derive static groups from the URI.
         resolver.register_namespace("IFD0", "http://ns.exiftool.org/EXIF/IFD0/1.0/");
-        assert_eq!(resolver.group_for_prefix("IFD0"), "XMP");
+        assert_eq!(resolver.group_for_prefix("IFD0"), "IFD0");
+        assert_eq!(
+            resolver.static_groups_for_prefix("IFD0"),
+            Some(("EXIF".into(), "IFD0".into()))
+        );
         // ...but ExifTool's plain `et` namespace is an ordinary standard one.
         resolver.register_namespace("zz", "http://ns.exiftool.org/1.0/");
         assert_eq!(resolver.group_for_prefix("zz"), "XMP-et");

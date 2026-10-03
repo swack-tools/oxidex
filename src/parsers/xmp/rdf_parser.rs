@@ -422,9 +422,8 @@ pub(crate) fn insert_xmp_entry_with_source(
         return;
     }
     let priority = if entry.group1 == "XMP" {
-        // The bare `XMP` group is a property no XMP table defines: one with
-        // no namespace, or in one of ExifTool's own `-X` static-group
-        // namespaces (`namespace_resolver::group_for_prefix`). FoundXMP gives
+        // The bare `XMP` group is a property no XMP table defines, such as
+        // one with no namespace. FoundXMP gives
         // such a tag the default `{ Name => $name, IsDefault => 1,
         // Priority => 0 }` (XMP.pm 13.59:3589-3596), so it never displaces a
         // same-named tag already found: `t/images/XMP.xml`'s bare
@@ -436,6 +435,21 @@ pub(crate) fn insert_xmp_entry_with_source(
     } else {
         entry.priority
     };
+    if !entry.group1.is_empty()
+        && !entry.group1.starts_with("XMP")
+        && entry.group1 != super::google_hdrp::HDRP_GROUP1
+    {
+        let group0 = entry.key.split_once(':').map_or("", |(group, _)| group);
+        metadata.insert_xmp_static_occurrence(
+            entry.key.clone(),
+            value,
+            source,
+            group0,
+            &entry.group1,
+            entry.binary_payload_unavailable,
+        );
+        return;
+    }
     if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
         if entry.binary_payload_unavailable {
             metadata.insert_occurrence_with_group0_binary_state(
@@ -661,6 +675,11 @@ fn canonical_standard_uri(uri: &str) -> Option<&'static str> {
 /// ExifImageHeight under plain `XMP`.
 fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> String {
     let name = tag.split_once(':').map_or(tag, |(_, name)| name);
+    if let Some((group0, _)) = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+    {
+        return format!("{group0}:{name}");
+    }
     let family = NamespaceResolver::extract_prefix(qname)
         .and_then(|prefix| resolver.resolve_prefix(prefix))
         .map_or("XMP", |uri| match uri {
@@ -693,6 +712,11 @@ fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> St
 /// packet scope. FoundXMP looks up the raw ID, never the displayed tag name.
 fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_default: bool) -> i16 {
     let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+    if resolver.static_groups_for_prefix(prefix).is_some() {
+        // Unknown tags written by ExifTool -X use XMP.pm's IsDefault,
+        // Priority => 0, even though their family groups are non-XMP.
+        return 0;
+    }
     let group = resolver.group_for_prefix(prefix);
     let namespace = group.strip_prefix("XMP-").unwrap_or("");
     super::priority::simple_property_priority_in_directory(
@@ -707,12 +731,28 @@ fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_defau
 /// focused structure walker sees the property. Reported FlatName is never a
 /// safe lookup key: distinct raw paths may print the same name.
 fn raw_property(qname: &str, resolver: &NamespaceResolver) -> (String, String) {
+    if let Some(uri) =
+        NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
+        && super::namespace_resolver::exiftool_static_groups(uri).is_some()
+    {
+        return (
+            uri.to_string(),
+            NamespaceResolver::extract_local_name(qname).to_string(),
+        );
+    }
     let group = resolver.group_for_qname(qname);
     let namespace = group.strip_prefix("XMP-").unwrap_or("");
     (
         namespace.to_string(),
         NamespaceResolver::extract_local_name(qname).to_string(),
     )
+}
+
+/// Recover family 0 for a source path, including flattened structure fields.
+fn static_key_for_path(path: Option<&super::struct_flatten::RawPath>, tag: &str) -> Option<String> {
+    let uri = path?.first()?.0.as_str();
+    let (group0, _) = super::namespace_resolver::exiftool_static_groups(uri)?;
+    Some(format!("{group0}:{}", tag.split_once(':')?.1))
 }
 
 fn raw_path_priority(path: &[(String, String)], low_default: bool) -> i16 {
@@ -1459,7 +1499,7 @@ fn parse_xmp_packet_in_directory(
         if let Some(forms) = convert_xmp_gps(tag, value) {
             return XmpValue::Scalar(forms.print);
         }
-        if record_forms {
+        if record_forms && tag.starts_with("XMP") {
             if matches!(
                 tag.rsplit(':').next(),
                 Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
@@ -1554,8 +1594,10 @@ fn parse_xmp_packet_in_directory(
             });
         if let Some(index) = matched {
             claimed[index] = true;
+            let key = static_key_for_path(results[index].path.as_ref(), tag)
+                .unwrap_or_else(|| legacy_key.clone());
             entries.push(XmpEntry::new(
-                legacy_key,
+                &key,
                 tag,
                 formatted[index].1.clone(),
                 false,
@@ -1568,8 +1610,9 @@ fn parse_xmp_packet_in_directory(
             ));
             gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
         } else {
+            let key = static_key_for_path(path.as_ref(), tag).unwrap_or_else(|| legacy_key.clone());
             entries.push(XmpEntry::new(
-                legacy_key,
+                &key,
                 tag,
                 format_value(tag, value, false),
                 false,
@@ -1581,8 +1624,10 @@ fn parse_xmp_packet_in_directory(
     }
     for (index, result) in results.iter().enumerate() {
         if !claimed[index] {
+            let key = static_key_for_path(result.path.as_ref(), &result.tag)
+                .unwrap_or_else(|| legacy.key_for(&result.tag, &result.value));
             entries.push(XmpEntry::new(
-                &legacy.key_for(&result.tag, &result.value),
+                &key,
                 &result.tag,
                 formatted[index].1.clone(),
                 true,
@@ -2381,7 +2426,7 @@ fn extract_top_level_struct_values_in_directory(
                     && has_parse_type_resource(&e)
                 {
                     struct_depth = Some(depth);
-                    struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                    struct_name = structured_component_name(&tag_name, &resolver);
                     struct_group = resolver.group_for_qname(&tag_name);
                     struct_raw = Some(raw_property(&tag_name, &resolver));
                 } else if let Some(sd) = struct_depth {
@@ -2390,7 +2435,7 @@ fn extract_top_level_struct_values_in_directory(
                         && !is_rdf_namespace(&tag_name, &resolver)
                     {
                         field_depth = Some(depth);
-                        field_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        field_name = structured_component_name(&tag_name, &resolver);
                         field_raw = Some(raw_property(&tag_name, &resolver));
                         field_text.clear();
                         lang_values.clear();
@@ -3615,6 +3660,19 @@ fn ucfirst(name: &str) -> String {
     }
 }
 
+fn structured_component_name(qname: &str, resolver: &NamespaceResolver) -> String {
+    if NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+        .is_some()
+    {
+        ucfirst(&super::namespace_resolver::static_export_component(
+            NamespaceResolver::extract_local_name(qname),
+        ))
+    } else {
+        ucfirst(NamespaceResolver::extract_local_name(qname))
+    }
+}
+
 /// Checks a property's local name and resolved namespace URI.
 fn is_property_in_namespace(
     tag_name: &str,
@@ -4364,6 +4422,15 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     local_name.retain(|ch| ch != '\u{2182}');
 
     let group = resolver.group_for_qname(qname);
+    // GetXMPTagID normalizes unknown all-uppercase components (ISO -> Iso,
+    // CAMERA_ID -> CameraId; XMP.pm:3038-3053). Ordinary source-table XMP
+    // property names retain their schema spelling.
+    if NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+        .is_some()
+    {
+        local_name = super::namespace_resolver::static_export_component(&local_name);
+    }
     if let Some(uri) =
         NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
     {
@@ -4424,6 +4491,29 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 /// tables, not guessed from a displayed property name. Short GMask:Data text
 /// remains ordinary text.
 fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> String {
+    // ExifTool -X's static-group properties are default XMP table entries,
+    // but their source names are not Adobe XMP schema names. Apply only
+    // FoundXMP's generic auto-conversions (XMP.pm:3670-3696), never the
+    // same-spelled XMP:Flash/Aperture/ShutterSpeed PrintConv tables.
+    if !tag.starts_with("XMP") {
+        if value.len() > 65536 {
+            return format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                value.len()
+            );
+        }
+        if let Some((numerator, denominator)) = value.split_once('/')
+            && let (Ok(numerator), Ok(denominator)) =
+                (numerator.parse::<i128>(), denominator.parse::<i128>())
+        {
+            return if denominator == 0 {
+                if numerator == 0 { "undef" } else { "inf" }.to_string()
+            } else {
+                format_xmp_plain_rational(value)
+            };
+        }
+        return value.to_string();
+    }
     // Dublin Core's lowercase raw `date` is declared with `%dateTimeInfo`
     // (XMP.pm) and prints through ConvertDateTime, including when carried
     // inside an SVG RDF packet. The reported name is capitalized to `Date`.
@@ -8146,10 +8236,8 @@ mod top_level_struct_tests {
         assert_eq!(
             typed
                 .iter()
-                // `http://ns.exiftool.org/EXIF/IFD0/1.0/` names ExifTool's
-                // own static groups, which are not modelled, so the leaf
-                // keeps the plain `XMP` group.
-                .find(|(tag, _)| tag == "XMP:Make")
+                // The resolved ExifTool -X URI supplies family-1 IFD0.
+                .find(|(tag, _)| tag == "IFD0:Make")
                 .map(|(_, value)| value.clone()),
             Some(XmpValue::Scalar("NIKON".to_string())),
             "real leaf missing or wrong: {typed:?}"

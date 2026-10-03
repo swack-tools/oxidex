@@ -745,6 +745,33 @@ impl MetadataMap {
         self.sink.record(key, occurrence);
     }
 
+    /// An ExifTool `-X` RDF property whose resolved URI restores a non-XMP
+    /// family-0/1 group. Keep its source identity distinct from a real EXIF
+    /// or MakerNote parser: XMP's default property has Priority => 0, and
+    /// source modules that were only named by the XML must not activate all
+    /// their native composite definitions.
+    pub(crate) fn insert_xmp_static_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        source: Option<&str>,
+        group0: &str,
+        group1: &str,
+        binary_payload_unavailable: bool,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = 0;
+        occurrence.group0 = super::tag_occurrence::intern(group0);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.is_list = matches!(&occurrence.raw, TagValue::Array(_));
+        occurrence.stored = source.map(|text| TagValue::new_string(text.to_owned()));
+        occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        occurrence.origin.module = Some("XMP::StaticGroup");
+        self.sink.record(key, occurrence);
+    }
+
     /// An XMP table declares this property binary, but the reader has only
     /// retained its public display form. Keep the source declaration so an
     /// explicit byte request refuses instead of emitting that display text.

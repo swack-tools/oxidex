@@ -365,14 +365,23 @@ fn push_frame(
         parent.child_elements += 1;
     }
 
+    let static_uri = uri
+        .as_deref()
+        .filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+    let renamed = rename_field(uri.as_deref(), local);
+    let component = static_uri.map_or_else(
+        || renamed.to_string(),
+        |_| super::namespace_resolver::static_export_component(renamed),
+    );
+    let group = resolver.group_for_prefix(prefix);
+    let namespace = static_uri.map_or_else(
+        || group.strip_prefix("XMP-").unwrap_or("").to_string(),
+        str::to_string,
+    );
     Ok(Frame {
-        part: (!ignored).then(|| tag_id_segment(rename_field(uri.as_deref(), local))),
-        group: resolver.group_for_prefix(prefix),
-        namespace: resolver
-            .group_for_prefix(prefix)
-            .strip_prefix("XMP-")
-            .unwrap_or("")
-            .to_string(),
+        part: (!ignored).then(|| tag_id_segment(&component)),
+        group,
+        namespace,
         local: local.to_string(),
         uri,
         lang: lang_attribute(element)?,
@@ -495,22 +504,23 @@ fn emit_attributes(
             continue;
         }
         let leaf = rename_field(uri, local);
-        if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(leaf))) {
-            let namespace = resolver.group_for_prefix(prefix);
-            let priority = path_priority(
-                stack,
-                Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
-                low_default,
-            );
+        let static_uri =
+            uri.filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+        let component = static_uri.map_or_else(
+            || leaf.to_string(),
+            |_| super::namespace_resolver::static_export_component(leaf),
+        );
+        if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(&component))) {
+            let ordinary_namespace = resolver.group_for_prefix(prefix);
+            let namespace =
+                static_uri.unwrap_or_else(|| ordinary_namespace.strip_prefix("XMP-").unwrap_or(""));
+            let priority = path_priority(stack, Some((namespace, local)), low_default);
             record(
                 collected,
                 tag,
                 value.to_string(),
                 priority,
-                raw_path(
-                    stack,
-                    Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
-                ),
+                raw_path(stack, Some((namespace, local))),
             );
         }
     }

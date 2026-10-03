@@ -197,22 +197,38 @@ impl NameIndex {
             &owned
         };
         let positions = self.by_name.get(lower).map(Vec::as_slice).unwrap_or(&[]);
+        // CLI requests are deliberately case-insensitive. A Composite table's
+        // dependency is an internal ExifTool tag ID, however: `ISO` cannot
+        // bind `Iso`, an unknown default tag restored from an ExifTool -X
+        // namespace. Other reader occurrences keep the established CLI
+        // arbitration, including aliases used by existing composite tables.
+        let static_case_mismatch = positions
+            .iter()
+            .filter_map(|&idx| map.active_occurrence(idx))
+            .any(|occurrence| {
+                occurrence.origin.module == Some("XMP::StaticGroup")
+                    && occurrence.name.as_ref() != short_name
+            });
         let winner = arbitrate(
             positions
                 .iter()
                 .filter_map(|&idx| map.active_occurrence(idx))
                 .filter(|occurrence| {
                     qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+                        && (occurrence.origin.module != Some("XMP::StaticGroup")
+                            || occurrence.name.as_ref() == short_name)
                 }),
         );
-        debug_assert!(
-            std::ptr::eq(
-                winner.map_or(std::ptr::null(), |o| o as *const TagOccurrence),
-                crate::cli::tag_resolution::resolve_requested_tag(map, token)
-                    .map_or(std::ptr::null(), |o| o as *const TagOccurrence),
-            ),
-            "NameIndex disagrees with resolve_requested_tag for {token:?}"
-        );
+        if !static_case_mismatch {
+            debug_assert!(
+                std::ptr::eq(
+                    winner.map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+                    crate::cli::tag_resolution::resolve_requested_tag(map, token)
+                        .map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+                ),
+                "NameIndex disagrees with resolve_requested_tag for {token:?}"
+            );
+        }
         winner
     }
 }
@@ -345,6 +361,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
+            // A standalone ExifTool -X RDF export can restore Nikon-tagged
+            // values without ever loading Nikon's MakerNote reader. ExifTool
+            // does not activate Nikon's Composite table in that case (13.59
+            // `t/images/XMP.xml` has Nikon:FocusMode but no AutoFocus).
+            if comp.module == "Nikon" && map.get_string("File:FileType") == Some("XMP") {
+                continue;
+            }
             let key = keys[idx].as_str();
             let already_ours = ours.contains(&idx);
             // Exif.pm guards this join with
