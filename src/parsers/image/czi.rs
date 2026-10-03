@@ -139,7 +139,7 @@ pub fn parse_czi_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
             }
         }
 
-        process_metadata_section(reader, header, &mut metadata);
+        process_metadata_section(reader, header, &mut metadata, true);
 
         Ok(metadata)
     })
@@ -160,7 +160,7 @@ pub(crate) fn probe_czi_xml_metadata(path: &Path) -> Option<MetadataMap> {
         return None;
     }
     let mut metadata = MetadataMap::new();
-    process_metadata_section(&reader, header, &mut metadata);
+    process_metadata_section(&reader, header, &mut metadata, false);
     Some(metadata)
 }
 
@@ -347,7 +347,12 @@ fn shorten_tag_names(name: &str) -> String {
 }
 
 /// ZISRAW.pm:184-201, the `ZISRAWMETADATA` section.
-fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &mut MetadataMap) {
+fn process_metadata_section(
+    reader: &dyn FileReader,
+    header: &[u8],
+    metadata: &mut MetadataMap,
+    retain_xml: bool,
+) {
     let Some(offset) = header
         .get(METADATA_OFFSET_AT..METADATA_OFFSET_AT + 8)
         .and_then(|bytes| bytes.try_into().ok())
@@ -381,7 +386,11 @@ fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &m
 
     // ZISRAW.pm:194, `$et->FoundTag('XML', $buff)` -- retain that exact
     // source block for -b while keeping its ordinary binary summary.
-    metadata.insert_available_binary_with_display_and_group1("XML:XML", xml.to_vec(), "XML");
+    metadata.insert_available_binary_with_display_and_group1(
+        "XML:XML",
+        if retain_xml { xml.to_vec() } else { Vec::new() },
+        "XML",
+    );
 
     let options = XmlWalkOptions {
         // `%Image::ExifTool::XMP::XML`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`.

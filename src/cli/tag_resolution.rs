@@ -436,24 +436,46 @@ pub fn unavailable_czi_binary_request<'a>(
     {
         return None;
     }
-    let xml_metadata = crate::parsers::image::czi::probe_czi_xml_metadata(path);
-    requested
+    let unresolved: Vec<_> = requested
+        .iter()
+        .filter(|token| {
+            resolve_requested_tags(
+                &report.metadata,
+                std::slice::from_ref(*token),
+                args.all_tags,
+            )
+            .is_empty()
+        })
+        .collect();
+    if unresolved.is_empty() {
+        return None;
+    }
+    if unresolved.iter().any(|token| {
+        let (qualifier, name) = split_request(token);
+        ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
+            .iter()
+            .any(|known| name.eq_ignore_ascii_case(known))
+            && qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"))
+    }) {
+        return Some(reason);
+    }
+    let xml_requests: Vec<_> = unresolved
+        .into_iter()
+        .filter(|token| {
+            split_request(token)
+                .0
+                .is_none_or(|group| group.eq_ignore_ascii_case("XML"))
+        })
+        .collect();
+    if xml_requests.is_empty() {
+        return None;
+    }
+    let xml_metadata = crate::parsers::image::czi::probe_czi_xml_metadata(path)?;
+    xml_requests
         .iter()
         .any(|token| {
-            if !resolve_requested_tags(&report.metadata, std::slice::from_ref(token), args.all_tags)
+            !resolve_requested_tags(&xml_metadata, std::slice::from_ref(*token), args.all_tags)
                 .is_empty()
-            {
-                return false;
-            }
-            let (qualifier, name) = split_request(token);
-            let header_tag = ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
-                .iter()
-                .any(|known| name.eq_ignore_ascii_case(known))
-                && qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"));
-            let xml_tag = xml_metadata.as_ref().is_some_and(|xml| {
-                !resolve_requested_tags(xml, std::slice::from_ref(token), args.all_tags).is_empty()
-            });
-            header_tag || xml_tag
         })
         .then_some(reason)
 }
