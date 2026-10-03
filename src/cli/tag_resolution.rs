@@ -422,11 +422,11 @@ pub fn resolve_requested_tags<'a>(
 /// declared by `ZISRAW::Main`; XML names are probed with the same schema-less
 /// walker the capable parser uses, so non-fixture properties are covered too.
 /// Unrelated and absent names keep the ordinary empty `-b` result.
-pub fn unavailable_czi_binary_request<'a>(
-    report: &'a crate::core::ReadReport,
+pub fn unavailable_czi_binary_request(
+    report: &crate::core::ReadReport,
     args: &CliArgs,
     path: &std::path::Path,
-) -> Option<&'a str> {
+) -> Option<String> {
     let reason = report.missing_czi_table()?;
     let requested = args.specific_tags()?;
     if !args.excluded_tags().is_empty()
@@ -451,14 +451,14 @@ pub fn unavailable_czi_binary_request<'a>(
     if unresolved.is_empty() {
         return None;
     }
-    if unresolved.iter().any(|token| {
+    if let Some(token) = unresolved.iter().find(|token| {
         let (qualifier, name) = split_request(token);
         ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
             .iter()
             .any(|known| name.eq_ignore_ascii_case(known))
             && qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"))
     }) {
-        return Some(reason);
+        return Some(format!("CZI tag {token}: {reason}"));
     }
     let xml_requests: Vec<_> = unresolved
         .into_iter()
@@ -474,11 +474,11 @@ pub fn unavailable_czi_binary_request<'a>(
     let xml_metadata = crate::parsers::image::czi::probe_czi_xml_metadata(path)?;
     xml_requests
         .iter()
-        .any(|token| {
+        .find(|token| {
             !resolve_requested_tags(&xml_metadata, std::slice::from_ref(*token), args.all_tags)
                 .is_empty()
         })
-        .then_some(reason)
+        .map(|token| format!("CZI tag {token}: {reason}"))
 }
 
 /// The bytes selected by `-b`: Font.pm can return decoded text containing

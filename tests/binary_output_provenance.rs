@@ -294,10 +294,12 @@ fn czi_missing_table_refuses_non_fixture_xml_property() {
         } else {
             assert!(!output.status.success(), "{tag}: {output:?}");
             assert!(output.stdout.is_empty(), "{tag}: {output:?}");
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
             assert!(
-                String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+                diagnostic.contains("missing ZISRAW::Main table"),
                 "{tag}: {output:?}"
             );
+            assert!(diagnostic.contains(&tag[1..]), "{tag}: {output:?}");
         }
     }
     let unknown = run(&["-b", "-XML:NoSuchTag"], &path);
@@ -332,10 +334,12 @@ fn czi_all_occurrences_refuses_missing_xml_collision() {
     } else {
         assert!(!output.status.success(), "{output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+            diagnostic.contains("missing ZISRAW::Main table"),
             "{output:?}"
         );
+        assert!(diagnostic.contains("FileType"), "{output:?}");
     }
 }
 
@@ -360,10 +364,12 @@ fn czi_missing_table_never_leaves_partial_multi_file_binary_output() {
         .unwrap();
     assert!(!output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+        diagnostic.contains("missing ZISRAW::Main table"),
         "{output:?}"
     );
+    assert!(diagnostic.contains("XML"), "{output:?}");
 }
 
 #[test]
