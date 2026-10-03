@@ -602,36 +602,50 @@ fn short_static_xmp_list_in_quicktime_retains_array_and_binary_elements() {
         bytes.extend_from_slice(payload);
         bytes
     }
-    let packet = br#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Tags><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF></x:xmpmeta>"#;
-    let mov = [
-        atom(b"ftyp", b"qt  \0\0\0\0qt  "),
-        atom(b"moov", &atom(b"udta", &atom(b"XMP_", packet))),
-    ]
-    .concat();
-    let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
-    std::fs::write(file.path(), mov).unwrap();
-    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
-    let ours = content_entries(run(
-        Command::new(env!("CARGO_BIN_EXE_oxidex")),
-        file.path(),
-        "-G0:1",
-    ));
-    assert_eq!(
-        theirs["XMP:XMP-dc:Tags"],
-        serde_json::json!(["alpha", "beta"])
-    );
-    assert_eq!(ours["XMP:XMP-dc:Tags"], theirs["XMP:XMP-dc:Tags"]);
-    for mut command in [oracle.command(), Command::new(env!("CARGO_BIN_EXE_oxidex"))] {
-        let output = command
-            .args(["-b", "-Tags"])
-            .arg(file.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+    for (first, second, expected_json, expected_bytes) in [
+        (
+            "alpha",
+            "beta",
+            serde_json::json!(["alpha", "beta"]),
+            b"alpha\nbeta".as_slice(),
+        ),
+        (
+            "2024-01-02T03:04:05Z",
+            "1/2",
+            serde_json::json!(["2024:01:02 03:04:05Z", 0.5]),
+            b"2024:01:02 03:04:05Z\n0.5".as_slice(),
+        ),
+    ] {
+        let packet = format!(
+            r#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Tags><rdf:Bag><rdf:li>{first}</rdf:li><rdf:li>{second}</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF></x:xmpmeta>"#
         );
-        assert_eq!(output.stdout, b"alpha\nbeta");
+        let mov = [
+            atom(b"ftyp", b"qt  \0\0\0\0qt  "),
+            atom(b"moov", &atom(b"udta", &atom(b"XMP_", packet.as_bytes()))),
+        ]
+        .concat();
+        let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
+        std::fs::write(file.path(), mov).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1",
+        ));
+        assert_eq!(theirs["XMP:XMP-dc:Tags"], expected_json);
+        assert_eq!(ours["XMP:XMP-dc:Tags"], theirs["XMP:XMP-dc:Tags"]);
+        for mut command in [oracle.command(), Command::new(env!("CARGO_BIN_EXE_oxidex"))] {
+            let output = command
+                .args(["-b", "-Tags"])
+                .arg(file.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, expected_bytes);
+        }
     }
 }

@@ -220,8 +220,8 @@ pub struct XmpEntry {
     pub binary_payload_unavailable: bool,
     /// The RDF property came from an ExifTool static-group namespace URI.
     pub source_is_static: bool,
-    /// Exact LF-joined source elements for a static list. `-b` extracts these
-    /// bytes even when the carrier requests an untyped value.
+    /// Exact LF-joined source elements when a static list includes a binary
+    /// placeholder. Ordinary lists extract their converted display elements.
     pub static_binary_list_source: Option<Vec<u8>>,
 }
 
@@ -258,6 +258,7 @@ impl XmpEntry {
     fn with_static_list_source(mut self, elements: Option<&[String]>) -> Self {
         if self.source_is_static
             && let Some(elements) = elements
+            && elements.iter().any(|element| element.len() > 65_536)
         {
             self.static_binary_list_source = Some(elements.join("\n").into_bytes());
         }
