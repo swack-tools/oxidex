@@ -46,16 +46,14 @@ class MainCiWorkflowTests(unittest.TestCase):
     def test_direct_architecture_routing_needs_no_runner_credential(self):
         def block(job):
             return re.search(r"(?ms)^  " + re.escape(job) + r":\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)", self.text).group(1)
-        for job in ("read-regression-gate", "verify-tables-capture"):
-            with self.subTest(job=job):
-                self.assertIn("runs-on: [self-hosted, Linux, ARM64]", block(job))
         self.assertIn("needs: [read-regression-gate]", block("verify-tables-capture"))
         self.assertIn("if: ${{ always() && !cancelled() }}", block("verify-tables-capture"))
         for obsolete in ("RUNNER_STATUS_TOKEN", "select_read_gate_runner", "select_capture_runner", "select-m4air-runner"):
             self.assertNotIn(obsolete, self.text)
-        for job in ("lint", "test", "release-build"):
+        for job in ("lint", "test", "release-build", "read-regression-gate", "verify-tables-capture"):
             with self.subTest(job=job):
                 self.assertIn("runs-on: spot", block(job))
+        self.assertNotIn("ARM64", self.text)
 
     def test_no_workflow_or_lint_config_routes_to_warpbuild(self):
         github = CI_YAML.parents[1]
