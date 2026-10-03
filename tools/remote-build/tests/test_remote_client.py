@@ -99,6 +99,9 @@ class ClientTests(unittest.TestCase):
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             self.assertEqual(receipt['stage'],'prepare')
             self.assertTrue(receipt['retryable'])
+            self.assertEqual(receipt['worktree_namespace'],'checkout')
+            self.assertEqual(len(receipt['run_id']),41)
+            self.assertIn(receipt['run_id'], ' '.join(run.call_args.args[0]))
             self.assertEqual(run.call_count,1)
             self.assertIn('--ssh-flag=-oServerAliveInterval=15',run.call_args.args[0])
             self.assertIn('--ssh-flag=-oServerAliveCountMax=3',run.call_args.args[0])
@@ -197,3 +200,23 @@ class ClientTests(unittest.TestCase):
             self.assertTrue(retryable_failure(dropped,stage))
         self.assertFalse(retryable_failure(subprocess.CalledProcessError(65,'ssh',
             stderr='OXIDEX_SOURCE_ARCHIVE_INVALID'),'sync_extract'))
+
+    def test_run_id_is_unique_across_clients_with_same_namespace(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
+            first=remote_build.unique_run_id('checkout')
+            second=remote_build.unique_run_id('checkout')
+        self.assertNotEqual(first,second)
+        self.assertEqual(len(first),41)
+        self.assertTrue(first.startswith('checkout-'))
+        self.assertEqual(len(remote_build.unique_run_id('x'*64)),64)
+
+    def test_cleanup_is_scoped_to_generated_run_paths(self):
+        from lib.remote_build import cleanup_command
+        run_id='checkout-'+'a'*32
+        command=cleanup_command(run_id)
+        self.assertIn('/remote-build/sources/'+run_id,command)
+        self.assertIn('/remote-build/targets/'+run_id,command)
+        with self.assertRaisesRegex(ValueError,'invalid remote run identifier'):
+            cleanup_command('../checkout')

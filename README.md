@@ -139,9 +139,15 @@ shim or infrastructure checkout is needed to submit a build. Python 3.11+
 is required, and the client uses only the Python standard library.
 
 `OXIDEX_REMOTE_PROJECT` selects the GCP project (default: the active gcloud
-project). `OXIDEX_REMOTE_WORKTREE` selects the persistent source/target cache
-identifier (default: a hash of the local checkout path). Give each local
-checkout a distinct identifier. Automatic builds choose a fresh instance and
+project). `OXIDEX_REMOTE_WORKTREE` selects a namespace for remote source and target
+directories (default: a hash of the local checkout path). Each build appends a
+random run suffix, so concurrent clients cannot overwrite each other's source
+or target directories even if they reuse the namespace. The Cargo download
+cache remains shared; compiled target output is scoped to one build. After
+automatic builds download and verify their artifacts, the client removes that
+run's remote source and target directories. Direct builds without an artifact
+directory retain their run directories for inspection; interrupted runs may
+need later host cleanup. Automatic builds choose a fresh instance and
 zone for every attempt. Direct `python3 tools/remote-build/direct.py` uses the configured
 instance and zone. Settings may be environment variables or local
 `.cargo/config.toml` `[env]` entries; no personal VM or credentials are committed.

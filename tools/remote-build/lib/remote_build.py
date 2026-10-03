@@ -4,6 +4,7 @@ import hashlib
 import json
 import shlex
 import re
+import secrets
 import subprocess
 import sys
 import tarfile
@@ -51,6 +52,21 @@ def verify_remote_toolchain(source, ssh, project):
             or len(cargo_versions) != 2 or set(cargo_versions) != {expected['cargo_version']}):
         raise RuntimeError('Remote builder compiler or Cargo does not match the pinned toolchain')
     return expected
+
+
+def unique_run_id(worktree_id):
+    # One launcher project owns both source and target paths. A per-build nonce
+    # prevents another client with the same namespace from replacing either.
+    return worktree_id[:31] + '-' + secrets.token_hex(16)
+
+
+def cleanup_command(run_id):
+    if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}-[0-9a-f]{32}', run_id):
+        raise ValueError('Refusing to clean an invalid remote run identifier')
+    root='/mnt/runner-data/remote-build'
+    source=shlex.quote(f'{root}/sources/{run_id}')
+    target=shlex.quote(f'{root}/targets/{run_id}')
+    return f'sudo rm -rf -- {source} {target}'
 
 
 def source_sync_command(digest, upload, destination):
@@ -129,9 +145,12 @@ def main(argv=None):
     import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
+    namespace=args.worktree_id
+    args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
     evidence.mkdir(parents=True,exist_ok=True)
-    receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project}
+    receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
+             'worktree_namespace':namespace,'run_id':args.worktree_id}
     def save():
         (evidence/'remote-build.json').write_text(json.dumps(receipt,indent=2))
     def ssh(command):
@@ -190,6 +209,14 @@ def main(argv=None):
             receipt['stage']='download'
             download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
             receipt['artifact']=str(artifact)
+            # Only remove this invocation's remote source/target after the
+            # downloaded binary has passed its SHA-256 check.
+            try:
+                subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
+                receipt['remote_cleanup']='complete'
+            except subprocess.CalledProcessError as exc:
+                receipt['remote_cleanup']='failed'
+                receipt['cleanup_error']=str(exc)
 
         receipt['verified']=True;save()
     except Exception as exc:
