@@ -755,6 +755,11 @@ fn static_key_for_path(path: Option<&super::struct_flatten::RawPath>, tag: &str)
     Some(format!("{group0}:{}", tag.split_once(':')?.1))
 }
 
+fn is_static_path(path: Option<&super::struct_flatten::RawPath>) -> bool {
+    path.and_then(|path| path.first())
+        .is_some_and(|(uri, _)| super::namespace_resolver::exiftool_static_groups(uri).is_some())
+}
+
 fn raw_path_priority(path: &[(String, String)], low_default: bool) -> i16 {
     let path: Vec<_> = path
         .iter()
@@ -825,6 +830,10 @@ fn parse_xmp_packet_in_directory(
     // dropping every property written after it. On XMP3.xmp that was
     // CountryCode, Scene and both pdfx custom properties.
     let mut description_depth = 0usize;
+    // A referenced rdf:nodeID definition contributes through its referring
+    // property, not again as standalone fields on its rdf:Description.
+    let referenced_node_ids = referenced_blank_node_ids(xml_bytes)?;
+    let mut referenced_description_depth: Option<usize> = None;
     let mut current_property: Option<String> = None;
     // The reported `XMP-<ns>:Name` of `current_property`, resolved when its
     // start tag is read: ExifTool translates a property's prefix before
@@ -880,17 +889,25 @@ fn parse_xmp_packet_in_directory(
                     description_depth += 1;
                     if current_property.is_some() {
                         property_is_struct = true;
+                    } else if rdf_node_id_attribute(&e, &resolver)
+                        .is_some_and(|id| referenced_node_ids.contains(&id))
+                    {
+                        referenced_description_depth = Some(depth);
                     }
-                    // Extract rdf:about and property attributes from Description
-                    extract_description_attributes(
-                        &e,
-                        &resolver,
-                        &mut results,
-                        &mut legacy,
-                        &mut default_namespace_tags,
-                        low_default,
-                    )?;
-                } else if description_depth > 0 && current_property.is_none() {
+                    if referenced_description_depth.is_none() {
+                        extract_description_attributes(
+                            &e,
+                            &resolver,
+                            &mut results,
+                            &mut legacy,
+                            &mut default_namespace_tags,
+                            low_default,
+                        )?;
+                    }
+                } else if description_depth > 0
+                    && current_property.is_none()
+                    && referenced_description_depth.is_none()
+                {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
@@ -934,6 +951,9 @@ fn parse_xmp_packet_in_directory(
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if is_rdf_description(&tag_name, &resolver) {
+                    if referenced_description_depth == Some(depth) {
+                        referenced_description_depth = None;
+                    }
                     description_depth = description_depth.saturating_sub(1);
                 } else if is_rdf_li(&tag_name, &resolver) && inside_collection {
                     // End of rdf:li - save the collected value
@@ -1101,14 +1121,18 @@ fn parse_xmp_packet_in_directory(
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    extract_description_attributes(
-                        &e,
-                        &resolver,
-                        &mut results,
-                        &mut legacy,
-                        &mut default_namespace_tags,
-                        low_default,
-                    )?;
+                    if !rdf_node_id_attribute(&e, &resolver)
+                        .is_some_and(|id| referenced_node_ids.contains(&id))
+                    {
+                        extract_description_attributes(
+                            &e,
+                            &resolver,
+                            &mut results,
+                            &mut legacy,
+                            &mut default_namespace_tags,
+                            low_default,
+                        )?;
+                    }
                 } else if current_property.is_some()
                     && is_collection_container(&tag_name, &resolver)
                 {
@@ -1495,55 +1519,58 @@ fn parse_xmp_packet_in_directory(
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
     // Format scalar values separately from each occurrence's list elements.
-    let mut format_value = |tag: &str, value: &str, record_forms: bool| -> XmpValue {
-        if let Some(forms) = convert_xmp_gps(tag, value) {
-            return XmpValue::Scalar(forms.print);
-        }
-        if record_forms && tag.starts_with("XMP") {
-            if matches!(
-                tag.rsplit(':').next(),
-                Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
-            ) {
-                rational_forms.push((tag.to_string(), value.to_string()));
+    let mut format_value =
+        |tag: &str, value: &str, record_forms: bool, is_static: bool| -> XmpValue {
+            if !is_static && let Some(forms) = convert_xmp_gps(tag, value) {
+                return XmpValue::Scalar(forms.print);
             }
-            // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
-            // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
-            // precision the composites need: BuildCompositeTags hands
-            // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
-            // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
-            // quotient (11109/1000 -> 11.109), never the printed
-            // "11.1 mm". Carry that ValueConv beside the print form --
-            // as the evaluated quotient, not the raw `n/d`, because
-            // (unlike the FocalPlane pair above, whose denominator
-            // Canon.pm:10152-10153 reads back out) nothing needs the
-            // fraction itself, and the quotient is also what
-            // `--no-print-conv` should show. Gated on the source
-            // actually being an `n/d` fraction: a plain-decimal
-            // source has no extra precision to preserve.
-            if matches!(tag.rsplit(':').next(), Some("FocalLength"))
-                && parse_xmp_rational(value).is_some()
-            {
-                rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
+            if record_forms && !is_static && tag.starts_with("XMP") {
+                if matches!(
+                    tag.rsplit(':').next(),
+                    Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
+                ) {
+                    rational_forms.push((tag.to_string(), value.to_string()));
+                }
+                // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
+                // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
+                // precision the composites need: BuildCompositeTags hands
+                // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
+                // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
+                // quotient (11109/1000 -> 11.109), never the printed
+                // "11.1 mm". Carry that ValueConv beside the print form --
+                // as the evaluated quotient, not the raw `n/d`, because
+                // (unlike the FocalPlane pair above, whose denominator
+                // Canon.pm:10152-10153 reads back out) nothing needs the
+                // fraction itself, and the quotient is also what
+                // `--no-print-conv` should show. Gated on the source
+                // actually being an `n/d` fraction: a plain-decimal
+                // source has no extra precision to preserve.
+                if matches!(tag.rsplit(':').next(), Some("FocalLength"))
+                    && parse_xmp_rational(value).is_some()
+                {
+                    rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
+                }
+                // A `DJI::XMP` coordinate prints through ToDMS but has no
+                // ValueConv: `exiftool -n` shows the packet's own text
+                // ("+32.0348174", DJI_FC2204.jpg), which is what composites and
+                // `--no-print-conv` must see.
+                if drone_dji_dms_ref(tag).is_some() {
+                    rational_forms.push((tag.to_string(), value.to_string()));
+                }
             }
-            // A `DJI::XMP` coordinate prints through ToDMS but has no
-            // ValueConv: `exiftool -n` shows the packet's own text
-            // ("+32.0348174", DJI_FC2204.jpg), which is what composites and
-            // `--no-print-conv` must see.
-            if drone_dji_dms_ref(tag).is_some() {
-                rational_forms.push((tag.to_string(), value.to_string()));
-            }
-        }
-        XmpValue::Scalar(format_xmp_value_with_default(
-            tag,
-            value,
-            default_namespace_tags.contains(tag),
-        ))
-    };
+            XmpValue::Scalar(format_xmp_value_with_default(
+                tag,
+                value,
+                default_namespace_tags.contains(tag),
+                is_static,
+            ))
+        };
 
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
         .iter()
         .map(|result| {
+            let is_static = is_static_path(result.path.as_ref());
             let value = if let Some(elements) = &result.elements {
                 XmpValue::List(
                     elements
@@ -1553,12 +1580,13 @@ fn parse_xmp_packet_in_directory(
                                 &result.tag,
                                 element,
                                 default_namespace_tags.contains(&result.tag),
+                                is_static,
                             )
                         })
                         .collect(),
                 )
             } else {
-                format_value(&result.tag, &result.value, true)
+                format_value(&result.tag, &result.value, true, is_static)
             };
             (result.tag.clone(), value)
         })
@@ -1614,7 +1642,7 @@ fn parse_xmp_packet_in_directory(
             entries.push(XmpEntry::new(
                 &key,
                 tag,
-                format_value(tag, value, false),
+                format_value(tag, value, false, is_static_path(path.as_ref())),
                 false,
                 *priority,
                 xmp_binary_source(tag, value, default_namespace_tags.contains(tag)),
@@ -2738,7 +2766,7 @@ fn extract_list_struct_values_in_directory(
                         && !is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver);
                     if is_container_candidate {
                         container_index += 1;
-                        let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        let local = structured_component_name(&tag_name, &resolver);
                         container_depth = Some(depth);
                         container_group = resolver.group_for_qname(&tag_name);
                         container_raw = Some(raw_property(&tag_name, &resolver));
@@ -2778,7 +2806,7 @@ fn extract_list_struct_values_in_directory(
                         text.clear();
                     }
                 } else {
-                    path.push(ucfirst(NamespaceResolver::extract_local_name(&tag_name)));
+                    path.push(structured_component_name(&tag_name, &resolver));
                     path_raw.push(raw_property(&tag_name, &resolver));
                     text.clear();
                 }
@@ -4057,6 +4085,73 @@ fn extract_description_attributes(
     Ok(())
 }
 
+/// IDs used by RDF properties to point at a separate node definition.
+/// A node definition is a direct child of rdf:RDF; a nodeID on another
+/// element (including a nested rdf:Description) is a reference.
+fn referenced_blank_node_ids(xml_bytes: &[u8]) -> Result<std::collections::HashSet<String>> {
+    // Most packets have no RDF blank nodes. Avoid another XML walk for them.
+    if memchr::memmem::find(xml_bytes, b"nodeID").is_none() {
+        return Ok(std::collections::HashSet::new());
+    }
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+    let mut resolver = NamespaceResolver::new();
+    let mut parent_is_rdf_root = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut buf = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(Event::Start(ref element)) | Ok(Event::Empty(ref element)) => {
+                let empty = matches!(event, Ok(Event::Empty(_)));
+                register_namespaces_from_element(element, &mut resolver)?;
+                resolver.push_element_scope();
+                let tag_name = extract_tag_name(element)?;
+                let definition = is_rdf_description(&tag_name, &resolver)
+                    && parent_is_rdf_root.last() == Some(&true);
+                if !definition && let Some(id) = rdf_node_id_attribute(element, &resolver) {
+                    ids.insert(id);
+                }
+                if empty {
+                    resolver.pop_element_scope();
+                } else {
+                    parent_is_rdf_root.push(is_property_in_namespace(
+                        &tag_name, "RDF", RDF_NS, &resolver,
+                    ));
+                }
+            }
+            Ok(Event::End(_)) => {
+                parent_is_rdf_root.pop();
+                resolver.pop_element_scope();
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid XMP XML structure: {error}"
+                )));
+            }
+        }
+        buf.clear();
+    }
+    Ok(ids)
+}
+
+fn rdf_node_id_attribute(element: &BytesStart, resolver: &NamespaceResolver) -> Option<String> {
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    element.attributes().flatten().find_map(|attr| {
+        let key = std::str::from_utf8(attr.key.as_ref()).ok()?;
+        // The blank-node extractor currently recognizes this literal spelling.
+        // Do not hide a definition whose aliased reference it cannot restore.
+        if key != "rdf:nodeID" || resolver.resolve_prefix("rdf") != Some(RDF_NS) {
+            return None;
+        }
+        let value = std::str::from_utf8(&attr.value).ok()?;
+        Some(quick_xml::escape::unescape(value).ok()?.into_owned())
+    })
+}
+
 /// Checks if a tag name represents an rdf:Description element.
 fn is_rdf_description(tag_name: &str, resolver: &NamespaceResolver) -> bool {
     if let Some(prefix) = NamespaceResolver::extract_prefix(tag_name) {
@@ -4482,7 +4577,7 @@ fn capitalize_first_letter(s: &str) -> String {
 /// - **Basic Job Ticket (xmpBJ:)**: JobName, CreationDate, Status
 #[cfg(test)]
 fn format_xmp_value(tag: &str, value: &str) -> String {
-    format_xmp_value_with_default(tag, value, false)
+    format_xmp_value_with_default(tag, value, false, false)
 }
 
 /// `FoundXMP` marks a newly defined property Binary when XMPAutoConv is on
@@ -4490,12 +4585,17 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 /// `is_default` is proven from a namespace absent from the selected source
 /// tables, not guessed from a displayed property name. Short GMask:Data text
 /// remains ordinary text.
-fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> String {
+fn format_xmp_value_with_default(
+    tag: &str,
+    value: &str,
+    is_default: bool,
+    is_static: bool,
+) -> String {
     // ExifTool -X's static-group properties are default XMP table entries,
     // but their source names are not Adobe XMP schema names. Apply only
     // FoundXMP's generic auto-conversions (XMP.pm:3670-3696), never the
     // same-spelled XMP:Flash/Aperture/ShutterSpeed PrintConv tables.
-    if !tag.starts_with("XMP") {
+    if is_static || !tag.starts_with("XMP") {
         if value.len() > 65536 {
             return format!(
                 "(Binary data {} bytes, use -b option to extract)",
@@ -4512,7 +4612,7 @@ fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> St
                 format_xmp_plain_rational(value)
             };
         }
-        return value.to_string();
+        return format_default_xmp_date(value);
     }
     // Dublin Core's lowercase raw `date` is declared with `%dateTimeInfo`
     // (XMP.pm) and prints through ConvertDateTime, including when carried
@@ -5071,6 +5171,29 @@ fn is_xmp_date_tag(local_name: &str) -> bool {
             // value difference rather than being converted on a guess.
             | "UTCAtExposure"
     ) || local_name.starts_with("HistoryWhen")
+}
+
+/// `ConvertXMPDate($value, 1)` for default XMP properties (13.59
+/// XMP.pm:3383-3396). Unlike a declared date tag, an unknown date-only
+/// string stays untouched; only the full timestamp shape is converted.
+fn format_default_xmp_date(value: &str) -> String {
+    static FULL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = FULL.get_or_init(|| {
+        regex::Regex::new(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})(:\d{2})?\s*(\S*)$")
+            .expect("literal XMP date pattern")
+    });
+    let Some(captures) = pattern.captures(value) else {
+        return value.to_string();
+    };
+    format!(
+        "{}:{}:{} {}{}{}",
+        &captures[1],
+        &captures[2],
+        &captures[3],
+        &captures[4],
+        captures.get(5).map_or("", |m| m.as_str()),
+        &captures[6],
+    )
 }
 
 /// Rewrites an ISO 8601 XMP timestamp the way ExifTool prints one:

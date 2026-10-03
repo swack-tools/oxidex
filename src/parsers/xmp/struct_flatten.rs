@@ -937,14 +937,21 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
         if value.is_empty() {
             continue;
         }
+        let static_uri =
+            uri.filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+        let leaf = rename_field(uri, local);
+        let component = static_uri.map_or_else(
+            || leaf.to_string(),
+            |_| super::namespace_resolver::static_export_component(leaf),
+        );
+        let group = resolver.group_for_prefix(prefix);
         out.push(NodeField {
-            name: tag_id_segment(rename_field(uri, local)),
+            name: tag_id_segment(&component),
             value: value.to_string(),
-            namespace: resolver
-                .group_for_prefix(prefix)
-                .strip_prefix("XMP-")
-                .unwrap_or("")
-                .to_string(),
+            namespace: static_uri.map_or_else(
+                || group.strip_prefix("XMP-").unwrap_or("").to_string(),
+                str::to_string,
+            ),
             local: local.to_string(),
         });
     }

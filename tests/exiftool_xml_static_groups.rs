@@ -129,3 +129,93 @@ fn static_uri_structures_and_uppercase_ids_follow_source_namespace() {
     ));
     assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }
+
+#[test]
+fn static_uri_defaults_use_generic_rational_and_date_conversion() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static default conversions: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/" xmlns:e="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:ShutterSpeedValue>0.4</q:ShutterSpeedValue><e:ModifyDate>2024-01-02T03:04:05Z</e:ModifyDate><e:DateOnly>2024-01-02</e:DateOnly></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(theirs["XMP:XMP-exif:ShutterSpeedValue"], 0.4);
+    assert_eq!(theirs["EXIF:IFD0:ModifyDate"], "2024:01:02 03:04:05Z");
+    assert_eq!(theirs["EXIF:IFD0:DateOnly"], "2024-01-02");
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
+fn static_uri_blank_nodes_and_list_structs_do_not_emit_source_field_aliases() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static RDF structure parity: pinned oracle unavailable");
+        return;
+    };
+    for body in [
+        br#"<rdf:Description><q:Settings rdf:nodeID="n1"/></rdf:Description><rdf:Description rdf:nodeID="n1"><q:VALUE>ghi</q:VALUE></rdf:Description>"#.as_slice(),
+        br#"<rdf:Description><q:Settings><rdf:Bag><rdf:li rdf:parseType="Resource"><q:VALUE>ghi</q:VALUE></rdf:li></rdf:Bag></q:Settings></rdf:Description>"#.as_slice(),
+    ] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let mut packet = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/">"#.to_vec();
+        packet.extend_from_slice(body);
+        packet.extend_from_slice(b"</rdf:RDF>");
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        assert_eq!(theirs["EXIF:IFD0:SettingsValue"], "ghi");
+        let ours = content_entries(run(Command::new(env!("CARGO_BIN_EXE_oxidex")), file.path(), "-G0:1"));
+        assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    }
+}
+
+#[test]
+fn ordinary_xmp_blank_node_definition_is_suppressed_only_when_referenced() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping ordinary RDF blank-node parity: pinned oracle unavailable");
+        return;
+    };
+    for body in [
+        br#"<rdf:Description><q:Settings rdf:nodeID="n1"/></rdf:Description><rdf:Description rdf:nodeID="n1"><q:Value>ghi</q:Value></rdf:Description>"#.as_slice(),
+        br#"<rdf:Description rdf:nodeID="n1"><q:Value>ghi</q:Value></rdf:Description>"#.as_slice(),
+    ] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let mut packet = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:q="http://example.test/ns/">"#.to_vec();
+        packet.extend_from_slice(body);
+        packet.extend_from_slice(b"</rdf:RDF>");
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        let ours = content_entries(run(Command::new(env!("CARGO_BIN_EXE_oxidex")), file.path(), "-G0:1"));
+        assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    }
+}
+
+#[test]
+fn static_xmp_family_and_adobe_schema_keep_distinct_value_conversions() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static/ordinary XMP collision: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"><q:ShutterSpeedValue>0.4</q:ShutterSpeedValue><exif:ShutterSpeedValue>0.4</exif:ShutterSpeedValue></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1:4"));
+    assert_eq!(theirs["XMP:XMP-exif:ShutterSpeedValue"], 0.4);
+    assert_eq!(theirs["XMP:XMP-exif:Copy1:ShutterSpeedValue"], 0.8);
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1:4",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
