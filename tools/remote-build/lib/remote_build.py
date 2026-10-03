@@ -53,19 +53,31 @@ def verify_remote_toolchain(source, ssh, project):
     return expected
 
 
+def source_sync_command(digest, upload, destination):
+    archive = shlex.quote(upload)
+    source = shlex.quote(destination)
+    return (f"echo '{digest}  {upload}' | sha256sum -c - "
+            "|| { echo OXIDEX_SOURCE_CHECKSUM_MISMATCH >&2; exit 66; }; "
+            f"tar -tzf {archive} >/dev/null "
+            "|| { echo OXIDEX_SOURCE_ARCHIVE_INVALID >&2; exit 65; }; "
+            f"find {source} -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} + && "
+            f"tar -xzf {archive} -C {source}")
+
+
 def retryable_exit(code):
     return code in (75, 137, 143, 255)
 
 
 def retryable_failure(exc, stage):
-    if stage in ('prepare', 'sync_upload', 'toolchain'):
+    if stage in ('prepare', 'sync_upload', 'toolchain', 'verify', 'download'):
         return True
     if stage == 'sync_extract':
         # A checksum mismatch is a source integrity error. A lost SSH session
         # can be reported as exit 1 by gcloud, so all other extraction failures
         # are worker-specific and may use the next eligible VM.
-        return (exc.returncode != 66 and
-                'OXIDEX_SOURCE_CHECKSUM_MISMATCH' not in (exc.stderr or ''))
+        return (exc.returncode not in (65, 66) and
+                not any(marker in (exc.stderr or '') for marker in (
+                    'OXIDEX_SOURCE_CHECKSUM_MISMATCH', 'OXIDEX_SOURCE_ARCHIVE_INVALID')))
     return retryable_exit(exc.returncode)
 
 
@@ -142,9 +154,7 @@ def main(argv=None):
         digest=receipt['snapshot']['archive_sha256']
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'
-        command=(f"echo '{digest}  {upload}' | sha256sum -c - "
-                 "|| { echo OXIDEX_SOURCE_CHECKSUM_MISMATCH >&2; exit 66; }; "
-                 f"tar -xzf {upload} -C {shlex.quote(destination)}")
+        command=source_sync_command(digest,upload,destination)
         receipt['stage']='sync_extract'
         subprocess.run(ssh(command),check=True,capture_output=True,text=True)
         receipt['sync_seconds']=time.monotonic()-start;save()
@@ -169,6 +179,7 @@ def main(argv=None):
             if result.returncode:
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
         binary=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/{args.profile}/oxidex'
+        receipt['stage']='verify'
         verification=subprocess.check_output(ssh(shlex.quote(binary)+' --version && sha256sum '+shlex.quote(binary)),text=True)
         print(verification,flush=True)
         digest=verification.splitlines()[-1].split()[0]
@@ -176,6 +187,7 @@ def main(argv=None):
         if args.artifact_dir:
             output=args.artifact_dir.expanduser().resolve();output.mkdir(parents=True,exist_ok=True)
             artifact=output/'oxidex'
+            receipt['stage']='download'
             download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
             receipt['artifact']=str(artifact)
 

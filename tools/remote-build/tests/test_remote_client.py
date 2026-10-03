@@ -166,3 +166,34 @@ class ClientTests(unittest.TestCase):
             self.assertIn('sync-extract.log',receipt['error'])
             self.assertIn('OXIDEX_SOURCE_CHECKSUM_MISMATCH',
                           (root/'evidence'/'sync-extract.log').read_text())
+
+    def test_new_snapshot_removes_deleted_source_files(self):
+        from lib.remote_build import source_sync_command
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source=root/'remote source';source.mkdir()
+            for index,files in enumerate(({'old.rs':b'old'}, {'new.rs':b'new'})):
+                upload=f'source-{index}.tar.gz'
+                archive=root/upload
+                with tarfile.open(archive,'w:gz') as tar:
+                    for name,data in files.items():
+                        local=root/name;local.write_bytes(data)
+                        tar.add(local,arcname=name)
+                digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+                command=source_sync_command(digest,upload,str(source))
+                subprocess.run(['sh','-c',command],cwd=root,check=True,capture_output=True)
+            self.assertEqual([path.name for path in source.iterdir()],['new.rs'])
+            command=source_sync_command('0'*64,upload,str(source))
+            failed=subprocess.run(['sh','-c',command],cwd=root,capture_output=True,text=True)
+            self.assertEqual(failed.returncode,66)
+            self.assertIn('OXIDEX_SOURCE_CHECKSUM_MISMATCH',failed.stderr)
+            self.assertEqual([path.name for path in source.iterdir()],['new.rs'])
+
+    def test_post_build_transport_retries_but_digest_error_stops(self):
+        from lib.remote_build import retryable_failure
+        dropped=subprocess.CalledProcessError(1,'gcloud')
+        for stage in ('verify','download'):
+            self.assertTrue(retryable_failure(dropped,stage))
+        self.assertFalse(retryable_failure(subprocess.CalledProcessError(65,'ssh',
+            stderr='OXIDEX_SOURCE_ARCHIVE_INVALID'),'sync_extract'))
