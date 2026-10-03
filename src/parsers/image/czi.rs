@@ -43,6 +43,7 @@
 //!
 //! - ExifTool source: `lib/Image/ExifTool/ZISRAW.pm`
 
+use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -51,7 +52,7 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::{
     Acknowledged, DecodedValue, PerlCitation, RawAccess, decode_binary_table, find_table,
 };
-use crate::io::ByteOrder;
+use crate::io::{ByteOrder, MMapReader};
 use crate::parsers::xmp::generic_xml::{
     XmlWalkOptions, extract_xml_properties_with, xml_table_priority,
 };
@@ -138,10 +139,34 @@ pub fn parse_czi_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
             }
         }
 
-        process_metadata_section(reader, header, &mut metadata);
+        // Ordinary reads retain their historical tolerant XML behavior; the
+        // diagnostic probe below propagates failures rather than guessing.
+        let _ = process_metadata_section(reader, header, &mut metadata, true);
 
         Ok(metadata)
     })
+}
+
+/// Re-read only the CZI XML section when the selected ExifTool source lacks
+/// `ZISRAW::Main`. The main parser correctly refuses the missing header layout,
+/// but a `-b -TAG` request must still distinguish a real XML property in this
+/// file from an unrelated or absent name. This uses the same section walker as
+/// a capable pin, without publishing any unsupported values as read metadata.
+pub(crate) fn probe_czi_xml_metadata(path: &Path) -> Result<MetadataMap, String> {
+    let reader = MMapReader::new(path)
+        .map_err(|error| format!("cannot reopen CZI for XML probe: {error}"))?;
+    if reader.size() < HEADER_LEN as u64 {
+        return Err("CZI source became too short for XML probe".to_string());
+    }
+    let header = reader
+        .read(0, HEADER_LEN)
+        .map_err(|error| format!("cannot read CZI header for XML probe: {error}"))?;
+    if !header.starts_with(CZI_SIGNATURE) {
+        return Err("CZI source changed before XML probe".to_string());
+    }
+    let mut metadata = MetadataMap::new();
+    process_metadata_section(&reader, header, &mut metadata, false)?;
+    Ok(metadata)
 }
 
 /// ZISRAW.pm:23-27's `int32u[2]` under `PrintConv => '$val =~ tr/ /./; $val'`.
@@ -327,41 +352,52 @@ fn shorten_tag_names(name: &str) -> String {
 }
 
 /// ZISRAW.pm:184-201, the `ZISRAWMETADATA` section.
-fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &mut MetadataMap) {
-    let Some(offset) = header
+fn process_metadata_section(
+    reader: &dyn FileReader,
+    header: &[u8],
+    metadata: &mut MetadataMap,
+    retain_xml: bool,
+) -> Result<(), String> {
+    let offset = header
         .get(METADATA_OFFSET_AT..METADATA_OFFSET_AT + 8)
         .and_then(|bytes| bytes.try_into().ok())
         .map(u64::from_le_bytes)
-    else {
-        return;
-    };
+        .ok_or("CZI XML offset is unavailable")?;
     // ZISRAW.pm:185, `my $pos = Get64u(\$buff, 92) or return 1`.
     if offset == 0 {
-        return;
+        return Ok(());
     }
-    let Ok(section) = reader.read(offset, METADATA_HEADER_LEN) else {
-        return;
-    };
+    let section = reader
+        .read(offset, METADATA_HEADER_LEN)
+        .map_err(|error| format!("cannot read CZI XML section: {error}"))?;
     if !section.starts_with(METADATA_SIGNATURE) {
-        return;
+        return Err("CZI XML section signature changed".to_string());
     }
-    let Some(len) = section
+    let len = section
         .get(METADATA_LENGTH_AT..METADATA_LENGTH_AT + 4)
         .and_then(|bytes| bytes.try_into().ok())
         .map(u32::from_le_bytes)
-    else {
-        return;
-    };
-    if len == 0 || len >= METADATA_MAX_LEN {
-        return;
+        .ok_or("CZI XML length is unavailable")?;
+    if len == 0 {
+        return Ok(());
     }
-    let Ok(xml) = reader.read(offset + METADATA_HEADER_LEN as u64, len as usize) else {
-        return;
-    };
+    if len >= METADATA_MAX_LEN {
+        return Err("CZI XML length exceeds the supported bound".to_string());
+    }
+    let xml_offset = offset
+        .checked_add(METADATA_HEADER_LEN as u64)
+        .ok_or("CZI XML offset overflow")?;
+    let xml = reader
+        .read(xml_offset, len as usize)
+        .map_err(|error| format!("cannot read CZI XML payload: {error}"))?;
 
     // ZISRAW.pm:194, `$et->FoundTag('XML', $buff)` -- retain that exact
     // source block for -b while keeping its ordinary binary summary.
-    metadata.insert_available_binary_with_display_and_group1("XML:XML", xml.to_vec(), "XML");
+    metadata.insert_available_binary_with_display_and_group1(
+        "XML:XML",
+        if retain_xml { xml.to_vec() } else { Vec::new() },
+        "XML",
+    );
 
     let options = XmlWalkOptions {
         // `%Image::ExifTool::XMP::XML`'s `GROUPS => { 0 => 'XML', 1 => 'XML' }`.
@@ -370,9 +406,8 @@ fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &m
         shorten: Some(shorten_tag_names),
         ..XmlWalkOptions::default()
     };
-    let Ok(properties) = extract_xml_properties_with(xml, &options) else {
-        return;
-    };
+    let properties = extract_xml_properties_with(xml, &options)
+        .map_err(|error| format!("cannot parse CZI XML properties: {error}"))?;
     for property in properties {
         let priority = xml_table_priority(&property);
         metadata.insert_xmp_occurrence(
@@ -384,6 +419,7 @@ fn process_metadata_section(reader: &dyn FileReader, header: &[u8], metadata: &m
             &property.group1,
         );
     }
+    Ok(())
 }
 
 #[cfg(test)]

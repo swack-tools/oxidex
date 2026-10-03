@@ -417,6 +417,73 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
+/// Returns a missing CZI source-table refusal only for a requested tag
+/// actually supplied by this CZI file's unavailable parser. Header names are
+/// declared by `ZISRAW::Main`; XML names are probed with the same schema-less
+/// walker the capable parser uses, so non-fixture properties are covered too.
+/// Unrelated and absent names keep the ordinary empty `-b` result.
+pub fn unavailable_czi_binary_request(
+    report: &crate::core::ReadReport,
+    args: &CliArgs,
+    path: &std::path::Path,
+) -> Option<String> {
+    let reason = report.missing_czi_table()?;
+    let requested = args.specific_tags()?;
+    if !args.excluded_tags().is_empty()
+        || requested
+            .iter()
+            .any(|token| token.contains('*') || token.contains('?'))
+    {
+        return None;
+    }
+    let unresolved: Vec<_> = requested
+        .iter()
+        .filter(|token| {
+            args.all_tags
+                || resolve_requested_tags(
+                    &report.metadata,
+                    std::slice::from_ref(*token),
+                    args.all_tags,
+                )
+                .is_empty()
+        })
+        .collect();
+    if unresolved.is_empty() {
+        return None;
+    }
+    if let Some(token) = unresolved.iter().find(|token| {
+        let (qualifier, name) = split_request(token);
+        ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
+            .iter()
+            .any(|known| name.eq_ignore_ascii_case(known))
+            && qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"))
+    }) {
+        return Some(format!("CZI tag {token}: {reason}"));
+    }
+    let xml_requests: Vec<_> = unresolved
+        .into_iter()
+        .filter(|token| {
+            split_request(token)
+                .0
+                .is_none_or(|group| group.eq_ignore_ascii_case("XML"))
+        })
+        .collect();
+    if xml_requests.is_empty() {
+        return None;
+    }
+    let xml_metadata = match crate::parsers::image::czi::probe_czi_xml_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => return Some(format!("CZI tag {}: {error}", xml_requests[0])),
+    };
+    xml_requests
+        .iter()
+        .find(|token| {
+            !resolve_requested_tags(&xml_metadata, std::slice::from_ref(*token), args.all_tags)
+                .is_empty()
+        })
+        .map(|token| format!("CZI tag {token}: {reason}"))
+}
+
 /// The bytes selected by `-b`: Font.pm can return decoded text containing
 /// non-Unicode UTF-8 sequences, which must reach stdout unchanged. Separate
 /// selected values are concatenated, as pinned ExifTool does.
@@ -616,6 +683,79 @@ mod binary_text_tests {
                 assert!(!truncated.contains_key("MPF0:ImageUIDList"));
             }
         }
+    }
+
+    #[test]
+    fn missing_czi_table_refuses_present_file_tags() {
+        use crate::core::{Diagnostic, ParseStatus, ReadReport};
+
+        let mut metadata = MetadataMap::new();
+        metadata.insert("File:FileType", TagValue::new_string("Unknown"));
+        let report = ReadReport {
+            metadata,
+            status: ParseStatus::Partial,
+            diagnostics: vec![Diagnostic::warning(
+                "CZI parse error: missing ZISRAW::Main table",
+            )],
+        };
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/czi/pinned.czi"
+        ));
+        for tag in ["NoSuchTag", "EXIF:XML", "EXIF:FileGUID", "FileType"] {
+            let args =
+                CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
+                    .unwrap();
+            assert_eq!(
+                unavailable_czi_binary_request(&report, &args, path),
+                None,
+                "{tag}"
+            );
+        }
+        for tag in [
+            "XML",
+            "XML:XML",
+            "MicroscopeName",
+            "XML:MicroscopeName",
+            "ZISRAWVersion",
+            "File:FileGUID",
+        ] {
+            let args =
+                CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
+                    .unwrap();
+            let error = unavailable_czi_binary_request(&report, &args, path).unwrap();
+            assert!(error.contains(tag), "{tag}: {error}");
+        }
+        let removed_dir = tempfile::tempdir().unwrap();
+        let removed = removed_dir.path().join("removed.czi");
+        let xml_request = CliArgs::parse_from([
+            "-b".into(),
+            "-XML:MicroscopeName".into(),
+            "removed.czi".into(),
+        ])
+        .unwrap();
+        let error = unavailable_czi_binary_request(&report, &xml_request, &removed).unwrap();
+        assert!(error.contains("XML:MicroscopeName"), "{error}");
+        assert!(error.contains("cannot reopen CZI"), "{error}");
+        let mut bad_offset = std::fs::read(path).unwrap();
+        let beyond_end = bad_offset.len() as u64 + 4096;
+        bad_offset[92..100].copy_from_slice(&beyond_end.to_le_bytes());
+        let moved_section = removed_dir.path().join("moved-section.czi");
+        std::fs::write(&moved_section, bad_offset).unwrap();
+        let error = unavailable_czi_binary_request(&report, &xml_request, &moved_section).unwrap();
+        assert!(error.contains("XML:MicroscopeName"), "{error}");
+        assert!(error.contains("cannot read CZI XML section"), "{error}");
+        let wildcard = CliArgs::parse_from([
+            "-b".into(),
+            "-XML".into(),
+            "-NoSuch*".into(),
+            "fixture.czi".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            unavailable_czi_binary_request(&report, &wildcard, path),
+            None
+        );
     }
 
     #[test]

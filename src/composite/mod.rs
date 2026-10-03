@@ -1234,10 +1234,16 @@ mod tests {
     #[test]
     fn xmp_selected_source_map_shapes_are_pinned() {
         use super::xmp_lens_maps::{XmpLensMaker as Maker, rows};
+        let (canon, nikon, pentax) = match crate::exiftool_tables::EXIFTOOL_VERSION {
+            "11.78" => (453, 576, 295),
+            "12.64" => (505, 607, 305),
+            "13.59" => (535, 618, 310),
+            pin => panic!("unverified XMP lens-map shape for ExifTool {pin}"),
+        };
         for (maker, count) in [
-            (Maker::Canon, 535),
-            (Maker::Nikon, 618),
-            (Maker::Pentax, 310),
+            (Maker::Canon, canon),
+            (Maker::Nikon, nikon),
+            (Maker::Pentax, pentax),
             (Maker::Sony, 431),
             (Maker::Sigma, 0),
             (Maker::Samsung, 18),

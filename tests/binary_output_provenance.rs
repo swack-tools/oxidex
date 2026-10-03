@@ -219,9 +219,157 @@ fn czi_xml_extracts_native_source_block() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/czi/pinned.czi"
     ));
+    let has_table = oxidex::exiftool_tables::find_table("ZISRAW", "Main").is_some();
+    match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" => assert!(!has_table, "11.78 has no native ZISRAW source"),
+        "12.64" | "13.59" => assert!(has_table, "capable pin lost ZISRAW::Main"),
+        pin => panic!("unverified CZI source capability for ExifTool {pin}"),
+    }
+    if !has_table {
+        let identity = run(&["-b", "-FileType"], path);
+        assert!(identity.status.success(), "{identity:?}");
+        assert_eq!(identity.stdout, b"Unknown");
+        let property = run(&["-b", "-XML:MicroscopeName"], path);
+        assert!(!property.status.success(), "{property:?}");
+        assert!(property.stdout.is_empty(), "{property:?}");
+        assert!(
+            String::from_utf8_lossy(&property.stderr).contains("missing ZISRAW::Main table"),
+            "{property:?}"
+        );
+        let unknown = run(&["-b", "-NoSuchTag"], path);
+        assert!(unknown.status.success(), "{unknown:?}");
+        assert!(unknown.stdout.is_empty(), "{unknown:?}");
+        let wildcard = run(&["-b", "-NoSuch*"], path);
+        assert!(!wildcard.status.success(), "{wildcard:?}");
+        assert!(wildcard.stdout.is_empty(), "{wildcard:?}");
+        assert!(
+            String::from_utf8_lossy(&wildcard.stderr)
+                .contains("-b with wildcard tag requests is not supported"),
+            "{wildcard:?}"
+        );
+    }
     let output = run(&["-b", "-XML"], path);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
+    if has_table {
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, include_bytes!("fixtures/czi/xml_header.bin"));
+    } else {
+        assert!(!output.status.success(), "missing CZI table must refuse -b");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("missing ZISRAW::Main table"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+fn czi_missing_table_refuses_non_fixture_xml_property() {
+    let mut czi = fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ))
+    .unwrap();
+    let section = u64::from_le_bytes(czi[92..100].try_into().unwrap()) as usize;
+    let xml_len = u32::from_le_bytes(czi[section + 32..section + 36].try_into().unwrap()) as usize;
+    let xml_start = section + 288;
+    let xml_end = xml_start + xml_len;
+    let xml = std::str::from_utf8(&czi[xml_start..xml_end]).unwrap();
+    let expanded = xml.replace(
+        "    </HardwareSetting>",
+        "      <Detectors><Detector Name=\"Detector-1\"/></Detectors>\n    </HardwareSetting>",
+    );
+    assert_ne!(expanded, xml, "fixture lost HardwareSetting XML section");
+    czi.splice(xml_start..xml_end, expanded.bytes());
+    czi[section + 32..section + 36].copy_from_slice(&(expanded.len() as u32).to_le_bytes());
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("other-property.czi");
+    fs::write(&path, czi).unwrap();
+
+    let has_table = oxidex::exiftool_tables::find_table("ZISRAW", "Main").is_some();
+    for tag in ["-XML:DetectorName", "-DetectorName"] {
+        let output = run(&["-b", tag], &path);
+        if has_table {
+            assert!(output.status.success(), "{tag}: {output:?}");
+            assert_eq!(output.stdout, b"Detector-1", "{tag}");
+        } else {
+            assert!(!output.status.success(), "{tag}: {output:?}");
+            assert!(output.stdout.is_empty(), "{tag}: {output:?}");
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                diagnostic.contains("missing ZISRAW::Main table"),
+                "{tag}: {output:?}"
+            );
+            assert!(diagnostic.contains(&tag[1..]), "{tag}: {output:?}");
+        }
+    }
+    let unknown = run(&["-b", "-XML:NoSuchTag"], &path);
+    assert!(unknown.status.success(), "{unknown:?}");
+    assert!(unknown.stdout.is_empty(), "{unknown:?}");
+}
+
+#[test]
+fn czi_all_occurrences_refuses_missing_xml_collision() {
+    let mut czi = fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ))
+    .unwrap();
+    let section = u64::from_le_bytes(czi[92..100].try_into().unwrap()) as usize;
+    let xml_len = u32::from_le_bytes(czi[section + 32..section + 36].try_into().unwrap()) as usize;
+    let xml_start = section + 288;
+    let xml_end = xml_start + xml_len;
+    let xml = std::str::from_utf8(&czi[xml_start..xml_end]).unwrap();
+    let expanded = xml.replace("<Metadata>", "<Metadata>\n    <FileType>camera</FileType>");
+    assert_ne!(expanded, xml, "fixture lost Metadata XML section");
+    czi.splice(xml_start..xml_end, expanded.bytes());
+    czi[section + 32..section + 36].copy_from_slice(&(expanded.len() as u32).to_le_bytes());
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("colliding-filetype.czi");
+    fs::write(&path, czi).unwrap();
+
+    let output = run(&["-a", "-b", "-FileType"], &path);
+    if oxidex::exiftool_tables::find_table("ZISRAW", "Main").is_some() {
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"CZIcamera", "{output:?}");
+    } else {
+        assert!(!output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostic.contains("missing ZISRAW::Main table"),
+            "{output:?}"
+        );
+        assert!(diagnostic.contains("FileType"), "{output:?}");
+    }
+}
+
+#[test]
+fn czi_missing_table_never_leaves_partial_multi_file_binary_output() {
+    if oxidex::exiftool_tables::EXIFTOOL_VERSION != "11.78" {
+        return;
+    }
+    let valid = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/icc/red_trc_apple.icc"
+    ));
+    let czi = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/czi/pinned.czi"
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-b", "-RedTRC", "-XML"])
+        .arg(valid)
+        .arg(czi)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        diagnostic.contains("missing ZISRAW::Main table"),
+        "{output:?}"
+    );
+    assert!(diagnostic.contains("XML"), "{output:?}");
 }
 
 #[test]

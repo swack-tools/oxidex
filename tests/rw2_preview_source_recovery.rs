@@ -13,6 +13,36 @@ fn source() -> Vec<u8> {
         .expect("read pinned Panasonic.rw2")
 }
 
+fn source_has_preview_a411_a412() -> bool {
+    let table = oxidex::exiftool_tables::find_ifd_table("Exif", "Main").unwrap();
+    let present = table.tag(0xA411).is_some() && table.tag(0xA412).is_some();
+    match oxidex::exiftool_tables::EXIFTOOL_VERSION {
+        "11.78" | "12.64" => assert!(!present, "older pin must not claim A411/A412"),
+        "13.59" => assert!(present, "13.59 must retain A411/A412"),
+        pin => panic!("unverified A411/A412 source capability for ExifTool {pin}"),
+    }
+    if !present {
+        let original = source();
+        let (tiff, ifd0) = preview_ifd0(&original);
+        let exif_ifd = tiff + read_u32(&original, entry(&original, ifd0, 0x8769) + 8) as usize;
+        let slot = entry(&original, exif_ifd, 0xA405);
+        for (id, name) in [(0xA411u16, "ShadingCorrection"), (0xA412, "NoiseReduction")] {
+            let mut data = original.clone();
+            data[slot..slot + 2].copy_from_slice(&id.to_le_bytes());
+            data[slot + 2..slot + 4].copy_from_slice(&3u16.to_le_bytes());
+            data[slot + 4..slot + 8].copy_from_slice(&1u32.to_le_bytes());
+            data[slot + 8..slot + 12].copy_from_slice(&1u32.to_le_bytes());
+            let metadata = parse(&data);
+            assert!(metadata.get(&format!("ExifIFD:{name}")).is_none());
+            assert_eq!(
+                metadata.get_string("Panasonic:NoiseReduction"),
+                Some("Standard")
+            );
+        }
+    }
+    present
+}
+
 fn read_u16(data: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(data[at..at + 2].try_into().unwrap())
 }
@@ -503,6 +533,9 @@ fn preview_exif_value_after_app1_is_refused() {
 
 #[test]
 fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
     let pointer = entry(&original, ifd0, 0x8769);
@@ -539,6 +572,9 @@ fn preview_a411_a412_use_exififd_identity_and_keep_panasonic_noise_reduction() {
 
 #[test]
 fn preview_ilce_model_keeps_a411_after_bad_first_exif_entry() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let mut data = source();
     let (tiff, ifd0) = preview_ifd0(&data);
     let model = entry(&data, ifd0, 0x0110);
@@ -610,6 +646,9 @@ fn preview_exif_pointer_does_not_revisit_prior_gps_directory() {
 
 #[test]
 fn preview_interop_reached_after_bad_entry_blocks_ifd1_alias() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let mut data = source();
     let (tiff, ifd0) = preview_ifd0(&data);
     let model = entry(&data, ifd0, 0x0110);
@@ -705,6 +744,9 @@ fn cyclic_preview_exififd_does_not_relabel_ifd0_shading_correction() {
 
 #[test]
 fn footerless_preview_exififd_keeps_reached_shading_correction() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let data = source();
     let outer_ifd0 = read_u32(&data, 4) as usize;
     let jpg_from_raw = entry(&data, outer_ifd0, 0x002e);
@@ -761,6 +803,9 @@ fn footerless_preview_exififd_keeps_reached_shading_correction() {
 
 #[test]
 fn preview_a411_uses_source_read_formats_beyond_integral_wires() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
     let pointer = entry(&original, ifd0, 0x8769);
@@ -817,6 +862,9 @@ fn preview_a411_uses_source_read_formats_beyond_integral_wires() {
 
 #[test]
 fn preview_a411_a412_arrays_use_generated_unknown_fallback() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
     let pointer = entry(&original, ifd0, 0x8769);
@@ -837,6 +885,9 @@ fn preview_a411_a412_arrays_use_generated_unknown_fallback() {
 
 #[test]
 fn preview_a411_preserves_embedded_nuls_and_zero_denominator_rationals() {
+    if !source_has_preview_a411_a412() {
+        return;
+    }
     let original = source();
     let (tiff, ifd0) = preview_ifd0(&original);
     let pointer = entry(&original, ifd0, 0x8769);
