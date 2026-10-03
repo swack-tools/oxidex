@@ -206,8 +206,12 @@ jobs:
     # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
     # workflow-wide) while skipping the full debuginfo this never reads.
     #
-    # If this job starts failing on memory, this block is the first suspect.
+    # Two current-head Spot runs (PR #1052) had multiple concurrent linker
+    # processes killed by signal 9 before tests ran. Limit this job's Cargo
+    # compilation fanout while the eight container runners share one host;
+    # keep the required Build & Test check name unchanged.
     env:
+      CARGO_BUILD_JOBS: 4
       CARGO_PROFILE_TEST_CODEGEN_UNITS: 16
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
