@@ -272,22 +272,28 @@ fn static_makernote_properties_do_not_activate_native_composites() {
         eprintln!("skipping maker-note activation parity: pinned oracle unavailable");
         return;
     };
-    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
-    std::fs::write(
-        file.path(),
-        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/MakerNotes/Canon/1.0/"><q:MinFocalLength>24</q:MinFocalLength><q:MaxFocalLength>70</q:MaxFocalLength></rdf:Description></rdf:RDF>"#,
-    )
-    .unwrap();
-    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
-    assert_eq!(theirs["MakerNotes:Canon:MinFocalLength"], 24);
-    assert_eq!(theirs["MakerNotes:Canon:MaxFocalLength"], 70);
-    assert!(!theirs.contains_key("Composite:Lens"));
-    let ours = content_entries(run(
-        Command::new(env!("CARGO_BIN_EXE_oxidex")),
-        file.path(),
-        "-G0:1",
-    ));
-    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+    for group0 in ["MakerNotes", "EXIF", "IFD0"] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let packet = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/{group0}/Canon/1.0/"><q:MinFocalLength>24</q:MinFocalLength><q:MaxFocalLength>70</q:MaxFocalLength></rdf:Description></rdf:RDF>"#
+        );
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        assert_eq!(theirs[&format!("{group0}:Canon:MinFocalLength")], 24);
+        assert_eq!(theirs[&format!("{group0}:Canon:MaxFocalLength")], 70);
+        assert!(!theirs.contains_key("Composite:Lens"));
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1",
+        ));
+        assert_eq!(
+            ours,
+            theirs,
+            "{group0}: current pin: {}",
+            oracle.provenance()
+        );
+    }
 }
 
 #[test]
@@ -326,4 +332,49 @@ fn embedded_static_makernote_keeps_native_canon_composites_active() {
         ours.get("Composite:Lens35efl"),
         theirs.get("Composite:Lens35efl")
     );
+}
+
+#[test]
+fn static_xmp_title_keeps_mov_priority_directory_promotion() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping MOV static XMP priority parity: pinned oracle unavailable");
+        return;
+    };
+    fn atom(name: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+    let packet = br#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Title>XMP TITLE</q:Title></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let mut udta = atom(b"\xa9nam", b"\0\x0c\0\0NATIVE TITLE");
+    udta.extend_from_slice(&atom(b"XMP_", packet));
+    let mut mov = atom(b"ftyp", b"qt  \0\0\0\0qt  ");
+    mov.extend_from_slice(&atom(b"moov", &atom(b"udta", &udta)));
+    let file = tempfile::Builder::new().suffix(".mov").tempfile().unwrap();
+    std::fs::write(file.path(), mov).unwrap();
+    let read_title = |mut command: Command| -> Value {
+        let output = command
+            .args(["-j", "-Title"])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut tags = rows[0].as_object().unwrap().clone();
+        tags.remove("SourceFile");
+        assert_eq!(tags.len(), 1, "{tags:?}");
+        tags.into_values().next().unwrap()
+    };
+    let theirs = read_title(oracle.command());
+    assert_eq!(theirs, "XMP TITLE");
+    let ours = read_title(Command::new(env!("CARGO_BIN_EXE_oxidex")));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }

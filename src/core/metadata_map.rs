@@ -747,9 +747,8 @@ impl MetadataMap {
 
     /// An ExifTool `-X` RDF property whose resolved URI restores a non-XMP
     /// family-0/1 group. Keep its source identity distinct from a real EXIF
-    /// or MakerNote parser: XMP's default property has Priority => 0, and
-    /// source modules that were only named by the XML must not activate all
-    /// their native composite definitions.
+    /// or MakerNote parser, and retain the effective source priority: a
+    /// priority directory can promote a default XMP property above zero.
     pub(crate) fn insert_xmp_static_occurrence<K: Into<String>>(
         &mut self,
         key: K,
@@ -757,12 +756,13 @@ impl MetadataMap {
         source: Option<&str>,
         group0: &str,
         group1: &str,
+        priority: i16,
         binary_payload_unavailable: bool,
     ) {
         let key = key.into();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
-        occurrence.priority = 0;
+        occurrence.priority = priority;
         occurrence.group0 = super::tag_occurrence::intern(group0);
         occurrence.group1 = super::tag_occurrence::intern(group1);
         // The static URI property has already passed XMPAutoConv. Native

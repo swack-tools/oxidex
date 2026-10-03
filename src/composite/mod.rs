@@ -338,21 +338,19 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // `lens_id::OMITTED`.
     let olympus_lens_type_pair = resolve_indexed(map, &mut names, "LensTypeMake").is_some()
         && resolve_indexed(map, &mut names, "LensTypeModel").is_some();
-    // ExifTool's -X static MakerNotes URI restores reported source groups,
-    // but does not load the manufacturer's parser or Composite table. An
-    // embedded packet can coexist with a real MakerNote, so activation is
-    // determined per source module rather than by FileType or group name.
-    let mut static_makernote_modules = HashSet::new();
-    let mut native_makernote_modules = HashSet::new();
+    // A static ExifTool -X URI reports the named group but never loads that
+    // group's native Composite table. The URI may name any family 0 (even
+    // EXIF/Canon), while an embedded packet may coexist with native tags.
+    // Source provenance, not the displayed family-0/group-1 string, decides
+    // whether the module was actually activated by a file reader.
+    let mut static_source_modules = HashSet::new();
+    let mut native_source_modules = HashSet::new();
     for occurrence in map.occurrences() {
-        if crate::cli::tag_resolution::family0_label(occurrence) != "MakerNotes" {
-            continue;
-        }
         let module = crate::cli::tag_resolution::family1_label(occurrence);
         if occurrence.origin.module == Some("XMP::StaticGroup") {
-            static_makernote_modules.insert(module.to_string());
+            static_source_modules.insert(module.to_string());
         } else {
-            native_makernote_modules.insert(module.to_string());
+            native_source_modules.insert(module.to_string());
         }
     }
     // Composites this run produced, keyed by each definition's own index
@@ -378,8 +376,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
-            if static_makernote_modules.contains(comp.module)
-                && !native_makernote_modules.contains(comp.module)
+            if static_source_modules.contains(comp.module)
+                && !native_source_modules.contains(comp.module)
             {
                 continue;
             }

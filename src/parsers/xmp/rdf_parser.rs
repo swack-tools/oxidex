@@ -430,7 +430,9 @@ pub(crate) fn insert_xmp_entry_with_source(
         metadata.insert(entry.key.clone(), value);
         return;
     }
-    let priority = if entry.group1 == "XMP" {
+    let priority = if entry.source_is_static {
+        entry.priority
+    } else if entry.group1 == "XMP" {
         // The bare `XMP` group is a property no XMP table defines, such as
         // one with no namespace. FoundXMP gives
         // such a tag the default `{ Name => $name, IsDefault => 1,
@@ -452,6 +454,7 @@ pub(crate) fn insert_xmp_entry_with_source(
             source,
             group0,
             &entry.group1,
+            priority,
             entry.binary_payload_unavailable,
         );
         return;
