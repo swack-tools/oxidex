@@ -538,7 +538,7 @@ jobs:
   #
   read-regression-gate:
     name: Corpus Read Regression Gate
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: spot
     timeout-minutes: 30
     env:
       # The receipt's build command is fixed (`cargo build --release --bin
@@ -640,7 +640,7 @@ jobs:
     # Avoid competing with the read measurement on the same M4 host.
     needs: [read-regression-gate]
     if: ${{ always() && !cancelled() }}
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: spot
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
