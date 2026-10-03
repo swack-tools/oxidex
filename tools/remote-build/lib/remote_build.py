@@ -89,6 +89,8 @@ def retryable_exit(code):
 
 
 def retryable_failure(exc, stage):
+    if stage == "cleanup":
+        return False
     if stage in ('prepare', 'sync_upload', 'toolchain', 'verify', 'download'):
         return True
     if stage == 'sync_extract':
