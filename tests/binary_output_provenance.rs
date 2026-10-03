@@ -229,6 +229,13 @@ fn czi_xml_extracts_native_source_block() {
         let identity = run(&["-b", "-FileType"], path);
         assert!(identity.status.success(), "{identity:?}");
         assert_eq!(identity.stdout, b"Unknown");
+        let property = run(&["-b", "-XML:MicroscopeName"], path);
+        assert!(!property.status.success(), "{property:?}");
+        assert!(property.stdout.is_empty(), "{property:?}");
+        assert!(
+            String::from_utf8_lossy(&property.stderr).contains("missing ZISRAW::Main table"),
+            "{property:?}"
+        );
         let unknown = run(&["-b", "-NoSuchTag"], path);
         assert!(unknown.status.success(), "{unknown:?}");
         assert!(unknown.stdout.is_empty(), "{unknown:?}");

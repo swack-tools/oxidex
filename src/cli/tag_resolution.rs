@@ -417,6 +417,40 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
+// The CZI XML property names independently observed with the pinned 13.59
+// oracle's `-a -G1 -s` on tests/fixtures/czi/pinned.czi. These are names
+// produced by ZISRAW.pm's ShortenTagNames, not a guess from a requested token.
+const KNOWN_CZI_XML_TAGS: &[&str] = &[
+    "XML",
+    "MicroscopeId",
+    "MicroscopeName",
+    "MicroscopeUniqueName",
+    "MicroscopeModel",
+    "MicroscopeIsAvailable",
+    "MicroscopeIsBroken",
+    "MicroscopeIsBrokenReason",
+    "MicroscopeMotorization",
+    "MicroscopeIsLightSource",
+    "MicroscopeIsLightSink",
+    "MicroscopeStandSpecification",
+    "MicroscopeDeviceRefId",
+    "EyePieceId",
+    "EyePieceName",
+    "EyePieceUniqueName",
+    "EyePieceModel",
+    "EyePieceIsAvailable",
+    "EyePieceIsBroken",
+    "EyePieceIsBrokenReason",
+    "EyePieceMotorization",
+    "EyePieceIsLightSource",
+    "EyePieceIsLightSink",
+    "EyePieceMag",
+    "EyePieceTotalMag",
+    "EyePieceDepthOfField",
+    "EyePieceFieldOfView",
+    "EyePieceTotalFieldOfView",
+];
+
 /// Returns a missing CZI source-table refusal only for a known tag that
 /// depends on that table. An unmatched request still has the ordinary `-b`
 /// empty result, and unsupported request forms keep their own diagnostics.
@@ -437,7 +471,10 @@ pub fn unavailable_czi_binary_request<'a>(
         .iter()
         .any(|token| {
             let (qualifier, name) = split_request(token);
-            let from_czi = if name.eq_ignore_ascii_case("XML") {
+            let from_czi = if KNOWN_CZI_XML_TAGS
+                .iter()
+                .any(|known| name.eq_ignore_ascii_case(known))
+            {
                 qualifier.is_none_or(|group| group.eq_ignore_ascii_case("XML"))
             } else if ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
                 .iter()
@@ -682,7 +719,14 @@ mod binary_text_tests {
                 "{tag}"
             );
         }
-        for tag in ["XML", "XML:XML", "ZISRAWVersion", "File:FileGUID"] {
+        for tag in [
+            "XML",
+            "XML:XML",
+            "MicroscopeName",
+            "XML:MicroscopeName",
+            "ZISRAWVersion",
+            "File:FileGUID",
+        ] {
             let args =
                 CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
                     .unwrap();
