@@ -229,6 +229,17 @@ fn czi_xml_extracts_native_source_block() {
         let identity = run(&["-b", "-FileType"], path);
         assert!(identity.status.success(), "{identity:?}");
         assert_eq!(identity.stdout, b"Unknown");
+        let unknown = run(&["-b", "-NoSuchTag"], path);
+        assert!(unknown.status.success(), "{unknown:?}");
+        assert!(unknown.stdout.is_empty(), "{unknown:?}");
+        let wildcard = run(&["-b", "-NoSuch*"], path);
+        assert!(!wildcard.status.success(), "{wildcard:?}");
+        assert!(wildcard.stdout.is_empty(), "{wildcard:?}");
+        assert!(
+            String::from_utf8_lossy(&wildcard.stderr)
+                .contains("-b with wildcard tag requests is not supported"),
+            "{wildcard:?}"
+        );
     }
     let output = run(&["-b", "-XML"], path);
     if has_table {

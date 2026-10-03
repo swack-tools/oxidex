@@ -417,19 +417,42 @@ pub fn resolve_requested_tags<'a>(
     out
 }
 
-/// Returns a missing CZI source-table refusal only when a requested binary
-/// tag is unavailable. Identity tags recovered by format detection remain
-/// readable even when the CZI parser could not run.
+/// Returns a missing CZI source-table refusal only for a known tag that
+/// depends on that table. An unmatched request still has the ordinary `-b`
+/// empty result, and unsupported request forms keep their own diagnostics.
 pub fn unavailable_czi_binary_request<'a>(
     report: &'a crate::core::ReadReport,
     args: &CliArgs,
 ) -> Option<&'a str> {
     let reason = report.missing_czi_table()?;
     let requested = args.specific_tags()?;
+    if !args.excluded_tags().is_empty()
+        || requested
+            .iter()
+            .any(|token| token.contains('*') || token.contains('?'))
+    {
+        return None;
+    }
     requested
         .iter()
         .any(|token| {
-            resolve_requested_tags(&report.metadata, std::slice::from_ref(token), args.all_tags)
+            let (qualifier, name) = split_request(token);
+            let from_czi = if name.eq_ignore_ascii_case("XML") {
+                qualifier.is_none_or(|group| group.eq_ignore_ascii_case("XML"))
+            } else if ["ZISRAWVersion", "PrimaryFileGUID", "FileGUID"]
+                .iter()
+                .any(|known| name.eq_ignore_ascii_case(known))
+            {
+                qualifier.is_none_or(|group| group.eq_ignore_ascii_case("File"))
+            } else {
+                false
+            };
+            from_czi
+                && resolve_requested_tags(
+                    &report.metadata,
+                    std::slice::from_ref(token),
+                    args.all_tags,
+                )
                 .is_empty()
         })
         .then_some(reason)
@@ -634,6 +657,48 @@ mod binary_text_tests {
                 assert!(!truncated.contains_key("MPF0:ImageUIDList"));
             }
         }
+    }
+
+    #[test]
+    fn missing_czi_table_only_refuses_known_unavailable_requests() {
+        use crate::core::{Diagnostic, ParseStatus, ReadReport};
+
+        let mut metadata = MetadataMap::new();
+        metadata.insert("File:FileType", TagValue::new_string("Unknown"));
+        let report = ReadReport {
+            metadata,
+            status: ParseStatus::Partial,
+            diagnostics: vec![Diagnostic::warning(
+                "CZI parse error: missing ZISRAW::Main table",
+            )],
+        };
+        for tag in ["NoSuchTag", "EXIF:XML", "EXIF:FileGUID", "FileType"] {
+            let args =
+                CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
+                    .unwrap();
+            assert_eq!(
+                unavailable_czi_binary_request(&report, &args),
+                None,
+                "{tag}"
+            );
+        }
+        for tag in ["XML", "XML:XML", "ZISRAWVersion", "File:FileGUID"] {
+            let args =
+                CliArgs::parse_from(["-b".into(), format!("-{tag}").into(), "fixture.czi".into()])
+                    .unwrap();
+            assert!(
+                unavailable_czi_binary_request(&report, &args).is_some(),
+                "{tag}"
+            );
+        }
+        let wildcard = CliArgs::parse_from([
+            "-b".into(),
+            "-XML".into(),
+            "-NoSuch*".into(),
+            "fixture.czi".into(),
+        ])
+        .unwrap();
+        assert_eq!(unavailable_czi_binary_request(&report, &wildcard), None);
     }
 
     #[test]
