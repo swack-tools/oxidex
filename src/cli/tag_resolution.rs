@@ -439,12 +439,13 @@ pub fn unavailable_czi_binary_request<'a>(
     let unresolved: Vec<_> = requested
         .iter()
         .filter(|token| {
-            resolve_requested_tags(
-                &report.metadata,
-                std::slice::from_ref(*token),
-                args.all_tags,
-            )
-            .is_empty()
+            args.all_tags
+                || resolve_requested_tags(
+                    &report.metadata,
+                    std::slice::from_ref(*token),
+                    args.all_tags,
+                )
+                .is_empty()
         })
         .collect();
     if unresolved.is_empty() {
