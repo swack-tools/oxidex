@@ -56,6 +56,18 @@ def retryable_exit(code):
     return code in (75, 137, 143, 255)
 
 
+def retryable_failure(exc, stage):
+    if stage in ('prepare', 'sync_upload', 'toolchain'):
+        return True
+    if stage == 'sync_extract':
+        # A checksum mismatch is a source integrity error. A lost SSH session
+        # can be reported as exit 1 by gcloud, so all other extraction failures
+        # are worker-specific and may use the next eligible VM.
+        return (exc.returncode != 66 and
+                'OXIDEX_SOURCE_CHECKSUM_MISMATCH' not in (exc.stderr or ''))
+    return retryable_exit(exc.returncode)
+
+
 def download_artifact(instance, zone, project, binary, artifact, digest):
     import tempfile
     import os
@@ -122,7 +134,7 @@ def main(argv=None):
         project=shlex.quote(args.worktree_id)
         receipt['stage']='prepare'
         subprocess.run(ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} prepare'),check=True)
-        receipt['stage']='sync'
+        receipt['stage']='sync_upload'
         start=time.monotonic()
         subprocess.run(['gcloud','compute','scp',str(archive),args.instance+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
                         '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE],check=True)
@@ -130,8 +142,10 @@ def main(argv=None):
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'
         command=(f"echo '{digest}  {upload}' | sha256sum -c - "
-                 f"&& tar -xzf {upload} -C {shlex.quote(destination)}")
-        subprocess.run(ssh(command),check=True)
+                 "|| { echo OXIDEX_SOURCE_CHECKSUM_MISMATCH >&2; exit 66; }; "
+                 f"tar -xzf {upload} -C {shlex.quote(destination)}")
+        receipt['stage']='sync_extract'
+        subprocess.run(ssh(command),check=True,capture_output=True,text=True)
         receipt['sync_seconds']=time.monotonic()-start;save()
         receipt['stage']='toolchain'
         receipt['toolchain']=verify_remote_toolchain(source, ssh, project)
@@ -168,8 +182,7 @@ def main(argv=None):
     except Exception as exc:
         receipt['error']=str(exc)
         if isinstance(exc,subprocess.CalledProcessError):
-            receipt['retryable']=(receipt.get('stage') in ('prepare','toolchain')
-                                  or retryable_exit(exc.returncode))
+            receipt['retryable']=retryable_failure(exc, receipt.get('stage'))
         save();raise
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
     return 0

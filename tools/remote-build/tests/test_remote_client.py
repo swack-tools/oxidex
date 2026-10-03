@@ -135,3 +135,13 @@ class ClientTests(unittest.TestCase):
             self.assertNotIn('verified',receipt)
             self.assertEqual(run.call_count,3)  # prepare, upload, extract only
             self.assertFalse(any('cargo fetch' in value for call in run.call_args_list for value in call.args[0]))
+
+    def test_sync_transport_retries_but_checksum_failure_stops(self):
+        from lib.remote_build import retryable_failure
+        upload=subprocess.CalledProcessError(1,'scp')
+        disconnected=subprocess.CalledProcessError(1,'ssh',stderr='Connection closed')
+        mismatch=subprocess.CalledProcessError(66,'ssh',stderr='OXIDEX_SOURCE_CHECKSUM_MISMATCH')
+        self.assertTrue(retryable_failure(upload,'sync_upload'))
+        self.assertTrue(retryable_failure(disconnected,'sync_extract'))
+        self.assertFalse(retryable_failure(mismatch,'sync_extract'))
+        self.assertFalse(retryable_failure(subprocess.CalledProcessError(101,'cargo'),'compile'))
