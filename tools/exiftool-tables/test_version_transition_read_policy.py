@@ -79,6 +79,21 @@ class LedgerTests(unittest.TestCase):
         return conformance.transcript_row(
             "/staged/0000.xml", oracle, candidate, conformance.compare(oracle, candidate))
 
+    def test_counts_embedded_identity_names_as_xmp_xml_payload(self):
+        oracle = {
+            "XMP:XMP-File:Copy1:FileType": "JPEG",
+            "XMP:XMP-File:Copy1:FileTypeExtension": "jpg",
+            "XMP:XMP-File:Copy1:MIMEType": "image/jpeg",
+            "XML:XML-File:Copy1:FileType": "JPEG",
+            "XML:XML-File:Copy1:MIMEType": "image/jpeg",
+            "File:FileType": "XML",
+            "File:MIMEType": "application/xml",
+            "XML:XML-File:Warning": "not payload",
+        }
+        result = policy.occurrence_ledger(self.fixture, oracle, {},
+                                          self.transcript(oracle, {}), native_status=0)
+        self.assertEqual(result["payload_occurrences"], 5)
+
     def test_records_both_matched_full_oracle_keys_and_multiplicity(self):
         oracle = {"EXIF:IFD0:Copy1:CreateDate": "2020:01:01",
                   "EXIF:ExifIFD:Copy1:CreateDate": "2021:01:01"}
