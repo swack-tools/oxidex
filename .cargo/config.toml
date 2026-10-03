@@ -32,9 +32,3 @@ rustflags = ["-C", "strip=none", "-C", "link-arg=-Wl,-S,-x"]
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "strip=none", "-C", "link-arg=-Wl,-S,-x"]
-
-# Repository-owned remote Linux worker commands.
-[alias]
-remote-build = "!python3 tools/remote-build/direct.py"
-remote-debug = "!python3 tools/remote-build/build.py --profile debug"
-remote-release = "!python3 tools/remote-build/build.py --profile release"

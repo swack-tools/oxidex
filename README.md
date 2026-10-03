@@ -134,7 +134,7 @@ all-features release build.
 ### Repository-owned remote-build commands
 
 The client lives in `tools/remote-build/` in this checkout. Just calls
-`build.py` directly; Cargo aliases call the same scripts. No global Cargo
+`build.py` directly. No global Cargo
 shim or infrastructure checkout is needed to submit a build. Python 3.11+
 is required, and the client uses only the Python standard library.
 
@@ -142,7 +142,7 @@ is required, and the client uses only the Python standard library.
 project). `OXIDEX_REMOTE_WORKTREE` selects the persistent source/target cache
 identifier (default: a hash of the local checkout path). Give each local
 checkout a distinct identifier. Automatic builds choose a fresh instance and
-zone for every attempt. Direct `cargo remote-build` uses the configured
+zone for every attempt. Direct `python3 tools/remote-build/direct.py` uses the configured
 instance and zone. Settings may be environment variables or local
 `.cargo/config.toml` `[env]` entries; no personal VM or credentials are committed.
 
@@ -154,7 +154,7 @@ just build-release
 # Optional: use a specific worker instead of automatic selection.
 export OXIDEX_REMOTE_INSTANCE=YOUR_INSTANCE
 export OXIDEX_REMOTE_ZONE=YOUR_ZONE
-cargo remote-build --profile debug
+python3 tools/remote-build/direct.py --profile debug
 ```
 
 ### Credentials and VM setup
