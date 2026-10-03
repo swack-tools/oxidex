@@ -43,8 +43,14 @@ for my $loaded_module ('Image/ExifTool.pm', 'Image/ExifTool/XMP.pm',
 }
 my $module = 'Image/ExifTool/PLUS.pm';
 my $expected = abs_path("$lib/$module") or die "selected PLUS.pm missing\n";
+my %supported_plus_versions = (
+    '11.78' => '1.00',
+    '12.64' => '1.00',
+    '13.59' => '1.02',
+);
 die "unsupported PLUS.pm version\n"
-    unless $Image::ExifTool::PLUS::VERSION eq '1.02';
+    unless defined($supported_plus_versions{$pin})
+        && $Image::ExifTool::PLUS::VERSION eq $supported_plus_versions{$pin};
 my $tag = $table->{MediaSummaryCode};
 die "MediaSummaryCode not selected from PLUS::XMP\n"
     unless ref($tag) eq 'HASH' && $tag->{SeparateTable} eq 'MediaMatrix';

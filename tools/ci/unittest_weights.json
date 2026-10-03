@@ -1,6 +1,6 @@
 {
  "note": "Module keys are whole-module seconds; full test ids (>=30s) override their share. Refresh: python3 tools/ci/unittest_weights_from_run.py <run-id> [<run-id> ...]",
- "source": "GitHub Actions runs 35679495666 at fc37c65e666b, 35646847038 at 817b086f9abe, 35609063000 at 36dcbec91aff (ubuntu-latest shards): per-test wall seconds between consecutive unittest -v results, mean over the runs containing each test; 2026-09-28 local buildless timing for ten new modules in historical-publication-weights-timing*.log and historical-publication-quicktime-timing-restored.log; 2026-10-03 local buildless timing for test_runtime_lens_types: 4 tests in 0.041s, rounded to minimum 0.1s (historical-lens-independent-11-78/new-module-timing.json)",
+ "source": "GitHub Actions runs 35679495666 at fc37c65e666b, 35646847038 at 817b086f9abe, 35609063000 at 36dcbec91aff (ubuntu-latest shards): per-test wall seconds between consecutive unittest -v results, mean over the runs containing each test; 2026-09-28 local buildless timing for ten new modules in historical-publication-weights-timing*.log and historical-publication-quicktime-timing-restored.log; 2026-10-03 local buildless timing for test_runtime_lens_types: 4 tests in 0.041s, rounded to minimum 0.1s (historical-lens-independent-11-78/new-module-timing.json); 2026-10-03 local buildless timing for test_plus_media_matrix_versions: 2 tests in 0.091s, rounded to minimum 0.1s (20261003-plus-media-source-compat/new-module-timing.json)",
  "seconds": {
   "test_af_points": 18.2,
   "test_af_points_relative_semantics": 0.1,
@@ -91,6 +91,7 @@
   "test_numeric_scalar": 0.2,
   "test_oracle_processors": 1.2,
   "test_patch_ifd_generated_row": 3.5,
+  "test_plus_media_matrix_versions": 0.1,
   "test_png_shift_contract": 0.1,
   "test_probe_ciff_opaque": 1.4,
   "test_probe_serial_processor": 4.0,

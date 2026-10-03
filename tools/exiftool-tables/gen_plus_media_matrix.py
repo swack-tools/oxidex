@@ -11,14 +11,16 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "src/parsers/xmp/generated_plus_media_matrix.rs"
+SUPPORTED_PLUS_VERSIONS = {"11.78": "1.00", "12.64": "1.00", "13.59": "1.02"}
 
 
 def render(data: dict) -> str:
     pin = (ROOT / ".exiftool-version").read_text().strip()
-    if (data.get("schema") != "plus_media_matrix_v1"
+    if (pin not in SUPPORTED_PLUS_VERSIONS
+            or data.get("schema") != "plus_media_matrix_v1"
             or data.get("exiftool_version") != pin
             or data.get("module") != "Image/ExifTool/PLUS.pm"
-            or data.get("module_version") != "1.02"
+            or data.get("module_version") != SUPPORTED_PLUS_VERSIONS.get(pin)
             or data.get("exceptions") != {"OTHER": "CODE", "Notes": "STRING"}):
         raise ValueError("selected PLUS MediaSummaryCode source contract changed")
     rows = data.get("rows")
