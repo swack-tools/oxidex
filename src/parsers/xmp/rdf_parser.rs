@@ -292,12 +292,12 @@ impl XmpEntry {
         }
     }
 
-    /// The value as stored: a list as an array of strings when `typed`,
-    /// else joined.
+    /// The value as stored: static-URI lists retain their array shape across
+    /// carriers; ordinary XMP lists follow the carrier's `typed` request.
     pub fn tag_value(&self, typed: bool) -> crate::core::TagValue {
         use crate::core::TagValue;
         match &self.value {
-            XmpValue::List(values) if typed => {
+            XmpValue::List(values) if typed || self.source_is_static => {
                 // Panasonic::DSA declares this sequence `Writable => real`.
                 // Its JSON values are numbers, unlike ordinary XMP text lists.
                 if self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
@@ -397,14 +397,14 @@ pub(crate) fn insert_xmp_packet_with_context(
             insert_xmp_entry_with_source(
                 metadata,
                 &promoted,
-                entry.tag_value(typed || entry.source_is_static),
+                entry.tag_value(typed),
                 source.as_deref(),
             );
         } else {
             insert_xmp_entry_with_source(
                 metadata,
                 entry,
-                entry.tag_value(typed || entry.source_is_static),
+                entry.tag_value(typed),
                 source.as_deref(),
             );
         }

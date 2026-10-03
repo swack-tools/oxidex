@@ -649,3 +649,41 @@ fn short_static_xmp_list_in_quicktime_retains_array_and_binary_elements() {
         }
     }
 }
+
+#[test]
+fn short_static_xmp_list_in_eps_retains_array_and_binary_elements() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping EPS static XMP list parity: pinned oracle unavailable");
+        return;
+    };
+    let packet = br#"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-dc/1.0/"><q:Tags><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end='w'?>"#;
+    let mut eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 1 1\n".to_vec();
+    eps.extend_from_slice(packet);
+    eps.extend_from_slice(b"\n%%EOF\n");
+    let file = tempfile::Builder::new().suffix(".eps").tempfile().unwrap();
+    std::fs::write(file.path(), eps).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(
+        theirs["XMP:XMP-dc:Tags"],
+        serde_json::json!(["alpha", "beta"])
+    );
+    assert_eq!(ours["XMP:XMP-dc:Tags"], theirs["XMP:XMP-dc:Tags"]);
+    for mut command in [oracle.command(), Command::new(env!("CARGO_BIN_EXE_oxidex"))] {
+        let output = command
+            .args(["-b", "-Tags"])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"alpha\nbeta");
+    }
+}
