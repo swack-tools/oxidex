@@ -5,6 +5,7 @@ import json
 import shlex
 import re
 import subprocess
+import sys
 import tarfile
 import tomllib
 import time
@@ -183,6 +184,11 @@ def main(argv=None):
         receipt['error']=str(exc)
         if isinstance(exc,subprocess.CalledProcessError):
             receipt['retryable']=retryable_failure(exc, receipt.get('stage'))
+            if receipt.get('stage') == 'sync_extract':
+                log=evidence/'sync-extract.log'
+                log.write_text((exc.stdout or '') + (exc.stderr or ''))
+                receipt['error']=f'Source extraction failed; see {log}'
+                print(receipt['error'], file=sys.stderr, flush=True)
         save();raise
     print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
     return 0

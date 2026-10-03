@@ -145,3 +145,24 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(retryable_failure(disconnected,'sync_extract'))
         self.assertFalse(retryable_failure(mismatch,'sync_extract'))
         self.assertFalse(retryable_failure(subprocess.CalledProcessError(101,'cargo'),'compile'))
+
+    def test_sync_failure_keeps_remote_diagnostics(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            failed=subprocess.CalledProcessError(66,'ssh',stderr='OXIDEX_SOURCE_CHECKSUM_MISMATCH\n')
+            with patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'run',side_effect=[SimpleNamespace(returncode=0),
+                     SimpleNamespace(returncode=0),failed]):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+            import json
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertFalse(receipt['retryable'])
+            self.assertIn('sync-extract.log',receipt['error'])
+            self.assertIn('OXIDEX_SOURCE_CHECKSUM_MISMATCH',
+                          (root/'evidence'/'sync-extract.log').read_text())
