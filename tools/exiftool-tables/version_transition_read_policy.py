@@ -178,8 +178,7 @@ def occurrence_ledger(fixture: dict, oracle_tags: dict, candidate_tags: dict,
               "value_diff": len(comparison["value_diff"]),
               "renames": len(comparison["renames"]), "extra": len(comparison["extra"])}
     payload = sum(row["group"] not in {"", "File", "System", "ExifTool"}
-                  and row["name"] not in {"Error", "Warning", "FileType",
-                                          "FileTypeExtension", "MIMEType"}
+                  and row["name"] not in {"Error", "Warning"}
                   for row in native)
     proof = {"schema": LEDGER_SCHEMA, "fixture": bound_fixture,
              "transcript": expected, "native": native, "candidate": candidate,
