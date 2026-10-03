@@ -388,7 +388,7 @@ ci:
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check cbindgen-check lint-release build-release test test-ffi-c
+ci-standard: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ C header up-to-date"
