@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 from pathlib import Path
 import re
 import socket
@@ -529,12 +530,38 @@ def _materialize_read_union(union: Mapping[str, Any], before: Mapping[str, Any],
             "sidecar": {"path": str(sidecar_path), "sha256": _sha_file(sidecar_path)}}
 
 
+def _verified_linux_perl_sha(ops_root: Path, perl: Path) -> str:
+    """Bind ELF Perl to the locked source, Archive::Zip and DOCX probes."""
+    import importlib.util
+    bootstrap_path = REPOSITORY_ROOT / "tools/release/bootstrap_oracle.py"
+    spec = importlib.util.spec_from_file_location("oxidex_task19_bootstrap_oracle", bootstrap_path)
+    if spec is None or spec.loader is None:
+        raise Refused("cannot load the locked Linux Perl bootstrap verifier")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    try:
+        manifest = bootstrap.verify(ops_root, (REPOSITORY_ROOT / ".exiftool-version").read_text().strip(), None)
+        identity = json.loads(manifest.read_text())["artifacts"]["perl_executable"]
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
+        raise Refused(f"locked Linux Perl bootstrap verification failed: {exc}") from exc
+    if identity.get("path") != str(perl):
+        raise Refused("Linux Perl executable path differs from the locked bootstrap identity")
+    return identity["sha256"]
+
+
 def _perl(ops_root: Path) -> Path:
     perl = ops_root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
     if perl.is_symlink() or not perl.is_file() or not os.access(perl, os.X_OK):
         raise Refused("pinned Perl 5.38.2 executable is absent")
-    if _sha_file(perl) != EXPECTED_PERL_SHA256:
-        raise Refused("pinned Perl 5.38.2 executable hash differs from the Task19 contract")
+    observed_sha = _sha_file(perl)
+    if sys.platform == "darwin":
+        if observed_sha != EXPECTED_PERL_SHA256:
+            raise Refused("pinned Darwin Perl 5.38.2 executable hash differs from the Task19 contract")
+    elif sys.platform == "linux" and platform.machine() == "x86_64":
+        if observed_sha != _verified_linux_perl_sha(ops_root, perl):
+            raise Refused("Linux Perl executable differs from the locked bootstrap identity")
+    else:
+        raise Refused("Task19 Perl is supported only on pinned Darwin or Linux x86_64 hosts")
     environment = dict(os.environ)
     for name in ("PERL5LIB", "PERLLIB", "PERL5OPT", "PERL_MM_OPT", "PERL_MB_OPT", "PERL_LOCAL_LIB_ROOT"):
         environment.pop(name, None)

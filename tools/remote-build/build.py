@@ -15,7 +15,7 @@ from lib.worker_selection import select_worker
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--profile', choices=['debug','release'],required=True)
+    parser.add_argument('--profile', choices=['debug','release','test'],required=True)
     parser.add_argument("--max-attempts",type=int,default=3)
     args=parser.parse_args()
     if args.max_attempts < 1:

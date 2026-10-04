@@ -400,9 +400,16 @@ verbatim fails in whichever direction is hardest to see.
 CI/PR polling: persist state to a file as you go, choose configurable worker
 counts and build jobs from available cores and memory, isolate every worker in its own explicit
 worktree and target directory, and reserve corpus timing runs exclusively from
-competing builds. Workers and builds run directly on this laptop without SSH,
-fleet or hub. Use native desktop agents first (up to three workers), then CLI
-workers for additional independent work under the routing skill. Report a
+competing builds. Run heavy Cargo builds and workspace tests on an eligible Linux amd64 Spot
+builder with `just build-release` and `just test-remote`. For Task19 and the
+corpus read gate, use `just qualify-remote <prepared-output-root>` once its
+exact-HEAD authenticated input bundle and frozen read floors are present. These recipes select a
+measured idle worker, verify the pinned Rust toolchain, isolate its source and
+target, and retain a local result receipt. Use local builds only when a test
+requires macOS or the remote proof is unavailable; label that distinction in
+evidence. Keep corpus timing runs exclusive from competing builds. Use native
+desktop agents first (up to three workers), then CLI workers for additional
+independent work under the routing skill. Report a
 blocked item as blocked instead of retrying it forever, and keep resumable
 evidence. A 45-minute poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.

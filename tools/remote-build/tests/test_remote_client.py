@@ -43,6 +43,31 @@ class ClientTests(unittest.TestCase):
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
         self.assertFalse(any('cargo build' in value for command in calls for value in command))
 
+    def test_remote_test_runs_workspace_suite_and_never_downloads_binary(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        calls=[]
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else 'a'*40+'\n'), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'download_artifact') as download:
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test']),0)
+            receipt=__import__('json').loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['test_exit_code'],0)
+            self.assertTrue(receipt['verified'])
+        self.assertTrue(any('cargo test --workspace --all-features --locked --no-fail-fast' in ' '.join(c)
+                            for c in calls))
+        download.assert_not_called()
+
     def test_worker_interruption_is_retryable_but_compiler_errors_are_not(self):
         from lib.remote_build import retryable_exit
         self.assertTrue(retryable_exit(255))

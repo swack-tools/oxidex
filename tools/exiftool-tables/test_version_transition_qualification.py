@@ -2404,5 +2404,36 @@ class MainOutcomeTests(unittest.TestCase):
         self.assertNotIn("refused", messages[-1])
 
 
+class PlatformPerlIdentityTests(unittest.TestCase):
+    def test_linux_perl_requires_locked_bootstrap_digest(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_text("#!/bin/sh\nprintf v5.38.2\n")
+            perl.chmod(0o755)
+            digest = qualification._sha_file(perl)
+            with patch.object(qualification.sys, "platform", "linux"), \
+                 patch.object(qualification.platform, "machine", return_value="x86_64"), \
+                 patch.object(qualification, "_verified_linux_perl_sha", return_value=digest):
+                self.assertEqual(qualification._perl(root), perl.resolve())
+            with patch.object(qualification.sys, "platform", "linux"), \
+                 patch.object(qualification.platform, "machine", return_value="x86_64"), \
+                 patch.object(qualification, "_verified_linux_perl_sha", return_value="0" * 64):
+                with self.assertRaisesRegex(qualification.Refused, "locked bootstrap identity"):
+                    qualification._perl(root)
+
+    def test_darwin_still_rejects_wrong_executable_digest(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_bytes(b"not the pinned Darwin executable")
+            perl.chmod(0o755)
+            with patch.object(qualification.sys, "platform", "darwin"):
+                with self.assertRaisesRegex(qualification.Refused, "pinned Darwin Perl"):
+                    qualification._perl(root)
+
+
 if __name__ == "__main__":
     unittest.main()

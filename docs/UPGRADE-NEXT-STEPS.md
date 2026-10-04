@@ -61,6 +61,26 @@ python3 tools/exiftool-tables/version_transition_qualification.py \
   --handoff-receipt "$OUT/$RUN/handoff.jsonl"
 ```
 
+For a Linux amd64 Spot run, use `just qualify-remote "$OUT"` after placing
+the exact-HEAD verified `provisioned/` bundles and `read-policy-input.json`
+under a **new** `$OUT` beneath `OXIDEX_OPS_DIR`. The recipe rejects dirty
+callers, missing inputs, a plan bound to another commit, or missing read
+floors before selecting a worker. It packages the clean Git HEAD and the
+selected immutable inputs, runs the three rows serially on one Spot VM, then
+runs the pinned corpus read build/observation/verification and published-read
+regression gate. The VM retains the source, targets, logs and inputs under
+`/mnt/runner-data/remote-qualification/<run-id>`; local transport evidence
+and downloaded receipts live under `$OXIDEX_OPS_DIR/evidence/remote-qualification/`.
+Only a downloaded, hash-matched three-row result plus a PASS corpus gate is a
+remote qualification PASS. `just test-remote` is the lighter full workspace
+suite and does not assert Task19 qualification. The prepared input bundle must
+be generated for the final candidate SHA; an older retained bundle is a
+reusable source artifact, not a valid final plan. Linux provision uses the
+locked Perl 5.38.2 and Archive::Zip sources through `bootstrap_oracle.py`,
+with DOCX and corpus capability probes before Task19 runs. The remote result
+archive does not include the private ephemeral signing key used for owned
+measurement checkouts.
+
 `--target-root` defaults to `$OXIDEX_TARGET_ROOT` (or
 `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`); output and target roots must be
 durable, not temporary. Only `$OUT/$RUN/qualification-result.json`, validated by

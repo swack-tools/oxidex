@@ -149,7 +149,7 @@ def main(argv=None):
     parser.add_argument('--project',default='homelab-424523')
     parser.add_argument('--worktree-id',required=True)
     parser.add_argument('--evidence-dir',type=Path,required=True)
-    parser.add_argument('--profile',choices=['debug','release'],default='release')
+    parser.add_argument('--profile',choices=['debug','release','test'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
     import re
@@ -187,6 +187,8 @@ def main(argv=None):
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        if args.profile == 'test' and receipt['source_status']:
+            raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
@@ -216,7 +218,10 @@ def main(argv=None):
         stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
-        stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
+        if args.profile=='test':
+            stages.append(('test','cargo test --workspace --all-features --locked --no-fail-fast'))
+        else:
+            stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
             receipt['stage']=stage
             start=time.monotonic()
@@ -229,6 +234,16 @@ def main(argv=None):
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
+        if args.profile=='test':
+            receipt['stage']='verify'
+            if receipt.get('test_exit_code') != 0:
+                raise RuntimeError('Remote workspace tests did not pass')
+            receipt['stage']='cleanup'
+            cleanup(strict=True)
+            receipt['verified']=True
+            save()
+            print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
+            return 0
         binary=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/{args.profile}/oxidex'
         receipt['stage']='verify'
         verification=subprocess.check_output(ssh(shlex.quote(binary)+' --version && sha256sum '+shlex.quote(binary)),text=True)

@@ -122,6 +122,16 @@ build-debug:
 build-release:
     python3 tools/remote-build/build.py --profile release
 
+# Run the full workspace test suite on an eligible Linux amd64 Spot builder.
+test-remote:
+    python3 tools/remote-build/build.py --profile test
+
+# Run all three Task19 rows and the corpus read gate on one Linux amd64 Spot VM.
+# OUTPUT is a unique ops-root directory with exact-HEAD provisioned inputs and
+# read-policy-input.json; see docs/UPGRADE-NEXT-STEPS.md.
+qualify-remote output:
+    python3 tools/remote-build/qualification.py --output "{{output}}"
+
 # Build just the binary
 build-bin:
     @echo "Building binary..."
