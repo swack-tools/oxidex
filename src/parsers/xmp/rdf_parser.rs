@@ -317,7 +317,7 @@ impl XmpEntry {
             XmpValue::List(values) if typed || self.source_is_static => {
                 // Panasonic::DSA declares this sequence `Writable => real`.
                 // Its JSON values are numbers, unlike ordinary XMP text lists.
-                if self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
+                if !self.source_is_static && self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
                     TagValue::Array(
                         values
                             .iter()

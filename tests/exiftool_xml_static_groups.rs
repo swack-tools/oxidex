@@ -862,3 +862,39 @@ fn oversized_static_list_marks_earlier_items_binary() {
     assert!(candidate.status.success());
     assert_eq!(candidate.stdout, expected.stdout);
 }
+
+#[test]
+fn static_xmpdsa_list_preserves_lexical_values() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static xmpDSA parity: pinned oracle unavailable");
+        return;
+    };
+    let xml = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-xmpDSA/1.0/"><q:NormalizedCropCorners><rdf:Seq><rdf:li>01.00</rdf:li><rdf:li>0.50</rdf:li></rdf:Seq></q:NormalizedCropCorners></rdf:Description></rdf:RDF>"#;
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), xml).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(
+        ours.get("XMP:XMP-xmpDSA:NormalizedCropCorners"),
+        theirs.get("XMP:XMP-xmpDSA:NormalizedCropCorners")
+    );
+    let mut expected = oracle.command();
+    let expected = expected
+        .args(["-b", "-NormalizedCropCorners"])
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(expected.status.success());
+    let mut candidate = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+    let candidate = candidate
+        .args(["-b", "-NormalizedCropCorners"])
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(candidate.status.success());
+    assert_eq!(candidate.stdout, expected.stdout);
+}
