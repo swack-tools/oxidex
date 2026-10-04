@@ -77,6 +77,19 @@ receipt and published-read gate are replayed on Spot; the local control plane
 checks that the downloaded archive hash, replay proof, corpus identity, and row
 receipts agree before publication. An interrupted extraction leaves only staged
 evidence and cannot publish a partial PASS.
+After the corpus gate, the Spot worker reruns Task19's full committed-result
+loader on each original row marker and records each marker SHA-256, the matrix
+hash, target root and lease path in its summary. The outer archive SHA-256
+binds that summary to the downloaded bytes. Later,
+`just verify-qualification-receipts "$OUT" <transport.json>` rechecks the
+retained source bundle, result archive, relocated receipt hashes, and both
+Spot replay attestations without rerunning OxiDex validation locally.
+The downloaded marker still names the original Spot output path and `/src`
+matrix: it cannot be passed to Task19's loader on the laptop. A full loader
+rerun requires the retained Spot source, prepared inputs, targets and lease
+paths recorded in `transport.json`. Preserve those until evidence closure;
+if the Spot VM is lost, rerun qualification from the immutable exact-head
+inputs rather than claiming portable replay of the downloaded marker.
 Only a downloaded, hash-matched three-row result plus a PASS corpus gate is a
 remote qualification PASS. `just test-remote` is the lighter full workspace
 suite and does not assert Task19 qualification. The prepared input bundle must

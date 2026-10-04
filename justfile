@@ -137,6 +137,11 @@ test-remote-on:
 qualify-remote output:
     python3 tools/remote-build/qualification.py --output "{{output}}"
 
+# Recheck downloaded hashes, row/lease bindings and Spot replay attestations.
+# Receipt integrity only; full Task19 loader replay needs retained Spot targets.
+verify-qualification-receipts output transport:
+    python3 tools/remote-build/qualification.py --verify-published --output "{{output}}" --transport "{{transport}}"
+
 # Build just the binary
 build-bin:
     @echo "Building binary..."

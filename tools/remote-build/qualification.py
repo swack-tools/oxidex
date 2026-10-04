@@ -369,6 +369,24 @@ def remote_run(output: Path, expected_head: str) -> int:
         result["corpus_gate"] = "PASS"
         result["corpus_receipt_sha256"] = sha(corpus / "observations" / "receipt.json")
         result["selected_file_floor"] = floor
+        # Re-run the instrument's full committed-result loader after all
+        # stages. Its path and binary checks require the retained Spot source,
+        # input trees and targets; the downloaded receipts preserve a digest
+        # binding to this on-host replay, not a claim of portable loader replay.
+        loaded = {}
+        for index, row in enumerate(rows):
+            marker = output / f"spot-{expected_head[:12]}-{index}" / "qualification-result.json"
+            committed = q.load_committed_result(marker)
+            if committed["caller"]["head"] != expected_head or [r["id"] for r in committed["rows"]] != [row]:
+                raise ValueError(f"Task19 {row} changed before final loader replay")
+            marker_sha = sha(marker)
+            if marker_sha != result["rows"][row]["marker_sha256"]:
+                raise ValueError(f"Task19 {row} marker changed after row validation")
+            loaded[row] = marker_sha
+        result["committed_loader_replay"] = {
+            "schema": 1, "kind": "oxidex_spot_task19_loader_replay", "status": "PASS",
+            "head": expected_head, "pin": pin, "matrix_sha256": sha(q.CANONICAL_MATRIX),
+            "target_root": str(target_root), "lease_path": str(lease), "rows": loaded}
         result["status"] = "PASS"
         save()
         return 0
@@ -495,9 +513,9 @@ def validate_downloaded_corpus(receipt: Path, summary: dict, head: str, pin: str
         raise RuntimeError(f"downloaded corpus receipt is not a replayed PASS: {error}") from error
 
 
-def publish_results(staged_output: Path, output: Path, head: str, pin: str,
-                    corpus_replay: dict, archive_sha: str) -> Path:
-    """Verify a complete fetched result tree, then publish it in one rename."""
+def verify_result_tree(staged_output: Path, output: Path, head: str, pin: str,
+                       corpus_replay: dict, archive_sha: str) -> None:
+    """Recheck digest-bound downloaded receipts without running the payload locally."""
     if not staged_output.is_dir():
         raise RuntimeError("remote result archive lacks the qualification output root")
     summary = json.loads((staged_output / "remote-qualification.json").read_text())
@@ -516,11 +534,102 @@ def publish_results(staged_output: Path, output: Path, head: str, pin: str,
         if not marker.is_file() or sha(marker) != summary["rows"][row.format(pin=pin)]["marker_sha256"]:
             raise RuntimeError("downloaded Task19 marker differs from remote summary")
         validate_downloaded_marker(marker, output, head, row.format(pin=pin), run_id, pin)
+    replayed = {row: summary["rows"][row]["marker_sha256"] for row in expected_rows}
+    if summary.get("committed_loader_replay") != {
+            "schema": 1, "kind": "oxidex_spot_task19_loader_replay", "status": "PASS",
+            "head": head, "pin": pin, "matrix_sha256": sha(qualification_module().CANONICAL_MATRIX),
+            "target_root": "/target", "lease_path": str(output / "transition.host.lock"),
+            "rows": replayed}:
+        raise RuntimeError("downloaded Task19 markers lack the on-Spot committed-loader replay binding")
+
+
+def publish_results(staged_output: Path, output: Path, head: str, pin: str,
+                    corpus_replay: dict, archive_sha: str) -> Path:
+    """Verify a complete fetched result tree, then publish it in one rename."""
+    verify_result_tree(staged_output, output, head, pin, corpus_replay, archive_sha)
     published = output / "remote-results"
     if published.exists() or published.is_symlink():
         raise ValueError(f"remote qualification results already exist: {published}")
     staged_output.replace(published)
     return published
+
+
+def verify_archived_receipts(archive: Path, output: Path, published: Path, head: str) -> None:
+    """Bind selected published receipt bytes directly to the retained archive."""
+    relative = output.relative_to(ops_root())
+    names = ["remote-qualification.json", "corpus-read/observations/receipt.json"]
+    names += [f"spot-{head[:12]}-{index}/qualification-result.json" for index in range(3)]
+    expected = {str(relative / name): published / name for name in names}
+    observed = set()
+    with tarfile.open(archive, "r:gz") as source:
+        for member in source:
+            path = expected.get(member.name)
+            if path is None:
+                continue
+            if member.name in observed or not member.isfile() or path.is_symlink() or not path.is_file():
+                raise RuntimeError("retained archive has an invalid or duplicate selected receipt")
+            stream = source.extractfile(member)
+            if stream is None:
+                raise RuntimeError("retained archive selected receipt has no bytes")
+            digest = hashlib.sha256()
+            size = 0
+            with stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+                    size += len(block)
+            if size != member.size or digest.hexdigest() != sha(path):
+                raise RuntimeError("published receipt differs from retained result archive")
+            observed.add(member.name)
+    if observed != set(expected):
+        raise RuntimeError("retained archive lacks a selected published receipt")
+
+
+def verify_published(output: Path, transport: Path) -> dict:
+    """Recheck retained archive and relocated receipts, never rerun the payload here."""
+    root = ops_root()
+    if (output.resolve() != output or not output.is_dir()
+            or not output.is_relative_to(root)):
+        raise ValueError("published output must be a real ops-root directory")
+    if (transport.resolve() != transport or not transport.is_file()
+            or not transport.is_relative_to(root)):
+        raise ValueError("transport receipt must be a real ops-root file")
+    record = json.loads(transport.read_text())
+    head, pin, stage = record.get("head"), record.get("pin"), record.get("stage")
+    if (record.get("status") != "PASS" or not isinstance(head, str)
+            or git("rev-parse", "HEAD") != head or git("status", "--porcelain")
+            or pin != (ROOT / ".exiftool-version").read_text().strip()
+            or not isinstance(stage, str)
+            or not stage.startswith("/mnt/runner-data/remote-qualification/")):
+        raise RuntimeError("transport does not bind this exact clean source and Spot stage")
+    result_dir = output / "remote-results"
+    if result_dir.resolve() != result_dir or not result_dir.is_dir():
+        raise ValueError("published result directory must be real")
+    relative = str(output.relative_to(root))
+    if any(not isinstance(record.get(key), str) or not record[key]
+           for key in ("instance", "instance_id", "zone")):
+        raise RuntimeError("transport lacks the retained Spot instance identity")
+    expected_remote = {
+        "status": "RETAINED_AT_PUBLICATION", "instance": record.get("instance"),
+        "instance_id": record.get("instance_id"), "zone": record.get("zone"),
+        "stage": stage, "source_path": stage + "/source",
+        "target_path": stage + "/targets", "output_path": stage + "/ops/" + relative,
+        "lease_path": stage + "/ops/" + relative + "/transition.host.lock",
+        "portable_loader_replay": False}
+    if (record.get("retained_remote_recheck") != expected_remote
+            or record.get("results_dir") != str(result_dir)):
+        raise RuntimeError("transport lacks retained remote source, target, and lease identity")
+    archive = transport.parent / "results.tar.gz"
+    bundle = transport.parent / "repository.bundle"
+    digest = record.get("results_sha256")
+    if (not isinstance(digest, str) or archive.is_symlink() or bundle.is_symlink()
+            or not archive.is_file() or sha(archive) != digest
+            or not bundle.is_file() or sha(bundle) != record.get("source_bundle_sha256")):
+        raise RuntimeError("retained result archive or source bundle digest differs")
+    verify_archived_receipts(archive, output, result_dir, head)
+    verify_result_tree(result_dir, output, head, pin, record["corpus_archive_replay"], digest)
+    return {"schema": 1, "kind": "oxidex_remote_published_receipt_check", "status": "PASS",
+            "head": head, "archive_sha256": digest,
+            "task19_loader_replay": "attested-on-Spot; remote targets required for full rerun"}
 
 
 def require_remote_success(receipt: dict) -> None:
@@ -564,7 +673,8 @@ def controller(output: Path, project: str | None) -> int:
         raise ValueError("local candidate changed while freezing qualification inputs")
     project = resolve_project(project)
     receipt = {"schema": 1, "kind": "oxidex_remote_spot_transport", "head": head, "pin": pin,
-               "project": project, "archive_sha256": sha(package), "status": "pending"}
+               "project": project, "archive_sha256": sha(package),
+               "source_bundle_sha256": sha(bundle), "status": "pending"}
     transport = evidence / "transport.json"
     def save():
         transport.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
@@ -711,6 +821,19 @@ def controller(output: Path, project: str | None) -> int:
             raise RuntimeError("Spot corpus replay used different result archive bytes")
         receipt["corpus_archive_replay"] = replay
         save()
+        remote_output = stage + "/ops/" + str(output.relative_to(ops_root()))
+        retained = (f"test -d {shlex.quote(stage + '/source')} && "
+                    f"test -d {shlex.quote(stage + '/targets')} && "
+                    f"test -f {shlex.quote(remote_output + '/transition.host.lock')}")
+        if ssh(retained, check=False).returncode:
+            raise RuntimeError("Spot source, targets, or lease disappeared before receipt publication")
+        receipt["retained_remote_recheck"] = {
+            "status": "RETAINED_AT_PUBLICATION", "instance": vm.name,
+            "instance_id": vm.instance_id, "zone": vm.zone, "stage": stage,
+            "source_path": stage + "/source", "target_path": stage + "/targets",
+            "output_path": remote_output, "lease_path": remote_output + "/transition.host.lock",
+            "portable_loader_replay": False}
+        save()
         receipt["results_dir"] = str(publish_results(staged_output, output, head, pin, replay, digest))
         receipt["status"] = "PASS"
         save()
@@ -731,8 +854,10 @@ def main() -> int:
     parser.add_argument("--remote-run", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify-results-tar", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--expected-head", help=argparse.SUPPRESS)
+    parser.add_argument("--verify-published", action="store_true")
+    parser.add_argument("--transport", type=Path)
     args = parser.parse_args()
-    output = args.output.expanduser().resolve()
+    output = args.output.expanduser().absolute()
     if args.remote_run:
         if not args.expected_head:
             parser.error("--remote-run requires --expected-head")
@@ -743,11 +868,16 @@ def main() -> int:
         print(json.dumps(replay_archived_corpus(args.verify_results_tar, output, args.expected_head),
                          sort_keys=True))
         return 0
+    if args.verify_published:
+        if not args.transport:
+            parser.error("--verify-published requires --transport")
+        print(json.dumps(verify_published(output, args.transport.expanduser().absolute()), sort_keys=True))
+        return 0
     return controller(output, args.project)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+    except (RuntimeError, ValueError, OSError, KeyError, TypeError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         raise SystemExit(f"remote qualification refused: {exc}")

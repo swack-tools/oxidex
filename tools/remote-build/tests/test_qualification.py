@@ -145,12 +145,82 @@ class QualificationTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not committed evidence"):
                 qualification.publish_results(staged, output, head, pin, replay, archive_sha)
             self.assertFalse((output / "remote-results").exists())
+            with patch.object(qualification, "validate_downloaded_marker"):
+                with self.assertRaisesRegex(RuntimeError, "loader replay binding"):
+                    qualification.publish_results(staged, output, head, pin, replay, archive_sha)
+            summary["committed_loader_replay"] = {
+                "schema": 1, "kind": "oxidex_spot_task19_loader_replay", "status": "PASS",
+                "head": head, "pin": pin,
+                "matrix_sha256": qualification.sha(qualification.qualification_module().CANONICAL_MATRIX),
+                "target_root": "/target", "lease_path": str(output / "transition.host.lock"),
+                "rows": {row: item["marker_sha256"] for row, item in rows.items()}}
+            (staged / "remote-qualification.json").write_text(json.dumps(summary))
             with patch.object(qualification, "validate_downloaded_marker") as validate:
                 published = qualification.publish_results(staged, output, head, pin, replay, archive_sha)
             self.assertEqual(validate.call_count, 3)
             self.assertEqual(published, output / "remote-results")
             self.assertFalse(staged.exists())
             self.assertTrue((published / "remote-qualification.json").is_file())
+
+    def test_published_receipt_verifier_binds_archive_and_retained_spot_paths(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            (output / "remote-results").mkdir(parents=True)
+            evidence = root / "evidence" / "remote-qualification" / "run"
+            evidence.mkdir(parents=True)
+            archive = evidence / "results.tar.gz"
+            names = ["remote-qualification.json", "corpus-read/observations/receipt.json"]
+            names += [f"spot-{'a' * 12}-{index}/qualification-result.json" for index in range(3)]
+            for name in names:
+                path = output / "remote-results" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name)
+            with tarfile.open(archive, "w:gz") as source:
+                for name in names:
+                    source.add(output / "remote-results" / name, arcname="output/" + name)
+            bundle = evidence / "repository.bundle"
+            bundle.write_bytes(b"source bundle")
+            head, stage = "a" * 40, "/mnt/runner-data/remote-qualification/run"
+            record = {"status": "PASS", "head": head, "pin": "13.59", "stage": stage,
+                      "instance": "spot", "instance_id": "123", "zone": "zone-a",
+                      "results_dir": str(output / "remote-results"),
+                      "results_sha256": qualification.sha(archive),
+                      "source_bundle_sha256": qualification.sha(bundle),
+                      "corpus_archive_replay": {"status": "PASS"},
+                      "retained_remote_recheck": {
+                          "status": "RETAINED_AT_PUBLICATION", "instance": "spot",
+                          "instance_id": "123", "zone": "zone-a", "stage": stage,
+                          "source_path": stage + "/source", "target_path": stage + "/targets",
+                          "output_path": stage + "/ops/output",
+                          "lease_path": stage + "/ops/output/transition.host.lock",
+                          "portable_loader_replay": False}}
+            transport = evidence / "transport.json"
+            transport.write_text(json.dumps(record))
+            with (
+                patch.object(qualification, "ops_root", return_value=root),
+                patch.object(qualification, "git", side_effect=[head, ""]),
+                patch.object(qualification, "verify_result_tree") as verify,
+            ):
+                result = qualification.verify_published(output, transport)
+            self.assertEqual(result["status"], "PASS")
+            verify.assert_called_once()
+            summary = output / "remote-results/remote-qualification.json"
+            summary.write_text("changed")
+            with (
+                patch.object(qualification, "ops_root", return_value=root),
+                patch.object(qualification, "git", side_effect=[head, ""]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "published receipt differs"):
+                    qualification.verify_published(output, transport)
+            summary.write_text("remote-qualification.json")
+            archive.write_bytes(b"tampered")
+            with (
+                patch.object(qualification, "ops_root", return_value=root),
+                patch.object(qualification, "git", side_effect=[head, ""]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "digest differs"):
+                    qualification.verify_published(output, transport)
 
     def test_project_environment_is_used_before_gcloud(self):
         with patch.dict("os.environ", {"OXIDEX_REMOTE_PROJECT": "spot-project"}), \
