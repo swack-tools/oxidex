@@ -17,19 +17,26 @@ to decrease the amount of time grepping. We also have things like hyperfine.
 
 We have: coreutils bat eza fd ripgrep hyperfine dust bottom tokei procs sd zoxide starship gitui git-delta lsd tealdeer broot bandwhich grex xh just watchexec typos-cli nushell yazi atuin mprocs hurl
 
-## Where you can utilize sccache to speed up builds especially when dealing with multiple worktrees
-building the same thing basically
+## Build cache
 
-## Commands
+Use sccache on remote builders when multiple worktrees compile the same code.
+
+## Remote build and test commands
+
+Run these from the local checkout as control-plane commands; their Rust and
+validation workloads execute on a Linux amd64 Spot worker:
+
 ```bash
-cargo build                    # Build debug
-cargo build --release          # Build release
-cargo test --workspace         # Run all tests
-just test                      # Run tests (CI config)
-just check                     # Quick check without build
-cargo clippy                   # Lint
-just build-bin-release         # Build release binary
+just build-debug               # Remote debug build
+just build-release             # Remote release build
+just test-remote               # Remote full workspace test suite
+just qualify-remote <prepared-output-root>  # Remote Task19 rows and corpus read gate
 ```
+
+Do not run local `cargo build`, `cargo test`, `cargo check`, `cargo clippy`,
+`just test`, or local Python validation, corpus, or qualification workloads.
+If a check has no remote recipe, add or repair one and retain its exact-source
+receipt; if it cannot run remotely, report it blocked.
 
 ## Release test-profile collision
 
@@ -39,9 +46,9 @@ targets (which require `panic=unwind`) and release binaries (which use
 bare `cargo test --workspace --release` may report bogus `panic strategy` or
 duplicate-`chrono` errors, especially after another release-profile command has
 shared the target directory. This is an output filename collision, not proof of
-a source regression. Prefer `just test`, which supplies the scoped unwind
-override; if reproducing the bare command is necessary, clear the colliding
-artifacts first with `cargo clean --release -p chrono -p oxidex`.
+a source regression. On a remote builder, `just test` supplies the scoped
+unwind override; if reproducing the bare command there is necessary, clear its
+colliding artifacts first with `cargo clean --release -p chrono -p oxidex`.
 
 ## Rust toolchain pin (build gotcha)
 
@@ -400,14 +407,19 @@ verbatim fails in whichever direction is hardest to see.
 CI/PR polling: persist state to a file as you go, choose configurable worker
 counts and build jobs from available cores and memory, isolate every worker in its own explicit
 worktree and target directory, and reserve corpus timing runs exclusively from
-competing builds. Run heavy Cargo builds and workspace tests on an eligible Linux amd64 Spot
-builder with `just build-release` and `just test-remote`. For Task19 and the
-corpus read gate, use `just qualify-remote <prepared-output-root>` once its
-exact-HEAD authenticated input bundle and frozen read floors are present. These recipes select a
-measured idle worker, verify the pinned Rust toolchain, isolate its source and
-target, and retain a local result receipt. Use local builds only when a test
-requires macOS or the remote proof is unavailable; label that distinction in
-evidence. Keep corpus timing runs exclusive from competing builds. Use native
+competing builds. Execute all OxiDex Rust/Cargo builds and tests, Python
+validation and measurement scripts, corpus observation and read gates, and
+Task19 qualification payloads on an eligible Linux amd64 Spot builder. Use
+`just build-debug`, `just build-release`, `just test-remote`, and
+`just qualify-remote <prepared-output-root>` after preparing its exact-HEAD
+authenticated inputs and frozen read floors. The local `just` process may
+select a worker, upload inputs, monitor the job, and download and verify
+receipts; it must not perform the payload computation. Preserve the pinned
+toolchain, clean signed source SHA, isolated remote target, and durable
+receipts. If remote capacity or proof is unavailable, or a check truly needs
+macOS and has no remote Mac runner, report it blocked and add or repair remote
+capability; never fall back to a local build or local validation run. Keep
+corpus timing runs exclusive from competing builds. Use native
 desktop agents first (up to three workers), then CLI workers for additional
 independent work under the routing skill. Report a
 blocked item as blocked instead of retrying it forever, and keep resumable
@@ -528,5 +540,6 @@ Hexagonal (ports/adapters) with three layers:
 - **Infrastructure**: Format-specific parsers, I/O
 
 ## Style
-- Run `cargo clippy` before commits
+- For Rust changes, run `cargo clippy` on a remote worker before commits, or
+  report that check blocked until a remote recipe exists; never run it locally.
 - Use `cargo fmt` for formatting

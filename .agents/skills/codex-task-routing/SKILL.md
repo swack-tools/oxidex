@@ -24,8 +24,11 @@ avoid full-history forks. Native subagents need explicit `model`,
 permission and give each implementer its own worktree and branch. Use native
 desktop agents first (up to three workers); use CLI workers for additional
 independent work. Both routes require the explicit model and effort above.
-Execute workers and builds directly on this laptop, without SSH, fleet or hub.
-Do not delegate unless the user or applicable instructions authorize it.
+Execute Codex review and implementation workers on this laptop. Route OxiDex
+Rust builds, tests, and Python validation/measurement payloads to Spot as
+required by `AGENTS.md`; the local client may only orchestrate the remote run
+and verify its receipts. Do not delegate unless the user or applicable
+instructions authorize it.
 
 ## Before the first push
 
@@ -91,11 +94,11 @@ Failed, stale, interrupted, or missing-result runs cannot support a push.
 Never infer acceptance from exit code zero alone. Review receipts do not waive
 repository CI, unresolved-thread, or independent behavior-verification gates.
 
-Keep one active published candidate per dependency cluster. Local CPU concurrency
-may be high: choose configurable worker counts and `CARGO_BUILD_JOBS` from the
-available cores and memory, and lower them when memory pressure appears. Use a
-separate `CARGO_TARGET_DIR` for each worktree. Reserve the laptop exclusively for
-corpus timing measurements; finish or pause competing builds first.
+Keep one active published candidate per dependency cluster. Choose remote
+worker counts and `CARGO_BUILD_JOBS` from the Spot VM's available cores and
+memory, and lower them when memory pressure appears. Use a separate remote
+`CARGO_TARGET_DIR` for each worktree. Reserve corpus timing runs on their
+remote worker exclusively from competing builds.
 Update HANDOFF.md and record review rounds, routing reasons, and available token
 usage. Missing or all-zero CLI usage is recorded as unknown, not free work.
 The launcher stops its child process group on timeout, `SIGTERM`, `SIGHUP`,
