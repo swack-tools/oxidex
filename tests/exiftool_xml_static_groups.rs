@@ -724,6 +724,40 @@ fn static_exif_and_gps_sources_keep_global_composites_active() {
         ));
         assert_eq!(ours, theirs, "{uri}: current pin: {}", oracle.provenance());
         if uri.contains("/GPS/") {
+            let ungrouped = |mut command: Command| {
+                let output = command.arg("-j").arg(file.path()).output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+                rows[0].as_object().unwrap().clone()
+            };
+            let theirs = ungrouped(oracle.command());
+            let ours = ungrouped(Command::new(env!("CARGO_BIN_EXE_oxidex")));
+            let text = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+                .arg(file.path())
+                .output()
+                .unwrap();
+            assert!(text.status.success());
+            let text = String::from_utf8(text.stdout).unwrap();
+            for tag in ["GPSLatitudeRef", "GPSLongitudeRef"] {
+                assert_eq!(
+                    ours.get(&format!("GPS:{tag}")),
+                    theirs.get(tag),
+                    "ungrouped {tag}"
+                );
+                let line = text
+                    .lines()
+                    .find(|line| line.starts_with(&format!("GPS:{tag}: ")))
+                    .unwrap();
+                assert_eq!(
+                    line.rsplit_once(": ").unwrap().1,
+                    theirs[tag].as_str().unwrap(),
+                    "text {tag}"
+                );
+            }
             for tag in ["GPSLatitudeRef", "GPSLongitudeRef"] {
                 let read_short = |mut command: Command| {
                     let output = command

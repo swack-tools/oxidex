@@ -2135,18 +2135,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     } else {
         ValueChannel::PrintConv
     };
-    let metadata = raw_metadata
+    let mut metadata = MetadataMap::new();
+    for (key, occurrence) in raw_metadata
         .winner_occurrences()
         .filter(|(key, _)| surviving.contains_key(*key))
-        .map(|(key, occurrence)| {
-            let value = if no_print_conv {
-                occurrence.project(channel).into_owned()
-            } else {
-                resolved_print_value(occurrence)
-            };
-            (key.clone(), value)
-        })
-        .collect();
+    {
+        let value = if no_print_conv {
+            occurrence.project(channel).into_owned()
+        } else {
+            resolved_print_value(occurrence)
+        };
+        // Keep source provenance on the display projection. The formatter
+        // otherwise treats a static RDF GPS field as a native GPS tag and
+        // runs its name-keyed PrintConv a second time (N -> North).
+        let mut display = TagOccurrence::from_insert_shim(key, value, 0);
+        if occurrence.origin.module == Some("XMP::StaticGroup") {
+            display.origin.module = Some("XMP::StaticGroup");
+        }
+        metadata.record_occurrence(key.clone(), display);
+    }
+    metadata.mark_read_complete();
     ResolvedFileOutput::Metadata(metadata)
 }
 
