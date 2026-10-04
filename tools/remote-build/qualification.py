@@ -705,10 +705,10 @@ def verify_published(output: Path, transport: Path) -> dict:
 
 def require_remote_success(receipt: dict) -> None:
     code = receipt["remote_exit_code"]
-    if code in (4, 5):
+    if code not in (0, 2):
         receipt["status"] = "RUNNING_RETAINED"
         receipt["unconfirmed_task19_exit"] = code
-        raise RuntimeError("Task19 outcome or lease state is unconfirmed; retained remote stage requires inspection")
+        raise RuntimeError("remote qualification outcome or lease state is unconfirmed; retained remote stage requires inspection")
     if code != 0:
         raise RuntimeError(f"remote qualification exited {code}")
 

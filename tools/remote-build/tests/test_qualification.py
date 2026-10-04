@@ -420,6 +420,15 @@ class QualificationTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exit 2"):
             qualification.task19_row_exit(2, "same-pin-13.59", Path("/owned/spot-head-0"), {})
 
+    def test_container_kill_retains_unconfirmed_task19_state(self):
+        for code in (1, 125, 137, 143):
+            with self.subTest(code=code):
+                transport = {"status": "running", "remote_exit_code": code}
+                with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                    qualification.require_remote_success(transport)
+                self.assertEqual(transport["status"], "RUNNING_RETAINED")
+                self.assertEqual(transport["unconfirmed_task19_exit"], code)
+
     def test_detached_exit_status_is_retained_unless_complete(self):
         for status in ("", "partial", "1x", "256", "-1"):
             with self.subTest(status=status):
