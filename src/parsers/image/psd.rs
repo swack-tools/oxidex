@@ -582,7 +582,7 @@ impl PSDParser {
             pos = next;
         }
 
-        metadata.insert("Photoshop:URL_List".to_string(), TagValue::Array(urls));
+        metadata.insert_declared_list("Photoshop:URL_List".to_string(), TagValue::Array(urls));
     }
 
     /// Parses the TIFF block in image resource 0x0422 (ExifInfo).

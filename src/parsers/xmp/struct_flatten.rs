@@ -357,17 +357,19 @@ fn push_frame(
         ExifToolError::parse_error(format!("Invalid UTF-8 in XMP element name: {}", e))
     })?;
     let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
-    let uri = resolver.resolve_prefix(prefix).map(str::to_string);
+    let lexical_uri = resolver.resolve_prefix(prefix);
+    let uri = resolver
+        .property_uri_for_prefix(prefix)
+        .or(lexical_uri)
+        .map(str::to_string);
     let local = NamespaceResolver::extract_local_name(qname);
-    let ignored = IGNORED_PREFIXES.contains(&prefix) || is_ignored_et_attr(uri.as_deref(), local);
+    let ignored = IGNORED_PREFIXES.contains(&prefix) || is_ignored_et_attr(lexical_uri, local);
 
     if let Some(parent) = stack.last_mut() {
         parent.child_elements += 1;
     }
 
-    let static_uri = uri
-        .as_deref()
-        .filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+    let static_uri = resolver.effective_static_uri(prefix);
     let renamed = rename_field(uri.as_deref(), local);
     let component = static_uri.map_or_else(
         || renamed.to_string(),
@@ -492,10 +494,11 @@ fn emit_attributes(
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
-        if is_ignored_et_attr(uri, local) {
+        let lexical_uri = resolver.resolve_prefix(prefix);
+        if is_ignored_et_attr(lexical_uri, local) {
             continue; // et:desc/et:prt/et:val/et:id/et:tagid/et:toolkit/et:table/et:index
         }
+        let uri = resolver.property_uri_for_prefix(prefix).or(lexical_uri);
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -504,8 +507,7 @@ fn emit_attributes(
             continue;
         }
         let leaf = rename_field(uri, local);
-        let static_uri =
-            uri.filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+        let static_uri = resolver.effective_static_uri(prefix);
         let component = static_uri.map_or_else(
             || leaf.to_string(),
             |_| super::namespace_resolver::static_export_component(leaf),
@@ -926,10 +928,11 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
-        if is_ignored_et_attr(uri, local) {
+        let lexical_uri = resolver.resolve_prefix(prefix);
+        if is_ignored_et_attr(lexical_uri, local) {
             continue;
         }
+        let uri = resolver.property_uri_for_prefix(prefix).or(lexical_uri);
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -937,8 +940,7 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
         if value.is_empty() {
             continue;
         }
-        let static_uri =
-            uri.filter(|uri| super::namespace_resolver::exiftool_static_groups(uri).is_some());
+        let static_uri = resolver.effective_static_uri(prefix);
         let leaf = rename_field(uri, local);
         let component = static_uri.map_or_else(
             || leaf.to_string(),

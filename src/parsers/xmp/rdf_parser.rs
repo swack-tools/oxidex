@@ -3847,10 +3847,8 @@ fn static_rdf_binary_display(tag: &str, payload: &[u8]) -> String {
     }
     // FoundXMP unescapes entities after decoding, then converts values.
     // Preserve a valid U+FFFD while replacing malformed UTF-8 for display.
-    let text = match std::str::from_utf8(payload) {
-        Ok(text) => text.to_owned(),
-        Err(_) => String::from_utf8_lossy(payload).replace('\u{fffd}', "?"),
-    };
+    let text = crate::exiftool_tables::runtime::fix_utf8(payload)
+        .expect("FixUTF8 emits well-formed UTF-8");
     let unescaped =
         quick_xml::escape::unescape(&text).map_or(text.clone(), |value| value.into_owned());
     format_xmp_value_with_default(tag, &unescaped, true, true)

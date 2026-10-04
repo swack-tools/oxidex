@@ -726,6 +726,19 @@ impl MetadataMap {
         group1: &str,
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_list_state(key, value, priority, group1, instance, false)
+    }
+
+    /// An occurrence whose producing table declared ExifTool List semantics.
+    pub(crate) fn insert_occurrence_with_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -733,6 +746,7 @@ impl MetadataMap {
         occurrence.priority = priority.into();
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         previous
     }

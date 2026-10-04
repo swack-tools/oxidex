@@ -368,7 +368,7 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 if e.local_name().as_ref() == b"HeadingPairs" {
                     in_heading_pairs = false;
                     if !heading_pairs.is_empty() {
-                        metadata.insert(
+                        metadata.insert_declared_list(
                             "XML:HeadingPairs".to_string(),
                             TagValue::new_array(std::mem::take(&mut heading_pairs)),
                         );
@@ -376,12 +376,12 @@ fn parse_app_properties(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
                 } else if e.local_name().as_ref() == b"TitlesOfParts" {
                     in_titles_of_parts = false;
                     if titles_of_parts.len() == 1 {
-                        metadata.insert(
+                        metadata.insert_declared_list(
                             "XML:TitlesOfParts".to_string(),
                             titles_of_parts.pop().expect("length checked"),
                         );
                     } else if !titles_of_parts.is_empty() {
-                        metadata.insert(
+                        metadata.insert_declared_list(
                             "XML:TitlesOfParts".to_string(),
                             TagValue::new_array(std::mem::take(&mut titles_of_parts)),
                         );

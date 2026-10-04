@@ -263,18 +263,20 @@ impl<'m> PlistStore<'m> {
                 Some(TagValue::Array(mut items)) => {
                     items.push(value);
                     self.metadata
-                        .insert(key.to_string(), TagValue::Array(items));
+                        .insert_declared_list(key.to_string(), TagValue::Array(items));
                 }
                 Some(existing) => {
-                    self.metadata
-                        .insert(key.to_string(), TagValue::Array(vec![existing, value]));
+                    self.metadata.insert_declared_list(
+                        key.to_string(),
+                        TagValue::Array(vec![existing, value]),
+                    );
                 }
                 None => {
-                    self.metadata.insert(key.to_string(), value);
+                    self.metadata.insert_declared_list(key.to_string(), value);
                 }
             }
         } else if !self.metadata.contains_key(key) {
-            self.metadata.insert(key.to_string(), value);
+            self.metadata.insert_declared_list(key.to_string(), value);
         }
     }
 }
