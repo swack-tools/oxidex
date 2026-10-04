@@ -208,7 +208,7 @@ fn ordinary_xmp_blank_node_definition_is_suppressed_only_when_referenced() {
 }
 
 #[test]
-fn aliased_rdf_elements_and_node_ids_do_not_become_xmp_fields() {
+fn aliased_rdf_descriptions_and_node_ids_do_not_become_xmp_fields() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping aliased RDF structure parity: pinned oracle unavailable");
         return;
@@ -216,7 +216,7 @@ fn aliased_rdf_elements_and_node_ids_do_not_become_xmp_fields() {
     let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
     std::fs::write(
         file.path(),
-        br#"<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><r:Description><q:Settings r:nodeID="n1"/></r:Description><r:Description r:nodeID="n1"><q:VALUE>ghi</q:VALUE></r:Description></r:RDF>"#,
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><r:Description><q:Settings r:nodeID="n1"/></r:Description><r:Description r:nodeID="n1"><q:VALUE>ghi</q:VALUE></r:Description></rdf:RDF>"#,
     )
     .unwrap();
     let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
