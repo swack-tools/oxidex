@@ -696,7 +696,10 @@ impl MetadataMap {
             let mut copied = TagOccurrence::from_insert_shim(key, occurrence.raw.clone(), order);
             copied.group1 = occurrence.group1.clone();
             copied.value = occurrence.value.clone();
-            copied.print = occurrence.value.as_ref().map(|_| occurrence.raw.clone());
+            copied.print = occurrence
+                .print
+                .clone()
+                .or_else(|| occurrence.value.as_ref().map(|_| occurrence.raw.clone()));
             copied.stored = occurrence.stored.clone();
             copied.binary_payload_unavailable = occurrence.binary_payload_unavailable;
             copied.binary_extract_from_stored = occurrence.binary_extract_from_stored;
