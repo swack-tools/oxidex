@@ -302,7 +302,7 @@ impl XmpEntry {
                 })
                 .collect();
             if has_binary_placeholder || has_decoded_payload {
-                self.binary_list_source = Some(converted.join(&[b'\n']));
+                self.binary_list_source = Some(converted.join(b"\n".as_slice()));
             }
         }
         self

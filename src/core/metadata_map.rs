@@ -1118,8 +1118,8 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
-        occurrence.group0 = source.group0;
-        occurrence.group1 = source.group1;
+        occurrence.group0 = source.group0.clone();
+        occurrence.group1 = source.group1.clone();
         occurrence.value = source.value.clone();
         occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
