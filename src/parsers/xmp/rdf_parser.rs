@@ -1618,21 +1618,10 @@ fn parse_xmp_packet_in_directory(
             priority,
             path.clone(),
         );
-        let payloads = flattened_binary_payloads.get(&(tag.clone(), path.clone()));
         let result = if values.len() > 1 {
-            let result = ResultOccurrence::list(tag, values);
-            if let Some(payloads) = payloads
-                && payloads.len() == result.elements.as_ref().map_or(0, Vec::len)
-                && payloads.iter().any(Option::is_some)
-            {
-                result.with_list_binary_payloads(payloads.clone())
-            } else {
-                result
-            }
+            ResultOccurrence::list(tag, values)
         } else {
-            ResultOccurrence::scalar(tag, values.join(", ")).with_static_binary_payload(
-                payloads.and_then(|payloads| payloads.first().cloned().flatten()),
-            )
+            ResultOccurrence::scalar(tag, values.join(", "))
         };
         results.push(result.with_path(path));
     }
@@ -1649,6 +1638,29 @@ fn parse_xmp_packet_in_directory(
         }
         legacy.push_priority_with_path(&legacy_tag, &tag, &value, priority, path.clone());
         results.push(ResultOccurrence::scalar(tag, value).with_path(path));
+    }
+
+    // Focused structure passes run before the generic flatten pass and may
+    // claim the same raw path. Attach decoded leaf bytes after all passes so
+    // their chosen display names retain the source datatype and -b payload.
+    for result in &mut results {
+        let Some(path) = result.path.as_ref() else {
+            continue;
+        };
+        let Some(payloads) = flattened_binary_payloads.get(&(result.tag.clone(), path.clone()))
+        else {
+            continue;
+        };
+        if payloads.iter().all(Option::is_none) {
+            continue;
+        }
+        if let Some(elements) = result.elements.as_ref() {
+            if elements.len() == payloads.len() && result.list_binary_payloads.is_none() {
+                result.list_binary_payloads = Some(payloads.clone());
+            }
+        } else if payloads.len() == 1 && result.static_binary_payload.is_none() {
+            result.static_binary_payload = payloads[0].clone();
+        }
     }
 
     // Distinct raw property IDs can print under the same family/name (for
