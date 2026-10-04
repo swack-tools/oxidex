@@ -70,7 +70,10 @@ selected immutable inputs, runs the three rows serially on one Spot VM, then
 runs the pinned corpus read build/observation/verification and published-read
 regression gate. The VM retains the source, targets, logs and inputs under
 `/mnt/runner-data/remote-qualification/<run-id>`; local transport evidence
-and downloaded receipts live under `$OXIDEX_OPS_DIR/evidence/remote-qualification/`.
+and the downloaded archive live under `$OXIDEX_OPS_DIR/evidence/remote-qualification/`.
+The complete downloaded receipts are hash-checked before being published
+together under `$OUT/remote-results/`; an interrupted extraction leaves only
+staged evidence and cannot publish a partial PASS.
 Only a downloaded, hash-matched three-row result plus a PASS corpus gate is a
 remote qualification PASS. `just test-remote` is the lighter full workspace
 suite and does not assert Task19 qualification. The prepared input bundle must

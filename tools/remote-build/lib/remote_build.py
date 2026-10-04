@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tarfile
 import io
+import os
 import tomllib
 import time
 from pathlib import Path
@@ -185,22 +186,68 @@ def download_test_proof(instance, zone, project, remote, local, digest, expected
         temporary.unlink(missing_ok=True)
 
 
-def make_snapshot(source: Path, archive: Path) -> dict:
-    names = subprocess.check_output(['git','-C',str(source),'ls-files','-z']).decode().split('\0')
+def snapshot_file_allowed(name):
+    parts=Path(name).parts
+    return (bool(name) and not any(p in {'.git','.codex','.claude','.agents','target',
+                                         'node_modules','.venv'} for p in parts)
+            and not Path(name).name.startswith('.env')
+            and Path(name).suffix not in {'.pem','.key'})
+
+
+def make_snapshot(source: Path, archive: Path, *, exact_commit=None) -> dict:
     files=[]
     with tarfile.open(archive,'w:gz',compresslevel=3) as tar:
-        for name in names:
-            parts=Path(name).parts
-            if not name or any(p in {'.git','.codex','.claude','.agents','target','node_modules','.venv'} for p in parts):
-                continue
-            path=source/name
-            if path.name.startswith('.env') or path.suffix in {'.pem','.key'} or not path.is_file() or path.is_symlink():
-                continue
-            data=path.read_bytes()
-            info=tar.gettarinfo(str(path),arcname=name)
-            info.size=len(data)
-            files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
-            tar.addfile(info,io.BytesIO(data))
+        if exact_commit is None:
+            names = subprocess.check_output(['git','-C',str(source),'ls-files','-z']).decode().split('\0')
+            for name in names:
+                if not snapshot_file_allowed(name):
+                    continue
+                path=source/name
+                if not path.is_file() or path.is_symlink():
+                    continue
+                data=path.read_bytes()
+                info=tar.gettarinfo(str(path),arcname=name)
+                info.size=len(data)
+                files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+                tar.addfile(info,io.BytesIO(data))
+        else:
+            # A clean-status observation cannot freeze mutable worktree bytes:
+            # a writer can change and restore a file between observations.
+            # Read the signed commit's immutable Git objects for test evidence.
+            tree=subprocess.check_output(['git','-C',str(source),'ls-tree','-r','-z',exact_commit])
+            expected=set()
+            for entry in tree.split(b'\0'):
+                if not entry:
+                    continue
+                metadata, raw_name=entry.split(b'\t',1)
+                name=os.fsdecode(raw_name)
+                if (metadata.split()[1] == b'blob' and metadata.split()[0] != b'120000'
+                        and snapshot_file_allowed(name)):
+                    expected.add(name)
+            process=subprocess.Popen(['git','-C',str(source),'archive','--format=tar',exact_commit],
+                                     stdout=subprocess.PIPE)
+            try:
+                seen=set()
+                with tarfile.open(fileobj=process.stdout,mode='r|') as committed:
+                    for info in committed:
+                        name=info.name
+                        if not info.isfile() or not snapshot_file_allowed(name):
+                            continue
+                        stream=committed.extractfile(info)
+                        if stream is None:
+                            raise RuntimeError(f'Git archive omitted blob contents: {name}')
+                        data=stream.read()
+                        info.size=len(data)
+                        seen.add(name)
+                        files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
+                        tar.addfile(info,io.BytesIO(data))
+                process.stdout.close()
+                if process.wait() or seen != expected:
+                    raise RuntimeError('Git archive differs from the exact committed source tree')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
     return {'files':files,'file_count':len(files),'archive_bytes':archive.stat().st_size,
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
@@ -255,7 +302,8 @@ def main(argv=None):
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
             verify_signed_source(source, receipt['source_commit'])
-        receipt['snapshot']=make_snapshot(source,archive)
+        receipt['snapshot']=make_snapshot(source,archive,
+                                          exact_commit=receipt['source_commit'] if args.profile=='test' else None)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)

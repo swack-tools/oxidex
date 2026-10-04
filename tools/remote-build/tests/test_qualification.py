@@ -2,6 +2,7 @@
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
@@ -57,7 +58,7 @@ class QualificationTransportTests(unittest.TestCase):
                 self.assertEqual(member.mode, 0o644)
                 self.assertEqual(stream.extractfile(member).read(), b"swackhamer key\n")
 
-    def test_result_archive_refuses_path_escape_and_overwrite(self):
+    def test_result_archive_refuses_path_escape_and_partial_publication(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             archive = root / "results.tar.gz"
@@ -67,15 +68,61 @@ class QualificationTransportTests(unittest.TestCase):
                 member.size = len(payload)
                 stream.addfile(member, io.BytesIO(payload))
             with self.assertRaisesRegex(ValueError, "unsafe member"):
-                qualification.safe_extract(archive, root)
+                qualification.safe_extract(archive, root / "staged")
             with tarfile.open(archive, "w:gz") as stream:
-                member = tarfile.TarInfo("existing.json")
+                for _ in range(2):
+                    member = tarfile.TarInfo("summary.json")
+                    member.size = 2
+                    stream.addfile(member, io.BytesIO(b"{}"))
+            with self.assertRaises(FileExistsError):
+                qualification.safe_extract(archive, root / "staged")
+            self.assertFalse((root / "staged").exists())
+
+    def test_result_archive_extracts_without_newer_tar_filter_api(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "results.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                member = tarfile.TarInfo("results/summary.json")
                 member.size = 2
                 stream.addfile(member, io.BytesIO(b"{}"))
-            (root / "existing.json").write_text("original")
-            with self.assertRaisesRegex(ValueError, "replace existing evidence"):
-                qualification.safe_extract(archive, root)
-            self.assertEqual((root / "existing.json").read_text(), "original")
+            with patch.object(tarfile.TarFile, "extractall", side_effect=AssertionError("newer filter API")):
+                qualification.safe_extract(archive, root / "staged")
+            self.assertEqual((root / "staged/results/summary.json").read_bytes(), b"{}")
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                qualification.safe_extract(archive, root / "staged")
+
+    def test_results_publish_only_after_all_markers_verify(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            staged = root / "staged/output"
+            staged.mkdir(parents=True)
+            head = "a" * 40
+            pin = "13.59"
+            corpus = staged / "corpus-read/observations/receipt.json"
+            corpus.parent.mkdir(parents=True)
+            corpus.write_text("{}")
+            rows = {}
+            for index, row in enumerate(qualification.ROWS):
+                marker = staged / f"spot-{head[:12]}-{index}/qualification-result.json"
+                marker.parent.mkdir()
+                marker.write_text("{}")
+                rows[row.format(pin=pin)] = {"marker_sha256": qualification.sha(marker)}
+            summary = {"status": "PASS", "head": head, "pin": pin, "corpus_gate": "PASS",
+                       "corpus_receipt_sha256": qualification.sha(corpus), "rows": rows}
+            (staged / "remote-qualification.json").write_text(json.dumps(summary))
+            missing = staged / f"spot-{head[:12]}-2/qualification-result.json"
+            missing.unlink()
+            with self.assertRaisesRegex(RuntimeError, "marker differs"):
+                qualification.publish_results(staged, output, head, pin)
+            self.assertFalse((output / "remote-results").exists())
+            missing.write_text("{}")
+            published = qualification.publish_results(staged, output, head, pin)
+            self.assertEqual(published, output / "remote-results")
+            self.assertFalse(staged.exists())
+            self.assertTrue((published / "remote-qualification.json").is_file())
 
     def test_project_environment_is_used_before_gcloud(self):
         with patch.dict("os.environ", {"OXIDEX_REMOTE_PROJECT": "spot-project"}), \
@@ -106,19 +153,49 @@ class QualificationTransportTests(unittest.TestCase):
             signer = root / "allowed_signers"
             signer.write_text("swackhamer key\n")
             destination = root / "input.tar.gz"
-            original_add = tarfile.TarFile.add
-            def mutate_after_add(archive, name, *args, **kwargs):
-                result = original_add(archive, name, *args, **kwargs)
-                if Path(name) == fixture:
+            original_addfile = tarfile.TarFile.addfile
+            def mutate_after_addfile(archive, member, *args, **kwargs):
+                result = original_addfile(archive, member, *args, **kwargs)
+                if member.name.endswith("fixture.bin"):
                     fixture.write_bytes(b"changed")
                 return result
             with patch.object(qualification, "ops_root", return_value=root), \
                  patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [policy, provisioned])), \
                  patch.object(qualification, "git", return_value=str(signer)), \
-                 patch.object(tarfile.TarFile, "add", new=mutate_after_add):
+                 patch.object(tarfile.TarFile, "addfile", new=mutate_after_addfile):
                 with self.assertRaisesRegex(ValueError, "changed while creating"):
                     qualification.prepare_archive(output, destination, bundle)
             self.assertFalse(destination.exists())
+
+    def test_archive_uses_frozen_input_even_if_live_file_changes_during_add(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            provisioned = output / "provisioned"
+            provisioned.mkdir(parents=True)
+            policy = output / "read-policy-input.json"
+            policy.write_text("original")
+            bundle = root / "repository.bundle"
+            bundle.write_bytes(b"bundle")
+            signer = root / "allowed_signers"
+            signer.write_text("swackhamer key\n")
+            destination = root / "input.tar.gz"
+            original_addfile = tarfile.TarFile.addfile
+            def change_live_during_add(archive, member, *args, **kwargs):
+                if member.name.endswith("read-policy-input.json"):
+                    policy.write_text("transient")
+                    try:
+                        return original_addfile(archive, member, *args, **kwargs)
+                    finally:
+                        policy.write_text("original")
+                return original_addfile(archive, member, *args, **kwargs)
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [policy, provisioned])), \
+                 patch.object(qualification, "git", return_value=str(signer)), \
+                 patch.object(tarfile.TarFile, "addfile", new=change_live_during_add):
+                qualification.prepare_archive(output, destination, bundle)
+            with tarfile.open(destination) as stream:
+                self.assertEqual(stream.extractfile("ops/output/read-policy-input.json").read(), b"original")
 
     def test_unavailable_worker_records_blocked_transport(self):
         with TemporaryDirectory() as directory:
@@ -144,6 +221,31 @@ class QualificationTransportTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "BLOCKED_NO_WORKER")
             self.assertIn("no eligible Spot worker", receipt["error"])
             self.assertEqual(receipt["head"], "a" * 40)
+
+    def test_worker_inventory_command_failure_records_blocked_transport(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            output.mkdir()
+            def package(_output, destination, _bundle):
+                destination.write_bytes(b"package")
+                return "a" * 40, "13.59"
+            def git(*args):
+                return "" if args[0] == "status" else "a" * 40
+            failure = subprocess.CalledProcessError(1, ["gcloud", "compute", "instances", "list"])
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [])), \
+                 patch.object(qualification, "git", side_effect=git), \
+                 patch.object(qualification, "prepare_archive", side_effect=package), \
+                 patch.object(qualification, "resolve_project", return_value="project"), \
+                 patch.object(qualification, "select_worker", side_effect=failure), \
+                 patch.object(qualification.subprocess, "run"):
+                self.assertEqual(qualification.controller(output, "project"), 2)
+            transports = list((root / "evidence/remote-qualification").glob("*/transport.json"))
+            self.assertEqual(len(transports), 1)
+            receipt = json.loads(transports[0].read_text())
+            self.assertEqual(receipt["status"], "BLOCKED_WORKER_SELECTION")
+            self.assertIn("gcloud", receipt["error"])
 
 class CorpusCommandContractTests(unittest.TestCase):
     def test_nested_proof_and_receipt_paths_follow_instrument_outputs(self):

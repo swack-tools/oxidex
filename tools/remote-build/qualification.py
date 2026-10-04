@@ -15,9 +15,11 @@ import os
 from pathlib import Path
 import secrets
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -136,32 +138,74 @@ def prepare_archive(output: Path, destination: Path, bundle: Path) -> tuple[str,
     if hashlib.sha256(signer_bytes).hexdigest() != signer_sha:
         raise ValueError("maintainer allowed signers changed during packaging")
     bundle_sha = sha(bundle)
-    with tarfile.open(destination, "w:gz", compresslevel=3) as archive:
-        archive.add(bundle, arcname="repository.bundle", recursive=False)
-        signer_member = tarfile.TarInfo("maintainer.allowed_signers")
-        signer_member.size = len(signer_bytes)
-        signer_member.mode = 0o644
-        archive.addfile(signer_member, io.BytesIO(signer_bytes))
-        for path in before:
-            archive.add(path, arcname=str(Path("ops") / path.relative_to(root)), recursive=False)
-    if ({path: sha(path) for path in input_paths(seeds, root)} != before
-            or sha(signers_path) != signer_sha or sha(bundle) != bundle_sha):
+    try:
+        with tarfile.open(destination, "w:gz", compresslevel=3) as archive:
+            def add_frozen(path: Path, name: str, expected: str) -> None:
+                # Archive the same bytes we hash, never ask tarfile to reopen
+                # a mutable path after its preflight identity was checked.
+                with tempfile.TemporaryFile(dir=destination.parent) as frozen, path.open("rb") as live:
+                    digest = hashlib.sha256()
+                    size = 0
+                    for block in iter(lambda: live.read(1024 * 1024), b""):
+                        digest.update(block)
+                        frozen.write(block)
+                        size += len(block)
+                    if digest.hexdigest() != expected:
+                        raise ValueError(f"qualification input changed while freezing: {path}")
+                    frozen.seek(0)
+                    member = tarfile.TarInfo(name)
+                    member.size = size
+                    member.mode = 0o644
+                    archive.addfile(member, frozen)
+            add_frozen(bundle, "repository.bundle", bundle_sha)
+            signer_member = tarfile.TarInfo("maintainer.allowed_signers")
+            signer_member.size = len(signer_bytes)
+            signer_member.mode = 0o644
+            archive.addfile(signer_member, io.BytesIO(signer_bytes))
+            for path, digest in before.items():
+                add_frozen(path, str(Path("ops") / path.relative_to(root)), digest)
+        if ({path: sha(path) for path in input_paths(seeds, root)} != before
+                or sha(signers_path) != signer_sha or sha(bundle) != bundle_sha):
+            raise ValueError("qualification inputs changed while creating the transfer archive")
+    except Exception:
         destination.unlink(missing_ok=True)
-        raise ValueError("qualification inputs changed while creating the transfer archive")
+        raise
     return head, pin
 
 
 def safe_extract(archive: Path, destination: Path) -> None:
+    """Extract only into a new staging directory, never into live evidence."""
+    if destination.exists():
+        raise ValueError(f"remote receipt staging path already exists: {destination}")
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
-        if any(member.issym() or member.islnk() or member.name.startswith("/") or ".." in Path(member.name).parts
+        if any((not member.isfile() and not member.isdir()) or not member.name
+               or member.name.startswith("/") or ".." in Path(member.name).parts
                for member in members):
             raise ValueError("remote receipt archive contains an unsafe member")
-        for member in members:
-            target = destination / member.name
-            if member.isfile() and target.exists():
-                raise ValueError(f"remote receipt would replace existing evidence: {target}")
-        source.extractall(destination, filter="data")
+        destination.mkdir(parents=True)
+        try:
+            # Regular files and directories only; this is safe on all stated
+            # Python 3.11 patch versions without tarfile's newer filter API.
+            for member in members:
+                target = destination / member.name
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                stream = source.extractfile(member)
+                if stream is None:
+                    raise ValueError(f"remote receipt has no bytes: {member.name}")
+                with stream, target.open("xb") as output:
+                    copied = 0
+                    for block in iter(lambda: stream.read(1024 * 1024), b""):
+                        output.write(block)
+                        copied += len(block)
+                    if copied != member.size:
+                        raise ValueError(f"remote receipt member was truncated: {member.name}")
+        except Exception:
+            shutil.rmtree(destination)
+            raise
 
 
 def corpus_commands(corpus: Path, instrument: Path, perl: Path, exiftool: Path,
@@ -282,8 +326,35 @@ def resolve_project(explicit: str | None) -> str:
     return project
 
 
+def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> Path:
+    """Verify a complete fetched result tree, then publish it in one rename."""
+    if not staged_output.is_dir():
+        raise RuntimeError("remote result archive lacks the qualification output root")
+    summary = json.loads((staged_output / "remote-qualification.json").read_text())
+    expected_rows = {row.format(pin=pin) for row in ROWS}
+    if (summary.get("status") != "PASS" or summary.get("head") != head
+            or summary.get("pin") != pin or summary.get("corpus_gate") != "PASS"
+            or set(summary.get("rows", {})) != expected_rows):
+        raise RuntimeError("remote summary is not an exact-head three-row and corpus PASS")
+    corpus_receipt = staged_output / "corpus-read" / "observations" / "receipt.json"
+    if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
+        raise RuntimeError("downloaded corpus receipt differs from remote summary")
+    for index, row in enumerate(ROWS):
+        marker = staged_output / f"spot-{head[:12]}-{index}" / "qualification-result.json"
+        if not marker.is_file() or sha(marker) != summary["rows"][row.format(pin=pin)]["marker_sha256"]:
+            raise RuntimeError("downloaded Task19 marker differs from remote summary")
+    published = output / "remote-results"
+    if published.exists() or published.is_symlink():
+        raise ValueError(f"remote qualification results already exist: {published}")
+    staged_output.replace(published)
+    return published
+
+
 def controller(output: Path, project: str | None) -> int:
     head, _pin, _seeds = exact_inputs(output)
+    published = output / "remote-results"
+    if published.exists() or published.is_symlink():
+        raise ValueError(f"remote qualification results already exist: {published}")
     evidence = ops_root() / "evidence" / "remote-qualification" / (head[:12] + "-" + secrets.token_hex(8))
     evidence.mkdir(parents=True)
     bundle = evidence / "repository.bundle"
@@ -303,8 +374,8 @@ def controller(output: Path, project: str | None) -> int:
     save()
     try:
         vm, sample = select_worker(project)
-    except RuntimeError as error:
-        receipt["status"] = "BLOCKED_NO_WORKER"
+    except (RuntimeError, ValueError, subprocess.SubprocessError, OSError) as error:
+        receipt["status"] = "BLOCKED_NO_WORKER" if isinstance(error, RuntimeError) else "BLOCKED_WORKER_SELECTION"
         receipt["error"] = str(error)
         save()
         print(f"remote qualification blocked before launch: {error}; evidence: {evidence}", file=sys.stderr)
@@ -418,21 +489,16 @@ def controller(output: Path, project: str | None) -> int:
                             "--quiet", *SCP_FLAGS], check=True)
             if sha(result_tar) != digest:
                 raise RuntimeError("remote result archive checksum differs after download")
-            safe_extract(result_tar, ops_root())
+            staging = evidence / "extracted"
+            safe_extract(result_tar, staging)
+            staged_output = staging / output.relative_to(ops_root())
+            receipt["staged_results"] = str(staged_output)
             receipt["results_sha256"] = digest
+        else:
+            raise RuntimeError("remote qualification results archive is unavailable")
         if receipt["remote_exit_code"] != 0:
             raise RuntimeError(f"remote qualification exited {receipt['remote_exit_code']}")
-        summary = json.loads((output / "remote-qualification.json").read_text())
-        if (summary.get("status") != "PASS" or summary.get("head") != head
-                or summary.get("corpus_gate") != "PASS" or len(summary.get("rows", {})) != 3):
-            raise RuntimeError("remote summary is not an exact-head three-row and corpus PASS")
-        corpus_receipt = output / "corpus-read" / "observations" / "receipt.json"
-        if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
-            raise RuntimeError("downloaded corpus receipt differs from remote summary")
-        for index, row in enumerate(ROWS):
-            marker = output / f"spot-{head[:12]}-{index}" / "qualification-result.json"
-            if not marker.is_file() or sha(marker) != summary["rows"][row.format(pin=pin)]["marker_sha256"]:
-                raise RuntimeError("downloaded Task19 marker differs from remote summary")
+        receipt["results_dir"] = str(publish_results(staged_output, output, head, pin))
         receipt["status"] = "PASS"
         save()
         return 0

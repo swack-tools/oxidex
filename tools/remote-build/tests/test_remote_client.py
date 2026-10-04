@@ -22,6 +22,25 @@ class ClientTests(unittest.TestCase):
                 self.assertEqual(tar.extractfile('Cargo.toml').read(), b'working change')
             self.assertEqual(receipt['file_count'],1)
 
+    def test_exact_head_snapshot_uses_committed_objects_not_mutable_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'src';root.mkdir()
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            for name, data in [('Cargo.toml','committed'),('.env','secret'),
+                               ('target/build','cache')]:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(data)
+            subprocess.run(['git','-C',str(root),'add','.'],check=True)
+            subprocess.run(['git','-C',str(root),'-c','user.name=Test',
+                            '-c','user.email=test@example.invalid','commit','-qm','fixture'],check=True)
+            head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+            (root/'Cargo.toml').write_text('transient worktree bytes')
+            archive=Path(directory)/'source.tar.gz'
+            receipt=make_snapshot(root,archive,exact_commit=head)
+            with tarfile.open(archive) as tar:
+                self.assertEqual(tar.getnames(),['Cargo.toml'])
+                self.assertEqual(tar.extractfile('Cargo.toml').read(),b'committed')
+            self.assertEqual(receipt['file_count'],1)
+
     def test_failed_remote_header_validation_prevents_release_compilation(self):
         from lib import remote_build
         from unittest.mock import patch
