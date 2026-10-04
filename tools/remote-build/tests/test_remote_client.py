@@ -125,8 +125,17 @@ class ClientTests(unittest.TestCase):
                     download_test_proof('vm','z','p','/remote',local,
                                         hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
                                         'a'*40,toolchain,'13.59')
-            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
+            proof['python_exit_code']=0
+            proof['status']='FAILED'
+            proof['test_exit_code']=1
+            failed_digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                failure=download_test_proof('vm','z','p','/remote',local,failed_digest,
+                                            'a'*40,toolchain,'13.59',require_pass=False)
+            self.assertEqual(failure['status'],'FAILED')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),failed_digest)
             proof['status']='PASS'
+            proof['test_exit_code']=0
             proof['rustc_commit']='e'*40
             with patch('lib.remote_build.subprocess.run',side_effect=fetch):
                 with self.assertRaisesRegex(RuntimeError,'does not establish'):

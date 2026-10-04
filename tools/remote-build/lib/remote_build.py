@@ -134,7 +134,8 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
         temporary.unlink(missing_ok=True)
 
 
-def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_toolchain, expected_oracle):
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
+                        expected_toolchain, expected_oracle, *, require_pass=True):
     import tempfile
     import os
     fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
@@ -157,20 +158,27 @@ def download_test_proof(instance, zone, project, remote, local, digest, expected
                 or re.findall(r'^release: (\S+)$', proof['rustc_version'], re.M)
                    != [expected_toolchain['channel']]
                 or proof.get('oracle_pin') != expected_oracle
-                or proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
-                or proof.get('python_exit_code') != 0
-                or proof.get('qualification_unit_exit_code') != 0
-                or proof.get('test_command') != ['cargo', 'test', '--workspace', '--all-features', '--locked', '--no-fail-fast']
-                or not isinstance(proof.get('python_command'), list)
-                or proof['python_command'][1:] != ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py']
-                or not isinstance(proof.get('qualification_unit_command'), list)
-                or proof['qualification_unit_command'][1:] != ['-m', 'unittest', 'test_version_transition_qualification.py']
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('exiftool_tree_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('corpus_tree_sha256', ''))
                 or proof.get('corpus_files', 0) < 4000):
             raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        if (not isinstance(proof.get('python_command'), list)
+                or proof['python_command'][1:] != ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py']
+                or (proof.get('qualification_unit_command') is not None and
+                    (not isinstance(proof['qualification_unit_command'], list) or
+                     proof['qualification_unit_command'][1:] != ['-m', 'unittest', 'test_version_transition_qualification.py']))
+                or (proof.get('test_command') is not None and
+                    proof['test_command'] != ['cargo', 'test', '--workspace', '--all-features', '--locked', '--no-fail-fast'])):
+            raise RuntimeError('Remote test proof has an unexpected command')
+        if require_pass:
+            if (proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
+                    or proof.get('python_exit_code') != 0 or proof.get('qualification_unit_exit_code') != 0
+                    or proof.get('test_command') is None or proof.get('qualification_unit_command') is None):
+                raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        elif proof.get('status') != 'FAILED' or not isinstance(proof.get('test_exit_code'), int) or proof['test_exit_code'] == 0:
+            raise RuntimeError('Remote test proof does not establish a bound failure')
         temporary.replace(local)
         return proof
     finally:
@@ -292,6 +300,27 @@ def main(argv=None):
             receipt['retryable']=retryable_exit(result.returncode);save()
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
+                if stage == 'test':
+                    remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+                    try:
+                        remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+                        if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                            raise RuntimeError('Remote failed-test proof has no SHA-256')
+                        receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                            remote_proof,evidence/'remote-test.json',remote_hash,receipt['source_commit'],
+                            receipt['toolchain'],(source/'.exiftool-version').read_text().strip(),require_pass=False)
+                        receipt['test_proof_sha256']=remote_hash
+                        receipt['retryable']=False
+                    except Exception as proof_error:
+                        # The command may have failed before writing a proof or
+                        # SSH may have lost its result. Do not destroy evidence
+                        # whose process state and payload are unconfirmed.
+                        receipt['remote_retained']=True
+                        receipt['retryable']=False
+                        receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                                 'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                        receipt['failure_proof_error']=str(proof_error)
+                    save()
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
         if args.profile=='test':
             receipt['stage']='verify'
@@ -337,7 +366,7 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain','cleanup'):
+        if receipt.get('stage') not in ('local_toolchain','cleanup') and not receipt.get('remote_retained'):
             cleanup()
         raise
     finally:
