@@ -787,9 +787,32 @@ impl MetadataMap {
         priority: i16,
         group1: &str,
     ) {
+        let is_list = matches!(&display, TagValue::Array(_));
+        self.insert_xmp_occurrence_with_list_flag(
+            key,
+            display,
+            value_form,
+            stored_form,
+            priority,
+            group1,
+            is_list,
+        );
+    }
+
+    /// Preserve the RDF source list declaration even when a carrier requests
+    /// a joined display string instead of a typed array.
+    pub(crate) fn insert_xmp_occurrence_with_list_flag<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        value_form: Option<TagValue>,
+        stored_form: Option<TagValue>,
+        priority: i16,
+        group1: &str,
+        is_list: bool,
+    ) {
         let key = key.into();
         let order = self.sink.next_order();
-        let is_list = matches!(&display, TagValue::Array(_));
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
         occurrence.priority = priority;
         occurrence.is_list = is_list;

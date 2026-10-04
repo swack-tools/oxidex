@@ -562,22 +562,30 @@ pub(crate) fn insert_xmp_entry_with_source(
     if let Some((source, forms)) =
         source.and_then(|raw| convert_xmp_gps(&entry.tag, raw).map(|forms| (raw, forms)))
     {
-        metadata.insert_xmp_occurrence(
+        metadata.insert_xmp_occurrence_with_list_flag(
             entry.key.clone(),
             value,
             Some(crate::core::TagValue::new_string(forms.value)),
             Some(crate::core::TagValue::new_string(source.to_owned())),
             priority,
             &entry.group1,
+            matches!(entry.value, XmpValue::List(_)),
         );
     } else {
-        metadata.insert_xmp_occurrence(
+        let source_list = matches!(entry.value, XmpValue::List(_));
+        // Some carriers request a comma-joined display string. Preserve the
+        // source elements as ValueConv so -b can still emit LF-separated List
+        // values rather than the joined display text.
+        let value_form = (source_list && !matches!(&value, crate::core::TagValue::Array(_)))
+            .then(|| entry.tag_value(true));
+        metadata.insert_xmp_occurrence_with_list_flag(
             entry.key.clone(),
             value,
-            None,
+            value_form,
             None,
             priority,
             &entry.group1,
+            source_list,
         );
     }
 }
@@ -1343,10 +1351,11 @@ fn parse_xmp_packet_in_directory(
 
     // The focused passes below keep their own source paths. This generic walk
     // handles the remaining flattened fields by their exact RDF path.
-    let flattened = super::struct_flatten::extract_flattened_struct_fields_with_identity(
-        xml_bytes,
-        low_default,
-    )?;
+    let (flattened, flattened_binary_payloads) =
+        super::struct_flatten::extract_flattened_struct_fields_with_identity_and_binary(
+            xml_bytes,
+            low_default,
+        )?;
     let raw_order: std::collections::HashMap<super::struct_flatten::RawPath, usize> = flattened
         .iter()
         .enumerate()
@@ -1609,10 +1618,21 @@ fn parse_xmp_packet_in_directory(
             priority,
             path.clone(),
         );
+        let payloads = flattened_binary_payloads.get(&(tag.clone(), path.clone()));
         let result = if values.len() > 1 {
-            ResultOccurrence::list(tag, values)
+            let result = ResultOccurrence::list(tag, values);
+            if let Some(payloads) = payloads
+                && payloads.len() == result.elements.as_ref().map_or(0, Vec::len)
+                && payloads.iter().any(Option::is_some)
+            {
+                result.with_list_binary_payloads(payloads.clone())
+            } else {
+                result
+            }
         } else {
-            ResultOccurrence::scalar(tag, values.join(", "))
+            ResultOccurrence::scalar(tag, values.join(", ")).with_static_binary_payload(
+                payloads.and_then(|payloads| payloads.first().cloned().flatten()),
+            )
         };
         results.push(result.with_path(path));
     }
@@ -3886,7 +3906,7 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 /// Reports whether a structure property's name is dropped from flattened IDs.
 /// An RDF datatype declaration is semantic, not a shorthand structure field.
 /// Only static ExifTool URI properties use this binary path here.
-fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
+pub(super) fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
     const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
     const ET_NS: [&str; 2] = ["http://ns.exiftool.org/1.0/", "http://ns.exiftool.ca/1.0/"];
     let mut rdf_datatype = None;
@@ -3954,7 +3974,7 @@ fn static_rdf_extract_bytes(tag: &str, payload: &[u8]) -> Vec<u8> {
     }
 }
 
-fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
+pub(super) fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
     use base64::Engine;
     // XMP.pm::DecodeBase64 truncates at the first character outside its
     // base64 alphabet, then removes whitespace and '=' before decoding.
@@ -8906,6 +8926,24 @@ mod entry_tests {
                 .as_ref()
                 .and_then(TagValue::as_string),
             Some("42,1.654321S")
+        );
+    }
+
+    #[test]
+    fn untyped_carrier_keeps_rdf_list_elements_for_binary_selection() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:subject><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF>"#;
+        let mut metadata = MetadataMap::new();
+        insert_xmp_packet(&mut metadata, xml, false).unwrap();
+        let occurrences = metadata.occurrences_for("XMP-dc:Subject");
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0].raw.as_string(), Some("alpha, beta"));
+        assert!(occurrences[0].is_list);
+        assert_eq!(
+            occurrences[0].value,
+            Some(TagValue::Array(vec![
+                TagValue::new_string("alpha"),
+                TagValue::new_string("beta"),
+            ]))
         );
     }
 
