@@ -82,7 +82,8 @@ loader on each original row marker and records each marker SHA-256, the matrix
 hash, target root and lease path in its summary. The outer archive SHA-256
 binds that summary to the downloaded bytes. Later,
 `just verify-qualification-receipts "$OUT" <transport.json>` rechecks the
-retained source bundle, result archive, relocated receipt hashes, and both
+retained source bundle, result archive, every published evidence file against
+its archived bytes, and both
 Spot replay attestations without rerunning OxiDex validation locally.
 The downloaded marker still names the original Spot output path and `/src`
 matrix: it cannot be passed to Task19's loader on the laptop. A full loader

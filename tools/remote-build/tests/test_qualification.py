@@ -172,6 +172,7 @@ class QualificationTransportTests(unittest.TestCase):
             archive = evidence / "results.tar.gz"
             names = ["remote-qualification.json", "corpus-read/observations/receipt.json"]
             names += [f"spot-{'a' * 12}-{index}/qualification-result.json" for index in range(3)]
+            names += ["spot-" + "a" * 12 + "-0/same-pin-13.59/before/execution-status.json"]
             for name in names:
                 path = output / "remote-results" / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,15 +206,15 @@ class QualificationTransportTests(unittest.TestCase):
                 result = qualification.verify_published(output, transport)
             self.assertEqual(result["status"], "PASS")
             verify.assert_called_once()
-            summary = output / "remote-results/remote-qualification.json"
+            summary = output / "remote-results/spot-aaaaaaaaaaaa-0/same-pin-13.59/before/execution-status.json"
             summary.write_text("changed")
             with (
                 patch.object(qualification, "ops_root", return_value=root),
                 patch.object(qualification, "git", side_effect=[head, ""]),
             ):
-                with self.assertRaisesRegex(RuntimeError, "published receipt differs"):
+                with self.assertRaisesRegex(RuntimeError, "published evidence differs"):
                     qualification.verify_published(output, transport)
-            summary.write_text("remote-qualification.json")
+            summary.write_text(names[-1])
             archive.write_bytes(b"tampered")
             with (
                 patch.object(qualification, "ops_root", return_value=root),

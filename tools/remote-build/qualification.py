@@ -554,23 +554,28 @@ def publish_results(staged_output: Path, output: Path, head: str, pin: str,
     return published
 
 
-def verify_archived_receipts(archive: Path, output: Path, published: Path, head: str) -> None:
-    """Bind selected published receipt bytes directly to the retained archive."""
-    relative = output.relative_to(ops_root())
-    names = ["remote-qualification.json", "corpus-read/observations/receipt.json"]
-    names += [f"spot-{head[:12]}-{index}/qualification-result.json" for index in range(3)]
-    expected = {str(relative / name): published / name for name in names}
+def verify_archived_receipts(archive: Path, output: Path, published: Path) -> None:
+    """Bind every published evidence file to its retained archive bytes."""
+    prefix = str(output.relative_to(ops_root())) + "/"
     observed = set()
     with tarfile.open(archive, "r:gz") as source:
         for member in source:
-            path = expected.get(member.name)
-            if path is None:
+            if not member.name.startswith(prefix):
+                raise RuntimeError("retained archive has a member outside published results")
+            relative = member.name[len(prefix):]
+            if not relative or ".." in Path(relative).parts:
+                raise RuntimeError("retained archive has an unsafe published path")
+            path = published / relative
+            if member.isdir():
+                if path.is_symlink() or not path.is_dir():
+                    raise RuntimeError("published evidence directory differs from archive")
                 continue
-            if member.name in observed or not member.isfile() or path.is_symlink() or not path.is_file():
-                raise RuntimeError("retained archive has an invalid or duplicate selected receipt")
+            if (not member.isfile() or relative in observed
+                    or path.is_symlink() or not path.is_file()):
+                raise RuntimeError("retained archive has invalid or duplicate evidence")
             stream = source.extractfile(member)
             if stream is None:
-                raise RuntimeError("retained archive selected receipt has no bytes")
+                raise RuntimeError("retained archive evidence has no bytes")
             digest = hashlib.sha256()
             size = 0
             with stream:
@@ -578,10 +583,18 @@ def verify_archived_receipts(archive: Path, output: Path, published: Path, head:
                     digest.update(block)
                     size += len(block)
             if size != member.size or digest.hexdigest() != sha(path):
-                raise RuntimeError("published receipt differs from retained result archive")
-            observed.add(member.name)
-    if observed != set(expected):
-        raise RuntimeError("retained archive lacks a selected published receipt")
+                raise RuntimeError("published evidence differs from retained result archive")
+            observed.add(relative)
+    actual = set()
+    for path in published.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError("published evidence contains a symlink")
+        if path.is_file():
+            actual.add(str(path.relative_to(published)))
+        elif not path.is_dir():
+            raise RuntimeError("published evidence contains a non-file entry")
+    if observed != actual or not observed:
+        raise RuntimeError("published evidence inventory differs from retained archive")
 
 
 def verify_published(output: Path, transport: Path) -> dict:
@@ -625,7 +638,7 @@ def verify_published(output: Path, transport: Path) -> dict:
             or not archive.is_file() or sha(archive) != digest
             or not bundle.is_file() or sha(bundle) != record.get("source_bundle_sha256")):
         raise RuntimeError("retained result archive or source bundle digest differs")
-    verify_archived_receipts(archive, output, result_dir, head)
+    verify_archived_receipts(archive, output, result_dir)
     verify_result_tree(result_dir, output, head, pin, record["corpus_archive_replay"], digest)
     return {"schema": 1, "kind": "oxidex_remote_published_receipt_check", "status": "PASS",
             "head": head, "archive_sha256": digest,
