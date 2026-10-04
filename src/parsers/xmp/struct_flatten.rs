@@ -75,7 +75,7 @@ const MWG_REGIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/region
 const MWG_COLLECTIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/collections/";
 const MWG_KEYWORDS_NS: &str = "http://www.metadataworkinggroup.com/schemas/keywords/";
 const GOOGLE_DEVICE_NS: &str = "http://ns.google.com/photos/dd/1.0/device/";
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub(super) const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 /// `(root namespace URI, ID prefix, replacement)` -- the schemas whose
 /// structures carry a `FlatName`. Matched longest-prefix-first, and only when
@@ -424,7 +424,7 @@ fn push_frame(
                 .and_then(|key| key.split_once(':'))
                 .is_some_and(|(prefix, local)| {
                     !IGNORED_PREFIXES.contains(&prefix)
-                        && !(local == "nodeID" && resolver.resolve_prefix(prefix) == Some(RDF_NS))
+                        && resolver.resolve_prefix(prefix) != Some(RDF_NS)
                         && !is_ignored_et_attr(resolver.resolve_prefix(prefix), local)
                 })
         }),
@@ -539,8 +539,8 @@ fn emit_attributes(
             continue;
         }
         let lexical_uri = resolver.resolve_prefix(prefix);
-        if local == "nodeID" && lexical_uri == Some(RDF_NS) {
-            continue; // RDF blank-node identity is structural, not a field.
+        if lexical_uri == Some(RDF_NS) {
+            continue; // RDF attributes describe the graph, not flattened fields.
         }
         if is_ignored_et_attr(lexical_uri, local) {
             continue; // et:desc/et:prt/et:val/et:id/et:tagid/et:toolkit/et:table/et:index
@@ -976,7 +976,7 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
             continue;
         }
         let lexical_uri = resolver.resolve_prefix(prefix);
-        if local == "nodeID" && lexical_uri == Some(RDF_NS) {
+        if lexical_uri == Some(RDF_NS) {
             continue;
         }
         if is_ignored_et_attr(lexical_uri, local) {

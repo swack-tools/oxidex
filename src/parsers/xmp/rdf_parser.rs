@@ -4041,6 +4041,7 @@ fn has_shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> b
             .and_then(|key| key.split_once(':'))
             .is_some_and(|(prefix, local)| {
                 !matches!(prefix, "rdf" | "xml" | "xmlns" | "x")
+                    && resolver.resolve_prefix(prefix) != Some(super::struct_flatten::RDF_NS)
                     && !super::struct_flatten::is_ignored_et_attr(
                         resolver.resolve_prefix(prefix),
                         local,

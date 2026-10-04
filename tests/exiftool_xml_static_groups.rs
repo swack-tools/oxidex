@@ -230,6 +230,33 @@ fn aliased_rdf_descriptions_and_node_ids_do_not_become_xmp_fields() {
 }
 
 #[test]
+fn aliased_rdf_datatype_is_structural_not_a_flattened_field() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping aliased RDF datatype parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><rdf:Description><q:Blob r:datatype="base64Binary">YWJj</q:Blob><q:Settings rdf:parseType="Resource"><q:Payload r:datatype="base64Binary">YWJj</q:Payload></q:Settings></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    for key in ["EXIF:IFD0:Blob", "EXIF:IFD0:SettingsPayload"] {
+        assert_eq!(
+            theirs[key],
+            "(Binary data 3 bytes, use -b option to extract)"
+        );
+    }
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
 fn static_xmp_family_and_adobe_schema_keep_distinct_value_conversions() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping static/ordinary XMP collision: pinned oracle unavailable");

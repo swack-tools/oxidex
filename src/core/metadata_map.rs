@@ -530,6 +530,27 @@ impl MetadataMap {
         self.insert_with_list_flag(key, value, true)
     }
 
+    /// Keep a parser's expanded value while `-b` extracts its original scalar
+    /// source text. PDF Info Keywords is comma-delimited source text, not an
+    /// ExifTool List, even though the library exposes its parsed elements as
+    /// an array.
+    pub(crate) fn insert_with_scalar_binary_source<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        source: &str,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.stored = Some(TagValue::Binary(source.as_bytes().to_vec()));
+        occurrence.binary_extract_from_stored = true;
+        self.sink.record(key, occurrence);
+        self.sink.mark_assigned(order as usize);
+        previous
+    }
+
     /// A source-declared list whose printed elements differ from its
     /// ValueConv elements. Binary output and `--no-print-conv` use `value`.
     pub(crate) fn insert_declared_list_with_value_form<K: Into<String>>(
