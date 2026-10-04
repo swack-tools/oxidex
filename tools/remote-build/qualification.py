@@ -56,6 +56,13 @@ def exact_inputs(output: Path) -> tuple[str, str, list[Path]]:
     head = git("rev-parse", "HEAD")
     if caller["head"] != head:
         raise ValueError("caller HEAD changed during qualification input preflight")
+    signature = git("log", "-1", "--format=%an|%ae|%cn|%ce|%G?|%GS").split("|")
+    if signature != ["swackhamer", "swackhamer@users.noreply.github.com",
+                     "swackhamer", "swackhamer@users.noreply.github.com", "G",
+                     "swackhamer@users.noreply.github.com"]:
+        raise ValueError("qualification HEAD is not the verified signed maintainer commit")
+    subprocess.run(["git", "-C", str(ROOT), "verify-commit", head], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     pin = (ROOT / ".exiftool-version").read_text().strip()
     matrix = q.materialize_matrix(q.load_matrix(q.CANONICAL_MATRIX, pin),
                                   output_root=output, target_root=ops_root() / "targets", run_id="preflight")
@@ -128,6 +135,22 @@ def safe_extract(archive: Path, destination: Path) -> None:
         source.extractall(destination, filter="data")
 
 
+def corpus_commands(corpus: Path, instrument: Path, perl: Path, exiftool: Path,
+                    samples: Path, floor: int) -> list[list[str]]:
+    """Bind the CLI's output *directories* to its nested proof and receipt files."""
+    build = corpus / "build"
+    observe = corpus / "observations"
+    receipt = observe / "receipt.json"
+    return [
+        [sys.executable, str(instrument), "build", "--output", str(build)],
+        [sys.executable, str(instrument), "observe", "--build-proof", str(build / "build-proof.json"),
+         "--perl", str(perl), "--exiftool-dir", str(exiftool), "--corpus", str(samples),
+         "--output", str(observe), "--min-files", str(floor)],
+        [sys.executable, str(instrument), "verify", "--receipt", str(receipt)],
+        [sys.executable, str(ROOT / "tools/ci/read_regression_gate.py"), "--receipt", str(receipt)],
+    ]
+
+
 def remote_run(output: Path, expected_head: str) -> int:
     """Container phase; source and ops root are already mounted at exact paths."""
     if git("rev-parse", "HEAD") != expected_head or git("status", "--porcelain"):
@@ -196,22 +219,14 @@ def remote_run(output: Path, expected_head: str) -> int:
         perl = ops_root() / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
         exiftool = bootstrap.exiftool_root(ops_root())
         samples = bootstrap.corpus_path(ops_root())
-        commands = [
-            [sys.executable, str(instrument), "build", "--output", str(corpus / "build.json")],
-            [sys.executable, str(instrument), "observe", "--build-proof", str(corpus / "build.json"),
-             "--perl", str(perl), "--exiftool-dir", str(exiftool), "--corpus", str(samples),
-             "--output", str(corpus / "receipt.json"), "--min-files", str(floor)],
-            [sys.executable, str(instrument), "verify", "--receipt", str(corpus / "receipt.json")],
-            [sys.executable, str(ROOT / "tools/ci/read_regression_gate.py"),
-             "--receipt", str(corpus / "receipt.json")],
-        ]
+        commands = corpus_commands(corpus, instrument, perl, exiftool, samples, floor)
         for index, command in enumerate(commands):
             with (corpus / f"stage-{index}.log").open("w") as log:
                 process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
             if process.returncode:
                 raise ValueError(f"corpus stage {index} exited {process.returncode}")
         result["corpus_gate"] = "PASS"
-        result["corpus_receipt_sha256"] = sha(corpus / "receipt.json")
+        result["corpus_receipt_sha256"] = sha(corpus / "observations" / "receipt.json")
         result["selected_file_floor"] = floor
         result["status"] = "PASS"
         save()
@@ -266,7 +281,8 @@ def controller(output: Path, project: str | None) -> int:
                  f"git -C {shlex.quote(stage + '/source')} checkout -q --detach {head} && "
                  f"test \"$(git -C {shlex.quote(stage + '/source')} rev-parse HEAD)\" = {head} && "
                  f"mkdir -p {shlex.quote(stage + '/targets')} && "
-                 f"sudo chown -R 1001:1001 {shlex.quote(stage)}")
+                 f"sudo chown -R 1001:1001 {shlex.quote(stage + '/source')} "
+                 f"{shlex.quote(stage + '/ops')} {shlex.quote(stage + '/targets')}")
         ssh(setup)
         ops_mount = str(ops_root())
         if " " in ops_mount or "'" in ops_mount:
@@ -285,27 +301,44 @@ def controller(output: Path, project: str | None) -> int:
                      f"printf '%s\\n' \"$?\" > {shlex.quote(stage + '/exit.status')}\n"
         ssh(f"printf '%s' {shlex.quote(run_script)} > {shlex.quote(stage + '/run.sh')} && "
             f"chmod 700 {shlex.quote(stage + '/run.sh')} && "
-            f"nohup setsid sh {shlex.quote(stage + '/run.sh')} </dev/null >/dev/null 2>&1 &")
+            f"{{ nohup setsid sh {shlex.quote(stage + '/run.sh')} </dev/null >/dev/null 2>&1 & "
+            f"printf '%s\\n' \"$!\" > {shlex.quote(stage + '/launch.pid')}; }}")
         receipt["status"] = "running"
         save()
+        timeout = int(os.environ.get("OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS", "43200"))
+        if timeout <= 0:
+            raise ValueError("remote qualification timeout must be positive")
+        deadline = time.monotonic() + timeout
         while True:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("remote qualification exceeded its deadline; inspect retained stage")
             poll = ssh(f"if test -f {shlex.quote(stage + '/exit.status')}; then cat {shlex.quote(stage + '/exit.status')}; "
-                       "else echo running; fi", check=False)
+                       f"elif test -f {shlex.quote(stage + '/launch.pid')} && "
+                       f'kill -0 "$(cat {shlex.quote(stage + "/launch.pid")})" 2>/dev/null; '
+                       "then echo running; else echo lost; fi", check=False)
             if poll.returncode:
                 raise RuntimeError("Spot worker unreachable; retained remote stage may be resumable")
             status = poll.stdout.strip()
+            if status == "lost":
+                raise RuntimeError("remote launch vanished before recording an exit status")
             if status != "running":
                 receipt["remote_exit_code"] = int(status)
                 break
             time.sleep(30)
+        observed_id = subprocess.check_output(["gcloud", "compute", "instances", "describe", vm.name,
+                                               f"--zone={vm.zone}", f"--project={project}",
+                                               "--format=value(id)"], text=True).strip()
+        if observed_id != vm.instance_id:
+            raise RuntimeError("selected Spot VM identity changed during qualification")
         # Preserve the outer container log even if Task19 stops before a row exists.
         subprocess.run(["gcloud", "compute", "scp", f"{vm.name}:{stage}/run.log",
                         str(evidence / "remote-run.log"), f"--zone={vm.zone}",
                         f"--project={project}", "--quiet", *SCP_FLAGS], check=False)
         # Results are copied even on failure; they never imply PASS by themselves.
-        pack = f"tar -czf {shlex.quote(stage + '/results.tar.gz')} -C {shlex.quote(stage + '/ops')} " + \
+        pack = f"sudo tar -czf {shlex.quote(stage + '/results.tar.gz')} -C {shlex.quote(stage + '/ops')} " + \
                " ".join(shlex.quote(str(output.relative_to(ops_root()) / name)) for name in
                         ["remote-qualification.json", "corpus-read", *[f"spot-{head[:12]}-{i}" for i in range(3)]])
+        pack += f' && sudo chown "$(id -u):$(id -g)" {shlex.quote(stage + "/results.tar.gz")}'
         ssh(pack, check=False)
         remote_digest = ssh(f"sha256sum {shlex.quote(stage + '/results.tar.gz')}", check=False)
         if remote_digest.returncode == 0:
