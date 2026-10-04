@@ -388,6 +388,45 @@ fn static_panasonicraw_name_does_not_suppress_native_rw2_composites() {
 }
 
 #[test]
+fn static_rdf_base64_binary_uses_decoded_bytes() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static RDF base64 parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Foo rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YWJj</q:Foo></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours.get("EXIF:IFD0:Foo"), theirs.get("EXIF:IFD0:Foo"));
+    assert_eq!(
+        ours.get("EXIF:IFD0:Foo"),
+        Some(&serde_json::json!(
+            "(Binary data 3 bytes, use -b option to extract)"
+        ))
+    );
+    let bytes = |mut command: Command| {
+        command
+            .args(["-b", "-Foo"])
+            .arg(file.path())
+            .output()
+            .unwrap()
+            .stdout
+    };
+    assert_eq!(
+        bytes(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+        bytes(oracle.command())
+    );
+}
+
+#[test]
 fn embedded_static_makernote_keeps_native_canon_composites_active() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping mixed native/static MakerNotes parity: pinned oracle unavailable");

@@ -778,6 +778,7 @@ impl MetadataMap {
         priority: i16,
         binary_payload_unavailable: bool,
         static_binary_list_source: Option<&[u8]>,
+        static_binary_payload: Option<&[u8]>,
     ) {
         let key = key.into();
         let order = self.sink.next_order();
@@ -792,7 +793,7 @@ impl MetadataMap {
         // FoundXMP displays oversized default text as Binary, but `-b`
         // still extracts the original property bytes. The parser retains
         // scalar or LF-joined list source bytes here, never the placeholder.
-        if let Some(bytes) = static_binary_list_source {
+        if let Some(bytes) = static_binary_payload.or(static_binary_list_source) {
             occurrence.stored = Some(TagValue::Binary(bytes.to_vec()));
             occurrence.binary_extract_from_stored = true;
         } else if binary_payload_unavailable && source.is_some() {

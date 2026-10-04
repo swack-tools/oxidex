@@ -361,8 +361,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     let mut native_source_modules = HashSet::new();
     for occurrence in map.occurrences() {
         if occurrence.origin.module != Some("XMP::StaticGroup") {
-            native_source_modules
-                .insert(crate::cli::tag_resolution::family1_label(occurrence).to_string());
+            let family1 = crate::cli::tag_resolution::family1_label(occurrence);
+            native_source_modules.insert(family1.to_string());
+            // Panasonic.pm's nonzero LensTypeModel RawConv requires Olympus.pm,
+            // activating its Composite table without an Olympus-group row.
+            if family1 == "Panasonic" && occurrence.name.as_ref() == "LensTypeModel" {
+                native_source_modules.insert("Olympus".to_string());
+            }
         }
     }
     // Composites this run produced, keyed by each definition's own index
@@ -1393,6 +1398,32 @@ mod tests {
         );
         assert_eq!(
             m.get_string("Composite:LensID"),
+            Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
+        );
+    }
+
+    #[test]
+    fn native_panasonic_model_activates_olympus_with_static_make() {
+        // Panasonic.pm's native LensTypeModel RawConv loads Olympus.pm when
+        // nonzero. A static XMP LensTypeMake may complete that table's pair.
+        let mut m = map_of(&[
+            ("Panasonic:LensTypeModel", "20 10"),
+            ("IFD0:Make", "Panasonic"),
+        ]);
+        m.insert_xmp_static_occurrence(
+            "Panasonic:LensTypeMake",
+            TagValue::new_string("2".to_string()),
+            Some("2"),
+            "Panasonic",
+            "Panasonic",
+            1,
+            false,
+            None,
+            None,
+        );
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensType"),
             Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
         );
     }

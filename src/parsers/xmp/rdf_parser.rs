@@ -223,6 +223,8 @@ pub struct XmpEntry {
     /// Exact LF-joined source elements when a static list includes a binary
     /// placeholder. Ordinary lists extract their converted display elements.
     pub static_binary_list_source: Option<Vec<u8>>,
+    /// Decoded bytes from an RDF base64Binary property in a static URI.
+    pub static_binary_payload: Option<Vec<u8>>,
 }
 
 impl XmpEntry {
@@ -247,11 +249,17 @@ impl XmpEntry {
             binary_payload_unavailable,
             source_is_static: false,
             static_binary_list_source: None,
+            static_binary_payload: None,
         }
     }
 
     fn with_static_source(mut self, source_is_static: bool) -> Self {
         self.source_is_static = source_is_static;
+        self
+    }
+
+    fn with_static_binary_payload(mut self, payload: Option<Vec<u8>>) -> Self {
+        self.static_binary_payload = payload;
         self
     }
 
@@ -295,6 +303,7 @@ impl XmpEntry {
             binary_payload_unavailable: false,
             source_is_static: false,
             static_binary_list_source: None,
+            static_binary_payload: None,
         }
     }
 
@@ -492,6 +501,7 @@ pub(crate) fn insert_xmp_entry_with_source(
             priority,
             entry.binary_payload_unavailable,
             entry.static_binary_list_source.as_deref(),
+            entry.static_binary_payload.as_deref(),
         );
         return;
     }
@@ -574,6 +584,7 @@ struct ResultOccurrence {
     elements: Option<Vec<String>>,
     path: Option<super::struct_flatten::RawPath>,
     is_default: bool,
+    static_binary_payload: Option<Vec<u8>>,
 }
 
 impl ResultOccurrence {
@@ -584,6 +595,7 @@ impl ResultOccurrence {
             elements: None,
             path: None,
             is_default: false,
+            static_binary_payload: None,
         }
     }
 
@@ -594,11 +606,17 @@ impl ResultOccurrence {
             elements: Some(elements),
             path: None,
             is_default: false,
+            static_binary_payload: None,
         }
     }
 
     fn with_path(mut self, path: super::struct_flatten::RawPath) -> Self {
         self.path = Some(path);
+        self
+    }
+
+    fn with_static_binary_payload(mut self, payload: Option<Vec<u8>>) -> Self {
+        self.static_binary_payload = payload;
         self
     }
 
@@ -905,6 +923,7 @@ fn parse_xmp_packet_in_directory(
     // change it (see `NamespaceResolver::group_for_prefix`).
     let mut current_tag = String::new();
     let mut current_default_namespace = false;
+    let mut current_static_base64 = false;
     // ... and its legacy key, resolved at the same time.
     let mut current_legacy = String::new();
     let mut current_priority = 0i16;
@@ -981,6 +1000,8 @@ fn parse_xmp_packet_in_directory(
                         current_priority =
                             source_property_priority(&tag_name, &resolver, low_default);
                         current_path = vec![raw_property(&tag_name, &resolver)];
+                        current_static_base64 = is_static_path(Some(&current_path))
+                            && has_rdf_base64_datatype(&e, &resolver);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         after_collection_close = false;
@@ -1130,18 +1151,30 @@ fn parse_xmp_packet_in_directory(
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
                         // only content is an empty Bag/Seq/Alt -- is still
                         // reported by ExifTool as an empty value.
-                        legacy.push_priority_with_path(
-                            &legacy_name,
-                            &prefixed_name,
-                            value,
-                            current_priority,
-                            current_path.clone(),
-                        );
-                        results.push(
-                            ResultOccurrence::scalar(prefixed_name, value.to_string())
-                                .with_path(current_path.clone())
-                                .with_default(current_default_namespace),
-                        );
+                        // `rdf:datatype=base64Binary` is an encoded payload,
+                        // never ordinary text under the real source tag name.
+                        // A malformed encoding is withheld rather than published
+                        // as a confidently wrong value.
+                        let payload = if current_static_base64 {
+                            decode_static_rdf_base64(value).map(Some)
+                        } else {
+                            Some(None)
+                        };
+                        if let Some(payload) = payload {
+                            legacy.push_priority_with_path(
+                                &legacy_name,
+                                &prefixed_name,
+                                value,
+                                current_priority,
+                                current_path.clone(),
+                            );
+                            results.push(
+                                ResultOccurrence::scalar(prefixed_name, value.to_string())
+                                    .with_path(current_path.clone())
+                                    .with_default(current_default_namespace)
+                                    .with_static_binary_payload(payload),
+                            );
+                        }
                     }
                     current_property = None;
                     current_value.clear();
@@ -1152,6 +1185,7 @@ fn parse_xmp_packet_in_directory(
                     inside_collection = false;
                     property_is_struct = false;
                     current_default_namespace = false;
+                    current_static_base64 = false;
                     current_path.clear();
                 }
                 depth -= 1;
@@ -1634,7 +1668,12 @@ fn parse_xmp_packet_in_directory(
         .iter()
         .map(|result| {
             let is_static = is_static_path(result.path.as_ref());
-            let value = if let Some(elements) = &result.elements {
+            let value = if let Some(payload) = &result.static_binary_payload {
+                XmpValue::Scalar(format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    payload.len()
+                ))
+            } else if let Some(elements) = &result.elements {
                 let converted: Vec<String> = elements
                     .iter()
                     .map(|element| {
@@ -1731,7 +1770,8 @@ fn parse_xmp_packet_in_directory(
                     ),
                 )
                 .with_static_source(is_static_path(results[index].path.as_ref()))
-                .with_static_list_source(results[index].elements.as_deref()),
+                .with_static_list_source(results[index].elements.as_deref())
+                .with_static_binary_payload(results[index].static_binary_payload.clone()),
             );
             gps_sources.push(xmp_source_scalar(
                 tag,
@@ -1792,7 +1832,8 @@ fn parse_xmp_packet_in_directory(
                     ),
                 )
                 .with_static_source(is_static_path(result.path.as_ref()))
-                .with_static_list_source(result.elements.as_deref()),
+                .with_static_list_source(result.elements.as_deref())
+                .with_static_binary_payload(result.static_binary_payload.clone()),
             );
             gps_sources.push(xmp_source_scalar(
                 &result.tag,
@@ -3747,6 +3788,35 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 ];
 
 /// Reports whether a structure property's name is dropped from flattened IDs.
+/// An RDF datatype declaration is semantic, not a shorthand structure field.
+/// Only static ExifTool URI properties use this binary path here.
+fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const BASE64_TYPE: &[u8] = b"http://www.w3.org/2001/XMLSchema#base64Binary";
+    element.attributes().flatten().any(|attr| {
+        std::str::from_utf8(attr.key.as_ref())
+            .ok()
+            .and_then(|key| key.split_once(':'))
+            .is_some_and(|(prefix, local)| {
+                local == "datatype"
+                    && resolver.resolve_prefix(prefix) == Some(RDF_NS)
+                    && attr.value.as_ref() == BASE64_TYPE
+            })
+    })
+}
+
+fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let compact: String = value
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(&compact)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&compact))
+        .ok()
+}
+
 /// Whether `element` carries RDF shorthand attributes -- namespaced attributes
 /// that are structure fields rather than XML bookkeeping.
 ///
@@ -8575,6 +8645,7 @@ mod entry_tests {
             binary_payload_unavailable: false,
             source_is_static: false,
             static_binary_list_source: None,
+            static_binary_payload: None,
         };
         assert_eq!(entry.group1, "XMP-exif");
     }
