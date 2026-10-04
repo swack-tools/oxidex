@@ -23,7 +23,7 @@ cargo build --release
 cargo install --path .
 ```
 
-`rust-toolchain.toml` pins the Rust toolchain (1.97.1), and rustup installs
+`rust-toolchain.toml` pins the Rust toolchain (1.99.0), and rustup installs
 it on first build. The crate uses edition 2024. A release build compiles the
 eight `oxidex-tags-*` crates and the generated tables, so the first build takes
 a while.

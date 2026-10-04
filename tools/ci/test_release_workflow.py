@@ -597,6 +597,18 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
 class ReleaseWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "release.yml").read_text()
 
+    def test_rust_build_workflows_install_the_repository_pin(self):
+        pin = tomllib.loads((REPO / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+        for job in ("build-linux", "build-windows", "build-macos"):
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertIn(f"toolchain: {pin}", block)
+        for name in ("jpeg-tag-matrix.yml", "update-coverage-docs.yml",
+                     "benchmarks.yml", "deploy-docs.yml", "benchmark-qualification.yml"):
+            with self.subTest(workflow=name):
+                self.assertIn(f"toolchain: {pin}", (WORKFLOWS / name).read_text())
+        self.assertIn(f"ARG RUST_VERSION={pin}", (REPO / "Dockerfile").read_text())
+
     def test_no_hard_coded_prerelease_false(self):
         self.assertNotRegex(self.text, r"(?m)^\s*prerelease:\s*false\s*$")
 
@@ -638,14 +650,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_macos_release_builds_and_asserts_a_universal_binary(self):
         block = job_block(self.text, "build-macos")
         self.assertIn('targets: aarch64-apple-darwin,x86_64-apple-darwin', block)
-        self.assertIn('cargo +1.97.1 build --release --target aarch64-apple-darwin', block)
-        self.assertIn('cargo +1.97.1 build --release --target x86_64-apple-darwin', block)
+        self.assertIn('cargo +1.99.0 build --release --target aarch64-apple-darwin', block)
+        self.assertIn('cargo +1.99.0 build --release --target x86_64-apple-darwin', block)
         self.assertIn('lipo -create -output "$APP_PATH"', block)
         self.assertIn('lipo -archs "$APP_PATH"', block)
         self.assertIn('arm64 x86_64', block)
         self.assertNotIn('aarch64 x86_64', block)
-        self.assertIn('toolchain: 1.97.1', block)
-        self.assertIn('rustup target list --installed --toolchain 1.97.1', block)
+        self.assertIn('toolchain: 1.99.0', block)
+        self.assertIn('rustup target list --installed --toolchain 1.99.0', block)
         self.assertIn('test -d "$SYSROOT/lib/rustlib/$target/lib"', block)
 
     def test_release_platform_specific_jobs_keep_native_runners(self):
