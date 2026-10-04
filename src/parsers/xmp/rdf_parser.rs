@@ -1635,29 +1635,36 @@ fn parse_xmp_packet_in_directory(
         .map(|result| {
             let is_static = is_static_path(result.path.as_ref());
             let value = if let Some(elements) = &result.elements {
-                let mut binary = false;
+                let converted: Vec<String> = elements
+                    .iter()
+                    .map(|element| {
+                        format_xmp_value_with_default(
+                            &result.tag,
+                            element,
+                            result.default_property(),
+                            is_static,
+                        )
+                    })
+                    .collect();
+                let binary = is_static
+                    && result.default_property()
+                    && elements
+                        .iter()
+                        .zip(&converted)
+                        .any(|(raw, value)| value != raw && value.starts_with("(Binary data "));
                 XmpValue::List(
                     elements
                         .iter()
-                        .map(|element| {
-                            let converted = format_xmp_value_with_default(
-                                &result.tag,
-                                element,
-                                result.default_property(),
-                                is_static,
-                            );
-                            if is_static && result.default_property() {
-                                let placeholder =
-                                    converted != *element && converted.starts_with("(Binary data ");
-                                binary |= placeholder;
-                                if binary && !placeholder {
-                                    return format!(
-                                        "(Binary data {} bytes, use -b option to extract)",
-                                        converted.len()
-                                    );
-                                }
+                        .zip(converted)
+                        .map(|(raw, value)| {
+                            if binary && !(value != *raw && value.starts_with("(Binary data ")) {
+                                format!(
+                                    "(Binary data {} bytes, use -b option to extract)",
+                                    value.len()
+                                )
+                            } else {
+                                value
                             }
-                            converted
                         })
                         .collect(),
                 )

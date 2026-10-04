@@ -826,3 +826,39 @@ fn literal_binary_summary_in_static_list_does_not_mark_later_items_binary() {
     ));
     assert_eq!(ours.get("EXIF:IFD0:Tags"), theirs.get("EXIF:IFD0:Tags"));
 }
+
+#[test]
+fn oversized_static_list_marks_earlier_items_binary() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping reverse oversized static list parity: pinned oracle unavailable");
+        return;
+    };
+    let long = "A".repeat(65_537);
+    let xml = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Tags><rdf:Bag><rdf:li>1/2</rdf:li><rdf:li>{long}</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF>"#
+    );
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), xml).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours.get("EXIF:IFD0:Tags"), theirs.get("EXIF:IFD0:Tags"));
+    let mut expected = oracle.command();
+    let expected = expected
+        .args(["-b", "-Tags"])
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(expected.status.success());
+    let mut candidate = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+    let candidate = candidate
+        .args(["-b", "-Tags"])
+        .arg(file.path())
+        .output()
+        .unwrap();
+    assert!(candidate.status.success());
+    assert_eq!(candidate.stdout, expected.stdout);
+}
