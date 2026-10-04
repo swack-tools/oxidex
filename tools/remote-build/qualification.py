@@ -238,6 +238,42 @@ def task19_row_exit(code: int, row: str, receipt: Path, result: dict) -> int | N
     return None
 
 
+def replay_archived_corpus(archive: Path, output: Path, expected_head: str) -> dict:
+    """Replay the exact packed receipt and published-read gate on Spot."""
+    if git("rev-parse", "HEAD") != expected_head or git("status", "--porcelain"):
+        raise ValueError("archive replay source is not the exact clean candidate")
+    member_name = str(output.relative_to(ops_root()) / "corpus-read/observations/receipt.json")
+    with tarfile.open(archive, "r:gz") as stream:
+        matches = [member for member in stream.getmembers() if member.name == member_name]
+        if len(matches) != 1 or not matches[0].isfile():
+            raise ValueError("results archive lacks one regular corpus receipt")
+        member = stream.extractfile(matches[0])
+        if member is None:
+            raise ValueError("results archive corpus receipt has no bytes")
+        with member:
+            packed_bytes = member.read()
+    packed_sha = hashlib.sha256(packed_bytes).hexdigest()
+    receipt = output / "corpus-read/observations/receipt.json"
+    if sha(receipt) != packed_sha:
+        raise ValueError("archived corpus receipt differs from the gated remote file")
+    document = json.loads(packed_bytes)
+    pin = (ROOT / ".exiftool-version").read_text().strip()
+    if (not isinstance(document, dict) or not isinstance(document.get("producer"), dict)
+            or document["producer"].get("source_commit") != expected_head):
+        raise ValueError("archived corpus receipt measures another source")
+    sys.path.insert(0, str(ROOT / "tools/ci"))
+    import read_regression_gate as gate
+    measurements = ROOT / "docs/public/measurements"
+    published, verdict, _receipt = gate.measure(
+        receipt, measurements / f"catalog-corpus-observed-{pin}.json",
+        measurements / f"catalog-source-{pin}.json", ROOT)
+    if verdict.status != "PASS":
+        raise ValueError(f"archived corpus read gate returned {verdict.status}")
+    return {"schema": 1, "kind": "oxidex_remote_corpus_archive_replay", "status": "PASS",
+            "head": expected_head, "pin": pin, "archive_sha256": sha(archive),
+            "corpus_receipt_sha256": packed_sha, "corpus_files": published.corpus_files}
+
+
 def remote_run(output: Path, expected_head: str) -> int:
     """Container phase; source and ops root are already mounted at exact paths."""
     if git("rev-parse", "HEAD") != expected_head or git("status", "--porcelain"):
@@ -422,7 +458,34 @@ def validate_downloaded_marker(marker: Path, output: Path, head: str,
         raise RuntimeError(f"downloaded Task19 marker is not committed evidence: {error}") from error
 
 
-def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> Path:
+def validate_downloaded_corpus(receipt: Path, summary: dict, head: str, pin: str,
+                               replay: dict, archive_sha: str) -> None:
+    """Check cheap relocated bindings; full transcript/gate replay ran on Spot."""
+    try:
+        body = json.loads(receipt.read_text())
+        files = body["corpus"]["files"]
+        producer = body["producer"]
+        if (not isinstance(body, dict) or body.get("schema") != "oxidex_corpus_read_receipt_v2"
+                or body.get("instrument") != "corpus_read_receipt.py"
+                or producer.get("source_commit") != head or producer.get("source_dirty") is not False
+                or body["build_proof"]["snapshot"]["source_commit"] != head
+                or body["native"]["exiftool_version"] != pin
+                or not isinstance(files, dict) or len(files) != summary.get("selected_file_floor")
+                or body["metric_c"]["corpus_files"] != len(files)
+                or len(body["observations"]) != 2 * len(files)
+                or set(body["sources"]) != set(files)
+                or replay != {"schema": 1, "kind": "oxidex_remote_corpus_archive_replay",
+                              "status": "PASS", "head": head, "pin": pin,
+                              "archive_sha256": archive_sha,
+                              "corpus_receipt_sha256": sha(receipt),
+                              "corpus_files": len(files)}):
+            raise ValueError("corpus receipt or remote archive replay identity differs")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        raise RuntimeError(f"downloaded corpus receipt is not a replayed PASS: {error}") from error
+
+
+def publish_results(staged_output: Path, output: Path, head: str, pin: str,
+                    corpus_replay: dict, archive_sha: str) -> Path:
     """Verify a complete fetched result tree, then publish it in one rename."""
     if not staged_output.is_dir():
         raise RuntimeError("remote result archive lacks the qualification output root")
@@ -435,6 +498,7 @@ def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> P
     corpus_receipt = staged_output / "corpus-read" / "observations" / "receipt.json"
     if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
         raise RuntimeError("downloaded corpus receipt differs from remote summary")
+    validate_downloaded_corpus(corpus_receipt, summary, head, pin, corpus_replay, archive_sha)
     for index, row in enumerate(ROWS):
         run_id = f"spot-{head[:12]}-{index}"
         marker = staged_output / run_id / "qualification-result.json"
@@ -456,6 +520,14 @@ def require_remote_success(receipt: dict) -> None:
         raise RuntimeError("Task19 outcome or lease state is unconfirmed; retained remote stage requires inspection")
     if code != 0:
         raise RuntimeError(f"remote qualification exited {code}")
+
+
+def confirmed_exit_status(status: str, receipt: dict) -> int:
+    """A malformed detached result is unknown, never an ordinary refusal."""
+    if not status.isascii() or not status.isdigit() or len(status) > 3 or int(status) > 255:
+        receipt["status"] = "RUNNING_RETAINED"
+        raise RuntimeError("remote exit status is unconfirmed; retained stage requires inspection")
+    return int(status)
 
 
 def controller(output: Path, project: str | None) -> int:
@@ -522,7 +594,7 @@ def controller(output: Path, project: str | None) -> int:
         ops_mount = str(ops_root())
         if " " in ops_mount or "'" in ops_mount:
             raise ValueError("ops root has unsupported Docker mount characters")
-        docker = ["sudo", "flock", "-x", "-w", "1800", "/run/oxidex-build.lock",
+        docker_base = ["sudo", "flock", "-x", "-w", "1800", "/run/oxidex-build.lock",
                   "docker", "run", "--rm", "--user=1001:1001", "--cpus=" + str(vm.cpus),
                   "--memory=" + str(int(vm.memory_gib)) + "g", "--memory-swap=" + str(int(vm.memory_gib)) + "g",
                   "--pids-limit=4096", "--cap-drop=ALL", "--security-opt=no-new-privileges",
@@ -531,11 +603,13 @@ def controller(output: Path, project: str | None) -> int:
                   "-v", stage + "/source:/src", "-v", stage + "/maintainer.allowed_signers:/maintainer.allowed_signers:ro",
                   "-v", stage + "/ops:" + ops_mount,
                   "-v", stage + "/targets:/target", "-v", "/mnt/runner-data/remote-build/cargo:/cargo",
-                  "-w", "/src", "oxidex-remote-builder:1.97.1", "python3",
+                  "-w", "/src"]
+        docker = docker_base + ["oxidex-remote-builder:1.97.1", "python3",
                   "tools/remote-build/qualification.py", "--remote-run", "--output", str(output),
                   "--expected-head", head]
         run_script = "#!/bin/sh\nset +e\n" + shlex.join(docker) + f" > {shlex.quote(stage + '/run.log')} 2>&1\n" + \
-                     f"printf '%s\\n' \"$?\" > {shlex.quote(stage + '/exit.status')}\n"
+                     f"printf '%s\\n' \"$?\" > {shlex.quote(stage + '/exit.status.tmp')} && " + \
+                     f"mv -f {shlex.quote(stage + '/exit.status.tmp')} {shlex.quote(stage + '/exit.status')}\n"
         ssh(f"printf '%s' {shlex.quote(run_script)} > {shlex.quote(stage + '/run.sh')} && "
             f"chmod 700 {shlex.quote(stage + '/run.sh')} && "
             f"{{ nohup setsid sh {shlex.quote(stage + '/run.sh')} </dev/null >/dev/null 2>&1 & "
@@ -564,7 +638,7 @@ def controller(output: Path, project: str | None) -> int:
                 save()
                 raise RuntimeError("remote launch vanished before recording an exit status; child state unconfirmed")
             if status != "running":
-                receipt["remote_exit_code"] = int(status)
+                receipt["remote_exit_code"] = confirmed_exit_status(status, receipt)
                 break
             time.sleep(30)
         observed_id = subprocess.check_output(["gcloud", "compute", "instances", "describe", vm.name,
@@ -608,7 +682,25 @@ def controller(output: Path, project: str | None) -> int:
         else:
             raise RuntimeError("remote qualification results archive is unavailable")
         require_remote_success(receipt)
-        receipt["results_dir"] = str(publish_results(staged_output, output, head, pin))
+        replay_docker = docker_base + ["-v", stage + "/results.tar.gz:/results.tar.gz:ro",
+                                       "oxidex-remote-builder:1.97.1", "python3",
+                                       "tools/remote-build/qualification.py", "--verify-results-tar", "/results.tar.gz",
+                                       "--output", str(output), "--expected-head", head]
+        replay_run = ssh(shlex.join(replay_docker), check=False)
+        if replay_run.returncode:
+            receipt["status"] = "RUNNING_RETAINED"
+            raise RuntimeError("Spot archive replay failed or is unconfirmed; retained stage requires inspection: "
+                               + replay_run.stderr[-1000:])
+        try:
+            replay = json.loads(replay_run.stdout)
+        except (ValueError, TypeError) as error:
+            receipt["status"] = "RUNNING_RETAINED"
+            raise RuntimeError("Spot archive replay output is unconfirmed; retained stage requires inspection") from error
+        if replay.get("archive_sha256") != digest:
+            raise RuntimeError("Spot corpus replay used different result archive bytes")
+        receipt["corpus_archive_replay"] = replay
+        save()
+        receipt["results_dir"] = str(publish_results(staged_output, output, head, pin, replay, digest))
         receipt["status"] = "PASS"
         save()
         return 0
@@ -626,6 +718,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--project")
     parser.add_argument("--remote-run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--verify-results-tar", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--expected-head", help=argparse.SUPPRESS)
     args = parser.parse_args()
     output = args.output.expanduser().resolve()
@@ -633,6 +726,12 @@ def main() -> int:
         if not args.expected_head:
             parser.error("--remote-run requires --expected-head")
         return remote_run(output, args.expected_head)
+    if args.verify_results_tar:
+        if not args.expected_head:
+            parser.error("--verify-results-tar requires --expected-head")
+        print(json.dumps(replay_archived_corpus(args.verify_results_tar, output, args.expected_head),
+                         sort_keys=True))
+        return 0
     return controller(output, args.project)
 
 

@@ -111,19 +111,39 @@ class QualificationTransportTests(unittest.TestCase):
                 marker.write_text("{}")
                 rows[row.format(pin=pin)] = {"marker_sha256": qualification.sha(marker)}
             summary = {"status": "PASS", "head": head, "pin": pin, "corpus_gate": "PASS",
-                       "corpus_receipt_sha256": qualification.sha(corpus), "rows": rows}
+                       "corpus_receipt_sha256": qualification.sha(corpus),
+                       "selected_file_floor": 1, "rows": rows}
+            (staged / "remote-qualification.json").write_text(json.dumps(summary))
+            archive_sha = "b" * 64
+            replay = {"schema": 1, "kind": "oxidex_remote_corpus_archive_replay",
+                      "status": "PASS", "head": head, "pin": pin,
+                      "archive_sha256": archive_sha,
+                      "corpus_receipt_sha256": qualification.sha(corpus), "corpus_files": 1}
+            with self.assertRaisesRegex(RuntimeError, "not a replayed PASS"):
+                qualification.publish_results(staged, output, head, pin, replay, archive_sha)
+            self.assertFalse((output / "remote-results").exists())
+            corpus.write_text(json.dumps({
+                "schema": "oxidex_corpus_read_receipt_v2", "instrument": "corpus_read_receipt.py",
+                "producer": {"source_commit": head, "source_dirty": False},
+                "build_proof": {"snapshot": {"source_commit": head}},
+                "native": {"exiftool_version": pin},
+                "corpus": {"files": {"fixture.jpg": "0" * 64}},
+                "metric_c": {"corpus_files": 1}, "observations": [{}, {}],
+                "sources": {"fixture.jpg": {}}}))
+            summary["corpus_receipt_sha256"] = qualification.sha(corpus)
+            replay["corpus_receipt_sha256"] = qualification.sha(corpus)
             (staged / "remote-qualification.json").write_text(json.dumps(summary))
             missing = staged / f"spot-{head[:12]}-0/qualification-result.json"
             missing.unlink()
             with self.assertRaisesRegex(RuntimeError, "marker differs"):
-                qualification.publish_results(staged, output, head, pin)
+                qualification.publish_results(staged, output, head, pin, replay, archive_sha)
             self.assertFalse((output / "remote-results").exists())
             missing.write_text("{}")
             with self.assertRaisesRegex(RuntimeError, "not committed evidence"):
-                qualification.publish_results(staged, output, head, pin)
+                qualification.publish_results(staged, output, head, pin, replay, archive_sha)
             self.assertFalse((output / "remote-results").exists())
             with patch.object(qualification, "validate_downloaded_marker") as validate:
-                published = qualification.publish_results(staged, output, head, pin)
+                published = qualification.publish_results(staged, output, head, pin, replay, archive_sha)
             self.assertEqual(validate.call_count, 3)
             self.assertEqual(published, output / "remote-results")
             self.assertFalse(staged.exists())
@@ -279,6 +299,31 @@ class QualificationTransportTests(unittest.TestCase):
                 self.assertEqual(transport["unconfirmed_task19_exit"], code)
         with self.assertRaisesRegex(ValueError, "exit 2"):
             qualification.task19_row_exit(2, "same-pin-13.59", Path("/owned/spot-head-0"), {})
+
+    def test_detached_exit_status_is_retained_unless_complete(self):
+        for status in ("", "partial", "1x", "256", "-1"):
+            with self.subTest(status=status):
+                receipt = {"status": "running"}
+                with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                    qualification.confirmed_exit_status(status, receipt)
+                self.assertEqual(receipt["status"], "RUNNING_RETAINED")
+        self.assertEqual(qualification.confirmed_exit_status("0", {}), 0)
+        self.assertEqual(qualification.confirmed_exit_status("5", {}), 5)
+
+    def test_spot_archive_replay_rejects_malformed_corpus_bytes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            receipt = output / "corpus-read/observations/receipt.json"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text("{}")
+            archive = root / "results.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                stream.add(receipt, arcname="output/corpus-read/observations/receipt.json")
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "git", side_effect=["a" * 40, ""]):
+                with self.assertRaisesRegex(ValueError, "measures another source"):
+                    qualification.replay_archived_corpus(archive, output, "a" * 40)
 
 class CorpusCommandContractTests(unittest.TestCase):
     def test_nested_proof_and_receipt_paths_follow_instrument_outputs(self):

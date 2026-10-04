@@ -72,8 +72,11 @@ regression gate. The VM retains the source, targets, logs and inputs under
 `/mnt/runner-data/remote-qualification/<run-id>`; local transport evidence
 and the downloaded archive live under `$OXIDEX_OPS_DIR/evidence/remote-qualification/`.
 The complete downloaded receipts are hash-checked before being published
-together under `$OUT/remote-results/`; an interrupted extraction leaves only
-staged evidence and cannot publish a partial PASS.
+together under `$OUT/remote-results/`. After packing, the exact archived corpus
+receipt and published-read gate are replayed on Spot; the local control plane
+checks that the downloaded archive hash, replay proof, corpus identity, and row
+receipts agree before publication. An interrupted extraction leaves only staged
+evidence and cannot publish a partial PASS.
 Only a downloaded, hash-matched three-row result plus a PASS corpus gate is a
 remote qualification PASS. `just test-remote` is the lighter full workspace
 suite and does not assert Task19 qualification. The prepared input bundle must
