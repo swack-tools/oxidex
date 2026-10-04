@@ -386,7 +386,9 @@ fn push_frame(
         .or(lexical_uri)
         .map(str::to_string);
     let local = NamespaceResolver::extract_local_name(qname);
-    let ignored = IGNORED_PREFIXES.contains(&prefix) || is_ignored_et_attr(lexical_uri, local);
+    let ignored = IGNORED_PREFIXES.contains(&prefix)
+        || lexical_uri == Some(RDF_NS)
+        || is_ignored_et_attr(lexical_uri, local);
 
     if let Some(parent) = stack.last_mut() {
         parent.child_elements += 1;
@@ -537,6 +539,9 @@ fn emit_attributes(
             continue;
         }
         let lexical_uri = resolver.resolve_prefix(prefix);
+        if local == "nodeID" && lexical_uri == Some(RDF_NS) {
+            continue; // RDF blank-node identity is structural, not a field.
+        }
         if is_ignored_et_attr(lexical_uri, local) {
             continue; // et:desc/et:prt/et:val/et:id/et:tagid/et:toolkit/et:table/et:index
         }
