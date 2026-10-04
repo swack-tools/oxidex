@@ -37,6 +37,9 @@ just qualify-remote <prepared-output-root>  # Remote Task19 rows and corpus read
 
 Do not run local `cargo build`, `cargo test`, `cargo check`, `cargo clippy`,
 `just test`, or local Python validation, corpus, or qualification workloads.
+This includes prose lint and validation hooks launched by an editor, Git, or
+agent tool. Disable the local hook invocation and run its payload on Spot with
+an exact-source receipt; if remote execution is unavailable, report it blocked.
 If a check has no remote recipe, add or repair one and retain its exact-source
 receipt; if it cannot run remotely, report it blocked.
 
