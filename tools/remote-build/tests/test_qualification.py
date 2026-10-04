@@ -312,7 +312,8 @@ class QualificationTransportTests(unittest.TestCase):
             root = Path(directory).resolve()
             output = root / "output"
             output.mkdir()
-            def package(_output, destination, _bundle):
+            def package(_output, destination, bundle):
+                bundle.write_bytes(b"bundle")
                 destination.write_bytes(b"package")
                 return "a" * 40, "13.59"
             def git(*args):
@@ -337,7 +338,8 @@ class QualificationTransportTests(unittest.TestCase):
             root = Path(directory).resolve()
             output = root / "output"
             output.mkdir()
-            def package(_output, destination, _bundle):
+            def package(_output, destination, bundle):
+                bundle.write_bytes(b"bundle")
                 destination.write_bytes(b"package")
                 return "a" * 40, "13.59"
             def git(*args):
