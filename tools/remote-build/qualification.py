@@ -226,14 +226,17 @@ def corpus_commands(corpus: Path, instrument: Path, perl: Path, exiftool: Path,
 
 
 def task19_row_exit(code: int, row: str, receipt: Path, result: dict) -> int | None:
-    """Retain Task19's unknown/held-lease outcomes instead of calling them refused."""
-    if code in (4, 5):
+    """Retain unknown outcomes, including killed processes with unproven cleanup."""
+    if code not in (0, 2, 3):
         result["status"] = "RUNNING_RETAINED"
         result["unconfirmed_row"] = {"id": row, "exit_code": code,
                                      "receipt_root": str(receipt),
                                      "log": str(receipt.parent / f"{receipt.name}.log")}
-        return code
-    if code not in (0, 3):
+        # The controller recognizes 4/5 as unconfirmed. Normalize a signal,
+        # keyboard interrupt, or unexpected crash to 5, but preserve its raw
+        # return code above for the operator inspecting the retained stage.
+        return code if code in (4, 5) else 5
+    if code == 2:
         raise ValueError(f"Task19 {row} exit {code}; see {receipt.name}.log")
     return None
 

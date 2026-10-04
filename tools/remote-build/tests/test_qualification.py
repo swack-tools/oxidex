@@ -287,19 +287,20 @@ class QualificationTransportTests(unittest.TestCase):
             self.assertIn("gcloud", receipt["error"])
 
     def test_task19_unknown_and_held_lease_exits_retain_lineage(self):
-        for code in (4, 5):
+        for code, transport_code in ((4, 4), (5, 5), (130, 5), (137, 5), (-9, 5), (1, 5)):
             with self.subTest(code=code):
                 result = {"status": "pending"}
                 receipt = Path("/owned/spot-head-0")
-                self.assertEqual(qualification.task19_row_exit(code, "same-pin-13.59", receipt, result), code)
+                self.assertEqual(qualification.task19_row_exit(code, "same-pin-13.59", receipt, result),
+                                 transport_code)
                 self.assertEqual(result["status"], "RUNNING_RETAINED")
                 self.assertEqual(result["unconfirmed_row"]["receipt_root"], str(receipt))
                 self.assertEqual(result["unconfirmed_row"]["exit_code"], code)
-                transport = {"status": "running", "remote_exit_code": code}
+                transport = {"status": "running", "remote_exit_code": transport_code}
                 with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
                     qualification.require_remote_success(transport)
                 self.assertEqual(transport["status"], "RUNNING_RETAINED")
-                self.assertEqual(transport["unconfirmed_task19_exit"], code)
+                self.assertEqual(transport["unconfirmed_task19_exit"], transport_code)
         with self.assertRaisesRegex(ValueError, "exit 2"):
             qualification.task19_row_exit(2, "same-pin-13.59", Path("/owned/spot-head-0"), {})
 
