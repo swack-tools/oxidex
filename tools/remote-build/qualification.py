@@ -357,7 +357,9 @@ def remote_run(output: Path, expected_head: str) -> int:
         floor = gate.published_reads(json.loads(measurement.read_text()), pin).corpus_files
         perl = ops_root() / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
         exiftool = bootstrap.exiftool_root(ops_root())
-        samples = bootstrap.corpus_path(ops_root())
+        # The published read snapshot and CI gate measure this exact pinned
+        # ExifTool sample tree, not bootstrap's larger combined corpus.
+        samples = exiftool / "t/images"
         commands = corpus_commands(corpus, instrument, perl, exiftool, samples, floor)
         for index, command in enumerate(commands):
             with (corpus / f"stage-{index}.log").open("w") as log:
