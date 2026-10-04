@@ -59,6 +59,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'verify_signed_source'), \
                  patch.object(remote_build,'download_artifact') as download, \
                  patch.object(remote_build,'download_test_proof',return_value={'status':'PASS'}) as proof_download:
                 self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
@@ -71,6 +72,24 @@ class ClientTests(unittest.TestCase):
                             for c in calls))
         proof_download.assert_called_once()
         download.assert_not_called()
+
+    def test_remote_test_refuses_unsigned_or_other_signer_before_upload(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with patch.object(remote_build.subprocess,'check_output',return_value=(
+             'swackhamer|swackhamer@users.noreply.github.com|'
+             'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
+             patch.object(remote_build.subprocess,'run') as verify:
+            with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
+                remote_build.verify_signed_source(Path('/repo'),'a'*40)
+            verify.assert_not_called()
+        signed=('swackhamer|swackhamer@users.noreply.github.com|'
+                'swackhamer|swackhamer@users.noreply.github.com|G|'
+                'swackhamer@users.noreply.github.com\n')
+        with patch.object(remote_build.subprocess,'check_output',return_value=signed), \
+             patch.object(remote_build.subprocess,'run') as verify:
+            remote_build.verify_signed_source(Path('/repo'),'a'*40)
+            self.assertIn('verify-commit', verify.call_args.args[0])
 
     def test_remote_test_proof_is_hash_checked_and_fail_closed(self):
         from lib.remote_build import download_test_proof

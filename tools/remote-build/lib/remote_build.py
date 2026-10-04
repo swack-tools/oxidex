@@ -40,6 +40,19 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
+def verify_signed_source(source, head):
+    identity = subprocess.check_output(
+        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS'],
+        text=True).strip().split('|')
+    expected = ['swackhamer','swackhamer@users.noreply.github.com',
+                'swackhamer','swackhamer@users.noreply.github.com',
+                'G','swackhamer@users.noreply.github.com']
+    if identity != expected:
+        raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
+    subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def verify_remote_toolchain(expected, ssh, project):
     rustc_output = subprocess.check_output(
         ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} rustc -vV'), text=True)
@@ -232,6 +245,8 @@ def main(argv=None):
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
+        if args.profile == 'test':
+            verify_signed_source(source, receipt['source_commit'])
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
