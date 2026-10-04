@@ -530,6 +530,25 @@ impl MetadataMap {
         self.insert_with_list_flag(key, value, true)
     }
 
+    /// A source-declared list whose printed elements differ from its
+    /// ValueConv elements. Binary output and `--no-print-conv` use `value`.
+    pub(crate) fn insert_declared_list_with_value_form<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        value: TagValue,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.is_list = true;
+        occurrence.value = Some(value);
+        occurrence.print = Some(occurrence.raw.clone());
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     fn insert_with_list_flag<K: Into<String>>(
         &mut self,
         key: K,
