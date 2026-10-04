@@ -700,6 +700,8 @@ impl MetadataMap {
             copied.stored = occurrence.stored.clone();
             copied.binary_payload_unavailable = occurrence.binary_payload_unavailable;
             copied.binary_extract_from_stored = occurrence.binary_extract_from_stored;
+            copied.is_list = occurrence.is_list;
+            copied.origin = occurrence.origin.clone();
             self.sink.record(key.clone(), copied);
             self.set_last_assigned(source.is_assigned(key));
         }
@@ -1066,6 +1068,7 @@ impl MetadataMap {
         occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
         occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
         occurrence.is_list = source.is_list;
+        occurrence.origin = source.origin.clone();
         self.sink.record(key, occurrence);
         previous
     }
@@ -1096,6 +1099,8 @@ impl MetadataMap {
         occurrence.stored = source.stored.clone();
         occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
         occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
+        occurrence.is_list = source.is_list;
+        occurrence.origin = source.origin.clone();
         self.sink.record(key, occurrence);
         previous
     }
@@ -2578,6 +2583,48 @@ mod tests {
             occurrence.project(ValueChannel::Stored).as_ref(),
             &TagValue::new_rational(1, 80)
         );
+    }
+
+    #[test]
+    fn rehomed_occurrences_keep_static_source_and_declared_list_state() {
+        use super::super::tag_occurrence::Instance;
+
+        let mut source = MetadataMap::new();
+        source.insert_xmp_static_occurrence(
+            "GPS:GPSLatitudeRef",
+            TagValue::new_string("N"),
+            Some("N"),
+            "GPS",
+            "GPS",
+            1,
+            false,
+            None,
+            None,
+        );
+        source.insert_declared_list(
+            "MIE:References",
+            TagValue::Array(vec![
+                TagValue::new_string("first"),
+                TagValue::new_string("second"),
+            ]),
+        );
+        let preserves_source = |map: &MetadataMap| {
+            assert!(map.is_xmp_static_source("GPS:GPSLatitudeRef"));
+            assert!(map.occurrences_for("MIE:References")[0].is_list);
+        };
+
+        let mut carried = MetadataMap::new();
+        let mut copied = MetadataMap::new();
+        for (key, occurrence) in source.winners_in_file_order() {
+            carried.insert_carrying_forms(key.clone(), occurrence);
+            copied.insert_copied_occurrence(key.clone(), occurrence, 1, "", Instance::default());
+        }
+        preserves_source(&carried);
+        preserves_source(&copied);
+
+        let mut merged = MetadataMap::new();
+        merged.merge_winners_keeping_group1(&source);
+        preserves_source(&merged);
     }
 
     #[test]
