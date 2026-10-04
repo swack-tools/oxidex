@@ -30,6 +30,8 @@ validation workloads execute on a Linux amd64 Spot worker:
 just build-debug               # Remote debug build
 just build-release             # Remote release build
 just test-remote               # Remote full workspace test suite
+# Same suite on an explicitly inspected Spot builder:
+OXIDEX_REMOTE_INSTANCE=<builder> OXIDEX_REMOTE_ZONE=<zone> just test-remote-on
 just qualify-remote <prepared-output-root>  # Remote Task19 rows and corpus read gate
 ```
 

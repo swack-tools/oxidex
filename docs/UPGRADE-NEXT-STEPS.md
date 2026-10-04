@@ -87,6 +87,20 @@ for all rows and the corpus gate. If the controller times out or loses the VM,
 its transport receipt says `RUNNING_RETAINED` with the exact VM, stage, PID,
 exit-status and log paths; inspect that retained job before launching another.
 
+The automatic test selector uses CPU and memory metrics; it does not measure
+runner disk I/O pressure. If a runner is saturated, inspect a separate idle
+Spot buildbench and run the same exact-HEAD test/proof transport on that host:
+
+```bash
+OXIDEX_REMOTE_INSTANCE=<inspected-buildbench> \
+OXIDEX_REMOTE_ZONE=<zone> just test-remote-on
+```
+
+The command records the selected instance, source SHA, pinned compiler and
+downloaded test proof under `OXIDEX_OPS_DIR/evidence/`. Use it only after
+checking the builder is provisioned and idle; keep CI runner hosts free while
+their jobs are active. This test receipt is distinct from a Task19 result.
+
 `--target-root` defaults to `$OXIDEX_TARGET_ROOT` (or
 `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`); output and target roots must be
 durable, not temporary. Only `$OUT/$RUN/qualification-result.json`, validated by

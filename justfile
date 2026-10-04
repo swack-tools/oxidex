@@ -126,6 +126,11 @@ build-release:
 test-remote:
     python3 tools/remote-build/build.py --profile test
 
+# Run the same exact-HEAD test proof on an explicitly inspected Spot builder.
+# Set OXIDEX_REMOTE_INSTANCE and OXIDEX_REMOTE_ZONE in the caller environment.
+test-remote-on:
+    python3 tools/remote-build/direct.py --profile test
+
 # Run all three Task19 rows and the corpus read gate on one Linux amd64 Spot VM.
 # OUTPUT is a unique ops-root directory with exact-HEAD provisioned inputs and
 # read-policy-input.json; see docs/UPGRADE-NEXT-STEPS.md.
