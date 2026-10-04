@@ -14,7 +14,7 @@ from lib.config import cargo_env_value
 from lib.remote_build import main
 
 parser=argparse.ArgumentParser(description='Build on a configured remote VM. Instance, zone, project and checkout are resolved from environment/Cargo configuration.')
-parser.add_argument('--profile',choices=['debug','release'],default='release')
+parser.add_argument('--profile',choices=['debug','release','test'],default='release')
 parser.add_argument('--evidence-dir',type=Path)
 parser.add_argument('--artifact-dir',type=Path)
 options=parser.parse_args()
