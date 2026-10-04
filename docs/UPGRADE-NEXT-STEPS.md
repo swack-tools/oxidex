@@ -79,7 +79,10 @@ reusable source artifact, not a valid final plan. Linux provision uses the
 locked Perl 5.38.2 and Archive::Zip sources through `bootstrap_oracle.py`,
 with DOCX and corpus capability probes before Task19 runs. The remote result
 archive does not include the private ephemeral signing key used for owned
-measurement checkouts.
+measurement checkouts. The controller holds the builder's host lock exclusively
+for all rows and the corpus gate. If the controller times out or loses the VM,
+its transport receipt says `RUNNING_RETAINED` with the exact VM, stage, PID,
+exit-status and log paths; inspect that retained job before launching another.
 
 `--target-root` defaults to `$OXIDEX_TARGET_ROOT` (or
 `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`); output and target roots must be

@@ -296,7 +296,8 @@ def controller(output: Path, project: str | None) -> int:
         ops_mount = str(ops_root())
         if " " in ops_mount or "'" in ops_mount:
             raise ValueError("ops root has unsupported Docker mount characters")
-        docker = ["sudo", "docker", "run", "--rm", "--user=1001:1001", "--cpus=" + str(vm.cpus),
+        docker = ["sudo", "flock", "-x", "-w", "1800", "/run/oxidex-build.lock",
+                  "docker", "run", "--rm", "--user=1001:1001", "--cpus=" + str(vm.cpus),
                   "--memory=" + str(int(vm.memory_gib)) + "g", "--memory-swap=" + str(int(vm.memory_gib)) + "g",
                   "--pids-limit=4096", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                   "-e", "OXIDEX_OPS_DIR=" + ops_mount, "-e", "OXIDEX_TARGET_ROOT=/target",
@@ -314,6 +315,8 @@ def controller(output: Path, project: str | None) -> int:
             f"{{ nohup setsid sh {shlex.quote(stage + '/run.sh')} </dev/null >/dev/null 2>&1 & "
             f"printf '%s\\n' \"$!\" > {shlex.quote(stage + '/launch.pid')}; }}")
         receipt["status"] = "running"
+        receipt["remote_job"] = {"stage": stage, "launch_pid_file": stage + "/launch.pid",
+                                 "exit_status_file": stage + "/exit.status", "log": stage + "/run.log"}
         save()
         timeout = int(os.environ.get("OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS", "43200"))
         if timeout <= 0:
@@ -321,13 +324,17 @@ def controller(output: Path, project: str | None) -> int:
         deadline = time.monotonic() + timeout
         while True:
             if time.monotonic() >= deadline:
-                raise RuntimeError("remote qualification exceeded its deadline; inspect retained stage")
+                receipt["status"] = "RUNNING_RETAINED"
+                save()
+                raise RuntimeError("remote qualification exceeded its deadline; job remains live or unconfirmed at retained stage")
             poll = ssh(f"if test -f {shlex.quote(stage + '/exit.status')}; then cat {shlex.quote(stage + '/exit.status')}; "
                        f"elif test -f {shlex.quote(stage + '/launch.pid')} && "
                        f'kill -0 "$(cat {shlex.quote(stage + "/launch.pid")})" 2>/dev/null; '
                        "then echo running; else echo lost; fi", check=False)
             if poll.returncode:
-                raise RuntimeError("Spot worker unreachable; retained remote stage may be resumable")
+                receipt["status"] = "RUNNING_RETAINED"
+                save()
+                raise RuntimeError("Spot worker unreachable; remote job state is unconfirmed at retained stage")
             status = poll.stdout.strip()
             if status == "lost":
                 raise RuntimeError("remote launch vanished before recording an exit status")
@@ -383,7 +390,8 @@ def controller(output: Path, project: str | None) -> int:
         save()
         return 0
     except Exception as error:
-        receipt["status"] = "REFUSED"
+        if receipt.get("status") != "RUNNING_RETAINED":
+            receipt["status"] = "REFUSED"
         receipt["error"] = str(error)
         save()
         print(f"remote qualification refused: {error}; evidence: {evidence}", file=sys.stderr)
