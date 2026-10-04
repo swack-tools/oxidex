@@ -1084,7 +1084,10 @@ impl MetadataMap {
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = source.value.clone();
-        occurrence.print = source.value.as_ref().map(|_| occurrence.raw.clone());
+        occurrence.print = source
+            .print
+            .clone()
+            .or_else(|| source.value.as_ref().map(|_| occurrence.raw.clone()));
         occurrence.stored = source.stored.clone();
         occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
         occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
@@ -1115,6 +1118,8 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
+        occurrence.group0 = source.group0;
+        occurrence.group1 = source.group1;
         occurrence.value = source.value.clone();
         occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
@@ -2616,7 +2621,7 @@ mod tests {
             TagValue::new_string("N"),
             Some("N"),
             "GPS",
-            "GPS",
+            "IFD0",
             1,
             false,
             None,
@@ -2632,6 +2637,10 @@ mod tests {
         let preserves_source = |map: &MetadataMap| {
             assert!(map.is_xmp_static_source("GPS:GPSLatitudeRef"));
             assert!(map.occurrences_for("MIE:References")[0].is_list);
+            assert_eq!(
+                map.occurrences_for("GPS:GPSLatitudeRef")[0].print,
+                Some(TagValue::new_string("N"))
+            );
         };
 
         let mut carried = MetadataMap::new();
@@ -2642,6 +2651,10 @@ mod tests {
         }
         preserves_source(&carried);
         preserves_source(&copied);
+        assert_eq!(
+            carried.occurrences_for("GPS:GPSLatitudeRef")[0].group1,
+            "IFD0"
+        );
 
         let mut merged = MetadataMap::new();
         merged.merge_winners_keeping_group1(&source);

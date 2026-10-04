@@ -263,16 +263,29 @@ impl XmpEntry {
         self
     }
 
-    fn with_binary_list_source(mut self, elements: Option<&[String]>, is_default: bool) -> Self {
-        if is_default
-            && let Some(elements) = elements
+    fn with_binary_list_source(
+        mut self,
+        elements: Option<&[String]>,
+        binary_payloads: Option<&[Option<Vec<u8>>]>,
+        is_default: bool,
+    ) -> Self {
+        if let Some(elements) = elements
             && let XmpValue::List(values) = &self.value
             && values.len() == elements.len()
         {
             let mut has_binary_placeholder = false;
-            let converted: Vec<String> = elements
+            let mut has_decoded_payload = false;
+            let converted: Vec<Vec<u8>> = elements
                 .iter()
-                .map(|raw| {
+                .enumerate()
+                .map(|(index, raw)| {
+                    if let Some(payload) = binary_payloads
+                        .and_then(|payloads| payloads.get(index))
+                        .and_then(Option::as_deref)
+                    {
+                        has_decoded_payload = true;
+                        return static_rdf_extract_bytes(&self.tag, payload);
+                    }
                     let value = format_xmp_value_with_default(
                         &self.tag,
                         raw,
@@ -282,14 +295,14 @@ impl XmpEntry {
                     let placeholder = value != *raw && value.starts_with("(Binary data ");
                     if placeholder {
                         has_binary_placeholder = true;
-                        raw.clone()
+                        raw.as_bytes().to_vec()
                     } else {
-                        value
+                        value.into_bytes()
                     }
                 })
                 .collect();
-            if has_binary_placeholder {
-                self.binary_list_source = Some(converted.join("\n").into_bytes());
+            if has_binary_placeholder || has_decoded_payload {
+                self.binary_list_source = Some(converted.join(&[b'\n']));
             }
         }
         self
@@ -597,6 +610,7 @@ struct ResultOccurrence {
     tag: String,
     value: String,
     elements: Option<Vec<String>>,
+    list_binary_payloads: Option<Vec<Option<Vec<u8>>>>,
     path: Option<super::struct_flatten::RawPath>,
     is_default: bool,
     static_binary_payload: Option<Vec<u8>>,
@@ -608,6 +622,7 @@ impl ResultOccurrence {
             tag,
             value,
             elements: None,
+            list_binary_payloads: None,
             path: None,
             is_default: false,
             static_binary_payload: None,
@@ -619,6 +634,7 @@ impl ResultOccurrence {
             tag,
             value: elements.join(", "),
             elements: Some(elements),
+            list_binary_payloads: None,
             path: None,
             is_default: false,
             static_binary_payload: None,
@@ -632,6 +648,11 @@ impl ResultOccurrence {
 
     fn with_static_binary_payload(mut self, payload: Option<Vec<u8>>) -> Self {
         self.static_binary_payload = payload;
+        self
+    }
+
+    fn with_list_binary_payloads(mut self, payloads: Vec<Option<Vec<u8>>>) -> Self {
+        self.list_binary_payloads = Some(payloads);
         self
     }
 
@@ -938,6 +959,7 @@ fn parse_xmp_packet_in_directory(
     let mut current_tag = String::new();
     let mut current_default_namespace = false;
     let mut current_static_base64 = false;
+    let mut pending_static_base64_li = false;
     // ... and its legacy key, resolved at the same time.
     let mut current_legacy = String::new();
     let mut current_priority = 0i16;
@@ -949,6 +971,7 @@ fn parse_xmp_packet_in_directory(
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
     let mut collection_is_alt = false;
     let mut collection_values: Vec<String> = Vec::new(); // Collect rdf:li values
+    let mut collection_binary_payloads: Vec<Option<Vec<u8>>> = Vec::new();
     // `xml:lang` of each collected `rdf:li`, parallel to `collection_values`.
     // A lang-alt is not one comma-joined value: ExifTool reports the
     // x-default entry under the plain tag name and every other language under
@@ -1032,10 +1055,13 @@ fn parse_xmp_packet_in_directory(
                         collection_is_alt =
                             NamespaceResolver::extract_local_name(&tag_name) == "Alt";
                         collection_values.clear();
+                        collection_binary_payloads.clear();
                         collection_langs.clear();
                         current_value.clear();
                     } else if inside_collection && is_rdf_li(&tag_name, &resolver) {
                         pending_lang = xml_lang_attribute(&e);
+                        pending_static_base64_li = is_static_path(Some(&current_path))
+                            && has_rdf_base64_datatype(&e, &resolver);
                         // Ignore indentation between list items while
                         // preserving the item's own leading/trailing text.
                         current_value.clear();
@@ -1061,10 +1087,19 @@ fn parse_xmp_packet_in_directory(
                         current_value.trim()
                     };
                     if !item.is_empty() {
-                        collection_values.push(item.to_string());
-                        collection_langs.push(pending_lang.take());
+                        let payload = if pending_static_base64_li {
+                            decode_static_rdf_base64(item).map(Some)
+                        } else {
+                            Some(None)
+                        };
+                        if let Some(payload) = payload {
+                            collection_values.push(item.to_string());
+                            collection_binary_payloads.push(payload);
+                            collection_langs.push(pending_lang.take());
+                        }
                     }
                     pending_lang = None;
+                    pending_static_base64_li = false;
                     current_value.clear();
                 } else if is_collection_container(&tag_name, &resolver) {
                     inside_collection = false;
@@ -1126,7 +1161,10 @@ fn parse_xmp_packet_in_directory(
                                     results.push(
                                         ResultOccurrence::scalar(tag, value.clone())
                                             .with_path(current_path.clone())
-                                            .with_default(current_default_namespace),
+                                            .with_default(current_default_namespace)
+                                            .with_static_binary_payload(
+                                                collection_binary_payloads[index].clone(),
+                                            ),
                                     );
                                 }
                             }
@@ -1141,10 +1179,14 @@ fn parse_xmp_packet_in_directory(
                             );
                             let result = if collection_values.len() > 1 {
                                 ResultOccurrence::list(prefixed_name, collection_values.clone())
+                                    .with_list_binary_payloads(collection_binary_payloads.clone())
                             } else {
                                 ResultOccurrence::scalar(
                                     prefixed_name,
                                     collection_values.join(", "),
+                                )
+                                .with_static_binary_payload(
+                                    collection_binary_payloads.first().cloned().flatten(),
                                 )
                             };
                             results.push(
@@ -1194,8 +1236,10 @@ fn parse_xmp_packet_in_directory(
                     current_value.clear();
                     after_collection_close = false;
                     collection_values.clear();
+                    collection_binary_payloads.clear();
                     collection_langs.clear();
                     pending_lang = None;
+                    pending_static_base64_li = false;
                     inside_collection = false;
                     property_is_struct = false;
                     current_default_namespace = false;
@@ -1250,6 +1294,7 @@ fn parse_xmp_packet_in_directory(
                     // parent indentation that follows it, like End(Bag).
                     current_value.clear();
                     collection_values.clear();
+                    collection_binary_payloads.clear();
                     collection_langs.clear();
                     inside_collection = false;
                     after_collection_close = true;
@@ -1687,13 +1732,23 @@ fn parse_xmp_packet_in_directory(
             } else if let Some(elements) = &result.elements {
                 let converted: Vec<String> = elements
                     .iter()
-                    .map(|element| {
-                        format_xmp_value_with_default(
-                            &result.tag,
-                            element,
-                            result.default_property(),
-                            is_static,
-                        )
+                    .enumerate()
+                    .map(|(index, element)| {
+                        if let Some(payload) = result
+                            .list_binary_payloads
+                            .as_ref()
+                            .and_then(|payloads| payloads.get(index))
+                            .and_then(Option::as_deref)
+                        {
+                            static_rdf_binary_display(&result.tag, payload)
+                        } else {
+                            format_xmp_value_with_default(
+                                &result.tag,
+                                element,
+                                result.default_property(),
+                                is_static,
+                            )
+                        }
                     })
                     .collect();
                 let binary = is_static
@@ -1783,6 +1838,7 @@ fn parse_xmp_packet_in_directory(
                 .with_static_source(is_static_path(results[index].path.as_ref()))
                 .with_binary_list_source(
                     results[index].elements.as_deref(),
+                    results[index].list_binary_payloads.as_deref(),
                     results[index].default_property(),
                 )
                 .with_static_binary_payload(
@@ -1851,7 +1907,11 @@ fn parse_xmp_packet_in_directory(
                     ),
                 )
                 .with_static_source(is_static_path(result.path.as_ref()))
-                .with_binary_list_source(result.elements.as_deref(), result.default_property())
+                .with_binary_list_source(
+                    result.elements.as_deref(),
+                    result.list_binary_payloads.as_deref(),
+                    result.default_property(),
+                )
                 .with_static_binary_payload(
                     result
                         .static_binary_payload
