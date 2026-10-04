@@ -220,9 +220,9 @@ pub struct XmpEntry {
     pub binary_payload_unavailable: bool,
     /// The RDF property came from an ExifTool static-group namespace URI.
     pub source_is_static: bool,
-    /// Exact LF-joined source elements when a static list includes a binary
-    /// placeholder. Ordinary lists extract their converted display elements.
-    pub static_binary_list_source: Option<Vec<u8>>,
+    /// Exact LF-joined source elements when a list includes a binary
+    /// placeholder. The displayed placeholder cannot be used for `-b`.
+    pub binary_list_source: Option<Vec<u8>>,
     /// Decoded bytes from an RDF base64Binary property in a static URI.
     pub static_binary_payload: Option<Vec<u8>>,
 }
@@ -248,7 +248,7 @@ impl XmpEntry {
             priority,
             binary_payload_unavailable,
             source_is_static: false,
-            static_binary_list_source: None,
+            binary_list_source: None,
             static_binary_payload: None,
         }
     }
@@ -263,8 +263,8 @@ impl XmpEntry {
         self
     }
 
-    fn with_static_list_source(mut self, elements: Option<&[String]>) -> Self {
-        if self.source_is_static
+    fn with_binary_list_source(mut self, elements: Option<&[String]>, is_default: bool) -> Self {
+        if is_default
             && let Some(elements) = elements
             && let XmpValue::List(values) = &self.value
             && values.len() == elements.len()
@@ -273,7 +273,12 @@ impl XmpEntry {
             let converted: Vec<String> = elements
                 .iter()
                 .map(|raw| {
-                    let value = format_xmp_value_with_default(&self.tag, raw, true, true);
+                    let value = format_xmp_value_with_default(
+                        &self.tag,
+                        raw,
+                        is_default,
+                        self.source_is_static,
+                    );
                     let placeholder = value != *raw && value.starts_with("(Binary data ");
                     if placeholder {
                         has_binary_placeholder = true;
@@ -284,7 +289,7 @@ impl XmpEntry {
                 })
                 .collect();
             if has_binary_placeholder {
-                self.static_binary_list_source = Some(converted.join("\n").into_bytes());
+                self.binary_list_source = Some(converted.join("\n").into_bytes());
             }
         }
         self
@@ -302,7 +307,7 @@ impl XmpEntry {
             priority: 1,
             binary_payload_unavailable: false,
             source_is_static: false,
-            static_binary_list_source: None,
+            binary_list_source: None,
             static_binary_payload: None,
         }
     }
@@ -500,7 +505,7 @@ pub(crate) fn insert_xmp_entry_with_source(
             &entry.group1,
             priority,
             entry.binary_payload_unavailable,
-            entry.static_binary_list_source.as_deref(),
+            entry.binary_list_source.as_deref(),
             entry.static_binary_payload.as_deref(),
         );
         return;
@@ -529,6 +534,16 @@ pub(crate) fn insert_xmp_entry_with_source(
     }
     if entry.binary_payload_unavailable {
         metadata.insert_xmp_binary_unavailable(entry.key.clone(), value, priority, &entry.group1);
+        return;
+    }
+    if let Some(bytes) = entry.binary_list_source.as_deref() {
+        metadata.insert_xmp_binary_list_occurrence(
+            entry.key.clone(),
+            value,
+            bytes,
+            priority,
+            &entry.group1,
+        );
         return;
     }
     if let Some((source, forms)) =
@@ -1766,7 +1781,10 @@ fn parse_xmp_packet_in_directory(
                     ),
                 )
                 .with_static_source(is_static_path(results[index].path.as_ref()))
-                .with_static_list_source(results[index].elements.as_deref())
+                .with_binary_list_source(
+                    results[index].elements.as_deref(),
+                    results[index].default_property(),
+                )
                 .with_static_binary_payload(
                     results[index]
                         .static_binary_payload
@@ -1833,7 +1851,7 @@ fn parse_xmp_packet_in_directory(
                     ),
                 )
                 .with_static_source(is_static_path(result.path.as_ref()))
-                .with_static_list_source(result.elements.as_deref())
+                .with_binary_list_source(result.elements.as_deref(), result.default_property())
                 .with_static_binary_payload(
                     result
                         .static_binary_payload
@@ -8739,7 +8757,7 @@ mod entry_tests {
             priority: 0,
             binary_payload_unavailable: false,
             source_is_static: false,
-            static_binary_list_source: None,
+            binary_list_source: None,
             static_binary_payload: None,
         };
         assert_eq!(entry.group1, "XMP-exif");

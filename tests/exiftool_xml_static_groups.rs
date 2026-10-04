@@ -813,6 +813,12 @@ fn binary_list_extraction_uses_newlines_for_static_and_ordinary_xmp() {
             "alpha".to_string(),
             "beta".to_string(),
         ),
+        (
+            "http://example.com/unknown/",
+            "Blob",
+            "A".repeat(65_537),
+            "tail".to_string(),
+        ),
     ] {
         let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
         let packet = format!(

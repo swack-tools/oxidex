@@ -140,7 +140,11 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
             result.record_occurrence(tag_name.clone(), source.clone());
         } else {
             let formatted_value = format_tag_value(tag_name, value);
-            result.insert(tag_name.clone(), formatted_value);
+            if source.is_list {
+                result.insert_declared_list(tag_name.clone(), formatted_value);
+            } else {
+                result.insert(tag_name.clone(), formatted_value);
+            }
         }
     }
     // A formatted copy is the same rows: each keeps its provenance, and the
@@ -2897,6 +2901,26 @@ mod tests {
         assert_eq!(formatted.get_string("GPS:GPSLatitudeRef"), Some("North"));
         // FocalLength should have unit suffix
         assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
+    }
+
+    #[test]
+    fn formatted_list_keeps_declared_list_semantics() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert_declared_list(
+            "IPTC:Keywords",
+            TagValue::Array(vec![
+                TagValue::new_string("first"),
+                TagValue::new_string("second"),
+            ]),
+        );
+
+        let formatted = format_for_exiftool(&metadata);
+        assert!(
+            formatted
+                .winning_occurrence("IPTC:Keywords")
+                .unwrap()
+                .is_list
+        );
     }
 
     #[test]

@@ -780,6 +780,27 @@ impl MetadataMap {
         self.sink.record(key, occurrence);
     }
 
+    /// An oversized default RDF list prints a binary summary, while `-b`
+    /// extracts the original LF-joined elements. Keep both representations.
+    pub(crate) fn insert_xmp_binary_list_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        source: &[u8],
+        priority: i16,
+        group1: &str,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.is_list = true;
+        occurrence.stored = Some(TagValue::Binary(source.to_vec()));
+        occurrence.binary_extract_from_stored = true;
+        self.sink.record(key, occurrence);
+    }
+
     /// An ExifTool `-X` RDF property whose resolved URI restores a non-XMP
     /// family-0/1 group. Keep its source identity distinct from a real EXIF
     /// or MakerNote parser, and retain the effective source priority: a
