@@ -4683,6 +4683,17 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
     format_xmp_value_with_default(tag, value, false, false)
 }
 
+/// XMP.pm's default `ConvertRational` recognizes `^(-?\d+)/(-?\d+)$`.
+/// Check the lexical shape independently of fixed-width integer capacity.
+fn default_xmp_rational_parts(value: &str) -> Option<(&str, &str)> {
+    let (numerator, denominator) = value.split_once('/')?;
+    let integer = |part: &str| {
+        let digits = part.strip_prefix('-').unwrap_or(part);
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    (integer(numerator) && integer(denominator)).then_some((numerator, denominator))
+}
+
 /// `FoundXMP` marks a newly defined property Binary when XMPAutoConv is on
 /// and its decoded value exceeds 65536 bytes (XMP.pm:3675,3695-3696).
 /// `is_default` is proven from a namespace absent from the selected source
@@ -4705,12 +4716,11 @@ fn format_xmp_value_with_default(
                 value.len()
             );
         }
-        if let Some((numerator, denominator)) = value.split_once('/')
-            && let (Ok(numerator), Ok(denominator)) =
-                (numerator.parse::<i128>(), denominator.parse::<i128>())
-        {
-            return if denominator == 0 {
-                if numerator == 0 { "undef" } else { "inf" }.to_string()
+        if let Some((numerator, denominator)) = default_xmp_rational_parts(value) {
+            let is_zero = |part: &str| part.trim_start_matches('-').bytes().all(|b| b == b'0');
+            return if is_zero(denominator) {
+                // Perl tests the captured numerator as a string: only "0" is false.
+                if numerator == "0" { "undef" } else { "inf" }.to_string()
             } else {
                 format_xmp_plain_rational(value)
             };

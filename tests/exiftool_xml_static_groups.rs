@@ -139,13 +139,21 @@ fn static_uri_defaults_use_generic_rational_and_date_conversion() {
     let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
     std::fs::write(
         file.path(),
-        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/" xmlns:e="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:ShutterSpeedValue>0.4</q:ShutterSpeedValue><e:ModifyDate>2024-01-02T03:04:05Z</e:ModifyDate><e:DateOnly>2024-01-02</e:DateOnly></rdf:Description></rdf:RDF>"#,
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/" xmlns:e="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:ShutterSpeedValue>0.4</q:ShutterSpeedValue><e:ModifyDate>2024-01-02T03:04:05Z</e:ModifyDate><e:DateOnly>2024-01-02</e:DateOnly><e:Foo>+1/2</e:Foo><e:Bar>1234567890123456789012345678901234567890/2</e:Bar><e:Zero>1/0</e:Zero><e:NegativeZero>-0/0</e:NegativeZero><e:LeadingZero>01/00</e:LeadingZero></rdf:Description></rdf:RDF>"#,
     )
     .unwrap();
     let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
     assert_eq!(theirs["XMP:XMP-exif:ShutterSpeedValue"], 0.4);
     assert_eq!(theirs["EXIF:IFD0:ModifyDate"], "2024:01:02 03:04:05Z");
     assert_eq!(theirs["EXIF:IFD0:DateOnly"], "2024-01-02");
+    assert_eq!(theirs["EXIF:IFD0:Foo"], "+1/2");
+    assert_eq!(
+        theirs["EXIF:IFD0:Bar"],
+        serde_json::json!(6.17283945061728e+38)
+    );
+    assert_eq!(theirs["EXIF:IFD0:Zero"], "inf");
+    assert_eq!(theirs["EXIF:IFD0:NegativeZero"], "inf");
+    assert_eq!(theirs["EXIF:IFD0:LeadingZero"], "inf");
     let ours = content_entries(run(
         Command::new(env!("CARGO_BIN_EXE_oxidex")),
         file.path(),
