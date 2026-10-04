@@ -302,8 +302,10 @@ def main(argv=None):
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
             verify_signed_source(source, receipt['source_commit'])
-        receipt['snapshot']=make_snapshot(source,archive,
-                                          exact_commit=receipt['source_commit'] if args.profile=='test' else None)
+        if args.profile=='test':
+            receipt['snapshot']=make_snapshot(source,archive,exact_commit=receipt['source_commit'])
+        else:
+            receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
