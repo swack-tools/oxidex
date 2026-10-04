@@ -61,6 +61,60 @@ class QualificationTransportTests(unittest.TestCase):
                 qualification.controller(Path("/missing"), "project")
             select.assert_not_called()
 
+    def test_archive_refuses_input_changed_after_validation(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            provisioned = output / "provisioned"
+            provisioned.mkdir(parents=True)
+            policy = output / "read-policy-input.json"
+            policy.write_text("{}")
+            fixture = provisioned / "fixture.bin"
+            fixture.write_bytes(b"original")
+            bundle = root / "repository.bundle"
+            bundle.write_bytes(b"bundle")
+            signer = root / "allowed_signers"
+            signer.write_text("swackhamer key\n")
+            destination = root / "input.tar.gz"
+            original_add = tarfile.TarFile.add
+            def mutate_after_add(archive, name, *args, **kwargs):
+                result = original_add(archive, name, *args, **kwargs)
+                if Path(name) == fixture:
+                    fixture.write_bytes(b"changed")
+                return result
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [policy, provisioned])), \
+                 patch.object(qualification, "git", return_value=str(signer)), \
+                 patch.object(tarfile.TarFile, "add", new=mutate_after_add):
+                with self.assertRaisesRegex(ValueError, "changed while creating"):
+                    qualification.prepare_archive(output, destination, bundle)
+            self.assertFalse(destination.exists())
+
+    def test_unavailable_worker_records_blocked_transport(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            output.mkdir()
+            def package(_output, destination, _bundle):
+                destination.write_bytes(b"package")
+                return "a" * 40, "13.59"
+            def git(*args):
+                return "" if args[0] == "status" else "a" * 40
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [])), \
+                 patch.object(qualification, "git", side_effect=git), \
+                 patch.object(qualification, "prepare_archive", side_effect=package), \
+                 patch.object(qualification, "resolve_project", return_value="project"), \
+                 patch.object(qualification, "select_worker", side_effect=RuntimeError("no eligible Spot worker")), \
+                 patch.object(qualification.subprocess, "run"):
+                self.assertEqual(qualification.controller(output, "project"), 2)
+            transports = list((root / "evidence/remote-qualification").glob("*/transport.json"))
+            self.assertEqual(len(transports), 1)
+            receipt = json.loads(transports[0].read_text())
+            self.assertEqual(receipt["status"], "BLOCKED_NO_WORKER")
+            self.assertIn("no eligible Spot worker", receipt["error"])
+            self.assertEqual(receipt["head"], "a" * 40)
+
 class CorpusCommandContractTests(unittest.TestCase):
     def test_nested_proof_and_receipt_paths_follow_instrument_outputs(self):
         with TemporaryDirectory() as directory:

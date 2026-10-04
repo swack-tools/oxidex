@@ -114,16 +114,28 @@ def input_paths(seeds: list[Path], root: Path) -> list[Path]:
 
 def prepare_archive(output: Path, destination: Path, bundle: Path) -> tuple[str, str]:
     root = ops_root()
+    seeds = [output / "read-policy-input.json", output / "provisioned"]
+    # The expensive qualification may begin hours later. Detect a writer that
+    # changes a validated floor, plan, or fixture while the transfer is packed.
+    before = {path: sha(path) for path in input_paths(seeds, root)}
     head, pin, seeds = exact_inputs(output)
+    if {path: sha(path) for path in input_paths(seeds, root)} != before:
+        raise ValueError("qualification inputs changed during preflight")
     signers = git("config", "--path", "--get", "gpg.ssh.allowedSignersFile")
     signers_path = Path(signers)
     if not signers_path.is_file():
         raise ValueError("maintainer allowed signers file is absent")
+    signer_sha = sha(signers_path)
+    bundle_sha = sha(bundle)
     with tarfile.open(destination, "w:gz", compresslevel=3) as archive:
         archive.add(bundle, arcname="repository.bundle", recursive=False)
         archive.add(signers_path, arcname="maintainer.allowed_signers", recursive=False)
-        for path in input_paths(seeds, root):
+        for path in before:
             archive.add(path, arcname=str(Path("ops") / path.relative_to(root)), recursive=False)
+    if ({path: sha(path) for path in input_paths(seeds, root)} != before
+            or sha(signers_path) != signer_sha or sha(bundle) != bundle_sha):
+        destination.unlink(missing_ok=True)
+        raise ValueError("qualification inputs changed while creating the transfer archive")
     return head, pin
 
 
@@ -211,12 +223,13 @@ def remote_run(output: Path, expected_head: str) -> int:
             with (output / f"{run_id}.log").open("w") as log:
                 process = subprocess.run([sys.executable, str(q.__file__), *arguments], stdout=log,
                                          stderr=subprocess.STDOUT)
-            if process.returncode:
+            if process.returncode not in (0, 3):
                 raise ValueError(f"Task19 {row} exit {process.returncode}; see {run_id}.log")
             committed = q.load_committed_result(receipt / "qualification-result.json")
             if committed["caller"]["head"] != expected_head or [r["id"] for r in committed["rows"]] != [row]:
                 raise ValueError(f"Task19 {row} final marker does not bind exact head and row")
-            result["rows"][row] = {"run_id": run_id, "marker_sha256": sha(receipt / "qualification-result.json")}
+            result["rows"][row] = {"run_id": run_id, "marker_sha256": sha(receipt / "qualification-result.json"),
+                                   "command_exit_code": process.returncode}
             save()
         corpus = output / "corpus-read"
         corpus.mkdir()
@@ -270,15 +283,23 @@ def controller(output: Path, project: str | None) -> int:
     if frozen_head != head or git("rev-parse", "HEAD") != head or git("status", "--porcelain"):
         raise ValueError("local candidate changed while freezing qualification inputs")
     project = resolve_project(project)
-    vm, sample = select_worker(project)
-    stage = f"/mnt/runner-data/remote-qualification/{evidence.name}"
     receipt = {"schema": 1, "kind": "oxidex_remote_spot_transport", "head": head, "pin": pin,
-               "instance": vm.name, "instance_id": vm.instance_id, "zone": vm.zone,
-               "utilization": {"cpu": sample[0], "memory": sample[1]}, "archive_sha256": sha(package),
-               "stage": stage, "status": "pending"}
+               "project": project, "archive_sha256": sha(package), "status": "pending"}
     transport = evidence / "transport.json"
     def save():
         transport.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    save()
+    try:
+        vm, sample = select_worker(project)
+    except RuntimeError as error:
+        receipt["status"] = "BLOCKED_NO_WORKER"
+        receipt["error"] = str(error)
+        save()
+        print(f"remote qualification blocked before launch: {error}; evidence: {evidence}", file=sys.stderr)
+        return 2
+    stage = f"/mnt/runner-data/remote-qualification/{evidence.name}"
+    receipt.update({"instance": vm.name, "instance_id": vm.instance_id, "zone": vm.zone,
+                    "utilization": {"cpu": sample[0], "memory": sample[1]}, "stage": stage})
     def ssh(command: str, *, check=True):
         return subprocess.run(["gcloud", "compute", "ssh", vm.name, f"--zone={vm.zone}",
                                f"--project={project}", "--quiet", *SSH_FLAGS,
@@ -296,6 +317,7 @@ def controller(output: Path, project: str | None) -> int:
                  f"git clone -q {shlex.quote(stage + '/repository.bundle')} {shlex.quote(stage + '/source')} && "
                  f"git -C {shlex.quote(stage + '/source')} checkout -q --detach {head} && "
                  f"test \"$(git -C {shlex.quote(stage + '/source')} rev-parse HEAD)\" = {head} && "
+                 f"chmod 0644 {shlex.quote(stage + '/maintainer.allowed_signers')} && "
                  f"mkdir -p {shlex.quote(stage + '/targets')} && "
                  f"sudo chown -R 1001:1001 {shlex.quote(stage + '/source')} "
                  f"{shlex.quote(stage + '/ops')} {shlex.quote(stage + '/targets')}")
@@ -344,7 +366,9 @@ def controller(output: Path, project: str | None) -> int:
                 raise RuntimeError("Spot worker unreachable; remote job state is unconfirmed at retained stage")
             status = poll.stdout.strip()
             if status == "lost":
-                raise RuntimeError("remote launch vanished before recording an exit status")
+                receipt["status"] = "RUNNING_RETAINED"
+                save()
+                raise RuntimeError("remote launch vanished before recording an exit status; child state unconfirmed")
             if status != "running":
                 receipt["remote_exit_code"] = int(status)
                 break

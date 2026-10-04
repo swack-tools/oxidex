@@ -54,7 +54,7 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/'.exiftool-version').write_text('13.59\n')
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1','rustc_commit':'f'*40}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
@@ -81,14 +81,23 @@ class ClientTests(unittest.TestCase):
             root=Path(directory)
             local=root/'remote-test.json'
             proof={'schema':1,'kind':'oxidex_spot_workspace_test','source_commit':'a'*40,
-                   'rust_pin':'1.97.1','oracle_pin':'13.59','status':'PASS','test_exit_code':0,
+                   'rust_pin':'1.97.1','rustc_commit':'f'*40,
+                   'rustc_version':'rustc 1.97.1\nrelease: 1.97.1\ncommit-hash: '+'f'*40+'\n',
+                   'cargo_version':'cargo 1.97.1 (abc)',
+                   'oracle_pin':'13.59','status':'PASS','test_exit_code':0,
+                   'test_command':['cargo','test','--workspace','--all-features','--locked','--no-fail-fast'],
+                   'python_exit_code':0,
+                   'python_command':['python3','-m','unittest','discover','-s','tests','-p','test_*.py'],
+                   'qualification_unit_exit_code':0,
+                   'qualification_unit_command':['python3','-m','unittest','test_version_transition_qualification.py'],
                    'bootstrap_manifest_sha256':'b'*64,'perl_sha256':'c'*64,
                    'exiftool_tree_sha256':'d'*64,'corpus_tree_sha256':'e'*64,'corpus_files':4000}
+            toolchain={'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}
             def fetch(command, **kwargs):
                 Path(command[4]).write_text(json.dumps(proof))
             digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
             with patch('lib.remote_build.subprocess.run',side_effect=fetch):
-                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,'1.97.1','13.59')
+                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,toolchain,'13.59')
             self.assertEqual(result['status'],'PASS')
             self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
             proof['status']='FAILED'
@@ -96,8 +105,22 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'does not establish'):
                     download_test_proof('vm','z','p','/remote',local,
                                         hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
-                                        'a'*40,'1.97.1','13.59')
+                                        'a'*40,toolchain,'13.59')
             self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
+            proof['status']='PASS'
+            proof['rustc_commit']='e'*40
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,toolchain,'13.59')
+            proof['rustc_commit']='f'*40
+            proof['python_exit_code']=1
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,toolchain,'13.59')
 
     def test_worker_interruption_is_retryable_but_compiler_errors_are_not(self):
         from lib.remote_build import retryable_exit
@@ -138,6 +161,25 @@ class ClientTests(unittest.TestCase):
         with patch.object(remote_build.subprocess,'check_output',side_effect=[rustc+off_pin,cargo]):
             with self.assertRaisesRegex(RuntimeError,'does not match'):
                 remote_build.verify_remote_toolchain(expected,lambda command:[command], 'checkout')
+
+    def test_spot_test_runner_rechecks_rustup_commit_before_cargo(self):
+        import test_runner
+        from unittest.mock import patch
+        pin='1.97.1'
+        expected='a'*40
+        rustc=f'rustc {pin}\nrelease: {pin}\ncommit-hash: {expected}\n'
+        def probe(command, **kwargs):
+            if command[:3] == ['rustup','which','--toolchain']:
+                return '/pin/'+command[-1]+'\n'
+            if command[-1] == '-vV':
+                return rustc
+            return f'cargo {pin} (abc)\n'
+        with patch.object(test_runner.subprocess,'check_output',side_effect=probe), \
+             patch.dict('os.environ',{},clear=True):
+            self.assertEqual(test_runner.pinned_rust_identity(pin,expected),
+                             (rustc,f'cargo {pin} (abc)'))
+            with self.assertRaisesRegex(RuntimeError,'differs from rustup'):
+                test_runner.pinned_rust_identity(pin,'b'*40)
 
     def test_prepare_race_is_retryable_without_building(self):
         from lib import remote_build

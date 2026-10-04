@@ -121,7 +121,7 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
         temporary.unlink(missing_ok=True)
 
 
-def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_pin, expected_oracle):
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_toolchain, expected_oracle):
     import tempfile
     import os
     fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
@@ -134,9 +134,24 @@ def download_test_proof(instance, zone, project, remote, local, digest, expected
             raise RuntimeError('Downloaded remote test proof checksum mismatch')
         proof = json.loads(temporary.read_text())
         if (proof.get('schema') != 1 or proof.get('kind') != 'oxidex_spot_workspace_test'
-                or proof.get('source_commit') != expected_commit or proof.get('rust_pin') != expected_pin
+                or proof.get('source_commit') != expected_commit
+                or proof.get('rust_pin') != expected_toolchain['channel']
+                or proof.get('rustc_commit') != expected_toolchain['rustc_commit']
+                or proof.get('cargo_version') != expected_toolchain['cargo_version']
+                or not isinstance(proof.get('rustc_version'), str)
+                or re.findall(r'^commit-hash: ([0-9a-f]{40})$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['rustc_commit']]
+                or re.findall(r'^release: (\S+)$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['channel']]
                 or proof.get('oracle_pin') != expected_oracle
                 or proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
+                or proof.get('python_exit_code') != 0
+                or proof.get('qualification_unit_exit_code') != 0
+                or proof.get('test_command') != ['cargo', 'test', '--workspace', '--all-features', '--locked', '--no-fail-fast']
+                or not isinstance(proof.get('python_command'), list)
+                or proof['python_command'][1:] != ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py']
+                or not isinstance(proof.get('qualification_unit_command'), list)
+                or proof['qualification_unit_command'][1:] != ['-m', 'unittest', 'test_version_transition_qualification.py']
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('exiftool_tree_sha256', ''))
@@ -247,7 +262,8 @@ def main(argv=None):
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
         if args.profile=='test':
-            stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '+receipt['source_commit']))
+            stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '
+                           +receipt['source_commit']+' --rustc-commit '+receipt['toolchain']['rustc_commit']))
         else:
             stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
@@ -272,7 +288,7 @@ def main(argv=None):
                 raise RuntimeError('Remote test proof has no SHA-256')
             local_proof=evidence/'remote-test.json'
             receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
-                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain']['channel'],
+                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain'],
                 (source/'.exiftool-version').read_text().strip())
             receipt['test_proof_sha256']=remote_hash
             receipt['stage']='cleanup'
