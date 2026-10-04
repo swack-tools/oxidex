@@ -1135,7 +1135,7 @@ impl Collected {
                     } else {
                         TagValue::Array(values.into_iter().map(TagValue::String).collect())
                     };
-                    metadata.insert(key, value);
+                    metadata.insert_declared_list(key, value);
                 }
             }
         }

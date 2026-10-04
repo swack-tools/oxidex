@@ -69,6 +69,17 @@ fn native_numeric_tuple_keeps_space_separator_in_binary_output() {
 }
 
 #[test]
+fn html_declared_list_keeps_newline_separator_in_binary_output() {
+    let Some(html) = fixtures::pinned_t_images_fixture_path("HTML.html") else {
+        return;
+    };
+    // Pinned ExifTool 13.59: `-b -HTML-dc:Creator t/images/HTML.html`.
+    let extracted = run(&["-b", "-HTML-dc:Creator"], &html);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(extracted.stdout, b"Phil Harvey\nAnother Creator");
+}
+
+#[test]
 fn large_mpf_uid_stays_visible_and_extracts_exact_bytes() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("uid-264.jpg");

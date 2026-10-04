@@ -1768,7 +1768,12 @@ fn parse_xmp_packet_in_directory(
                 )
                 .with_static_source(is_static_path(results[index].path.as_ref()))
                 .with_static_list_source(results[index].elements.as_deref())
-                .with_static_binary_payload(results[index].static_binary_payload.clone()),
+                .with_static_binary_payload(
+                    results[index]
+                        .static_binary_payload
+                        .as_deref()
+                        .map(|payload| static_rdf_extract_bytes(tag, payload)),
+                ),
             );
             gps_sources.push(xmp_source_scalar(
                 tag,
@@ -1830,7 +1835,12 @@ fn parse_xmp_packet_in_directory(
                 )
                 .with_static_source(is_static_path(result.path.as_ref()))
                 .with_static_list_source(result.elements.as_deref())
-                .with_static_binary_payload(result.static_binary_payload.clone()),
+                .with_static_binary_payload(
+                    result
+                        .static_binary_payload
+                        .as_deref()
+                        .map(|payload| static_rdf_extract_bytes(&result.tag, payload)),
+                ),
             );
             gps_sources.push(xmp_source_scalar(
                 &result.tag,
@@ -3822,21 +3832,39 @@ fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -
 /// binary reference for values over 100 bytes or matching its literal
 /// control-character class. The class also contains `0`, `c` and `x` in
 /// 13.59 due to the source's `\0x0c` spelling; preserve that behavior.
-fn static_rdf_binary_display(tag: &str, payload: &[u8]) -> String {
-    let binary = payload.len() > 100
+fn static_rdf_binary_is_binary(payload: &[u8]) -> bool {
+    payload.len() > 100
         || payload
             .iter()
-            .any(|byte| matches!(*byte, 0..=8 | 11 | 14..=31 | b'0' | b'c' | b'x'));
-    if !binary {
-        // ExifTool's JSON output replaces malformed UTF-8 bytes with '?' while
-        // -b still extracts the original decoded bytes.
-        let text = String::from_utf8_lossy(payload).replace('\u{fffd}', "?");
-        return format_xmp_value_with_default(tag, &text, true, true);
+            .any(|byte| matches!(*byte, 0..=8 | 11 | 14..=31 | b'0' | b'c' | b'x'))
+}
+
+fn static_rdf_binary_display(tag: &str, payload: &[u8]) -> String {
+    if static_rdf_binary_is_binary(payload) {
+        return format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            payload.len()
+        );
     }
-    format!(
-        "(Binary data {} bytes, use -b option to extract)",
-        payload.len()
-    )
+    // FoundXMP unescapes entities after decoding, then converts values.
+    // Preserve a valid U+FFFD while replacing malformed UTF-8 for display.
+    let text = match std::str::from_utf8(payload) {
+        Ok(text) => text.to_owned(),
+        Err(_) => String::from_utf8_lossy(payload).replace('\u{fffd}', "?"),
+    };
+    let unescaped =
+        quick_xml::escape::unescape(&text).map_or(text.clone(), |value| value.into_owned());
+    format_xmp_value_with_default(tag, &unescaped, true, true)
+}
+
+fn static_rdf_extract_bytes(tag: &str, payload: &[u8]) -> Vec<u8> {
+    if static_rdf_binary_is_binary(payload) || std::str::from_utf8(payload).is_err() {
+        payload.to_vec()
+    } else {
+        // -b uses post-conversion text for short valid UTF-8, but true
+        // binary and malformed UTF-8 retain their decoded source bytes.
+        static_rdf_binary_display(tag, payload).into_bytes()
+    }
 }
 
 fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
@@ -3862,7 +3890,19 @@ fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
             .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
             .with_decode_allow_trailing_bits(true),
     );
-    decoder.decode(&compact).ok()
+    // Perl's uu unpack treats the extra sextet of a 4n+1 group as another
+    // line-length byte and emits that many zero bytes.
+    if compact.len() % 4 == 1 {
+        let (prefix, last) = compact.split_at(compact.len() - 1);
+        let mut decoded = decoder.decode(prefix).ok()?;
+        let extra = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            .iter()
+            .position(|byte| Some(byte) == last.as_bytes().first())?;
+        decoded.resize(decoded.len() + extra, 0);
+        Some(decoded)
+    } else {
+        decoder.decode(&compact).ok()
+    }
 }
 
 /// Whether `element` carries RDF shorthand attributes -- namespaced attributes

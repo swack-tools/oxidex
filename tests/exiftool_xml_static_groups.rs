@@ -396,7 +396,7 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
     let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
     std::fs::write(
         file.path(),
-        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Foo rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YWJj</q:Foo><q:Short rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YQ==</q:Short><q:Alias rdf:datatype="base64">YWJj</q:Alias><q:Partial rdf:datatype="base64">not-valid?</q:Partial></rdf:Description></rdf:RDF>"#,
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Foo rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YWJj</q:Foo><q:Short rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YQ==</q:Short><q:Alias rdf:datatype="base64">YWJj</q:Alias><q:Partial rdf:datatype="base64">not-valid?</q:Partial><q:One rdf:datatype="base64">A</q:One><q:Extra rdf:datatype="base64">abcde</q:Extra><q:Entity rdf:datatype="base64">JmFtcDs=</q:Entity><q:Rational rdf:datatype="base64">MTIvMw==</q:Rational><q:Replacement rdf:datatype="base64">77+9</q:Replacement></rdf:Description></rdf:RDF>"#,
     )
     .unwrap();
     let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
@@ -414,9 +414,19 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
     );
     assert_eq!(ours.get("EXIF:IFD0:Short"), theirs.get("EXIF:IFD0:Short"));
     assert_eq!(ours.get("EXIF:IFD0:Short"), Some(&serde_json::json!("a")));
-    for tag in ["EXIF:IFD0:Alias", "EXIF:IFD0:Partial"] {
+    for tag in [
+        "EXIF:IFD0:Alias",
+        "EXIF:IFD0:Partial",
+        "EXIF:IFD0:One",
+        "EXIF:IFD0:Extra",
+        "EXIF:IFD0:Entity",
+        "EXIF:IFD0:Rational",
+        "EXIF:IFD0:Replacement",
+    ] {
         assert_eq!(ours.get(tag), theirs.get(tag), "{tag}");
     }
+    assert_eq!(ours.get("EXIF:IFD0:Entity"), Some(&serde_json::json!("&")));
+    assert_eq!(ours.get("EXIF:IFD0:Rational"), Some(&serde_json::json!(4)));
     let bytes = |mut command: Command| {
         command
             .args(["-b", "-Foo"])
@@ -442,6 +452,17 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
         partial_bytes(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
         partial_bytes(oracle.command())
     );
+    for tag in ["One", "Extra", "Entity", "Rational", "Replacement"] {
+        let extract = |mut command: Command| {
+            command.arg("-b").arg(format!("-{tag}")).arg(file.path());
+            command.output().unwrap().stdout
+        };
+        assert_eq!(
+            extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+            extract(oracle.command()),
+            "-b -{tag}"
+        );
+    }
 }
 
 #[test]
