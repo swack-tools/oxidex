@@ -4722,15 +4722,7 @@ fn format_xmp_value_with_default(
                 // Perl tests the captured numerator as a string: only "0" is false.
                 if numerator == "0" { "undef" } else { "inf" }.to_string()
             } else {
-                match parse_xmp_number(value) {
-                    Some(number) if number.is_infinite() => if number.is_sign_negative() {
-                        "-Inf"
-                    } else {
-                        "Inf"
-                    }
-                    .to_string(),
-                    _ => format_xmp_plain_rational(value),
-                }
+                format_xmp_plain_rational(value)
             };
         }
         return format_default_xmp_date(value);
@@ -5839,6 +5831,16 @@ fn format_xmp_plain_rational(value: &str) -> String {
     let Some(number) = parse_xmp_number(value) else {
         return value.trim().to_string();
     };
+    // A computed quotient uses Perl's capitalized spelling; literal `inf`
+    // is text and retains its original case.
+    if number.is_infinite() && default_xmp_rational_parts(value).is_some() {
+        return if number.is_sign_negative() {
+            "-Inf"
+        } else {
+            "Inf"
+        }
+        .to_string();
+    }
     format_perl_g15(number)
 }
 
