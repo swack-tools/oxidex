@@ -283,6 +283,46 @@ fn rebound_prefix_retains_effective_schema_rename_for_static_uri() {
 }
 
 #[test]
+fn rebound_prefix_selects_effective_conversion_and_source_groups() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping effective XMP namespace parity: pinned oracle unavailable");
+        return;
+    };
+    let cases = [
+        (
+            "converted",
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.adobe.com/exif/1.0/"><q:ExposureBiasValue>1/2</q:ExposureBiasValue></rdf:Description><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/"><q:ExposureBiasValue>3/2</q:ExposureBiasValue></rdf:Description></rdf:RDF>"#,
+            "XMP:XMP-exif:Copy1:ExposureCompensation",
+            serde_json::json!("+3/2"),
+        ),
+        (
+            "standard-group",
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.adobe.com/exif/1.0/"><q:PixelXDimension>11</q:PixelXDimension></rdf:Description><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:PixelXDimension>123</q:PixelXDimension></rdf:Description></rdf:RDF>"#,
+            "XMP:XMP-exif:Copy1:ExifImageWidth",
+            serde_json::json!(123),
+        ),
+        (
+            "temporary-prefix",
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://example.com/first"><q:Foo>bar</q:Foo></rdf:Description><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:ExposureBiasValue>3/2</q:ExposureBiasValue></rdf:Description></rdf:RDF>"#,
+            "EXIF:IFD0:ExposureBiasValue",
+            serde_json::json!(1.5),
+        ),
+    ];
+    for (name, packet, key, expected) in cases {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1:4"));
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1:4",
+        ));
+        assert_eq!(theirs.get(key), Some(&expected), "{name}");
+        assert_eq!(ours, theirs, "{name}: current pin: {}", oracle.provenance());
+    }
+}
+
+#[test]
 fn static_uri_groups_and_print_values_are_source_defined() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping static URI source parity: pinned oracle unavailable");

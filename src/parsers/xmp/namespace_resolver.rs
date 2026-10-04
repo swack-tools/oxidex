@@ -328,6 +328,33 @@ impl NamespaceResolver {
         self.translated_xmp_group_for_prefix(prefix)
     }
 
+    /// Prefix ExifTool uses for a property after its persistent `xlatNS`
+    /// translation. XML attributes still resolve against lexical bindings.
+    pub fn effective_prefix<'a>(&'a self, lexical: &'a str) -> &'a str {
+        self.xlat.get(lexical).map_or(lexical, String::as_str)
+    }
+
+    /// Source URI selected for a property after prefix translation. `curURI`
+    /// owns nonstandard URIs; `%nsURI` supplies standard schema URIs.
+    pub fn property_uri_for_prefix(&self, lexical: &str) -> Option<&str> {
+        let effective = self.effective_prefix(lexical);
+        self.cur_uri.get(effective).map(String::as_str).or_else(|| {
+            URI_PREFIXES
+                .iter()
+                .find(|(_, prefix)| *prefix == effective)
+                .map(|(uri, _)| *uri)
+        })
+    }
+
+    /// ExifTool's static-source test is specifically `curURI{$ns}` after
+    /// translation, never the lexical XML `xmlns` binding.
+    pub fn effective_static_uri(&self, lexical: &str) -> Option<&str> {
+        self.cur_uri
+            .get(self.effective_prefix(lexical))
+            .map(String::as_str)
+            .filter(|uri| exiftool_static_groups(uri).is_some())
+    }
+
     /// Schema selected by ExifTool's effective prefix translation, even when
     /// the current URI supplies static family groups for the public output.
     pub fn translated_xmp_group_for_prefix(&self, prefix: &str) -> String {
@@ -340,7 +367,8 @@ impl NamespaceResolver {
     /// URI selects these groups. `System` and numeric family-1 components are
     /// re-filed under XML to avoid colliding with this sidecar's File tags.
     pub fn static_groups_for_prefix(&self, prefix: &str) -> Option<(String, String)> {
-        self.resolve_prefix(prefix).and_then(exiftool_static_groups)
+        self.effective_static_uri(prefix)
+            .and_then(exiftool_static_groups)
     }
 
     /// [`Self::group_for_prefix`] for a qualified name (`dc:title`).

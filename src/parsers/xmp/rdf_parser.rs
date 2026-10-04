@@ -756,7 +756,7 @@ fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> St
         return format!("{group0}:{name}");
     }
     let family = NamespaceResolver::extract_prefix(qname)
-        .and_then(|prefix| resolver.resolve_prefix(prefix))
+        .and_then(|prefix| resolver.property_uri_for_prefix(prefix))
         .map_or("XMP", |uri| match uri {
             "http://ns.adobe.com/xap/1.0/mm/" => "XMP-xmpMM",
             "http://ns.adobe.com/xap/1.0/rights/" => "XMP-xmpRights",
@@ -806,9 +806,8 @@ fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_defau
 /// focused structure walker sees the property. Reported FlatName is never a
 /// safe lookup key: distinct raw paths may print the same name.
 fn raw_property(qname: &str, resolver: &NamespaceResolver) -> (String, String) {
-    if let Some(uri) =
-        NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
-        && super::namespace_resolver::exiftool_static_groups(uri).is_some()
+    if let Some(uri) = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.effective_static_uri(prefix))
     {
         return (
             uri.to_string(),
@@ -4798,7 +4797,7 @@ fn has_unregistered_namespace(qname: &str, resolver: &NamespaceResolver) -> bool
     let Some(prefix) = NamespaceResolver::extract_prefix(qname) else {
         return true;
     };
-    let Some(uri) = resolver.resolve_prefix(prefix) else {
+    let Some(uri) = resolver.property_uri_for_prefix(prefix) else {
         return true;
     };
     canonical_standard_uri(uri).is_none()
@@ -4833,7 +4832,7 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     }
     if !is_static
         && let Some(uri) = NamespaceResolver::extract_prefix(qname)
-            .and_then(|prefix| resolver.resolve_prefix(prefix))
+            .and_then(|prefix| resolver.property_uri_for_prefix(prefix))
     {
         // Renames keyed on the namespace URI apply to the raw local name,
         // before capitalization: Google writes `hdrp_makernote`, not
