@@ -349,6 +349,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
         let module = crate::cli::tag_resolution::family1_label(occurrence);
         if occurrence.origin.module == Some("XMP::StaticGroup") {
             static_source_modules.insert(module.to_string());
+            static_source_modules.insert(occurrence.group0.to_string());
         } else {
             native_source_modules.insert(module.to_string());
         }
@@ -381,7 +382,9 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // a format-specific table. Other modules need a native reader
             // activation, even when a static URI displays their group name.
             if !matches!(comp.module, "Exif" | "GPS" | "XMP")
-                && static_source_modules.contains(comp.module)
+                && static_source_modules
+                    .iter()
+                    .any(|source| source == comp.module || source.starts_with(comp.module))
                 && !native_source_modules.contains(comp.module)
             {
                 continue;

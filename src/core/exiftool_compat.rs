@@ -130,8 +130,18 @@ pub fn format_for_exiftool(metadata: &MetadataMap) -> MetadataMap {
     let mut result = MetadataMap::with_capacity(metadata.len());
 
     for (tag_name, value) in metadata.iter() {
-        let formatted_value = format_tag_value(tag_name, value);
-        result.insert(tag_name.clone(), formatted_value);
+        let source = metadata
+            .winning_occurrence(tag_name)
+            .expect("every projected value has a winning occurrence");
+        if source.origin.module == Some("XMP::StaticGroup") {
+            // FoundXMP already converted this static URI property. A native
+            // name-keyed formatter would alter its public value; retain the
+            // source occurrence so comparison also keeps its provenance.
+            result.record_occurrence(tag_name.clone(), source.clone());
+        } else {
+            let formatted_value = format_tag_value(tag_name, value);
+            result.insert(tag_name.clone(), formatted_value);
+        }
     }
     // A formatted copy is the same rows: each keeps its provenance, and the
     // map keeps the read's.
@@ -2887,6 +2897,31 @@ mod tests {
         assert_eq!(formatted.get_string("GPS:GPSLatitudeRef"), Some("North"));
         // FocalLength should have unit suffix
         assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50.0 mm"));
+    }
+
+    #[test]
+    fn static_xmp_source_survives_compatibility_projection() {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        std::fs::write(
+            file.path(),
+            br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:FocalLength>50</q:FocalLength></rdf:Description></rdf:RDF>"#,
+        )
+        .unwrap();
+        let metadata = crate::core::operations::read_metadata(file.path()).unwrap();
+        assert_eq!(metadata.get_string("EXIF:FocalLength"), Some("50"));
+        assert!(metadata.is_xmp_static_source("EXIF:FocalLength"));
+
+        let formatted = format_for_exiftool(&metadata);
+        assert_eq!(formatted.get_string("EXIF:FocalLength"), Some("50"));
+        assert!(formatted.is_xmp_static_source("EXIF:FocalLength"));
+        assert_eq!(
+            formatted
+                .winning_occurrence("EXIF:FocalLength")
+                .unwrap()
+                .origin
+                .module,
+            Some("XMP::StaticGroup")
+        );
     }
 
     #[test]

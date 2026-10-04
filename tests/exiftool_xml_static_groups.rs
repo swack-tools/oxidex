@@ -305,6 +305,34 @@ fn static_makernote_properties_do_not_activate_native_composites() {
 }
 
 #[test]
+fn static_canoncustom_does_not_activate_native_canon_composites() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping CanonCustom composite activation parity: pinned oracle unavailable");
+        return;
+    };
+    for group0 in ["MakerNotes", "EXIF", "Canon"] {
+        let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+        let packet = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/{group0}/CanonCustom/1.0/"><q:MinFocalLength>18</q:MinFocalLength><q:MaxFocalLength>55</q:MaxFocalLength></rdf:Description></rdf:RDF>"#
+        );
+        std::fs::write(file.path(), packet).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        assert!(!theirs.contains_key("Composite:Lens"));
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1",
+        ));
+        assert_eq!(
+            ours,
+            theirs,
+            "{group0}: current pin: {}",
+            oracle.provenance()
+        );
+    }
+}
+
+#[test]
 fn embedded_static_makernote_keeps_native_canon_composites_active() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping mixed native/static MakerNotes parity: pinned oracle unavailable");

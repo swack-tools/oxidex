@@ -1424,6 +1424,11 @@ impl MetadataMap {
         self.sink.winner_occurrences()
     }
 
+    /// The full winning occurrence behind a projected map key.
+    pub(crate) fn winning_occurrence(&self, key: &str) -> Option<&TagOccurrence> {
+        self.sink.winner_occurrence(key)
+    }
+
     /// Whether the winning value came from an ExifTool static-group RDF URI.
     /// Output writers must not apply a native table's name-keyed PrintConv to it.
     pub(crate) fn is_xmp_static_source(&self, key: &str) -> bool {
