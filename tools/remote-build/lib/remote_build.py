@@ -121,7 +121,7 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
         temporary.unlink(missing_ok=True)
 
 
-def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_pin):
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_pin, expected_oracle):
     import tempfile
     import os
     fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
@@ -135,6 +135,7 @@ def download_test_proof(instance, zone, project, remote, local, digest, expected
         proof = json.loads(temporary.read_text())
         if (proof.get('schema') != 1 or proof.get('kind') != 'oxidex_spot_workspace_test'
                 or proof.get('source_commit') != expected_commit or proof.get('rust_pin') != expected_pin
+                or proof.get('oracle_pin') != expected_oracle
                 or proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
                 or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
@@ -271,7 +272,8 @@ def main(argv=None):
                 raise RuntimeError('Remote test proof has no SHA-256')
             local_proof=evidence/'remote-test.json'
             receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
-                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain']['channel'])
+                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain']['channel'],
+                (source/'.exiftool-version').read_text().strip())
             receipt['test_proof_sha256']=remote_hash
             receipt['stage']='cleanup'
             cleanup(strict=True)

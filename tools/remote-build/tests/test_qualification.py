@@ -47,6 +47,13 @@ class QualificationTransportTests(unittest.TestCase):
                 qualification.safe_extract(archive, root)
             self.assertEqual((root / "existing.json").read_text(), "original")
 
+    def test_project_environment_is_used_before_gcloud(self):
+        with patch.dict("os.environ", {"OXIDEX_REMOTE_PROJECT": "spot-project"}), \
+             patch.object(qualification.subprocess, "check_output") as default_project:
+            self.assertEqual(qualification.resolve_project(None), "spot-project")
+            self.assertEqual(qualification.resolve_project("explicit-project"), "explicit-project")
+            default_project.assert_not_called()
+
     def test_stale_inputs_refuse_before_worker_selection(self):
         with patch.object(qualification, "exact_inputs", side_effect=ValueError("stale plan")), \
              patch.object(qualification, "select_worker") as select:

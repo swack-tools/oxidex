@@ -248,6 +248,15 @@ def remote_run(output: Path, expected_head: str) -> int:
         return 2
 
 
+def resolve_project(explicit: str | None) -> str:
+    project = explicit or os.environ.get("OXIDEX_REMOTE_PROJECT")
+    if not project:
+        project = subprocess.check_output(["gcloud", "config", "get-value", "project"], text=True).strip()
+    if not project or project == "(unset)":
+        raise ValueError("set OXIDEX_REMOTE_PROJECT or configure a gcloud project")
+    return project
+
+
 def controller(output: Path, project: str | None) -> int:
     head, _pin, _seeds = exact_inputs(output)
     evidence = ops_root() / "evidence" / "remote-qualification" / (head[:12] + "-" + secrets.token_hex(8))
@@ -260,9 +269,7 @@ def controller(output: Path, project: str | None) -> int:
     frozen_head, pin = prepare_archive(output, package, bundle)
     if frozen_head != head or git("rev-parse", "HEAD") != head or git("status", "--porcelain"):
         raise ValueError("local candidate changed while freezing qualification inputs")
-    project = project or subprocess.check_output(["gcloud", "config", "get-value", "project"], text=True).strip()
-    if not project or project == "(unset)":
-        raise ValueError("set OXIDEX_REMOTE_PROJECT or configure a gcloud project")
+    project = resolve_project(project)
     vm, sample = select_worker(project)
     stage = f"/mnt/runner-data/remote-qualification/{evidence.name}"
     receipt = {"schema": 1, "kind": "oxidex_remote_spot_transport", "head": head, "pin": pin,
@@ -380,8 +387,12 @@ def controller(output: Path, project: str | None) -> int:
         if receipt["remote_exit_code"] != 0:
             raise RuntimeError(f"remote qualification exited {receipt['remote_exit_code']}")
         summary = json.loads((output / "remote-qualification.json").read_text())
-        if summary.get("status") != "PASS" or summary.get("head") != head or len(summary.get("rows", {})) != 3:
-            raise RuntimeError("remote summary is not an exact-head three-row PASS")
+        if (summary.get("status") != "PASS" or summary.get("head") != head
+                or summary.get("corpus_gate") != "PASS" or len(summary.get("rows", {})) != 3):
+            raise RuntimeError("remote summary is not an exact-head three-row and corpus PASS")
+        corpus_receipt = output / "corpus-read" / "observations" / "receipt.json"
+        if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
+            raise RuntimeError("downloaded corpus receipt differs from remote summary")
         for index, row in enumerate(ROWS):
             marker = output / f"spot-{head[:12]}-{index}" / "qualification-result.json"
             if not marker.is_file() or sha(marker) != summary["rows"][row.format(pin=pin)]["marker_sha256"]:

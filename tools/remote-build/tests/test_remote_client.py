@@ -53,6 +53,7 @@ class ClientTests(unittest.TestCase):
             return SimpleNamespace(returncode=0)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
+            (root/'.exiftool-version').write_text('13.59\n')
             with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
@@ -87,7 +88,7 @@ class ClientTests(unittest.TestCase):
                 Path(command[4]).write_text(json.dumps(proof))
             digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
             with patch('lib.remote_build.subprocess.run',side_effect=fetch):
-                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,'1.97.1')
+                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,'1.97.1','13.59')
             self.assertEqual(result['status'],'PASS')
             self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
             proof['status']='FAILED'
@@ -95,7 +96,7 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'does not establish'):
                     download_test_proof('vm','z','p','/remote',local,
                                         hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
-                                        'a'*40,'1.97.1')
+                                        'a'*40,'1.97.1','13.59')
             self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
 
     def test_worker_interruption_is_retryable_but_compiler_errors_are_not(self):
