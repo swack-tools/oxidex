@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -85,7 +86,9 @@ def input_paths(seeds: list[Path], root: Path) -> list[Path]:
         if raw.is_symlink():
             raise ValueError(f"qualification input symlink is forbidden: {raw}")
         path = raw.resolve()
-        if not path.is_relative_to(root) or path in selected:
+        if not path.is_relative_to(root):
+            raise ValueError(f"qualification input is outside OXIDEX_OPS_DIR: {path}")
+        if path in selected:
             continue
         if not path.exists():
             raise ValueError(f"qualification input absent or symlinked: {path}")
@@ -97,17 +100,20 @@ def input_paths(seeds: list[Path], root: Path) -> list[Path]:
                 document = json.loads(path.read_text())
             except (ValueError, UnicodeError):
                 continue
-            def visit(value):
+            def visit(value, key=""):
                 if isinstance(value, str) and value.startswith(str(root) + "/"):
                     dependency = Path(value)
                     if dependency.exists():
                         pending.append(dependency)
+                elif (isinstance(value, str) and value.startswith("/")
+                      and key in {"path", "fixture", "source_root", "source", "archive", "manifest"}):
+                    raise ValueError(f"qualification input {key} is outside OXIDEX_OPS_DIR: {value}")
                 elif isinstance(value, dict):
-                    for item in value.values():
-                        visit(item)
+                    for name, item in value.items():
+                        visit(item, name)
                 elif isinstance(value, list):
                     for item in value:
-                        visit(item)
+                        visit(item, key)
             visit(document)
     return sorted(path for path in selected if path.is_file())
 
@@ -126,10 +132,16 @@ def prepare_archive(output: Path, destination: Path, bundle: Path) -> tuple[str,
     if not signers_path.is_file():
         raise ValueError("maintainer allowed signers file is absent")
     signer_sha = sha(signers_path)
+    signer_bytes = signers_path.read_bytes()
+    if hashlib.sha256(signer_bytes).hexdigest() != signer_sha:
+        raise ValueError("maintainer allowed signers changed during packaging")
     bundle_sha = sha(bundle)
     with tarfile.open(destination, "w:gz", compresslevel=3) as archive:
         archive.add(bundle, arcname="repository.bundle", recursive=False)
-        archive.add(signers_path, arcname="maintainer.allowed_signers", recursive=False)
+        signer_member = tarfile.TarInfo("maintainer.allowed_signers")
+        signer_member.size = len(signer_bytes)
+        signer_member.mode = 0o644
+        archive.addfile(signer_member, io.BytesIO(signer_bytes))
         for path in before:
             archive.add(path, arcname=str(Path("ops") / path.relative_to(root)), recursive=False)
     if ({path: sha(path) for path in input_paths(seeds, root)} != before

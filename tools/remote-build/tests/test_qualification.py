@@ -26,6 +26,36 @@ class QualificationTransportTests(unittest.TestCase):
             alias.symlink_to(fixture)
             with self.assertRaisesRegex(ValueError, "symlink"):
                 qualification.input_paths([alias], root)
+            external = root.parent / "external-fixture.jpg"
+            (provisioned / "external.json").write_text(json.dumps({"fixture": str(external)}))
+            with self.assertRaisesRegex(ValueError, "outside OXIDEX_OPS_DIR"):
+                qualification.input_paths([provisioned], root)
+
+    def test_signer_symlink_is_archived_as_readable_file(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            provisioned = output / "provisioned"
+            provisioned.mkdir(parents=True)
+            policy = output / "read-policy-input.json"
+            policy.write_text("{}")
+            bundle = root / "repository.bundle"
+            bundle.write_bytes(b"bundle")
+            signer = root / "signer-real"
+            signer.write_text("swackhamer key\n")
+            signer.chmod(0o600)
+            link = root / "signer-link"
+            link.symlink_to(signer)
+            destination = root / "input.tar.gz"
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [policy, provisioned])), \
+                 patch.object(qualification, "git", return_value=str(link)):
+                qualification.prepare_archive(output, destination, bundle)
+            with tarfile.open(destination) as stream:
+                member = stream.getmember("maintainer.allowed_signers")
+                self.assertTrue(member.isfile())
+                self.assertEqual(member.mode, 0o644)
+                self.assertEqual(stream.extractfile(member).read(), b"swackhamer key\n")
 
     def test_result_archive_refuses_path_escape_and_overwrite(self):
         with TemporaryDirectory() as directory:
