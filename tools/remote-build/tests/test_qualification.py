@@ -1,10 +1,13 @@
 """Safety boundaries for the Spot qualification transport."""
+import hashlib
 import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -324,6 +327,30 @@ class QualificationTransportTests(unittest.TestCase):
                  patch.object(qualification, "git", side_effect=["a" * 40, ""]):
                 with self.assertRaisesRegex(ValueError, "measures another source"):
                     qualification.replay_archived_corpus(archive, output, "a" * 40)
+
+    def test_spot_archive_gate_reads_frozen_bytes_if_live_receipt_changes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "output"
+            receipt = output / "corpus-read/observations/receipt.json"
+            receipt.parent.mkdir(parents=True)
+            head = "a" * 40
+            original = {"producer": {"source_commit": head}}
+            receipt.write_text(json.dumps(original))
+            archive = root / "results.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                stream.add(receipt, arcname="output/corpus-read/observations/receipt.json")
+            def measure(frozen, *_args):
+                receipt.write_text("{}")
+                self.assertEqual(json.loads(frozen.read_text()), original)
+                return SimpleNamespace(corpus_files=1), SimpleNamespace(status="PASS"), original
+            with patch.object(qualification, "ops_root", return_value=root), \
+                 patch.object(qualification, "git", side_effect=[head, ""]), \
+                 patch.dict(sys.modules, {"read_regression_gate": SimpleNamespace(measure=measure)}):
+                replay = qualification.replay_archived_corpus(archive, output, head)
+            self.assertEqual(replay["status"], "PASS")
+            self.assertEqual(replay["corpus_receipt_sha256"],
+                             hashlib.sha256(json.dumps(original).encode()).hexdigest())
 
 class CorpusCommandContractTests(unittest.TestCase):
     def test_nested_proof_and_receipt_paths_follow_instrument_outputs(self):

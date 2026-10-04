@@ -264,9 +264,15 @@ def replay_archived_corpus(archive: Path, output: Path, expected_head: str) -> d
     sys.path.insert(0, str(ROOT / "tools/ci"))
     import read_regression_gate as gate
     measurements = ROOT / "docs/public/measurements"
-    published, verdict, _receipt = gate.measure(
-        receipt, measurements / f"catalog-corpus-observed-{pin}.json",
-        measurements / f"catalog-source-{pin}.json", ROOT)
+    # An anonymous file prevents a concurrent writer from replacing the live
+    # receipt between the archive digest check and the gate's own read.
+    with tempfile.TemporaryFile(mode="w+b", dir=output / "corpus-read") as frozen:
+        frozen.write(packed_bytes)
+        frozen.flush()
+        published, verdict, _receipt = gate.measure(
+            Path(f"/proc/self/fd/{frozen.fileno()}"),
+            measurements / f"catalog-corpus-observed-{pin}.json",
+            measurements / f"catalog-source-{pin}.json", ROOT)
     if verdict.status != "PASS":
         raise ValueError(f"archived corpus read gate returned {verdict.status}")
     return {"schema": 1, "kind": "oxidex_remote_corpus_archive_replay", "status": "PASS",
