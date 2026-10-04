@@ -310,7 +310,6 @@ def main(argv=None):
                             remote_proof,evidence/'remote-test.json',remote_hash,receipt['source_commit'],
                             receipt['toolchain'],(source/'.exiftool-version').read_text().strip(),require_pass=False)
                         receipt['test_proof_sha256']=remote_hash
-                        receipt['retryable']=False
                     except Exception as proof_error:
                         # The command may have failed before writing a proof or
                         # SSH may have lost its result. Do not destroy evidence
