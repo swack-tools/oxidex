@@ -119,7 +119,12 @@ class QualificationTransportTests(unittest.TestCase):
                 qualification.publish_results(staged, output, head, pin)
             self.assertFalse((output / "remote-results").exists())
             missing.write_text("{}")
-            published = qualification.publish_results(staged, output, head, pin)
+            with self.assertRaisesRegex(RuntimeError, "not committed evidence"):
+                qualification.publish_results(staged, output, head, pin)
+            self.assertFalse((output / "remote-results").exists())
+            with patch.object(qualification, "validate_downloaded_marker") as validate:
+                published = qualification.publish_results(staged, output, head, pin)
+            self.assertEqual(validate.call_count, 3)
             self.assertEqual(published, output / "remote-results")
             self.assertFalse(staged.exists())
             self.assertTrue((published / "remote-qualification.json").is_file())
@@ -137,6 +142,17 @@ class QualificationTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale plan"):
                 qualification.controller(Path("/missing"), "project")
             select.assert_not_called()
+
+    def test_invalid_timeout_refuses_before_any_remote_launch(self):
+        for invalid in ("not-a-number", "0", "-1"):
+            with self.subTest(invalid=invalid), \
+                 patch.dict("os.environ", {"OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS": invalid}), \
+                 patch.object(qualification, "exact_inputs") as inputs, \
+                 patch.object(qualification, "select_worker") as select:
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    qualification.controller(Path("/missing"), "project")
+                inputs.assert_not_called()
+                select.assert_not_called()
 
     def test_archive_refuses_input_changed_after_validation(self):
         with TemporaryDirectory() as directory:
@@ -246,6 +262,23 @@ class QualificationTransportTests(unittest.TestCase):
             receipt = json.loads(transports[0].read_text())
             self.assertEqual(receipt["status"], "BLOCKED_WORKER_SELECTION")
             self.assertIn("gcloud", receipt["error"])
+
+    def test_task19_unknown_and_held_lease_exits_retain_lineage(self):
+        for code in (4, 5):
+            with self.subTest(code=code):
+                result = {"status": "pending"}
+                receipt = Path("/owned/spot-head-0")
+                self.assertEqual(qualification.task19_row_exit(code, "same-pin-13.59", receipt, result), code)
+                self.assertEqual(result["status"], "RUNNING_RETAINED")
+                self.assertEqual(result["unconfirmed_row"]["receipt_root"], str(receipt))
+                self.assertEqual(result["unconfirmed_row"]["exit_code"], code)
+                transport = {"status": "running", "remote_exit_code": code}
+                with self.assertRaisesRegex(RuntimeError, "unconfirmed"):
+                    qualification.require_remote_success(transport)
+                self.assertEqual(transport["status"], "RUNNING_RETAINED")
+                self.assertEqual(transport["unconfirmed_task19_exit"], code)
+        with self.assertRaisesRegex(ValueError, "exit 2"):
+            qualification.task19_row_exit(2, "same-pin-13.59", Path("/owned/spot-head-0"), {})
 
 class CorpusCommandContractTests(unittest.TestCase):
     def test_nested_proof_and_receipt_paths_follow_instrument_outputs(self):

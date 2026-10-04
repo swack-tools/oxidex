@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -59,7 +60,7 @@ def exact_inputs(output: Path) -> tuple[str, str, list[Path]]:
     head = git("rev-parse", "HEAD")
     if caller["head"] != head:
         raise ValueError("caller HEAD changed during qualification input preflight")
-    signature = git("log", "-1", "--format=%an|%ae|%cn|%ce|%G?|%GS").split("|")
+    signature = git("log", "-1", "--format=%an|%ae|%cn|%ce|%G?|%GS", head).split("|")
     if signature != ["swackhamer", "swackhamer@users.noreply.github.com",
                      "swackhamer", "swackhamer@users.noreply.github.com", "G",
                      "swackhamer@users.noreply.github.com"]:
@@ -224,6 +225,19 @@ def corpus_commands(corpus: Path, instrument: Path, perl: Path, exiftool: Path,
     ]
 
 
+def task19_row_exit(code: int, row: str, receipt: Path, result: dict) -> int | None:
+    """Retain Task19's unknown/held-lease outcomes instead of calling them refused."""
+    if code in (4, 5):
+        result["status"] = "RUNNING_RETAINED"
+        result["unconfirmed_row"] = {"id": row, "exit_code": code,
+                                     "receipt_root": str(receipt),
+                                     "log": str(receipt.parent / f"{receipt.name}.log")}
+        return code
+    if code not in (0, 3):
+        raise ValueError(f"Task19 {row} exit {code}; see {receipt.name}.log")
+    return None
+
+
 def remote_run(output: Path, expected_head: str) -> int:
     """Container phase; source and ops root are already mounted at exact paths."""
     if git("rev-parse", "HEAD") != expected_head or git("status", "--porcelain"):
@@ -279,8 +293,10 @@ def remote_run(output: Path, expected_head: str) -> int:
             with (output / f"{run_id}.log").open("w") as log:
                 process = subprocess.run([sys.executable, str(q.__file__), *arguments], stdout=log,
                                          stderr=subprocess.STDOUT)
-            if process.returncode not in (0, 3):
-                raise ValueError(f"Task19 {row} exit {process.returncode}; see {run_id}.log")
+            retained_exit = task19_row_exit(process.returncode, row, receipt, result)
+            if retained_exit is not None:
+                save()
+                return retained_exit
             committed = q.load_committed_result(receipt / "qualification-result.json")
             if committed["caller"]["head"] != expected_head or [r["id"] for r in committed["rows"]] != [row]:
                 raise ValueError(f"Task19 {row} final marker does not bind exact head and row")
@@ -326,6 +342,86 @@ def resolve_project(explicit: str | None) -> str:
     return project
 
 
+def validate_downloaded_marker(marker: Path, output: Path, head: str,
+                               row: str, run_id: str, pin: str) -> None:
+    """Recheck the downloaded marker and its relocated receipt bindings.
+
+    The remote runner first calls Task19's full load_committed_result before
+    hashing the marker into its summary. Its absolute paths refer to the
+    remote ops mount, so the local verifier maps them to staged bytes.
+    """
+    q = qualification_module()
+    try:
+        final = json.loads(marker.read_text())
+        caller = final["caller"]
+        rows = final["rows"]
+        matrix = final["matrix"]
+        policy = final["read_policy_input"]
+        manifest = final["receipt_manifest"]
+        item = rows[0]
+        if (not isinstance(final, dict) or final.get("schema") != q.SCHEMA
+                or final.get("kind") != q.RESULT_KIND or final.get("run_id") != run_id
+                or final.get("status") != "tooling-executed-nonpromoting"
+                or final.get("promotion") != "forbidden" or final.get("caller_restored") is not True
+                or caller.get("head") != head or caller.get("pin_version") != pin
+                or caller.get("status") != "clean" or len(rows) != 1
+                or item.get("id") != row or item.get("qualification_outcome") != "pending"
+                or item.get("promotion") != "forbidden" or item.get("caller_restored") is not True
+                or Path(matrix["path"]).name != q.CANONICAL_MATRIX.name
+                or matrix.get("sha256") != sha(q.CANONICAL_MATRIX)
+                or policy.get("path") != str(output / "read-policy-input.json")
+                or policy.get("sha256") != sha(output / "read-policy-input.json")
+                or item.get("read_policy_input") != policy):
+            raise ValueError("downloaded Task19 marker has invalid committed identity")
+        floors = json.loads((output / "read-policy-input.json").read_text())["rows"][row]
+        if item.get("read_payload_floors") != floors:
+            raise ValueError("downloaded Task19 marker differs from frozen read floors")
+        names = {"owner_receipt": "lease-owner.json", "heartbeat_receipt": "lease-heartbeat.jsonl",
+                 "expiry_receipt": "lease-expiry.json", "release_receipt": "lease-release.json",
+                 "handoff_receipt": "handoff.jsonl"}
+        if set(manifest) != {*names, "row_results"} or len(manifest["row_results"]) != 1:
+            raise ValueError("downloaded Task19 marker lacks its receipt manifest")
+        for key, name in names.items():
+            local = marker.parent / name
+            if manifest[key] != {"path": str(output / run_id / name), "sha256": sha(local)}:
+                raise ValueError(f"downloaded Task19 {name} receipt differs from marker")
+            if name.endswith(".jsonl"):
+                records = [json.loads(line) for line in local.read_text().splitlines()]
+                if not records or any(record.get("run_id") != run_id or
+                                      record.get("qualification_outcome") != "pending" for record in records):
+                    raise ValueError(f"downloaded Task19 {name} has invalid outcome")
+            else:
+                receipt = json.loads(local.read_text())
+                if receipt.get("run_id") != run_id or receipt.get("qualification_outcome") != "pending":
+                    raise ValueError(f"downloaded Task19 {name} has invalid outcome")
+        row_result = marker.parent / row / "transition-result.json"
+        if (manifest["row_results"][0] !=
+                {"path": str(output / run_id / row / "transition-result.json"), "sha256": sha(row_result)}
+                or json.loads(row_result.read_text()) != item):
+            raise ValueError("downloaded Task19 row receipt differs from marker")
+        pair = marker.parent / row / "read-policy-pair.json"
+        if item.get("read_policy_pair") != {"path": str(output / run_id / row / pair.name),
+                                            "sha256": sha(pair)}:
+            raise ValueError("downloaded Task19 read-policy pair differs from marker")
+        owner = json.loads((marker.parent / "lease-owner.json").read_text())
+        release = json.loads((marker.parent / "lease-release.json").read_text())
+        expiry = json.loads((marker.parent / "lease-expiry.json").read_text())
+        observed, deadline = final["deadline_observed_at"], final["lease_expires_at"]
+        if (not isinstance(observed, (int, float)) or not isinstance(deadline, (int, float))
+                or not math.isfinite(observed) or not math.isfinite(deadline) or observed >= deadline
+                or owner.get("lease_expires_at") != deadline
+                or expiry.get("lease_expires_at") != deadline
+                or expiry.get("expiry_status") != "not-expired"
+                or expiry.get("terminal_status") != "body-validated"
+                or release.get("release_status") != "released"
+                or release.get("terminal_status") != "body-validated"
+                or release.get("flock_release_confirmed") is not True
+                or release.get("surviving_children") != [] or release.get("receipt_failures") != []):
+            raise ValueError("downloaded Task19 marker lacks release/deadline proof")
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
+        raise RuntimeError(f"downloaded Task19 marker is not committed evidence: {error}") from error
+
+
 def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> Path:
     """Verify a complete fetched result tree, then publish it in one rename."""
     if not staged_output.is_dir():
@@ -340,9 +436,11 @@ def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> P
     if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
         raise RuntimeError("downloaded corpus receipt differs from remote summary")
     for index, row in enumerate(ROWS):
-        marker = staged_output / f"spot-{head[:12]}-{index}" / "qualification-result.json"
+        run_id = f"spot-{head[:12]}-{index}"
+        marker = staged_output / run_id / "qualification-result.json"
         if not marker.is_file() or sha(marker) != summary["rows"][row.format(pin=pin)]["marker_sha256"]:
             raise RuntimeError("downloaded Task19 marker differs from remote summary")
+        validate_downloaded_marker(marker, output, head, row.format(pin=pin), run_id, pin)
     published = output / "remote-results"
     if published.exists() or published.is_symlink():
         raise ValueError(f"remote qualification results already exist: {published}")
@@ -350,7 +448,23 @@ def publish_results(staged_output: Path, output: Path, head: str, pin: str) -> P
     return published
 
 
+def require_remote_success(receipt: dict) -> None:
+    code = receipt["remote_exit_code"]
+    if code in (4, 5):
+        receipt["status"] = "RUNNING_RETAINED"
+        receipt["unconfirmed_task19_exit"] = code
+        raise RuntimeError("Task19 outcome or lease state is unconfirmed; retained remote stage requires inspection")
+    if code != 0:
+        raise RuntimeError(f"remote qualification exited {code}")
+
+
 def controller(output: Path, project: str | None) -> int:
+    try:
+        timeout = int(os.environ.get("OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS", "43200"))
+    except ValueError as error:
+        raise ValueError("remote qualification timeout must be a positive integer") from error
+    if timeout <= 0:
+        raise ValueError("remote qualification timeout must be a positive integer")
     head, _pin, _seeds = exact_inputs(output)
     published = output / "remote-results"
     if published.exists() or published.is_symlink():
@@ -430,9 +544,6 @@ def controller(output: Path, project: str | None) -> int:
         receipt["remote_job"] = {"stage": stage, "launch_pid_file": stage + "/launch.pid",
                                  "exit_status_file": stage + "/exit.status", "log": stage + "/run.log"}
         save()
-        timeout = int(os.environ.get("OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS", "43200"))
-        if timeout <= 0:
-            raise ValueError("remote qualification timeout must be positive")
         deadline = time.monotonic() + timeout
         while True:
             if time.monotonic() >= deadline:
@@ -496,8 +607,7 @@ def controller(output: Path, project: str | None) -> int:
             receipt["results_sha256"] = digest
         else:
             raise RuntimeError("remote qualification results archive is unavailable")
-        if receipt["remote_exit_code"] != 0:
-            raise RuntimeError(f"remote qualification exited {receipt['remote_exit_code']}")
+        require_remote_success(receipt)
         receipt["results_dir"] = str(publish_results(staged_output, output, head, pin))
         receipt["status"] = "PASS"
         save()

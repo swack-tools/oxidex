@@ -27,8 +27,10 @@ class ClientTests(unittest.TestCase):
             root=Path(directory)/'src';root.mkdir()
             subprocess.run(['git','init','-q',str(root)],check=True)
             for name, data in [('Cargo.toml','committed'),('.env','secret'),
+                               ('.agents/skills/routing.md','tracked instructions'),
                                ('target/build','cache')]:
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(data)
+            (root/'linked-cargo').symlink_to('Cargo.toml')
             subprocess.run(['git','-C',str(root),'add','.'],check=True)
             subprocess.run(['git','-C',str(root),'-c','user.name=Test',
                             '-c','user.email=test@example.invalid','commit','-qm','fixture'],check=True)
@@ -37,9 +39,11 @@ class ClientTests(unittest.TestCase):
             archive=Path(directory)/'source.tar.gz'
             receipt=make_snapshot(root,archive,exact_commit=head)
             with tarfile.open(archive) as tar:
-                self.assertEqual(tar.getnames(),['Cargo.toml'])
+                self.assertEqual(set(tar.getnames()),
+                                 {'.env','.agents/skills/routing.md','Cargo.toml','linked-cargo','target/build'})
                 self.assertEqual(tar.extractfile('Cargo.toml').read(),b'committed')
-            self.assertEqual(receipt['file_count'],1)
+                self.assertTrue(tar.getmember('linked-cargo').issym())
+            self.assertEqual(receipt['file_count'],5)
 
     def test_failed_remote_header_validation_prevents_release_compilation(self):
         from lib import remote_build
@@ -109,6 +113,7 @@ class ClientTests(unittest.TestCase):
              patch.object(remote_build.subprocess,'run') as verify:
             remote_build.verify_signed_source(Path('/repo'),'a'*40)
             self.assertIn('verify-commit', verify.call_args.args[0])
+            self.assertEqual(remote_build.subprocess.check_output.call_args.args[0][-1], 'a'*40)
 
     def test_completed_test_retains_remote_proof_if_download_fails(self):
         from lib import remote_build

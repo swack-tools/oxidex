@@ -43,7 +43,7 @@ def pinned_toolchain(source):
 
 def verify_signed_source(source, head):
     identity = subprocess.check_output(
-        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS'],
+        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
         text=True).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
@@ -221,8 +221,9 @@ def make_snapshot(source: Path, archive: Path, *, exact_commit=None) -> dict:
                     continue
                 metadata, raw_name=entry.split(b'\t',1)
                 name=os.fsdecode(raw_name)
-                if (metadata.split()[1] == b'blob' and metadata.split()[0] != b'120000'
-                        and snapshot_file_allowed(name)):
+                if metadata.split()[1] == b'commit':
+                    raise RuntimeError(f'Exact-HEAD test snapshot cannot omit submodule: {name}')
+                if metadata.split()[1] == b'blob':
                     expected.add(name)
             process=subprocess.Popen(['git','-C',str(source),'archive','--format=tar',exact_commit],
                                      stdout=subprocess.PIPE)
@@ -231,16 +232,20 @@ def make_snapshot(source: Path, archive: Path, *, exact_commit=None) -> dict:
                 with tarfile.open(fileobj=process.stdout,mode='r|') as committed:
                     for info in committed:
                         name=info.name
-                        if not info.isfile() or not snapshot_file_allowed(name):
+                        if not info.isfile() and not info.issym():
                             continue
-                        stream=committed.extractfile(info)
-                        if stream is None:
-                            raise RuntimeError(f'Git archive omitted blob contents: {name}')
-                        data=stream.read()
-                        info.size=len(data)
+                        if info.issym():
+                            data=os.fsencode(info.linkname)
+                            tar.addfile(info)
+                        else:
+                            stream=committed.extractfile(info)
+                            if stream is None:
+                                raise RuntimeError(f'Git archive omitted blob contents: {name}')
+                            data=stream.read()
+                            info.size=len(data)
+                            tar.addfile(info,io.BytesIO(data))
                         seen.add(name)
                         files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
-                        tar.addfile(info,io.BytesIO(data))
                 process.stdout.close()
                 if process.wait() or seen != expected:
                     raise RuntimeError('Git archive differs from the exact committed source tree')
