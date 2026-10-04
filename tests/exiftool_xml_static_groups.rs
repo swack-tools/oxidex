@@ -229,6 +229,31 @@ fn static_xmp_family_and_adobe_schema_keep_distinct_value_conversions() {
 }
 
 #[test]
+fn static_xmp_family_keeps_source_name_when_schema_has_rename() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static XMP rename parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/"><q:ExposureBiasValue>1/2</q:ExposureBiasValue></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(
+        theirs.get("XMP:XMP-exif:ExposureBiasValue"),
+        Some(&serde_json::json!(0.5))
+    );
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
 fn static_uri_groups_and_print_values_are_source_defined() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping static URI source parity: pinned oracle unavailable");

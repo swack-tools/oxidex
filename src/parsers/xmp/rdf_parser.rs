@@ -4825,14 +4825,15 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     // GetXMPTagID normalizes unknown all-uppercase components (ISO -> Iso,
     // CAMERA_ID -> CameraId; XMP.pm:3038-3053). Ordinary source-table XMP
     // property names retain their schema spelling.
-    if NamespaceResolver::extract_prefix(qname)
+    let is_static = NamespaceResolver::extract_prefix(qname)
         .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
-        .is_some()
-    {
+        .is_some();
+    if is_static {
         local_name = super::namespace_resolver::static_export_component(&local_name);
     }
-    if let Some(uri) =
-        NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
+    if !is_static
+        && let Some(uri) = NamespaceResolver::extract_prefix(qname)
+            .and_then(|prefix| resolver.resolve_prefix(prefix))
     {
         // Renames keyed on the namespace URI apply to the raw local name,
         // before capitalization: Google writes `hdrp_makernote`, not
@@ -4850,7 +4851,11 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     }
 
     // Some properties are reported by ExifTool under a different name.
-    let reported = exiftool_property_name(&group, &local_name);
+    let reported = if is_static {
+        local_name.as_str()
+    } else {
+        exiftool_property_name(&group, &local_name)
+    };
     format!("{group}:{reported}")
 }
 
