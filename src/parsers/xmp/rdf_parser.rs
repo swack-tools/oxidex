@@ -5842,7 +5842,18 @@ fn format_xmp_plain_rational(value: &str) -> String {
 pub(super) fn format_perl_g15(number: f64) -> String {
     const PRECISION: i32 = 15;
 
-    if !number.is_finite() || number == 0.0 {
+    if number.is_infinite() {
+        return if number.is_sign_negative() {
+            "-Inf"
+        } else {
+            "Inf"
+        }
+        .to_string();
+    }
+    if number.is_nan() {
+        return "NaN".to_string();
+    }
+    if number == 0.0 {
         return format!("{number}");
     }
 

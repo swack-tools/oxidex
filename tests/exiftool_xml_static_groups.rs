@@ -695,3 +695,29 @@ fn short_static_xmp_list_in_eps_retains_array_and_binary_elements() {
         assert_eq!(output.stdout, b"alpha\nbeta");
     }
 }
+
+#[test]
+fn static_rational_overflow_spelling_matches_pinned_perl() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static rational overflow parity: pinned oracle unavailable");
+        return;
+    };
+    let big = "9".repeat(309);
+    let xml = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Positive>{big}/1</q:Positive><q:Negative>-{big}/1</q:Negative><q:Indeterminate>{big}/{big}</q:Indeterminate><q:Underflow>1/{big}</q:Underflow><q:ZeroDenominator>{big}/0</q:ZeroDenominator></rdf:Description></rdf:RDF>"#
+    );
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), xml).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(theirs["EXIF:IFD0:Positive"], "Inf");
+    assert_eq!(theirs["EXIF:IFD0:Negative"], "-Inf");
+    assert_eq!(theirs["EXIF:IFD0:Indeterminate"], "NaN");
+    assert_eq!(theirs["EXIF:IFD0:Underflow"], 0);
+    assert_eq!(theirs["EXIF:IFD0:ZeroDenominator"], "inf");
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
