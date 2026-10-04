@@ -1751,8 +1751,16 @@ fn parse_xmp_packet_in_directory(
                         }
                     })
                     .collect();
+                // An oversized plain list makes FoundXMP treat the whole
+                // default-property list as binary. An explicit RDF base64
+                // item is different: its decoded payload is per-item, so it
+                // must not turn unrelated siblings into binary summaries.
                 let binary = is_static
                     && result.default_property()
+                    && !result
+                        .list_binary_payloads
+                        .as_ref()
+                        .is_some_and(|payloads| payloads.iter().any(Option::is_some))
                     && elements
                         .iter()
                         .zip(&converted)
