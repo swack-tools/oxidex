@@ -13,6 +13,8 @@ import tomllib
 import time
 from pathlib import Path
 
+from .config import builder_instance_name
+
 
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
@@ -152,6 +154,8 @@ def main(argv=None):
     parser.add_argument('--profile',choices=['debug','release'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
+    if not builder_instance_name(args.instance):
+        raise ValueError('Remote builds require a dedicated builder-* VM')
     import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')

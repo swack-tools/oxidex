@@ -7,6 +7,19 @@ from lib.remote_build import make_snapshot
 
 
 class ClientTests(unittest.TestCase):
+    def test_direct_build_rejects_runner_vm_before_any_remote_work(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote_build.subprocess,'run') as run, \
+             patch.object(remote_build.subprocess,'check_output') as check_output:
+            with self.assertRaisesRegex(ValueError,'dedicated builder-'):
+                remote_build.main(['--source',directory,'--instance','oxidex-runners-a',
+                                   '--zone','z','--worktree-id','checkout',
+                                   '--evidence-dir',str(Path(directory)/'evidence')])
+            run.assert_not_called()
+            check_output.assert_not_called()
+
     def test_snapshot_uses_working_files_without_caches_or_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)/'src';root.mkdir()
@@ -39,7 +52,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}):
                 with self.assertRaisesRegex(RuntimeError,'header failed'):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
         self.assertFalse(any('cargo build' in value for command in calls for value in command))
 
@@ -93,7 +106,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'prepare')) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -131,7 +144,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
                  patch.object(remote_build,'verify_remote_toolchain',side_effect=RuntimeError('off pin')):
                 with self.assertRaisesRegex(RuntimeError,'off pin'):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -163,7 +176,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=[SimpleNamespace(returncode=0),
                      SimpleNamespace(returncode=0),failed]):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -234,7 +247,7 @@ class ClientTests(unittest.TestCase):
             with patch.object(remote_build.subprocess,'check_output',side_effect=subprocess.CalledProcessError(1,'rustup')), \
                  patch.object(remote_build.subprocess,'run') as run:
                 with self.assertRaisesRegex(RuntimeError,'Local rustup cannot resolve repository toolchain pin'):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -269,9 +282,9 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
-                self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence')]),0)
-                self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence2')]),0)
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             second=json.loads((root/'evidence2'/'remote-build.json').read_text())
@@ -312,7 +325,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             self.assertTrue(receipt['verified'])
