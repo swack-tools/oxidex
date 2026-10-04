@@ -113,7 +113,7 @@ class QualificationTransportTests(unittest.TestCase):
             summary = {"status": "PASS", "head": head, "pin": pin, "corpus_gate": "PASS",
                        "corpus_receipt_sha256": qualification.sha(corpus), "rows": rows}
             (staged / "remote-qualification.json").write_text(json.dumps(summary))
-            missing = staged / f"spot-{head[:12]}-2/qualification-result.json"
+            missing = staged / f"spot-{head[:12]}-0/qualification-result.json"
             missing.unlink()
             with self.assertRaisesRegex(RuntimeError, "marker differs"):
                 qualification.publish_results(staged, output, head, pin)
