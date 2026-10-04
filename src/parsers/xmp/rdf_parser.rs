@@ -1669,10 +1669,7 @@ fn parse_xmp_packet_in_directory(
         .map(|result| {
             let is_static = is_static_path(result.path.as_ref());
             let value = if let Some(payload) = &result.static_binary_payload {
-                XmpValue::Scalar(format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    payload.len()
-                ))
+                XmpValue::Scalar(static_rdf_binary_display(&result.tag, payload))
             } else if let Some(elements) = &result.elements {
                 let converted: Vec<String> = elements
                     .iter()
@@ -3792,29 +3789,80 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 /// Only static ExifTool URI properties use this binary path here.
 fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
     const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-    const BASE64_TYPE: &[u8] = b"http://www.w3.org/2001/XMLSchema#base64Binary";
-    element.attributes().flatten().any(|attr| {
-        std::str::from_utf8(attr.key.as_ref())
+    const ET_NS: [&str; 2] = ["http://ns.exiftool.org/1.0/", "http://ns.exiftool.ca/1.0/"];
+    let mut rdf_datatype = None;
+    let mut et_encoding = None;
+    for attr in element.attributes().flatten() {
+        let Some((prefix, local)) = std::str::from_utf8(attr.key.as_ref())
             .ok()
             .and_then(|key| key.split_once(':'))
-            .is_some_and(|(prefix, local)| {
-                local == "datatype"
-                    && resolver.resolve_prefix(prefix) == Some(RDF_NS)
-                    && attr.value.as_ref() == BASE64_TYPE
-            })
-    })
+        else {
+            continue;
+        };
+        let value = std::str::from_utf8(attr.value.as_ref())
+            .ok()
+            .map(str::to_owned);
+        if local == "datatype" && resolver.resolve_prefix(prefix) == Some(RDF_NS) {
+            rdf_datatype = value;
+        } else if local == "encoding"
+            && resolver
+                .resolve_prefix(prefix)
+                .is_some_and(|uri| ET_NS.contains(&uri))
+        {
+            et_encoding = value;
+        }
+    }
+    // XMP.pm:3643-3646 checks `rdf:datatype || et:encoding` with /base64/.
+    rdf_datatype
+        .or(et_encoding)
+        .is_some_and(|value| value.contains("base64"))
+}
+
+/// XMP.pm:3645-3647 dereferences short decoded text, but retains a
+/// binary reference for values over 100 bytes or matching its literal
+/// control-character class. The class also contains `0`, `c` and `x` in
+/// 13.59 due to the source's `\0x0c` spelling; preserve that behavior.
+fn static_rdf_binary_display(tag: &str, payload: &[u8]) -> String {
+    let binary = payload.len() > 100
+        || payload
+            .iter()
+            .any(|byte| matches!(*byte, 0..=8 | 11 | 14..=31 | b'0' | b'c' | b'x'));
+    if !binary {
+        // ExifTool's JSON output replaces malformed UTF-8 bytes with '?' while
+        // -b still extracts the original decoded bytes.
+        let text = String::from_utf8_lossy(payload).replace('\u{fffd}', "?");
+        return format_xmp_value_with_default(tag, &text, true, true);
+    }
+    format!(
+        "(Binary data {} bytes, use -b option to extract)",
+        payload.len()
+    )
 }
 
 fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
     use base64::Engine;
+    // XMP.pm::DecodeBase64 truncates at the first character outside its
+    // base64 alphabet, then removes whitespace and '=' before decoding.
     let compact: String = value
         .chars()
-        .filter(|ch| !ch.is_ascii_whitespace())
+        .take_while(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, '+' | '/' | '=' | ' ' | '\t' | '\n' | '\r' | '\u{c}')
+        })
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '=')
         .collect();
-    base64::engine::general_purpose::STANDARD
-        .decode(&compact)
-        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&compact))
-        .ok()
+    if compact.is_empty() {
+        return Some(Vec::new());
+    }
+    // Perl's unpack('u', ...) accepts non-zero trailing bits in partial
+    // quartets; strict RFC 4648 decoding would discard such values.
+    let decoder = base64::engine::general_purpose::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::general_purpose::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
+            .with_decode_allow_trailing_bits(true),
+    );
+    decoder.decode(&compact).ok()
 }
 
 /// Whether `element` carries RDF shorthand attributes -- namespaced attributes

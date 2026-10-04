@@ -396,7 +396,7 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
     let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
     std::fs::write(
         file.path(),
-        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Foo rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YWJj</q:Foo></rdf:Description></rdf:RDF>"#,
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Foo rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YWJj</q:Foo><q:Short rdf:datatype="http://www.w3.org/2001/XMLSchema#base64Binary">YQ==</q:Short><q:Alias rdf:datatype="base64">YWJj</q:Alias><q:Partial rdf:datatype="base64">not-valid?</q:Partial></rdf:Description></rdf:RDF>"#,
     )
     .unwrap();
     let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
@@ -412,6 +412,11 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
             "(Binary data 3 bytes, use -b option to extract)"
         ))
     );
+    assert_eq!(ours.get("EXIF:IFD0:Short"), theirs.get("EXIF:IFD0:Short"));
+    assert_eq!(ours.get("EXIF:IFD0:Short"), Some(&serde_json::json!("a")));
+    for tag in ["EXIF:IFD0:Alias", "EXIF:IFD0:Partial"] {
+        assert_eq!(ours.get(tag), theirs.get(tag), "{tag}");
+    }
     let bytes = |mut command: Command| {
         command
             .args(["-b", "-Foo"])
@@ -423,6 +428,19 @@ fn static_rdf_base64_binary_uses_decoded_bytes() {
     assert_eq!(
         bytes(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
         bytes(oracle.command())
+    );
+    let partial_bytes = |mut command: Command| {
+        command
+            .args(["-b", "-Partial"])
+            .arg(file.path())
+            .output()
+            .unwrap()
+            .stdout
+    };
+    assert_eq!(partial_bytes(oracle.command()), [0x9e, 0x8b]);
+    assert_eq!(
+        partial_bytes(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
+        partial_bytes(oracle.command())
     );
 }
 
