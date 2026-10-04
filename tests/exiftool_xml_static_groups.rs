@@ -721,3 +721,22 @@ fn static_rational_overflow_spelling_matches_pinned_perl() {
     ));
     assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }
+
+#[test]
+fn named_xmp_literal_infinity_keeps_original_spelling() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping named XMP infinity parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:e="http://ns.adobe.com/exif/1.0/"><e:FocalPlaneXResolution>inf</e:FocalPlaneXResolution><e:FocalPlaneYResolution>-inf</e:FocalPlaneYResolution></rdf:Description></rdf:RDF>"#).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    assert_eq!(theirs["XMP:XMP-exif:FocalPlaneXResolution"], "inf");
+    assert_eq!(theirs["XMP:XMP-exif:FocalPlaneYResolution"], "-inf");
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}

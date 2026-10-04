@@ -4722,7 +4722,15 @@ fn format_xmp_value_with_default(
                 // Perl tests the captured numerator as a string: only "0" is false.
                 if numerator == "0" { "undef" } else { "inf" }.to_string()
             } else {
-                format_xmp_plain_rational(value)
+                match parse_xmp_number(value) {
+                    Some(number) if number.is_infinite() => if number.is_sign_negative() {
+                        "-Inf"
+                    } else {
+                        "Inf"
+                    }
+                    .to_string(),
+                    _ => format_xmp_plain_rational(value),
+                }
             };
         }
         return format_default_xmp_date(value);
@@ -5842,18 +5850,7 @@ fn format_xmp_plain_rational(value: &str) -> String {
 pub(super) fn format_perl_g15(number: f64) -> String {
     const PRECISION: i32 = 15;
 
-    if number.is_infinite() {
-        return if number.is_sign_negative() {
-            "-Inf"
-        } else {
-            "Inf"
-        }
-        .to_string();
-    }
-    if number.is_nan() {
-        return "NaN".to_string();
-    }
-    if number == 0.0 {
+    if !number.is_finite() || number == 0.0 {
         return format!("{number}");
     }
 
