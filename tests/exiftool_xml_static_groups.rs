@@ -763,3 +763,66 @@ fn named_xmp_computed_rational_overflow_uses_perl_spelling() {
     ));
     assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
 }
+
+#[test]
+fn oversized_static_list_and_rational_follow_converted_values() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping oversized static conversion parity: pinned oracle unavailable");
+        return;
+    };
+    let long = "A".repeat(65_537);
+    let numerator = "9".repeat(65_537);
+    let xml = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Tags><rdf:Bag><rdf:li>{long}</rdf:li><rdf:li>1/2</rdf:li></rdf:Bag></q:Tags><q:Huge>{numerator}/2</q:Huge></rdf:Description></rdf:RDF>"#
+    );
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), xml).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(theirs["EXIF:IFD0:Huge"], "Inf");
+    assert_eq!(ours.get("EXIF:IFD0:Huge"), theirs.get("EXIF:IFD0:Huge"));
+    assert_eq!(ours.get("EXIF:IFD0:Tags"), theirs.get("EXIF:IFD0:Tags"));
+    for tag in ["-Tags", "-Huge"] {
+        let mut expected = oracle.command();
+        let expected = expected
+            .args(["-b", tag])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(expected.status.success());
+        let mut candidate = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+        let candidate = candidate
+            .args(["-b", tag])
+            .arg(file.path())
+            .output()
+            .unwrap();
+        assert!(
+            candidate.status.success(),
+            "{}",
+            String::from_utf8_lossy(&candidate.stderr)
+        );
+        assert_eq!(candidate.stdout, expected.stdout, "{tag}");
+    }
+}
+
+#[test]
+fn literal_binary_summary_in_static_list_does_not_mark_later_items_binary() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping static literal binary summary parity: pinned oracle unavailable");
+        return;
+    };
+    let xml = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Tags><rdf:Bag><rdf:li>(Binary data 3 bytes, use -b option to extract)</rdf:li><rdf:li>1/2</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF>"#;
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(file.path(), xml).unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1",
+    ));
+    assert_eq!(ours.get("EXIF:IFD0:Tags"), theirs.get("EXIF:IFD0:Tags"));
+}

@@ -258,9 +258,26 @@ impl XmpEntry {
     fn with_static_list_source(mut self, elements: Option<&[String]>) -> Self {
         if self.source_is_static
             && let Some(elements) = elements
-            && elements.iter().any(|element| element.len() > 65_536)
+            && let XmpValue::List(values) = &self.value
+            && values.len() == elements.len()
         {
-            self.static_binary_list_source = Some(elements.join("\n").into_bytes());
+            let mut has_binary_placeholder = false;
+            let converted: Vec<String> = elements
+                .iter()
+                .map(|raw| {
+                    let value = format_xmp_value_with_default(&self.tag, raw, true, true);
+                    let placeholder = value != *raw && value.starts_with("(Binary data ");
+                    if placeholder {
+                        has_binary_placeholder = true;
+                        raw.clone()
+                    } else {
+                        value
+                    }
+                })
+                .collect();
+            if has_binary_placeholder {
+                self.static_binary_list_source = Some(converted.join("\n").into_bytes());
+            }
         }
         self
     }
@@ -1618,16 +1635,29 @@ fn parse_xmp_packet_in_directory(
         .map(|result| {
             let is_static = is_static_path(result.path.as_ref());
             let value = if let Some(elements) = &result.elements {
+                let mut binary = false;
                 XmpValue::List(
                     elements
                         .iter()
                         .map(|element| {
-                            format_xmp_value_with_default(
+                            let converted = format_xmp_value_with_default(
                                 &result.tag,
                                 element,
                                 result.default_property(),
                                 is_static,
-                            )
+                            );
+                            if is_static && result.default_property() {
+                                let placeholder =
+                                    converted != *element && converted.starts_with("(Binary data ");
+                                binary |= placeholder;
+                                if binary && !placeholder {
+                                    return format!(
+                                        "(Binary data {} bytes, use -b option to extract)",
+                                        converted.len()
+                                    );
+                                }
+                            }
+                            converted
                         })
                         .collect(),
                 )
@@ -4564,7 +4594,14 @@ fn xmp_binary_source(
     // Name-keyed binary declarations belong to Adobe XMP table entries, not
     // properties from ExifTool's static source URI. FoundXMP still applies
     // its length limit to an unregistered default property from either source.
-    (is_default && is_scalar && raw.len() > 65536)
+    (is_default
+        && is_scalar
+        && if source_is_static {
+            let converted = format_xmp_value_with_default(tag, raw, is_default, true);
+            converted != raw && converted.starts_with("(Binary data ")
+        } else {
+            raw.len() > 65_536
+        })
         || (!source_is_static
             && (RAW_BINARY_TAGS.contains(&tag)
                 || (BASE64_DECODED_BINARY_TAGS.contains(&tag)
@@ -4710,22 +4747,24 @@ fn format_xmp_value_with_default(
     // FoundXMP's generic auto-conversions (XMP.pm:3670-3696), never the
     // same-spelled XMP:Flash/Aperture/ShutterSpeed PrintConv tables.
     if is_static || !tag.starts_with("XMP") {
-        if value.len() > 65536 {
-            return format!(
-                "(Binary data {} bytes, use -b option to extract)",
-                value.len()
-            );
-        }
-        if let Some((numerator, denominator)) = default_xmp_rational_parts(value) {
+        let converted = if let Some((numerator, denominator)) = default_xmp_rational_parts(value) {
             let is_zero = |part: &str| part.trim_start_matches('-').bytes().all(|b| b == b'0');
-            return if is_zero(denominator) {
+            if is_zero(denominator) {
                 // Perl tests the captured numerator as a string: only "0" is false.
                 if numerator == "0" { "undef" } else { "inf" }.to_string()
             } else {
                 format_xmp_plain_rational(value)
-            };
+            }
+        } else {
+            format_default_xmp_date(value)
+        };
+        if converted.len() > 65_536 {
+            return format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                converted.len()
+            );
         }
-        return format_default_xmp_date(value);
+        return converted;
     }
     // Dublin Core's lowercase raw `date` is declared with `%dateTimeInfo`
     // (XMP.pm) and prints through ConvertDateTime, including when carried
