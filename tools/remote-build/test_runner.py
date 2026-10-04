@@ -89,24 +89,27 @@ def main() -> int:
     python_outcome = subprocess.run(python_command, cwd=ROOT / "tools/remote-build", env=os.environ.copy())
     proof["python_command"] = python_command
     proof["python_exit_code"] = python_outcome.returncode
-    if python_outcome.returncode == 0:
+    proof["qualification_unit_exit_code"] = None
+    if python_outcome.returncode:
+        proof["test_exit_code"] = python_outcome.returncode
+    else:
         qualification_command = [sys.executable, "-m", "unittest", "test_version_transition_qualification.py"]
         qualification_outcome = subprocess.run(qualification_command,
                                               cwd=ROOT / "tools/exiftool-tables", env=os.environ.copy())
         proof["qualification_unit_command"] = qualification_command
         proof["qualification_unit_exit_code"] = qualification_outcome.returncode
-    if python_outcome.returncode == 0 and proof["qualification_unit_exit_code"] == 0:
-        # Python tests may take time; bind the proof to the actual pre-Cargo
-        # identity rather than a probe made before another payload ran.
-        rustc, cargo = pinned_rust_identity(pin, args.rustc_commit)
-        proof["rustc_version"] = rustc
-        proof["cargo_version"] = cargo
-        command = ["cargo", "test", "--workspace", "--all-features", "--locked", "--no-fail-fast"]
-        outcome = subprocess.run(command, cwd=ROOT, env=os.environ.copy())
-        proof["test_command"] = command
-        proof["test_exit_code"] = outcome.returncode
-    else:
-        proof["test_exit_code"] = (python_outcome.returncode or proof["qualification_unit_exit_code"])
+        if qualification_outcome.returncode:
+            proof["test_exit_code"] = qualification_outcome.returncode
+        else:
+            # Bind the proof to the actual pre-Cargo identity, not a probe
+            # made before the Python suites ran.
+            rustc, cargo = pinned_rust_identity(pin, args.rustc_commit)
+            proof["rustc_version"] = rustc
+            proof["cargo_version"] = cargo
+            command = ["cargo", "test", "--workspace", "--all-features", "--locked", "--no-fail-fast"]
+            outcome = subprocess.run(command, cwd=ROOT, env=os.environ.copy())
+            proof["test_command"] = command
+            proof["test_exit_code"] = outcome.returncode
     proof["status"] = "PASS" if proof["test_exit_code"] == 0 else "FAILED"
     TARGET.mkdir(parents=True, exist_ok=True)
     temporary = TARGET / ".remote-test.json.tmp"

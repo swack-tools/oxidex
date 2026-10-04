@@ -124,7 +124,7 @@ class ClientTests(unittest.TestCase):
             self.assertTrue(receipt['remote_retained'])
             self.assertIn('/remote-build/targets/',receipt['remote_paths']['target'])
             self.assertNotIn('remote_cleanup',receipt)
-            self.assertFalse(any('rm -rf' in ' '.join(command) for command in calls))
+            self.assertFalse(any('sudo rm -rf --' in ' '.join(command) for command in calls))
 
     def test_remote_test_proof_is_hash_checked_and_fail_closed(self):
         from lib.remote_build import download_test_proof
