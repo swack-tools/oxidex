@@ -422,6 +422,7 @@ fn push_frame(
                 .and_then(|key| key.split_once(':'))
                 .is_some_and(|(prefix, local)| {
                     !IGNORED_PREFIXES.contains(&prefix)
+                        && !(local == "nodeID" && resolver.resolve_prefix(prefix) == Some(RDF_NS))
                         && !is_ignored_et_attr(resolver.resolve_prefix(prefix), local)
                 })
         }),
@@ -784,7 +785,7 @@ pub(crate) fn extract_blank_node_fields_with_identity(
                 let frame = push_frame(e, &mut resolver, &mut stack)?;
                 stack.push(frame);
 
-                let node_id = attribute_value(e, b"rdf:nodeID")?;
+                let node_id = super::rdf_parser::rdf_node_id_attribute(e, &resolver);
                 if let Some(node_id) = node_id {
                     // A named property carrying the reference itself
                     // (`<ph:tester rdf:nodeID="abc"/>`), or an rdf:Description
@@ -970,6 +971,9 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
             continue;
         }
         let lexical_uri = resolver.resolve_prefix(prefix);
+        if local == "nodeID" && lexical_uri == Some(RDF_NS) {
+            continue;
+        }
         if is_ignored_et_attr(lexical_uri, local) {
             continue;
         }

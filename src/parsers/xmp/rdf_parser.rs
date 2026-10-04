@@ -4544,7 +4544,10 @@ fn referenced_blank_node_ids(xml_bytes: &[u8]) -> Result<std::collections::HashS
     Ok(ids)
 }
 
-fn rdf_node_id_attribute(element: &BytesStart, resolver: &NamespaceResolver) -> Option<String> {
+pub(super) fn rdf_node_id_attribute(
+    element: &BytesStart,
+    resolver: &NamespaceResolver,
+) -> Option<String> {
     const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
     element.attributes().flatten().find_map(|attr| {
         let key = std::str::from_utf8(attr.key.as_ref()).ok()?;

@@ -193,6 +193,7 @@ fn ordinary_xmp_blank_node_definition_is_suppressed_only_when_referenced() {
     };
     for body in [
         br#"<rdf:Description><q:Settings rdf:nodeID="n1"/></rdf:Description><rdf:Description rdf:nodeID="n1"><q:Value>ghi</q:Value></rdf:Description>"#.as_slice(),
+        br#"<rdf:Description xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><q:Settings r:nodeID="n1"/></rdf:Description><rdf:Description xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" r:nodeID="n1"><q:Value>ghi</q:Value></rdf:Description>"#.as_slice(),
         br#"<rdf:Description rdf:nodeID="n1"><q:Value>ghi</q:Value></rdf:Description>"#.as_slice(),
     ] {
         let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
