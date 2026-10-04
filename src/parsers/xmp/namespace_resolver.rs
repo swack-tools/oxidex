@@ -325,6 +325,12 @@ impl NamespaceResolver {
         if let Some((_, group1)) = self.static_groups_for_prefix(prefix) {
             return group1;
         }
+        self.translated_xmp_group_for_prefix(prefix)
+    }
+
+    /// Schema selected by ExifTool's effective prefix translation, even when
+    /// the current URI supplies static family groups for the public output.
+    pub fn translated_xmp_group_for_prefix(&self, prefix: &str) -> String {
         let effective = self.xlat.get(prefix).map_or(prefix, String::as_str);
         format!("XMP-{}", translated_prefix(effective))
     }

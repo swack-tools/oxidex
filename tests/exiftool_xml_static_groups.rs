@@ -254,6 +254,35 @@ fn static_xmp_family_keeps_source_name_when_schema_has_rename() {
 }
 
 #[test]
+fn rebound_prefix_retains_effective_schema_rename_for_static_uri() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping rebound static XMP rename parity: pinned oracle unavailable");
+        return;
+    };
+    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
+    std::fs::write(
+        file.path(),
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.adobe.com/exif/1.0/"><q:PixelXDimension>11</q:PixelXDimension></rdf:Description><rdf:Description xmlns:q="http://ns.exiftool.org/XMP/XMP-exif/1.0/"><q:PixelXDimension>123</q:PixelXDimension></rdf:Description></rdf:RDF>"#,
+    )
+    .unwrap();
+    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1:4"));
+    assert_eq!(
+        theirs.get("XMP:XMP-exif:ExifImageWidth"),
+        Some(&serde_json::json!(11))
+    );
+    assert_eq!(
+        theirs.get("XMP:XMP-exif:Copy1:ExifImageWidth"),
+        Some(&serde_json::json!(123))
+    );
+    let ours = content_entries(run(
+        Command::new(env!("CARGO_BIN_EXE_oxidex")),
+        file.path(),
+        "-G0:1:4",
+    ));
+    assert_eq!(ours, theirs, "current pin: {}", oracle.provenance());
+}
+
+#[test]
 fn static_uri_groups_and_print_values_are_source_defined() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping static URI source parity: pinned oracle unavailable");

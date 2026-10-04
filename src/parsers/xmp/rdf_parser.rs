@@ -4852,7 +4852,12 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
 
     // Some properties are reported by ExifTool under a different name.
     let reported = if is_static {
-        local_name.as_str()
+        // A preceding sibling can leave a prefix translation in force after
+        // this namespace is rebound to a static ExifTool URI. ExifTool still
+        // uses that translated schema's tag-name aliases.
+        let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+        let schema = resolver.translated_xmp_group_for_prefix(prefix);
+        exiftool_property_name(&schema, &local_name)
     } else {
         exiftool_property_name(&group, &local_name)
     };
