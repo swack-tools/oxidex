@@ -91,6 +91,41 @@ class ClientTests(unittest.TestCase):
             remote_build.verify_signed_source(Path('/repo'),'a'*40)
             self.assertIn('verify-commit', verify.call_args.args[0])
 
+    def test_completed_test_retains_remote_proof_if_download_fails(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import json
+        calls=[]
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        def output(command, **kwargs):
+            if '--porcelain' in command:
+                return ''
+            if any('sha256sum' in str(item) for item in command):
+                return 'a'*64+'  proof\n'
+            return 'b'*40+'\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'.exiftool-version').write_text('13.59\n')
+            with patch.object(remote_build,'pinned_toolchain',return_value={
+                     'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build,'verify_remote_toolchain'), \
+                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'download_test_proof',side_effect=RuntimeError('download unavailable')):
+                with self.assertRaisesRegex(RuntimeError,'download unavailable'):
+                    remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test'])
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertTrue(receipt['remote_retained'])
+            self.assertIn('/remote-build/targets/',receipt['remote_paths']['target'])
+            self.assertNotIn('remote_cleanup',receipt)
+            self.assertFalse(any('rm -rf' in ' '.join(command) for command in calls))
+
     def test_remote_test_proof_is_hash_checked_and_fail_closed(self):
         from lib.remote_build import download_test_proof
         from unittest.mock import patch

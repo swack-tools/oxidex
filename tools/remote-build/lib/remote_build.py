@@ -327,6 +327,13 @@ def main(argv=None):
             if receipt.get('test_exit_code') != 0:
                 raise RuntimeError('Remote workspace tests did not pass')
             remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+            # A completed test is not a verified test until its proof reaches
+            # durable local evidence. Retain remote paths across SSH/download
+            # failures instead of deleting the only completed proof.
+            receipt['remote_retained']=True
+            receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                     'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+            save()
             remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
             if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
                 raise RuntimeError('Remote test proof has no SHA-256')
@@ -335,6 +342,8 @@ def main(argv=None):
                 remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain'],
                 (source/'.exiftool-version').read_text().strip())
             receipt['test_proof_sha256']=remote_hash
+            receipt['remote_retained']=False
+            receipt.pop('remote_paths',None)
             receipt['stage']='cleanup'
             cleanup(strict=True)
             receipt['verified']=True
