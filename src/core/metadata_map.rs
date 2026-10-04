@@ -2652,7 +2652,9 @@ mod tests {
         preserves_source(&carried);
         preserves_source(&copied);
         assert_eq!(
-            carried.occurrences_for("GPS:GPSLatitudeRef")[0].group1,
+            carried.occurrences_for("GPS:GPSLatitudeRef")[0]
+                .group1
+                .as_ref(),
             "IFD0"
         );
 
