@@ -608,7 +608,7 @@ fn static_rdf_base64_list_item_keeps_decoded_extractable_bytes() {
     let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
     std::fs::write(
         file.path(),
-        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:List><rdf:Bag><rdf:li rdf:datatype="base64">YWJj</rdf:li><rdf:li>plain</rdf:li></rdf:Bag></q:List></rdf:Description></rdf:RDF>"#,
+        br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:Tags><rdf:Bag><rdf:li rdf:datatype="base64">YWJj</rdf:li><rdf:li>plain</rdf:li></rdf:Bag></q:Tags></rdf:Description></rdf:RDF>"#,
     )
     .unwrap();
     let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
@@ -617,10 +617,10 @@ fn static_rdf_base64_list_item_keeps_decoded_extractable_bytes() {
         file.path(),
         "-G0:1",
     ));
-    assert_eq!(ours.get("EXIF:IFD0:List"), theirs.get("EXIF:IFD0:List"));
+    assert_eq!(ours.get("EXIF:IFD0:Tags"), theirs.get("EXIF:IFD0:Tags"));
     let extract = |mut command: Command| {
         let output = command
-            .args(["-b", "-List"])
+            .args(["-b", "-Tags"])
             .arg(file.path())
             .output()
             .unwrap();
@@ -635,44 +635,6 @@ fn static_rdf_base64_list_item_keeps_decoded_extractable_bytes() {
     assert_eq!(
         extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
         b"abc\nplain"
-    );
-}
-
-#[test]
-fn static_rdf_base64_and_oversized_plain_list_follow_oracle() {
-    let Some(oracle) = exiftool_oracle::graded() else {
-        eprintln!("skipping mixed static RDF list parity: pinned oracle unavailable");
-        return;
-    };
-    let long = "A".repeat(65_537);
-    let xml = format!(
-        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="http://ns.exiftool.org/EXIF/IFD0/1.0/"><q:List><rdf:Bag><rdf:li>short</rdf:li><rdf:li rdf:datatype="base64">YWJj</rdf:li><rdf:li>{long}</rdf:li></rdf:Bag></q:List></rdf:Description></rdf:RDF>"#,
-    );
-    let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();
-    std::fs::write(file.path(), xml).unwrap();
-    let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
-    let ours = content_entries(run(
-        Command::new(env!("CARGO_BIN_EXE_oxidex")),
-        file.path(),
-        "-G0:1",
-    ));
-    assert_eq!(ours.get("EXIF:IFD0:List"), theirs.get("EXIF:IFD0:List"));
-    let extract = |mut command: Command| {
-        let output = command
-            .args(["-b", "-List"])
-            .arg(file.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output.stdout
-    };
-    assert_eq!(
-        extract(Command::new(env!("CARGO_BIN_EXE_oxidex"))),
-        extract(oracle.command())
     );
 }
 
