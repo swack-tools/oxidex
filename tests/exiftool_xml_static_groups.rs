@@ -170,6 +170,7 @@ fn static_uri_blank_nodes_and_list_structs_do_not_emit_source_field_aliases() {
     };
     for body in [
         br#"<rdf:Description><q:Settings rdf:nodeID="n1"/></rdf:Description><rdf:Description rdf:nodeID="n1"><q:VALUE>ghi</q:VALUE></rdf:Description>"#.as_slice(),
+        br#"<rdf:Description xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><q:Settings r:nodeID="n1"/></rdf:Description><rdf:Description xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" r:nodeID="n1"><q:VALUE>ghi</q:VALUE></rdf:Description>"#.as_slice(),
         br#"<rdf:Description><q:Settings><rdf:Bag><rdf:li rdf:parseType="Resource"><q:VALUE>ghi</q:VALUE></rdf:li></rdf:Bag></q:Settings></rdf:Description>"#.as_slice(),
     ] {
         let file = tempfile::Builder::new().suffix(".xmp").tempfile().unwrap();

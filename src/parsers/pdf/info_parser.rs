@@ -236,6 +236,7 @@ fn insert_keywords_metadata(metadata: &mut MetadataMap, value: &str) {
         .map(|keyword| keyword.to_string())
         .collect();
 
+    let is_list = keyword_values.len() > 1;
     let tag_value = match keyword_values.len() {
         0 => TagValue::new_string(value.to_string()),
         1 => TagValue::new_string(keyword_values[0].clone()),
@@ -247,7 +248,11 @@ fn insert_keywords_metadata(metadata: &mut MetadataMap, value: &str) {
         ),
     };
 
-    metadata.insert("PDF:Keywords".to_string(), tag_value);
+    if is_list {
+        metadata.insert_declared_list("PDF:Keywords".to_string(), tag_value);
+    } else {
+        metadata.insert("PDF:Keywords".to_string(), tag_value);
+    }
 }
 
 /// Inserts trapped metadata, converting PDF name values to proper format.
