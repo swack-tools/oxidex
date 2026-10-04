@@ -8934,7 +8934,7 @@ mod entry_tests {
         let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:subject><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF>"#;
         let mut metadata = MetadataMap::new();
         insert_xmp_packet(&mut metadata, xml, false).unwrap();
-        let occurrences = metadata.occurrences_for("XMP-dc:Subject");
+        let occurrences = metadata.occurrences_for("XMP:Subject");
         assert_eq!(occurrences.len(), 1);
         assert_eq!(occurrences[0].raw.as_string(), Some("alpha, beta"));
         assert!(occurrences[0].is_list);
