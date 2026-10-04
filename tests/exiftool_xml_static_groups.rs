@@ -333,6 +333,61 @@ fn static_canoncustom_does_not_activate_native_canon_composites() {
 }
 
 #[test]
+fn static_panasonicraw_name_does_not_suppress_native_rw2_composites() {
+    let Some(oracle) = exiftool_oracle::graded() else {
+        eprintln!("skipping PanasonicRaw native activation parity: pinned oracle unavailable");
+        return;
+    };
+    for uri in [
+        "http://ns.exiftool.org/PanasonicRaw/Other/1.0/",
+        "http://ns.exiftool.org/EXIF/PanasonicRawExtra/1.0/",
+    ] {
+        let xml = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:q="{uri}"><q:Foo>bar</q:Foo></rdf:Description></rdf:RDF>"#
+        );
+        let entries = [
+            (4u16, 3u16, 1u32, 6u32),
+            (5, 3, 1, 8),
+            (6, 3, 1, 2742),
+            (7, 3, 1, 3656),
+            (
+                700,
+                1,
+                u32::try_from(xml.len()).unwrap(),
+                8 + 2 + 5 * 12 + 4,
+            ),
+        ];
+        let mut rw2 = b"II\x55\0".to_vec();
+        rw2.extend_from_slice(&8u32.to_le_bytes());
+        rw2.extend_from_slice(&u16::try_from(entries.len()).unwrap().to_le_bytes());
+        for (id, typ, count, value) in entries {
+            rw2.extend_from_slice(&id.to_le_bytes());
+            rw2.extend_from_slice(&typ.to_le_bytes());
+            rw2.extend_from_slice(&count.to_le_bytes());
+            rw2.extend_from_slice(&value.to_le_bytes());
+        }
+        rw2.extend_from_slice(&0u32.to_le_bytes());
+        rw2.extend_from_slice(xml.as_bytes());
+        let file = tempfile::Builder::new().suffix(".rw2").tempfile().unwrap();
+        std::fs::write(file.path(), rw2).unwrap();
+        let theirs = content_entries(run(oracle.command(), file.path(), "-G0:1"));
+        let ours = content_entries(run(
+            Command::new(env!("CARGO_BIN_EXE_oxidex")),
+            file.path(),
+            "-G0:1",
+        ));
+        for tag in ["Composite:ImageWidth", "Composite:ImageHeight"] {
+            assert!(
+                theirs.contains_key(tag),
+                "current pin: {}",
+                oracle.provenance()
+            );
+            assert_eq!(ours.get(tag), theirs.get(tag), "{uri}: {tag}");
+        }
+    }
+}
+
+#[test]
 fn embedded_static_makernote_keeps_native_canon_composites_active() {
     let Some(oracle) = exiftool_oracle::graded() else {
         eprintln!("skipping mixed native/static MakerNotes parity: pinned oracle unavailable");

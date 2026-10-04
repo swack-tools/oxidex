@@ -134,9 +134,12 @@ fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
 /// binds to it, not to `Canon:BaseISO * Canon:AutoISO / 100`. No separate
 /// demoted-composite special case is needed for this anymore: it is the
 /// same rule as every other name.
-fn resolve_dependency(map: &MetadataMap, index: &mut NameIndex, key: &str) -> Option<String> {
-    let occurrence = index.resolve(map, key)?;
-    occurrence_value_string(occurrence)
+fn resolve_dependency<'m>(
+    map: &'m MetadataMap,
+    index: &mut NameIndex,
+    key: &str,
+) -> Option<&'m TagOccurrence> {
+    index.resolve(map, key)
 }
 
 /// Every occurrence position in a [`MetadataMap`], grouped by the
@@ -274,14 +277,26 @@ fn resolve_lens_occurrence(
 /// to normalize the two dependency-name notations ExifTool's generated
 /// tables use (`Module::Tag` for QuickTime, `Group:Tag` for everything
 /// parsed) onto one separator before delegating.
-fn resolve_indexed(map: &MetadataMap, index: &mut NameIndex, name: &str) -> Option<String> {
+fn resolve_indexed_with_source(
+    map: &MetadataMap,
+    index: &mut NameIndex,
+    name: &str,
+) -> Option<(String, bool)> {
     // Only QuickTime's `Module::Tag` names need rewriting; borrowing the
     // rest keeps this per-dependency, per-pass call allocation-free.
-    if name.contains("::") {
+    let occurrence = if name.contains("::") {
         resolve_dependency(map, index, &name.replacen("::", ":", 1))
     } else {
         resolve_dependency(map, index, name)
-    }
+    }?;
+    Some((
+        occurrence_value_string(occurrence)?,
+        occurrence.origin.module == Some("XMP::StaticGroup"),
+    ))
+}
+
+fn resolve_indexed(map: &MetadataMap, index: &mut NameIndex, name: &str) -> Option<String> {
+    resolve_indexed_with_source(map, index, name).map(|(value, _)| value)
 }
 
 /// [`resolve_indexed`] against a fresh index, for tests that resolve one name.
@@ -343,15 +358,11 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // EXIF/Canon), while an embedded packet may coexist with native tags.
     // Source provenance, not the displayed family-0/group-1 string, decides
     // whether the module was actually activated by a file reader.
-    let mut static_source_modules = HashSet::new();
     let mut native_source_modules = HashSet::new();
     for occurrence in map.occurrences() {
-        let module = crate::cli::tag_resolution::family1_label(occurrence);
-        if occurrence.origin.module == Some("XMP::StaticGroup") {
-            static_source_modules.insert(module.to_string());
-            static_source_modules.insert(occurrence.group0.to_string());
-        } else {
-            native_source_modules.insert(module.to_string());
+        if occurrence.origin.module != Some("XMP::StaticGroup") {
+            native_source_modules
+                .insert(crate::cli::tag_resolution::family1_label(occurrence).to_string());
         }
     }
     // Composites this run produced, keyed by each definition's own index
@@ -377,18 +388,6 @@ pub fn apply(map: &mut MetadataMap) -> usize {
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
-            // Exif, GPS and XMP composites are available with the core
-            // reader. A static URI may supply their inputs without loading
-            // a format-specific table. Other modules need a native reader
-            // activation, even when a static URI displays their group name.
-            if !matches!(comp.module, "Exif" | "GPS" | "XMP")
-                && static_source_modules
-                    .iter()
-                    .any(|source| source == comp.module || source.starts_with(comp.module))
-                && !native_source_modules.contains(comp.module)
-            {
-                continue;
-            }
             let key = keys[idx].as_str();
             let already_ours = ours.contains(&idx);
             // Exif.pm guards this join with
@@ -445,9 +444,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 .unwrap_or(0);
             let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
+            let mut uses_static_input = false;
             for &(index, dep) in comp.require {
-                match resolve_indexed(map, &mut names, dep) {
-                    Some(v) => owned[index] = Some(v),
+                match resolve_indexed_with_source(map, &mut names, dep) {
+                    Some((value, is_static)) => {
+                        owned[index] = Some(value);
+                        uses_static_input |= is_static;
+                    }
                     None => {
                         satisfied = false;
                         break;
@@ -458,7 +461,24 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 continue;
             }
             for &(index, dep) in comp.desire {
-                owned[index] = resolve_indexed(map, &mut names, dep);
+                if let Some((value, is_static)) = resolve_indexed_with_source(map, &mut names, dep)
+                {
+                    owned[index] = Some(value);
+                    uses_static_input |= is_static;
+                }
+            }
+            // A static URI can name a maker-note family without loading its
+            // Composite table. Gate on the resolved inputs, not on similarly
+            // spelled but unrelated static properties. RW2/RWL activate the
+            // PanasonicRaw reader even when all native rows display as IFD0.
+            let native_reader_active = native_source_modules.contains(comp.module)
+                || (comp.module == "PanasonicRaw"
+                    && matches!(file_type.as_deref(), Some("RW2" | "RWL")));
+            if !matches!(comp.module, "Exif" | "GPS" | "XMP")
+                && uses_static_input
+                && !native_reader_active
+            {
+                continue;
             }
             if comp.module == "QuickTime" && comp.name == "AvgBitrate" {
                 // Native RawConv walks every occurrence of its selected
