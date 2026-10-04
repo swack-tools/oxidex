@@ -121,6 +121,33 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
         temporary.unlink(missing_ok=True)
 
 
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit, expected_pin):
+    import tempfile
+    import os
+    fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        subprocess.run(['gcloud','compute','scp',instance+':'+remote,str(temporary),
+                        '--zone='+zone,'--project='+project,'--quiet',*SCP_KEEPALIVE],check=True)
+        if hashlib.sha256(temporary.read_bytes()).hexdigest() != digest:
+            raise RuntimeError('Downloaded remote test proof checksum mismatch')
+        proof = json.loads(temporary.read_text())
+        if (proof.get('schema') != 1 or proof.get('kind') != 'oxidex_spot_workspace_test'
+                or proof.get('source_commit') != expected_commit or proof.get('rust_pin') != expected_pin
+                or proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('exiftool_tree_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('corpus_tree_sha256', ''))
+                or proof.get('corpus_files', 0) < 4000):
+            raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        temporary.replace(local)
+        return proof
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def make_snapshot(source: Path, archive: Path) -> dict:
     names = subprocess.check_output(['git','-C',str(source),'ls-files','-z']).decode().split('\0')
     files=[]
@@ -219,7 +246,7 @@ def main(argv=None):
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
         if args.profile=='test':
-            stages.append(('test','cargo test --workspace --all-features --locked --no-fail-fast'))
+            stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '+receipt['source_commit']))
         else:
             stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
@@ -238,6 +265,14 @@ def main(argv=None):
             receipt['stage']='verify'
             if receipt.get('test_exit_code') != 0:
                 raise RuntimeError('Remote workspace tests did not pass')
+            remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+            remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+            if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                raise RuntimeError('Remote test proof has no SHA-256')
+            local_proof=evidence/'remote-test.json'
+            receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain']['channel'])
+            receipt['test_proof_sha256']=remote_hash
             receipt['stage']='cleanup'
             cleanup(strict=True)
             receipt['verified']=True

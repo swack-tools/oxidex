@@ -55,18 +55,48 @@ class ClientTests(unittest.TestCase):
             root=Path(directory)
             with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
-                 patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else 'a'*40+'\n'), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
-                 patch.object(remote_build,'download_artifact') as download:
+                 patch.object(remote_build,'download_artifact') as download, \
+                 patch.object(remote_build,'download_test_proof',return_value={'status':'PASS'}) as proof_download:
                 self.assertEqual(remote_build.main(['--source',str(root),'--instance','vm','--zone','z',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test']),0)
             receipt=__import__('json').loads((root/'evidence'/'remote-build.json').read_text())
             self.assertEqual(receipt['test_exit_code'],0)
             self.assertTrue(receipt['verified'])
-        self.assertTrue(any('cargo test --workspace --all-features --locked --no-fail-fast' in ' '.join(c)
+            self.assertEqual(receipt['test_proof']['status'], 'PASS')
+        self.assertTrue(any('tools/remote-build/test_runner.py --source-sha' in ' '.join(c)
                             for c in calls))
+        proof_download.assert_called_once()
         download.assert_not_called()
+
+    def test_remote_test_proof_is_hash_checked_and_fail_closed(self):
+        from lib.remote_build import download_test_proof
+        from unittest.mock import patch
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            local=root/'remote-test.json'
+            proof={'schema':1,'kind':'oxidex_spot_workspace_test','source_commit':'a'*40,
+                   'rust_pin':'1.97.1','oracle_pin':'13.59','status':'PASS','test_exit_code':0,
+                   'bootstrap_manifest_sha256':'b'*64,'perl_sha256':'c'*64,
+                   'exiftool_tree_sha256':'d'*64,'corpus_tree_sha256':'e'*64,'corpus_files':4000}
+            def fetch(command, **kwargs):
+                Path(command[4]).write_text(json.dumps(proof))
+            digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,'1.97.1')
+            self.assertEqual(result['status'],'PASS')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
+            proof['status']='FAILED'
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,'1.97.1')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
 
     def test_worker_interruption_is_retryable_but_compiler_errors_are_not(self):
         from lib.remote_build import retryable_exit

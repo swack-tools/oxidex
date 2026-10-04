@@ -115,8 +115,13 @@ def input_paths(seeds: list[Path], root: Path) -> list[Path]:
 def prepare_archive(output: Path, destination: Path, bundle: Path) -> tuple[str, str]:
     root = ops_root()
     head, pin, seeds = exact_inputs(output)
+    signers = git("config", "--path", "--get", "gpg.ssh.allowedSignersFile")
+    signers_path = Path(signers)
+    if not signers_path.is_file():
+        raise ValueError("maintainer allowed signers file is absent")
     with tarfile.open(destination, "w:gz", compresslevel=3) as archive:
         archive.add(bundle, arcname="repository.bundle", recursive=False)
+        archive.add(signers_path, arcname="maintainer.allowed_signers", recursive=False)
         for path in input_paths(seeds, root):
             archive.add(path, arcname=str(Path("ops") / path.relative_to(root)), recursive=False)
     return head, pin
@@ -163,7 +168,11 @@ def remote_run(output: Path, expected_head: str) -> int:
     key = signing / "id_ed25519"
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
     allowed = signing / "allowed_signers"
-    allowed.write_text("spot-qualification@local " + (signing / "id_ed25519.pub").read_text())
+    maintainer_signers = Path("/maintainer.allowed_signers").read_text()
+    if not maintainer_signers.strip():
+        raise ValueError("maintainer allowed signers file is empty")
+    allowed.write_text(maintainer_signers.rstrip("\n") + "\n" +
+                       "spot-qualification@local " + (signing / "id_ed25519.pub").read_text())
     for name, value in {"user.name": "OxiDex Spot qualification", "user.email": "spot-qualification@local",
                         "user.signingkey": str(key), "gpg.format": "ssh",
                         "gpg.ssh.allowedSignersFile": str(allowed)}.items():
@@ -292,7 +301,8 @@ def controller(output: Path, project: str | None) -> int:
                   "--pids-limit=4096", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                   "-e", "OXIDEX_OPS_DIR=" + ops_mount, "-e", "OXIDEX_TARGET_ROOT=/target",
                   "-e", "CARGO_HOME=/cargo", "-e", "CARGO_TARGET_DIR=/target/corpus",
-                  "-v", stage + "/source:/src", "-v", stage + "/ops:" + ops_mount,
+                  "-v", stage + "/source:/src", "-v", stage + "/maintainer.allowed_signers:/maintainer.allowed_signers:ro",
+                  "-v", stage + "/ops:" + ops_mount,
                   "-v", stage + "/targets:/target", "-v", "/mnt/runner-data/remote-build/cargo:/cargo",
                   "-w", "/src", "oxidex-remote-builder:1.97.1", "python3",
                   "tools/remote-build/qualification.py", "--remote-run", "--output", str(output),
@@ -335,11 +345,20 @@ def controller(output: Path, project: str | None) -> int:
                         str(evidence / "remote-run.log"), f"--zone={vm.zone}",
                         f"--project={project}", "--quiet", *SCP_FLAGS], check=False)
         # Results are copied even on failure; they never imply PASS by themselves.
-        pack = f"sudo tar -czf {shlex.quote(stage + '/results.tar.gz')} -C {shlex.quote(stage + '/ops')} " + \
-               " ".join(shlex.quote(str(output.relative_to(ops_root()) / name)) for name in
-                        ["remote-qualification.json", "corpus-read", *[f"spot-{head[:12]}-{i}" for i in range(3)]])
-        pack += f' && sudo chown "$(id -u):$(id -g)" {shlex.quote(stage + "/results.tar.gz")}'
-        ssh(pack, check=False)
+        candidate_names = ["remote-qualification.json", "corpus-read", *
+                           [f"spot-{head[:12]}-{i}" for i in range(3)], *
+                           [f"spot-{head[:12]}-{i}.log" for i in range(3)]]
+        relative_paths = [str(output.relative_to(ops_root()) / name) for name in candidate_names]
+        present = []
+        for relative in relative_paths:
+            candidate = stage + "/ops/" + relative
+            if ssh("test -e " + shlex.quote(candidate), check=False).returncode == 0:
+                present.append(relative)
+        if present:
+            pack = f"sudo tar -czf {shlex.quote(stage + '/results.tar.gz')} -C {shlex.quote(stage + '/ops')} -- " + \
+                   " ".join(shlex.quote(path) for path in present)
+            pack += f' && sudo chown "$(id -u):$(id -g)" {shlex.quote(stage + "/results.tar.gz")}'
+            ssh(pack)
         remote_digest = ssh(f"sha256sum {shlex.quote(stage + '/results.tar.gz')}", check=False)
         if remote_digest.returncode == 0:
             digest = remote_digest.stdout.split()[0]
