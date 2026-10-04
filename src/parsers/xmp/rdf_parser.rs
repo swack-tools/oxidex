@@ -1751,20 +1751,24 @@ fn parse_xmp_packet_in_directory(
                         }
                     })
                     .collect();
-                // An oversized plain list makes FoundXMP treat the whole
+                // An oversized plain item makes FoundXMP treat the whole
                 // default-property list as binary. An explicit RDF base64
-                // item is different: its decoded payload is per-item, so it
-                // must not turn unrelated siblings into binary summaries.
-                let binary = is_static
-                    && result.default_property()
-                    && !result
-                        .list_binary_payloads
-                        .as_ref()
-                        .is_some_and(|payloads| payloads.iter().any(Option::is_some))
-                    && elements
-                        .iter()
-                        .zip(&converted)
-                        .any(|(raw, value)| value != raw && value.starts_with("(Binary data "));
+                // item has only a per-item decoded payload and cannot by
+                // itself turn unrelated siblings into binary summaries.
+                let binary =
+                    is_static
+                        && result.default_property()
+                        && elements.iter().zip(&converted).enumerate().any(
+                            |(index, (raw, value))| {
+                                !result
+                                    .list_binary_payloads
+                                    .as_ref()
+                                    .and_then(|payloads| payloads.get(index))
+                                    .is_some_and(Option::is_some)
+                                    && value != raw
+                                    && value.starts_with("(Binary data ")
+                            },
+                        );
                 XmpValue::List(
                     elements
                         .iter()
