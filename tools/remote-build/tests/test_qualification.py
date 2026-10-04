@@ -115,7 +115,8 @@ class QualificationTransportTests(unittest.TestCase):
                 rows[row.format(pin=pin)] = {"marker_sha256": qualification.sha(marker)}
             summary = {"status": "PASS", "head": head, "pin": pin, "corpus_gate": "PASS",
                        "corpus_receipt_sha256": qualification.sha(corpus),
-                       "selected_file_floor": 1, "rows": rows}
+                       "selected_file_floor": 1, "rows": rows,
+                       "input_archive_sha256": "c" * 64, "input_file_count": 1}
             (staged / "remote-qualification.json").write_text(json.dumps(summary))
             archive_sha = "b" * 64
             replay = {"schema": 1, "kind": "oxidex_remote_corpus_archive_replay",
@@ -176,10 +177,16 @@ class QualificationTransportTests(unittest.TestCase):
             for name in names:
                 path = output / "remote-results" / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(name)
+                if name == "remote-qualification.json":
+                    path.write_text(json.dumps({"input_archive_sha256": "c" * 64,
+                                                "input_file_count": 6}))
+                else:
+                    path.write_text(name)
             with tarfile.open(archive, "w:gz") as source:
                 for name in names:
                     source.add(output / "remote-results" / name, arcname="output/" + name)
+            signer = evidence / "maintainer.allowed_signers"
+            signer.write_text("swackhamer key")
             bundle = evidence / "repository.bundle"
             bundle.write_bytes(b"source bundle")
             head, stage = "a" * 40, "/mnt/runner-data/remote-qualification/run"
@@ -188,6 +195,8 @@ class QualificationTransportTests(unittest.TestCase):
                       "results_dir": str(output / "remote-results"),
                       "results_sha256": qualification.sha(archive),
                       "source_bundle_sha256": qualification.sha(bundle),
+                      "signers_sha256": qualification.sha(signer),
+                      "input_archive_sha256": "c" * 64, "input_file_count": 6,
                       "corpus_archive_replay": {"status": "PASS"},
                       "retained_remote_recheck": {
                           "status": "RETAINED_AT_PUBLICATION", "instance": "spot",
@@ -195,6 +204,8 @@ class QualificationTransportTests(unittest.TestCase):
                           "source_path": stage + "/source", "target_path": stage + "/targets",
                           "output_path": stage + "/ops/output",
                           "lease_path": stage + "/ops/output/transition.host.lock",
+                          "input_archive_path": stage + "/ops/output/spot-input.tar.gz",
+                          "input_archive_sha256": "c" * 64,
                           "portable_loader_replay": False}}
             transport = evidence / "transport.json"
             transport.write_text(json.dumps(record))
@@ -230,18 +241,22 @@ class QualificationTransportTests(unittest.TestCase):
             self.assertEqual(qualification.resolve_project("explicit-project"), "explicit-project")
             default_project.assert_not_called()
 
-    def test_stale_inputs_refuse_before_worker_selection(self):
-        with patch.object(qualification, "exact_inputs", side_effect=ValueError("stale plan")), \
-             patch.object(qualification, "select_worker") as select:
-            with self.assertRaisesRegex(ValueError, "stale plan"):
+    def test_missing_transport_inputs_refuse_before_worker_selection(self):
+        with (
+            patch.object(qualification, "transport_inputs", side_effect=ValueError("missing transport input")),
+            patch.object(qualification, "exact_inputs") as task19,
+            patch.object(qualification, "select_worker") as select,
+        ):
+            with self.assertRaisesRegex(ValueError, "missing transport input"):
                 qualification.controller(Path("/missing"), "project")
+            task19.assert_not_called()
             select.assert_not_called()
 
     def test_invalid_timeout_refuses_before_any_remote_launch(self):
         for invalid in ("not-a-number", "0", "-1"):
             with self.subTest(invalid=invalid), \
                  patch.dict("os.environ", {"OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS": invalid}), \
-                 patch.object(qualification, "exact_inputs") as inputs, \
+                 patch.object(qualification, "transport_inputs") as inputs, \
                  patch.object(qualification, "select_worker") as select:
                 with self.assertRaisesRegex(ValueError, "positive integer"):
                     qualification.controller(Path("/missing"), "project")
@@ -307,57 +322,85 @@ class QualificationTransportTests(unittest.TestCase):
             with tarfile.open(destination) as stream:
                 self.assertEqual(stream.extractfile("ops/output/read-policy-input.json").read(), b"original")
 
-    def test_unavailable_worker_records_blocked_transport(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            output = root / "output"
-            output.mkdir()
-            def package(_output, destination, bundle):
-                bundle.write_bytes(b"bundle")
-                destination.write_bytes(b"package")
-                return "a" * 40, "13.59"
-            def git(*args):
-                return "" if args[0] == "status" else "a" * 40
-            with patch.object(qualification, "ops_root", return_value=root), \
-                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [])), \
-                 patch.object(qualification, "git", side_effect=git), \
-                 patch.object(qualification, "prepare_archive", side_effect=package), \
-                 patch.object(qualification, "resolve_project", return_value="project"), \
-                 patch.object(qualification, "select_worker", side_effect=RuntimeError("no eligible Spot worker")), \
-                 patch.object(qualification.subprocess, "run"):
-                self.assertEqual(qualification.controller(output, "project"), 2)
-            transports = list((root / "evidence/remote-qualification").glob("*/transport.json"))
-            self.assertEqual(len(transports), 1)
-            receipt = json.loads(transports[0].read_text())
-            self.assertEqual(receipt["status"], "BLOCKED_NO_WORKER")
-            self.assertIn("no eligible Spot worker", receipt["error"])
-            self.assertEqual(receipt["head"], "a" * 40)
+    def test_worker_selection_failures_record_blocked_transport(self):
+        failures = (
+            (RuntimeError("no eligible Spot worker"), "BLOCKED_NO_WORKER"),
+            (subprocess.CalledProcessError(1, ["gcloud", "compute", "instances", "list"]),
+             "BLOCKED_WORKER_SELECTION"),
+        )
+        for failure, expected in failures:
+            with self.subTest(expected=expected), TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                output = root / "output"
+                output.mkdir()
+                signer = root / "signer"
+                signer.write_text("swackhamer key")
+                fixture = root / "fixture"
+                fixture.write_bytes(b"fixture")
+                def git(*args):
+                    return "" if args[0] == "status" else "a" * 40
+                def run(command, **_kwargs):
+                    if "bundle" in command and "create" in command:
+                        Path(command[-2]).write_bytes(b"bundle")
+                    return SimpleNamespace(returncode=0)
+                with (
+                    patch.object(qualification, "ops_root", return_value=root),
+                    patch.object(qualification, "transport_inputs",
+                                 return_value=("a" * 40, "13.59", [fixture], signer)),
+                    patch.object(qualification, "exact_inputs") as task19,
+                    patch.object(qualification, "git", side_effect=git),
+                    patch.object(qualification, "resolve_project", return_value="project"),
+                    patch.object(qualification, "select_worker", side_effect=failure),
+                    patch.object(qualification.subprocess, "run", side_effect=run),
+                ):
+                    self.assertEqual(qualification.controller(output, "project"), 2)
+                    task19.assert_not_called()
+                transports = list((root / "evidence/remote-qualification").glob("*/transport.json"))
+                self.assertEqual(len(transports), 1)
+                receipt = json.loads(transports[0].read_text())
+                self.assertEqual(receipt["status"], expected)
+                self.assertEqual(receipt["head"], "a" * 40)
 
-    def test_worker_inventory_command_failure_records_blocked_transport(self):
+    def test_upload_sends_selected_files_without_local_task19_preflight(self):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             output = root / "output"
             output.mkdir()
-            def package(_output, destination, bundle):
-                bundle.write_bytes(b"bundle")
-                destination.write_bytes(b"package")
-                return "a" * 40, "13.59"
+            fixture = root / "cache" / "fixture.jpg"
+            fixture.parent.mkdir()
+            fixture.write_bytes(b"fixture")
+            signer = root / "signer"
+            signer.write_text("swackhamer key")
+            vm = SimpleNamespace(name="spot", zone="zone-a", instance_id="123",
+                                 cpus=8, memory_gib=16)
+            commands = []
             def git(*args):
                 return "" if args[0] == "status" else "a" * 40
-            failure = subprocess.CalledProcessError(1, ["gcloud", "compute", "instances", "list"])
-            with patch.object(qualification, "ops_root", return_value=root), \
-                 patch.object(qualification, "exact_inputs", return_value=("a" * 40, "13.59", [])), \
-                 patch.object(qualification, "git", side_effect=git), \
-                 patch.object(qualification, "prepare_archive", side_effect=package), \
-                 patch.object(qualification, "resolve_project", return_value="project"), \
-                 patch.object(qualification, "select_worker", side_effect=failure), \
-                 patch.object(qualification.subprocess, "run"):
+            def run(command, **_kwargs):
+                commands.append(command)
+                if "bundle" in command and "create" in command:
+                    Path(command[-2]).write_bytes(b"bundle")
+                if command[:3] == ["gcloud", "compute", "scp"] and str(fixture) in command:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            with (
+                patch.object(qualification, "ops_root", return_value=root),
+                patch.object(qualification, "transport_inputs",
+                             return_value=("a" * 40, "13.59", [fixture], signer)),
+                patch.object(qualification, "exact_inputs") as task19,
+                patch.object(qualification, "prepare_archive") as archive,
+                patch.object(qualification, "git", side_effect=git),
+                patch.object(qualification, "resolve_project", return_value="project"),
+                patch.object(qualification, "select_worker", return_value=(vm, (0.1, 0.1))),
+                patch.object(qualification.subprocess, "run", side_effect=run),
+            ):
                 self.assertEqual(qualification.controller(output, "project"), 2)
+                task19.assert_not_called()
+                archive.assert_not_called()
+            self.assertTrue(any(command[:3] == ["gcloud", "compute", "scp"]
+                                and str(fixture) in command for command in commands))
             transports = list((root / "evidence/remote-qualification").glob("*/transport.json"))
-            self.assertEqual(len(transports), 1)
-            receipt = json.loads(transports[0].read_text())
-            self.assertEqual(receipt["status"], "BLOCKED_WORKER_SELECTION")
-            self.assertIn("gcloud", receipt["error"])
+            self.assertEqual(json.loads(transports[0].read_text())["status"], "REFUSED")
 
     def test_task19_unknown_and_held_lease_exits_retain_lineage(self):
         for code, transport_code in ((4, 4), (5, 5), (130, 5), (137, 5), (-9, 5), (1, 5)):

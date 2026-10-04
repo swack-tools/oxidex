@@ -62,13 +62,19 @@ python3 tools/exiftool-tables/version_transition_qualification.py \
 ```
 
 For a Linux amd64 Spot run, use `just qualify-remote "$OUT"` after placing
-the exact-HEAD verified `provisioned/` bundles and `read-policy-input.json`
-under a **new** `$OUT` beneath `OXIDEX_OPS_DIR`. The recipe rejects dirty
-callers, missing inputs, a plan bound to another commit, or missing read
-floors before selecting a worker. It packages the clean Git HEAD and the
-selected immutable inputs, runs the three rows serially on one Spot VM, then
-runs the pinned corpus read build/observation/verification and published-read
-regression gate. The VM retains the source, targets, logs and inputs under
+exact-HEAD `provisioned/` bundles and `read-policy-input.json` under a **new**
+`$OUT` beneath `OXIDEX_OPS_DIR`. The local client checks the clean signed HEAD,
+discovers referenced upload paths, and transfers their bytes without running
+Task19 validation or compressing corpus data. It records file metadata before
+and after transfer to catch concurrent writes; source manifests and the Spot
+preflight remain the authority for content identity. On the selected Spot VM,
+the recipe validates the pinned plans, source identities and six native read
+floors, hashes and compresses a frozen input archive, then runs three rows
+serially followed by the pinned corpus read build/observation/verification and
+published-read regression gate. A stale plan or missing floor refuses before
+the first row, not before worker selection.
+
+The VM retains the source, targets, logs and inputs under
 `/mnt/runner-data/remote-qualification/<run-id>`; local transport evidence
 and the downloaded archive live under `$OXIDEX_OPS_DIR/evidence/remote-qualification/`.
 The complete downloaded receipts are hash-checked before being published
@@ -82,9 +88,10 @@ loader on each original row marker and records each marker SHA-256, the matrix
 hash, target root and lease path in its summary. The outer archive SHA-256
 binds that summary to the downloaded bytes. Later,
 `just verify-qualification-receipts "$OUT" <transport.json>` rechecks the
-retained source bundle, result archive, every published evidence file against
-its archived bytes, and both
-Spot replay attestations without rerunning OxiDex validation locally.
+retained source bundle and signer, result archive, every published evidence
+file against its archived bytes, the Spot-frozen input archive digest and
+file count, and both Spot replay attestations without rerunning OxiDex
+validation locally.
 The downloaded marker still names the original Spot output path and `/src`
 matrix: it cannot be passed to Task19's loader on the laptop. A full loader
 rerun requires the retained Spot source, prepared inputs, targets and lease

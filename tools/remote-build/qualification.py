@@ -52,7 +52,7 @@ def qualification_module():
 
 
 def exact_inputs(output: Path) -> tuple[str, str, list[Path]]:
-    """Use the qualification instrument itself to reject stale or incomplete inputs."""
+    """On Spot, reject stale or incomplete Task19 inputs before any row runs."""
     q = qualification_module()
     if output.is_symlink() or not output.is_dir() or not output.is_relative_to(ops_root()):
         raise ValueError("output must be a real directory beneath OXIDEX_OPS_DIR")
@@ -78,6 +78,41 @@ def exact_inputs(output: Path) -> tuple[str, str, list[Path]]:
             if frozen["identity"]["documents"]["plan"].get("repository_commit") != head:
                 raise ValueError(f"{row['id']} {side} input plan is not bound to HEAD {head}")
     return head, pin, [policy, output / "provisioned"]
+
+
+def transport_inputs(output: Path) -> tuple[str, str, list[Path], Path]:
+    """Discover upload paths locally; Task19 validates their bytes on Spot."""
+    root = ops_root()
+    if output.resolve() != output or not output.is_dir() or not output.is_relative_to(root):
+        raise ValueError("qualification output must be a real ops-root directory")
+    policy, provisioned = output / "read-policy-input.json", output / "provisioned"
+    if not policy.is_file() or not provisioned.is_dir():
+        raise ValueError("prepared Task19 policy or provisioned directory is missing")
+    head = git("rev-parse", "HEAD")
+    if git("status", "--porcelain"):
+        raise ValueError("qualification source must be clean before upload")
+    signature = git("log", "-1", "--format=%an|%ae|%cn|%ce|%G?|%GS", head).split("|")
+    if signature != ["swackhamer", "swackhamer@users.noreply.github.com",
+                     "swackhamer", "swackhamer@users.noreply.github.com", "G",
+                     "swackhamer@users.noreply.github.com"]:
+        raise ValueError("qualification HEAD is not the verified signed maintainer commit")
+    subprocess.run(["git", "-C", str(ROOT), "verify-commit", head], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    signer = Path(git("config", "--path", "--get", "gpg.ssh.allowedSignersFile"))
+    if not signer.is_file():
+        raise ValueError("maintainer allowed signers file is absent")
+    # JSON references only tell the transport which bytes to send. No local
+    # Task19 plan/policy validation, source hashing or compression occurs here.
+    paths = input_paths([policy, provisioned], root)
+    if not paths:
+        raise ValueError("prepared Task19 upload has no files")
+    return head, (ROOT / ".exiftool-version").read_text().strip(), paths, signer
+
+
+def transfer_identity(path: Path) -> tuple[int, int, int, int]:
+    """Catch ordinary concurrent writes without reading payload bytes locally."""
+    status = path.stat()
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns
 
 
 def input_paths(seeds: list[Path], root: Path) -> list[Path]:
@@ -320,7 +355,15 @@ def remote_run(output: Path, expected_head: str) -> int:
         bootstrap = module_from_spec(spec)
         spec.loader.exec_module(bootstrap)
         bootstrap.provision(ops_root())
-        exact_inputs(output)
+        # The expensive Task19 input validation and content-freezing archive
+        # happen only inside this Spot container, before the first row.
+        input_archive = output / "spot-input.tar.gz"
+        frozen_head, frozen_pin = prepare_archive(output, input_archive, Path("/repository.bundle"))
+        if frozen_head != expected_head or frozen_pin != pin:
+            raise ValueError("Spot-frozen Task19 inputs differ from the candidate")
+        result["input_archive_sha256"] = sha(input_archive)
+        result["input_file_count"] = len(input_paths([policy, output / "provisioned"], ops_root()))
+        save()
         lease = output / "transition.host.lock"
         lease.touch(exist_ok=True)
         for index, row in enumerate(rows):
@@ -524,6 +567,12 @@ def verify_result_tree(staged_output: Path, output: Path, head: str, pin: str,
             or summary.get("pin") != pin or summary.get("corpus_gate") != "PASS"
             or set(summary.get("rows", {})) != expected_rows):
         raise RuntimeError("remote summary is not an exact-head three-row and corpus PASS")
+    input_digest = summary.get("input_archive_sha256")
+    if (not isinstance(input_digest, str) or len(input_digest) != 64
+            or any(char not in "0123456789abcdef" for char in input_digest)
+            or type(summary.get("input_file_count")) is not int
+            or summary["input_file_count"] <= 0):
+        raise RuntimeError("remote summary lacks the Spot-frozen input archive identity")
     corpus_receipt = staged_output / "corpus-read" / "observations" / "receipt.json"
     if not corpus_receipt.is_file() or sha(corpus_receipt) != summary.get("corpus_receipt_sha256"):
         raise RuntimeError("downloaded corpus receipt differs from remote summary")
@@ -627,17 +676,26 @@ def verify_published(output: Path, transport: Path) -> dict:
         "stage": stage, "source_path": stage + "/source",
         "target_path": stage + "/targets", "output_path": stage + "/ops/" + relative,
         "lease_path": stage + "/ops/" + relative + "/transition.host.lock",
+        "input_archive_path": stage + "/ops/" + relative + "/spot-input.tar.gz",
+        "input_archive_sha256": record.get("input_archive_sha256"),
         "portable_loader_replay": False}
     if (record.get("retained_remote_recheck") != expected_remote
             or record.get("results_dir") != str(result_dir)):
         raise RuntimeError("transport lacks retained remote source, target, and lease identity")
     archive = transport.parent / "results.tar.gz"
     bundle = transport.parent / "repository.bundle"
+    signer = transport.parent / "maintainer.allowed_signers"
     digest = record.get("results_sha256")
     if (not isinstance(digest, str) or archive.is_symlink() or bundle.is_symlink()
+            or signer.is_symlink() or not signer.is_file()
+            or sha(signer) != record.get("signers_sha256")
             or not archive.is_file() or sha(archive) != digest
             or not bundle.is_file() or sha(bundle) != record.get("source_bundle_sha256")):
         raise RuntimeError("retained result archive or source bundle digest differs")
+    summary = json.loads((result_dir / "remote-qualification.json").read_text())
+    if (summary.get("input_archive_sha256") != record.get("input_archive_sha256")
+            or summary.get("input_file_count") != record.get("input_file_count")):
+        raise RuntimeError("transport and Spot-frozen input identities differ")
     verify_archived_receipts(archive, output, result_dir)
     verify_result_tree(result_dir, output, head, pin, record["corpus_archive_replay"], digest)
     return {"schema": 1, "kind": "oxidex_remote_published_receipt_check", "status": "PASS",
@@ -670,24 +728,26 @@ def controller(output: Path, project: str | None) -> int:
         raise ValueError("remote qualification timeout must be a positive integer") from error
     if timeout <= 0:
         raise ValueError("remote qualification timeout must be a positive integer")
-    head, _pin, _seeds = exact_inputs(output)
+    head, pin, paths, signer = transport_inputs(output)
     published = output / "remote-results"
     if published.exists() or published.is_symlink():
         raise ValueError(f"remote qualification results already exist: {published}")
+    identities = {path: transfer_identity(path) for path in paths}
     evidence = ops_root() / "evidence" / "remote-qualification" / (head[:12] + "-" + secrets.token_hex(8))
     evidence.mkdir(parents=True)
     bundle = evidence / "repository.bundle"
     subprocess.run(["git", "-C", str(ROOT), "bundle", "create", str(bundle), "HEAD"], check=True)
     subprocess.run(["git", "-C", str(ROOT), "bundle", "verify", str(bundle)], check=True,
                    stdout=subprocess.DEVNULL)
-    package = evidence / "input.tar.gz"
-    frozen_head, pin = prepare_archive(output, package, bundle)
-    if frozen_head != head or git("rev-parse", "HEAD") != head or git("status", "--porcelain"):
-        raise ValueError("local candidate changed while freezing qualification inputs")
+    signer_copy = evidence / "maintainer.allowed_signers"
+    signer_copy.write_bytes(signer.read_bytes())
+    if git("rev-parse", "HEAD") != head or git("status", "--porcelain"):
+        raise ValueError("local candidate changed while preparing source transport")
     project = resolve_project(project)
     receipt = {"schema": 1, "kind": "oxidex_remote_spot_transport", "head": head, "pin": pin,
-               "project": project, "archive_sha256": sha(package),
-               "source_bundle_sha256": sha(bundle), "status": "pending"}
+               "project": project, "input_file_count": len(paths),
+               "source_bundle_sha256": sha(bundle), "signers_sha256": sha(signer_copy),
+               "status": "pending"}
     transport = evidence / "transport.json"
     def save():
         transport.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
@@ -708,15 +768,30 @@ def controller(output: Path, project: str | None) -> int:
                                f"--project={project}", "--quiet", *SSH_FLAGS,
                                "--command=" + command], check=check, capture_output=True, text=True)
     save()
-    upload = f"~/oxidex-qualification-{evidence.name}.tar.gz"
     try:
-        subprocess.run(["gcloud", "compute", "scp", str(package), f"{vm.name}:{upload}",
-                        f"--zone={vm.zone}", f"--project={project}", "--quiet", *SCP_FLAGS], check=True)
-        # All shell operands are generated safe identifiers or shlex quoted.
-        setup = (f"sudo install -d -m 0770 -o \"$(id -u)\" -g \"$(id -g)\" {shlex.quote(stage)} && "
-                 f"printf '%s  %s\\n' {shlex.quote(receipt['archive_sha256'])} {shlex.quote(upload[2:])} "
-                 "| sha256sum -c - && "
-                 f"tar -xzf {shlex.quote(upload[2:])} -C {shlex.quote(stage)} && "
+        # Only path discovery and byte transport run locally. Spot performs
+        # the Task19 preflight and compresses the immutable input archive.
+        ssh(f"sudo install -d -m 0770 -o \"$(id -u)\" -g \"$(id -g)\" {shlex.quote(stage)}")
+        subprocess.run(["gcloud", "compute", "scp", str(bundle), str(signer_copy),
+                        f"{vm.name}:{stage}/", f"--zone={vm.zone}", f"--project={project}",
+                        "--quiet", *SCP_FLAGS], check=True)
+        grouped: dict[Path, list[Path]] = {}
+        for path in paths:
+            grouped.setdefault(path.relative_to(ops_root()).parent, []).append(path)
+        for parent, files in sorted(grouped.items()):
+            remote_dir = stage + "/ops/" + str(parent)
+            ssh("mkdir -p -- " + shlex.quote(remote_dir))
+            for offset in range(0, len(files), 64):
+                subprocess.run(["gcloud", "compute", "scp", *map(str, files[offset:offset + 64]),
+                                f"{vm.name}:{remote_dir}/", f"--zone={vm.zone}",
+                                f"--project={project}", "--quiet", *SCP_FLAGS], check=True)
+        if ({path: transfer_identity(path) for path in paths} != identities
+                or git("rev-parse", "HEAD") != head or git("status", "--porcelain")):
+            raise ValueError("local candidate or input file changed during upload")
+        setup = (f"printf '%s  %s\\n' {shlex.quote(receipt['source_bundle_sha256'])} "
+                 f"{shlex.quote(stage + '/repository.bundle')} | sha256sum -c - && "
+                 f"printf '%s  %s\\n' {shlex.quote(receipt['signers_sha256'])} "
+                 f"{shlex.quote(stage + '/maintainer.allowed_signers')} | sha256sum -c - && "
                  f"git clone -q {shlex.quote(stage + '/repository.bundle')} {shlex.quote(stage + '/source')} && "
                  f"git -C {shlex.quote(stage + '/source')} checkout -q --detach {head} && "
                  f"test \"$(git -C {shlex.quote(stage + '/source')} rev-parse HEAD)\" = {head} && "
@@ -734,7 +809,8 @@ def controller(output: Path, project: str | None) -> int:
                   "--pids-limit=4096", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                   "-e", "OXIDEX_OPS_DIR=" + ops_mount, "-e", "OXIDEX_TARGET_ROOT=/target",
                   "-e", "CARGO_HOME=/cargo", "-e", "CARGO_TARGET_DIR=/target/corpus",
-                  "-v", stage + "/source:/src", "-v", stage + "/maintainer.allowed_signers:/maintainer.allowed_signers:ro",
+                  "-v", stage + "/source:/src", "-v", stage + "/repository.bundle:/repository.bundle:ro",
+                  "-v", stage + "/maintainer.allowed_signers:/maintainer.allowed_signers:ro",
                   "-v", stage + "/ops:" + ops_mount,
                   "-v", stage + "/targets:/target", "-v", "/mnt/runner-data/remote-build/cargo:/cargo",
                   "-w", "/src"]
@@ -835,9 +911,21 @@ def controller(output: Path, project: str | None) -> int:
         receipt["corpus_archive_replay"] = replay
         save()
         remote_output = stage + "/ops/" + str(output.relative_to(ops_root()))
+        summary = json.loads((staged_output / "remote-qualification.json").read_text())
+        input_digest = summary.get("input_archive_sha256")
+        if (summary.get("input_file_count") != receipt["input_file_count"]
+                or not isinstance(input_digest, str) or len(input_digest) != 64):
+            raise RuntimeError("Spot-frozen input identity differs from the uploaded inventory")
+        remote_input = remote_output + "/spot-input.tar.gz"
+        frozen_digest = ssh("sha256sum " + shlex.quote(remote_input), check=False)
+        frozen_lines = frozen_digest.stdout.split()
+        if frozen_digest.returncode or not frozen_lines or frozen_lines[0] != input_digest:
+            raise RuntimeError("retained Spot-frozen input archive digest differs")
+        receipt["input_archive_sha256"] = input_digest
         retained = (f"test -d {shlex.quote(stage + '/source')} && "
                     f"test -d {shlex.quote(stage + '/targets')} && "
-                    f"test -f {shlex.quote(remote_output + '/transition.host.lock')}")
+                    f"test -f {shlex.quote(remote_output + '/transition.host.lock')} && "
+                    f"test -f {shlex.quote(remote_input)}")
         if ssh(retained, check=False).returncode:
             raise RuntimeError("Spot source, targets, or lease disappeared before receipt publication")
         receipt["retained_remote_recheck"] = {
@@ -845,6 +933,7 @@ def controller(output: Path, project: str | None) -> int:
             "instance_id": vm.instance_id, "zone": vm.zone, "stage": stage,
             "source_path": stage + "/source", "target_path": stage + "/targets",
             "output_path": remote_output, "lease_path": remote_output + "/transition.host.lock",
+            "input_archive_path": remote_input, "input_archive_sha256": input_digest,
             "portable_loader_replay": False}
         save()
         receipt["results_dir"] = str(publish_results(staged_output, output, head, pin, replay, digest))

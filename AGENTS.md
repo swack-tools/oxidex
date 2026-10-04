@@ -34,6 +34,9 @@ just test-remote               # Remote full workspace test suite
 OXIDEX_REMOTE_INSTANCE=<builder> OXIDEX_REMOTE_ZONE=<zone> just test-remote-on
 just qualify-remote <prepared-output-root>  # Remote Task19 rows and corpus read gate
 ```
+The local qualification client discovers upload paths; Spot validates and
+freezes the prepared inputs before running a row.
+
 `just verify-qualification-receipts <output> <transport-receipt>` rechecks
 local receipt/archive integrity only. Full committed-result replay requires the
 retained Spot source and target paths recorded in the transport receipt.
