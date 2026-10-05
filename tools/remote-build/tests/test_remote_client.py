@@ -440,3 +440,25 @@ class ClientTests(unittest.TestCase):
                 data=tar.extractfile('code.rs').read()
             self.assertEqual(receipt['files'][0]['sha256'],hashlib.sha256(data).hexdigest())
             self.assertEqual(receipt['files'][0]['bytes'],len(data))
+
+
+class DirectSetupReceiptTests(unittest.TestCase):
+    def test_provider_failure_retryable_but_identity_failure_terminal(self):
+        import json
+        from unittest.mock import patch
+        from lib import remote_build
+        for failure,expected in [(subprocess.CalledProcessError(1,'gcloud'),True),
+                                 (RuntimeError('Identity changed'),False),
+                                 (ValueError('Missing trust file'),False)]:
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                with patch.object(remote_build.ssh_transport,'identity',return_value=('u','k')), \
+                     patch.object(remote_build.ssh_transport,'DirectTransport',side_effect=failure), \
+                     patch.object(remote_build.subprocess,'run') as remote:
+                    with self.assertRaises(type(failure)):
+                        remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                            '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
+                receipt=json.loads((root/'evidence/remote-build.json').read_text())
+                self.assertEqual(receipt['stage'],'transport_identity')
+                self.assertEqual(receipt['retryable'],expected)
+                remote.assert_not_called()

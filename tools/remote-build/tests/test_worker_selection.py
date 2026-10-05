@@ -123,3 +123,33 @@ class WorkerSelectionTests(unittest.TestCase):
         self.assertEqual(vm.name,'builder-b')
         metrics.assert_called_once()
         self.assertEqual([vm.instance_id for vm in metrics.call_args.args[1]],['1','2'])
+
+
+class DirectSelectionTests(unittest.TestCase):
+    def test_vm_transport_refusal_tries_next_candidate(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        transport=SimpleNamespace(ssh=lambda command:['ssh','builder-b',command])
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=[RuntimeError('No address'),transport]), \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)) as run:
+            vm,_=select_worker('project')
+        self.assertEqual(vm.name,'builder-b')
+        self.assertEqual(run.call_count,1)
+
+    def test_shared_trust_configuration_refuses_without_fallback(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=ValueError('Missing trust')):
+            with self.assertRaisesRegex(ValueError,'Missing trust'):
+                select_worker('project')

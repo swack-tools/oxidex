@@ -80,7 +80,7 @@ def select_worker(project, excluded_ids=(), required_name=None, required_id=None
                     '--command=sh -c '+shlex.quote(probe)]
             result = subprocess.run(command,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, RuntimeError):
             continue
         if result.returncode == 0:
             print(f'Selected {vm.name} ({vm.zone}): CPU {sample[0]:.1%}, memory {sample[1]:.1%}', flush=True)

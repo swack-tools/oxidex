@@ -241,7 +241,8 @@ def main(argv=None):
                                     'address':transport.host}
             save()
         except Exception as exc:
-            receipt.update(error=str(exc), retryable=False)
+            receipt.update(error=str(exc), retryable=isinstance(exc,
+                (subprocess.CalledProcessError, subprocess.TimeoutExpired)))
             save()
             raise
     def ssh(command):
