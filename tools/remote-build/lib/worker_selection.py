@@ -69,6 +69,7 @@ def select_worker(project, excluded_ids=(), required_name=None, required_id=None
     observations=list(zip(candidates,samples)) if samples else [(vm,None) for vm in candidates]
     # Probe only candidates with trustworthy low utilization, best first.
     probe = launcher_probe()
+    refusals = []
     for vm, sample in rank_workers(observations):
         try:
             if ssh_transport.identity():
@@ -80,9 +81,13 @@ def select_worker(project, excluded_ids=(), required_name=None, required_id=None
                     '--command=sh -c '+shlex.quote(probe)]
             result = subprocess.run(command,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, RuntimeError):
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, RuntimeError) as exc:
+            refusals.append((vm.name, exc))
             continue
         if result.returncode == 0:
             print(f'Selected {vm.name} ({vm.zone}): CPU {sample[0]:.1%}, memory {sample[1]:.1%}', flush=True)
             return vm, sample
+    if refusals:
+        detail = '; '.join(name+': '+str(exc) for name, exc in refusals)
+        raise RuntimeError('Builder transport/provider probes refused: '+detail) from refusals[-1][1]
     raise RuntimeError('No available builder-* or explicitly approved VM with complete CPU/memory metrics below 75%; retry later')

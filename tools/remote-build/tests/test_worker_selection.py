@@ -153,3 +153,21 @@ class DirectSelectionTests(unittest.TestCase):
              patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=ValueError('Missing trust')):
             with self.assertRaisesRegex(ValueError,'Missing trust'):
                 select_worker('project')
+
+
+class ProviderFailureEvidenceTests(unittest.TestCase):
+    def test_all_provider_failures_preserve_cause_instead_of_capacity_claim(self):
+        import json,subprocess
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'}]
+        error=subprocess.CalledProcessError(1,['gcloud','compute','instances','describe','builder-a'])
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=error):
+            with self.assertRaisesRegex(RuntimeError,'transport/provider') as caught:
+                select_worker('project')
+        self.assertIs(caught.exception.__cause__,error)
+        self.assertIn('gcloud',str(caught.exception))
+        self.assertNotIn('metrics below',str(caught.exception))
