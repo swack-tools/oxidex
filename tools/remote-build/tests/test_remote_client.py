@@ -7,6 +7,24 @@ from lib.remote_build import make_snapshot
 
 
 class ClientTests(unittest.TestCase):
+    def test_explicit_native_probe_refuses_busy_host(self):
+        import json,time
+        from lib import remote_build
+        from unittest.mock import patch
+        for cpu,memory in [(.75,.1),(.1,.75),(float('nan'),.1)]:
+            data={'cpu':cpu,'memory':memory,'observed_at':time.time(),'method':'native-linux-one-second'}
+            with patch.object(remote_build.subprocess,'check_output',return_value=json.dumps(data)):
+                with self.assertRaisesRegex(RuntimeError,'admission refused'):
+                    remote_build.explicit_resource_probe(lambda command:[command])
+
+    def test_explicit_native_probe_records_valid_current_observation(self):
+        import json,time
+        from lib import remote_build
+        from unittest.mock import patch
+        data={'cpu':.2,'memory':.3,'observed_at':time.time(),'method':'native-linux-one-second'}
+        with patch.object(remote_build.subprocess,'check_output',return_value=json.dumps(data)):
+            self.assertEqual(remote_build.explicit_resource_probe(lambda command:[command]),data)
+
     def test_explicit_builder_replacement_prevents_all_ssh(self):
         import json
         from lib import remote_build

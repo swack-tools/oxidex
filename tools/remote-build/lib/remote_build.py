@@ -145,6 +145,36 @@ def make_snapshot(source: Path, archive: Path) -> dict:
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
 
+def explicit_resource_probe(ssh):
+    """Read native Linux CPU/memory before an explicit bootstrap dispatch.
+
+    This is a current-host admission probe, not a Monitoring window or release
+    qualification. The root launcher still owns atomic container admission.
+    """
+    script = """import json,time
+from pathlib import Path
+def cpu():
+    values=[int(v) for v in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
+    return sum(values),values[3]+values[4]
+a=cpu();time.sleep(1);b=cpu()
+delta=b[0]-a[0]
+if delta<=0:raise SystemExit('Invalid CPU observation')
+mem={line.split(':')[0]:int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith(('MemTotal:','MemAvailable:'))}
+print(json.dumps({'cpu':1-(b[1]-a[1])/delta,'memory':1-mem['MemAvailable']/mem['MemTotal'],'observed_at':time.time(),'method':'native-linux-one-second'}))
+"""
+    output=subprocess.check_output(ssh('python3 -c '+shlex.quote(script)),text=True,timeout=15)
+    record=json.loads(output)
+    import math
+    if (not isinstance(record,dict) or record.get('method')!='native-linux-one-second'
+            or any(type(record.get(k)) not in (int,float) or not math.isfinite(record[k])
+                   or not 0<=record[k]<.75 for k in ('cpu','memory'))
+            or type(record.get('observed_at')) not in (int,float)
+            or not math.isfinite(record['observed_at'])
+            or abs(time.time()-record['observed_at'])>15):
+        raise RuntimeError('Explicit builder CPU/memory admission refused')
+    return record
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',type=Path,required=True)
@@ -211,6 +241,7 @@ def main(argv=None):
         receipt['instance_id'] = args.instance_id
         subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
         receipt['launcher_verified'] = True
+        receipt['resource_probe'] = explicit_resource_probe(ssh)
         save()
     def cleanup(strict=False):
         try:
