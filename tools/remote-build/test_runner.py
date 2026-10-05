@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -51,6 +52,19 @@ def pinned_rust_identity(pin: str, expected_commit: str) -> tuple[str, str]:
     return active_rustc, active_cargo
 
 
+def provision_cached_oracle(bootstrap, lock_path: Path, cargo_home: Path) -> tuple[Path, Path]:
+    """Reuse the locked oracle while serializing downloads and verification."""
+    cache = cargo_home / "oxidex-oracle" / file_sha(lock_path)
+    cache.mkdir(parents=True, exist_ok=True)
+    with (cache / ".provision.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            manifest = bootstrap.provision(cache)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    return cache, manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
@@ -62,8 +76,6 @@ def main() -> int:
         parser.error("--rustc-commit must be a full Rust commit SHA")
     ops = TARGET / "ops"
     os.environ["OXIDEX_OPS_DIR"] = str(ops)
-    os.environ["EXIFTOOL_CACHE_DIR"] = str(ops / "cache/exiftool" / (ROOT / ".exiftool-version").read_text().strip())
-    os.environ["EXIFTOOL_PERL"] = str(ops / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2")
     os.environ["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"] = "1"
     spec = importlib.util.spec_from_file_location("oxidex_spot_oracle_bootstrap",
                                                   ROOT / "tools/release/bootstrap_oracle.py")
@@ -71,7 +83,11 @@ def main() -> int:
         raise RuntimeError("cannot load locked oracle bootstrap")
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
-    manifest = bootstrap.provision(ops)
+    oracle_ops, manifest = provision_cached_oracle(
+        bootstrap, ROOT / "tools/release/oracle-lock.json",
+        Path(os.environ.get("CARGO_HOME", "/cargo")))
+    os.environ["EXIFTOOL_CACHE_DIR"] = str(oracle_ops / "cache/exiftool" / (ROOT / ".exiftool-version").read_text().strip())
+    os.environ["EXIFTOOL_PERL"] = str(oracle_ops / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2")
     report = json.loads(manifest.read_text())
     pin = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
     rustc, cargo = pinned_rust_identity(pin, args.rustc_commit)

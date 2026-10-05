@@ -196,7 +196,10 @@ requires a clean checkout with a verified maintainer-signed HEAD, provisions the
 locked Perl/ExifTool oracle and fixture corpus remotely, runs the remote-client
 and version-qualification Python suites, then executes
 `cargo test --workspace --all-features --locked --no-fail-fast`. No Rust tests or
-oracle bootstrap run locally. The downloaded `remote-test.json` proof must match
+oracle bootstrap run locally. The oracle installation is shared in the persistent
+Cargo mount, keyed by the locked oracle specification and verified on each run;
+a provisioning lock serializes concurrent installers. Test results remain in
+each run’s separate target directory. The downloaded `remote-test.json` proof must match
 the source SHA, compiler identity, oracle pin, fixture floor and test commands
 before the client reports success. Receipts and logs live under
 `$OXIDEX_OPS_DIR/evidence/auto-remote-<timestamp>` (default
