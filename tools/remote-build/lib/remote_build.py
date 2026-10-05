@@ -69,11 +69,9 @@ def unique_run_id(worktree_id):
 def cleanup_command(run_id):
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}-[0-9a-f]{32}', run_id):
         raise ValueError('Refusing to clean an invalid remote run identifier')
-    root='/mnt/runner-data/remote-build'
-    source=shlex.quote(f'{root}/sources/{run_id}')
-    target=shlex.quote(f'{root}/targets/{run_id}')
     archive=f'~/oxidex-remote-source-{run_id}.tar.gz'
-    return f'sudo rm -rf -- {source} {target} && rm -f -- {archive}'
+    return f'sudo /usr/local/bin/oxidex-remote-build {shlex.quote(run_id)} cleanup && rm -f -- {archive}'
+
 
 
 def source_sync_command(digest, upload, destination):
@@ -107,16 +105,18 @@ def retryable_failure(exc, stage):
     return retryable_exit(exc.returncode)
 
 
-def download_artifact(instance, zone, project, binary, artifact, digest):
+def download_artifact(instance, zone, project, binary, artifact, digest, transport=None):
     import tempfile
     import os
     fd,name=tempfile.mkstemp(prefix='.oxidex-download-',dir=artifact.parent)
     os.close(fd)
     temporary=Path(name)
     try:
-        subprocess.run(['gcloud','compute','scp',ssh_transport.target(instance)+':'+binary,str(temporary),
-            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE,
-            *ssh_transport.flags('scp')],check=True)
+        command = (transport.scp(temporary, binary, download=True) if transport else
+            ['gcloud','compute','scp',ssh_transport.target(instance)+':'+binary,str(temporary),
+             '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(command,check=True)
         if hashlib.sha256(temporary.read_bytes()).hexdigest()!=digest:
             raise RuntimeError('Downloaded binary checksum mismatch')
         temporary.chmod(0o755)
@@ -230,7 +230,23 @@ def main(argv=None):
             receipt.update(error=str(exc), retryable=True)
             save()
             raise
+    transport = None
+    if ssh_transport.identity():
+        receipt['stage'] = 'transport_identity'
+        save()
+        try:
+            transport = ssh_transport.DirectTransport(args.instance, args.zone, args.project,
+                args.instance_id or (approval['id'] if approval else None))
+            receipt['transport'] = {'method':'direct-ssh', 'instance_id':transport.instance_id,
+                                    'address':transport.host}
+            save()
+        except Exception as exc:
+            receipt.update(error=str(exc), retryable=False)
+            save()
+            raise
     def ssh(command):
+        if transport:
+            return transport.ssh(command)
         return ['gcloud','compute','ssh',ssh_transport.target(args.instance),'--zone='+args.zone,'--project='+args.project,
                 '--quiet',*SSH_KEEPALIVE,*ssh_transport.flags('ssh'),'--command='+command]
     if args.instance_id is not None:
@@ -263,6 +279,7 @@ def main(argv=None):
         try:
             subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
             receipt['remote_cleanup']='complete'
+            receipt['remote_targets']='retained'
         except Exception as cleanup_error:
             receipt['remote_cleanup']='failed'
             receipt['cleanup_error']=str(cleanup_error)
@@ -290,9 +307,12 @@ def main(argv=None):
         subprocess.run(ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} prepare'),check=True)
         receipt['stage']='sync_upload'
         start=time.monotonic()
-        subprocess.run(['gcloud','compute','scp',str(archive),ssh_transport.target(args.instance)+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
-                        '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE,
-                        *ssh_transport.flags('scp')],check=True)
+        upload_path='~/oxidex-remote-source-'+args.worktree_id+'.tar.gz'
+        upload_command = (transport.scp(archive, upload_path) if transport else
+            ['gcloud','compute','scp',str(archive),ssh_transport.target(args.instance)+':'+upload_path,
+             '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(upload_command,check=True)
         digest=receipt['snapshot']['archive_sha256']
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'
@@ -331,7 +351,8 @@ def main(argv=None):
         output.mkdir(parents=True,exist_ok=True)
         artifact=output/'oxidex'
         receipt['stage']='download'
-        download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
+        download_artifact(args.instance,args.zone,args.project,binary,artifact,digest,
+                          **({'transport':transport} if transport else {}))
         receipt['artifact']=str(artifact)
         receipt['verified']=True;save()
         receipt['stage']='cleanup'

@@ -71,10 +71,14 @@ def select_worker(project, excluded_ids=(), required_name=None, required_id=None
     probe = launcher_probe()
     for vm, sample in rank_workers(observations):
         try:
-            result = subprocess.run(['gcloud','compute','ssh',ssh_transport.target(vm.name),'--zone='+vm.zone,
-            '--project='+project,'--quiet',*SSH_KEEPALIVE,
-            *ssh_transport.flags('ssh'),
-            '--command=sh -c '+shlex.quote(probe)],
+            if ssh_transport.identity():
+                transport = ssh_transport.DirectTransport(vm.name, vm.zone, project, vm.instance_id)
+                command = transport.ssh('sh -c '+shlex.quote(probe))
+            else:
+                command = ['gcloud','compute','ssh',vm.name,'--zone='+vm.zone,
+                    '--project='+project,'--quiet',*SSH_KEEPALIVE,
+                    '--command=sh -c '+shlex.quote(probe)]
+            result = subprocess.run(command,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
         except subprocess.TimeoutExpired:
             continue

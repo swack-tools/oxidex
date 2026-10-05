@@ -319,8 +319,8 @@ class ClientTests(unittest.TestCase):
         from lib.remote_build import cleanup_command
         run_id='checkout-'+'a'*32
         command=cleanup_command(run_id)
-        self.assertIn('/remote-build/sources/'+run_id,command)
-        self.assertIn('/remote-build/targets/'+run_id,command)
+        self.assertIn('oxidex-remote-build '+run_id+' cleanup',command)
+        self.assertNotIn('sudo rm',command)
         with self.assertRaisesRegex(ValueError,'invalid remote run identifier'):
             cleanup_command('../checkout')
 
@@ -353,7 +353,7 @@ class ClientTests(unittest.TestCase):
                 return f'oxidex 2.0\n{digest}  /binary\n'
             return 'commit\n'
         def run(command, **kwargs):
-            if 'sudo rm -rf' in ' '.join(command):
+            if ' cleanup &&' in ' '.join(command):
                 events.append('cleanup')
             return SimpleNamespace(returncode=0)
         def download(instance,zone,project,binary,artifact,sha):
@@ -395,7 +395,7 @@ class ClientTests(unittest.TestCase):
                 return f'oxidex 2.0\n{digest}  /binary\n'
             return 'commit\n'
         def run(command, **kwargs):
-            if 'sudo rm -rf' in ' '.join(command):
+            if ' cleanup &&' in ' '.join(command):
                 raise subprocess.CalledProcessError(255,command)
             return SimpleNamespace(returncode=0)
         def download(instance,zone,project,binary,artifact,sha):
