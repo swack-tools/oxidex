@@ -47,7 +47,7 @@ def run_attempts(project, source, profile, evidence, max_attempts):
         # Inventory and Monitoring are read again on every attempt.
         vm,sample=select_worker(project, excluded_ids=excluded)
         env=dict(os.environ,OXIDEX_REMOTE_INSTANCE=vm.name,OXIDEX_REMOTE_ZONE=vm.zone,
-                 OXIDEX_REMOTE_PROJECT=project)
+                 OXIDEX_REMOTE_PROJECT=project, OXIDEX_REMOTE_INSTANCE_ID=str(vm.instance_id))
         folder=evidence/str(attempt)
         folder.mkdir(parents=True)
         (folder/'selection.json').write_text(json.dumps({'instance':vm.name,'instance_id':vm.instance_id,

@@ -230,19 +230,27 @@ def main(argv=None):
     if args.instance_id is not None:
         from .worker_selection import launcher_probe
         receipt['stage'] = 'identity_probe'
+        receipt['admission_passed'] = False
         save()
-        actual = json.loads(subprocess.check_output([
-            'gcloud', 'compute', 'instances', 'describe', args.instance,
-            '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
-        if str(actual.get('id')) != args.instance_id or actual.get('status') != 'RUNNING':
-            receipt['error'] = 'Pinned remote builder identity changed or is not running'
+        try:
+            actual = json.loads(subprocess.check_output([
+                'gcloud', 'compute', 'instances', 'describe', args.instance,
+                '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
+            if str(actual.get('id')) != args.instance_id or actual.get('status') != 'RUNNING':
+                receipt['error'] = 'Pinned remote builder identity changed or is not running'
+                save()
+                raise RuntimeError(receipt['error'])
+            receipt['instance_id'] = args.instance_id
+            subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
+            receipt['launcher_verified'] = True
+            receipt['resource_probe'] = explicit_resource_probe(ssh)
             save()
-            raise RuntimeError(receipt['error'])
-        receipt['instance_id'] = args.instance_id
-        subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
-        receipt['launcher_verified'] = True
-        receipt['resource_probe'] = explicit_resource_probe(ssh)
-        save()
+            receipt['admission_passed'] = True
+            save()
+        except Exception as exc:
+            receipt.update(error=str(exc), retryable=False, admission_passed=False)
+            save()
+            raise
     def cleanup(strict=False):
         try:
             subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
