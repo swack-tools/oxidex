@@ -145,6 +145,10 @@ def make_snapshot(source: Path, archive: Path) -> dict:
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
 
+class BuilderBusy(RuntimeError):
+    """Transient host utilization refusal, before any source mutation."""
+
+
 def explicit_resource_probe(ssh):
     """Read native Linux CPU/memory before an explicit bootstrap dispatch.
 
@@ -167,11 +171,13 @@ print(json.dumps({'cpu':1-(b[1]-a[1])/delta,'memory':1-mem['MemAvailable']/mem['
     import math
     if (not isinstance(record,dict) or record.get('method')!='native-linux-one-second'
             or any(type(record.get(k)) not in (int,float) or not math.isfinite(record[k])
-                   or not 0<=record[k]<.75 for k in ('cpu','memory'))
+                   or not 0<=record[k]<=1 for k in ('cpu','memory'))
             or type(record.get('observed_at')) not in (int,float)
             or not math.isfinite(record['observed_at'])
             or abs(time.time()-record['observed_at'])>15):
         raise RuntimeError('Explicit builder CPU/memory admission refused')
+    if any(record[k]>=.75 for k in ('cpu','memory')):
+        raise BuilderBusy('Explicit builder CPU/memory admission refused: busy host')
     return record
 
 
@@ -248,7 +254,9 @@ def main(argv=None):
             receipt['admission_passed'] = True
             save()
         except Exception as exc:
-            receipt.update(error=str(exc), retryable=False, admission_passed=False)
+            transient = (isinstance(exc, (BuilderBusy, subprocess.TimeoutExpired))
+                         or isinstance(exc, subprocess.CalledProcessError) and exc.returncode in (75, 255))
+            receipt.update(error=str(exc), retryable=transient, admission_passed=False)
             save()
             raise
     def cleanup(strict=False):

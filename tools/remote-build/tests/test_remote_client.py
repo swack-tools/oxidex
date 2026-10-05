@@ -15,13 +15,14 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(remote_build.subprocess,'check_output',return_value=json.dumps({'id':'2','status':'RUNNING'})), \
              patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
-             patch.object(remote_build,'explicit_resource_probe',side_effect=RuntimeError('Explicit builder CPU/memory admission refused')):
+             patch.object(remote_build,'explicit_resource_probe',side_effect=remote_build.BuilderBusy('Explicit builder CPU/memory admission refused')):
             evidence=Path(directory)/'evidence'
             with self.assertRaisesRegex(RuntimeError,'admission refused'):
                 remote_build.main(['--source',directory,'--instance','builder-test','--zone','z',
                     '--instance-id','2','--worktree-id','checkout','--evidence-dir',str(evidence)])
             receipt=json.loads((evidence/'remote-build.json').read_text())
             self.assertFalse(receipt['admission_passed'])
+            self.assertTrue(receipt['retryable'])
             self.assertIn('admission refused',receipt['error'])
             self.assertEqual(run.call_count,1)
             self.assertIn('invalid.project',str(run.call_args.args[0]))
