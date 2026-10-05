@@ -159,14 +159,6 @@ def main(argv=None):
         approval = matching_approval(approved_instances(), args.project, args.instance, args.zone)
         if approval is None:
             raise ValueError('Remote builds require a dedicated builder-* VM or an explicit identity-bound approval')
-        actual = json.loads(subprocess.check_output([
-            'gcloud', 'compute', 'instances', 'describe', args.instance,
-            '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
-        if str(actual.get('id')) != approval['id'] or actual.get('status') != 'RUNNING':
-            raise RuntimeError('Approved remote builder identity changed or is not running')
-        from .worker_selection import select_worker
-        select_worker(args.project, required_name=args.instance,
-                      required_id=approval['id'], required_zone=args.zone)
     import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
@@ -182,6 +174,21 @@ def main(argv=None):
         receipt['approved_instance'] = approval
     def save():
         (evidence/'remote-build.json').write_text(json.dumps(receipt,indent=2))
+    if approval:
+        from .worker_selection import select_worker
+        receipt['stage'] = 'admission'
+        try:
+            actual = json.loads(subprocess.check_output([
+                'gcloud', 'compute', 'instances', 'describe', args.instance,
+                '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
+            if str(actual.get('id')) != approval['id'] or actual.get('status') != 'RUNNING':
+                raise RuntimeError('Approved remote builder identity changed or is not running')
+            select_worker(args.project, required_name=args.instance,
+                          required_id=approval['id'], required_zone=args.zone)
+        except (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            receipt.update(error=str(exc), retryable=True)
+            save()
+            raise
     def ssh(command):
         return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
                 '--quiet',*SSH_KEEPALIVE,'--command='+command]

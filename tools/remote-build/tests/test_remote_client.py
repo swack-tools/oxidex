@@ -25,6 +25,9 @@ class ClientTests(unittest.TestCase):
                 remote_build.main(['--source',directory,'--instance','approved-bench','--zone','z',
                                    '--worktree-id','checkout','--evidence-dir',str(Path(directory)/'evidence')])
             run.assert_not_called()
+            receipt=json.loads((Path(directory)/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['stage'],'admission')
+            self.assertTrue(receipt['retryable'])
 
     def test_direct_exception_refuses_replacement_before_remote_mutation(self):
         import json
