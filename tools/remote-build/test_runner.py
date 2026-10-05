@@ -56,23 +56,23 @@ def oracle_cache_root(lock_path: Path, cargo_home: Path) -> Path:
     return cargo_home / "oxidex-oracle" / file_sha(lock_path)
 
 
-def load_oracle_bootstrap(cache: Path):
-    """Bind the bootstrap's import-time durable root to the shared cache."""
-    previous = os.environ.get("OXIDEX_OPS_DIR")
+def configure_oracle_environment(cache: Path, pin: str) -> None:
+    """Keep bootstrap and every oracle consumer inside the same durable root."""
     os.environ["OXIDEX_OPS_DIR"] = str(cache)
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "oxidex_spot_oracle_bootstrap", ROOT / "tools/release/bootstrap_oracle.py")
-        if spec is None or spec.loader is None:
-            raise RuntimeError("cannot load locked oracle bootstrap")
-        bootstrap = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bootstrap)
-        return bootstrap
-    finally:
-        if previous is None:
-            os.environ.pop("OXIDEX_OPS_DIR", None)
-        else:
-            os.environ["OXIDEX_OPS_DIR"] = previous
+    os.environ["EXIFTOOL_CACHE_DIR"] = str(cache / "cache/exiftool" / pin)
+    os.environ["EXIFTOOL_PERL"] = str(cache / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2")
+
+
+def load_oracle_bootstrap(cache: Path):
+    if os.environ.get("OXIDEX_OPS_DIR") != str(cache):
+        raise RuntimeError("oracle environment and bootstrap cache root differ")
+    spec = importlib.util.spec_from_file_location(
+        "oxidex_spot_oracle_bootstrap", ROOT / "tools/release/bootstrap_oracle.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load locked oracle bootstrap")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    return bootstrap
 
 
 def provision_cached_oracle(bootstrap, lock_path: Path, cargo_home: Path) -> tuple[Path, Path]:
@@ -97,15 +97,13 @@ def main() -> int:
         parser.error("--source-sha must be a full Git SHA")
     if not re.fullmatch(r"[0-9a-f]{40}", args.rustc_commit):
         parser.error("--rustc-commit must be a full Rust commit SHA")
-    ops = TARGET / "ops"
-    os.environ["OXIDEX_OPS_DIR"] = str(ops)
     os.environ["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"] = "1"
     lock_path = ROOT / "tools/release/oracle-lock.json"
     cargo_home = Path(os.environ.get("CARGO_HOME", "/cargo"))
-    bootstrap = load_oracle_bootstrap(oracle_cache_root(lock_path, cargo_home))
+    cache = oracle_cache_root(lock_path, cargo_home)
+    configure_oracle_environment(cache, (ROOT / ".exiftool-version").read_text().strip())
+    bootstrap = load_oracle_bootstrap(cache)
     oracle_ops, manifest = provision_cached_oracle(bootstrap, lock_path, cargo_home)
-    os.environ["EXIFTOOL_CACHE_DIR"] = str(oracle_ops / "cache/exiftool" / (ROOT / ".exiftool-version").read_text().strip())
-    os.environ["EXIFTOOL_PERL"] = str(oracle_ops / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2")
     report = json.loads(manifest.read_text())
     pin = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
     rustc, cargo = pinned_rust_identity(pin, args.rustc_commit)
