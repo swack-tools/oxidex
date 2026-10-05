@@ -45,15 +45,14 @@ artifacts first with `cargo clean --release -p chrono -p oxidex`.
 
 ## Rust toolchain pin (build gotcha)
 
-`rust-toolchain.toml` pins the compiler (`channel = "1.97.1"`; CI builds with
+`rust-toolchain.toml` pins the compiler (`channel = "1.99.0"`; CI builds with
 it), but **only rustup's proxies read that file**. Any other `rustc` earlier on
-`PATH` ignores it without a word. On the maintainer's Mac, `/opt/homebrew/bin`
-comes before `~/.cargo/bin`, so `rustc` and `cargo` are Homebrew's 1.98.1 and
-every local build silently used it. Even rustup's own cargo
-(`~/.cargo/bin/cargo`, or `rustup run 1.97.1 cargo build`) compiles with
-Homebrew's rustc there, because cargo runs the first `rustc` it finds on
-`PATH`. **`rustup run` is not a fix.** Checked: a crate built that way embeds
-Homebrew's `/rustc/48a229ce…` std paths.
+`PATH` ignores it without a word. On 2026-09-23, the maintainer's Mac put
+`/opt/homebrew/bin` before `~/.cargo/bin`, so local builds silently used
+Homebrew's 1.98.1 instead of the then-pinned 1.97.1. Even rustup's own cargo
+(`~/.cargo/bin/cargo`, or `rustup run 1.99.0 cargo build`) can compile with
+a different `rustc` when it appears first on `PATH`. **`rustup run` is not a
+fix.** The 2026-09-23 binary embedded Homebrew's `/rustc/48a229ce…` std paths.
 
 Fix it once per shell (put it in the profile):
 
@@ -65,7 +64,7 @@ For a single command, use `PATH="$HOME/.cargo/bin:$PATH" cargo …`. Setting
 `$RUSTC` alone is not enough: cargo must be the pinned one too, and
 preflight, the corpus receipt and the rehearsal stages all check
 `cargo -V`. So if you pin by path, pin both:
-`RUSTC="$(rustup which --toolchain 1.97.1 rustc)" "$(rustup which --toolchain 1.97.1 cargo)" …`.
+`RUSTC="$(rustup which --toolchain 1.99.0 rustc)" "$(rustup which --toolchain 1.99.0 cargo)" …`.
 Check with
 `tools/preflight.sh`, which exits 6 when `rustc` (or `$RUSTC`) or `cargo`
 resolves to anything but the pinned channel. It also exits 6 when that
@@ -77,7 +76,7 @@ nothing you will measure.
 To see which compiler built a binary, read its own bytes. What `PATH` resolves
 today can differ from what built it:
 `grep -aoE '/rustc/[0-9a-f]{40}' target/release/oxidex | sort -u`, compared
-with `rustup run 1.97.1 rustc -vV | grep commit-hash`. Every instrument
+with `rustup run 1.99.0 rustc -vV | grep commit-hash`. Every instrument
 header does that comparison and warns on a mismatch (see incident 12 below).
 
 **Measurements from 2026-09-23 are off-pin.** Every local build and corpus

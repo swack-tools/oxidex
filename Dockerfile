@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Both base image versions are ARGs so a bump is a one-line change.
-ARG RUST_VERSION=1.97.1
+ARG RUST_VERSION=1.99.0
 ARG ALPINE_VERSION=3.24
 
 # ---------------------------------------------------------------------------
