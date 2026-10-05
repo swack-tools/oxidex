@@ -4,7 +4,7 @@ import math
 import shlex
 import subprocess
 from types import SimpleNamespace
-from .config import builder_instance_name
+from .config import approved_instances, builder_instance_name, matching_approval
 from .resource_metrics import read_utilization
 
 # Exact launcher bytes provisioned by spot-github-runners' builder_assets.py.
@@ -46,8 +46,12 @@ def select_worker(project, excluded_ids=()):
         'gcloud', 'compute', 'instances', 'list', '--project='+project,
         '--format=json(name,id,zone,status,machineType)'], text=True))
     candidates = []
+    approvals = approved_instances()
     for row in inventory:
-        if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not builder_instance_name(row.get('name')):
+        zone = row['zone'].rsplit('/',1)[-1]
+        permitted = builder_instance_name(row.get('name')) or matching_approval(
+            approvals, project, row.get('name'), zone, row.get('id'))
+        if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not permitted:
             continue
         vm = SimpleNamespace(name=row['name'], instance_id=str(row['id']), zone=row['zone'].rsplit('/',1)[-1])
         if row.get('machineType'):
@@ -71,4 +75,4 @@ def select_worker(project, excluded_ids=()):
         if result.returncode == 0:
             print(f'Selected {vm.name} ({vm.zone}): CPU {sample[0]:.1%}, memory {sample[1]:.1%}', flush=True)
             return vm, sample
-    raise RuntimeError('No available builder-* VM with complete CPU/memory metrics below 75%; retry later')
+    raise RuntimeError('No available builder-* or explicitly approved VM with complete CPU/memory metrics below 75%; retry later')

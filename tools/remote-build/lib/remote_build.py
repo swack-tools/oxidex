@@ -13,7 +13,7 @@ import tomllib
 import time
 from pathlib import Path
 
-from .config import builder_instance_name
+from .config import approved_instances, builder_instance_name, matching_approval
 
 
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
@@ -154,8 +154,16 @@ def main(argv=None):
     parser.add_argument('--profile',choices=['debug','release'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
+    approval = None
     if not builder_instance_name(args.instance):
-        raise ValueError('Remote builds require a dedicated builder-* VM')
+        approval = matching_approval(approved_instances(), args.project, args.instance, args.zone)
+        if approval is None:
+            raise ValueError('Remote builds require a dedicated builder-* VM or an explicit identity-bound approval')
+        actual = json.loads(subprocess.check_output([
+            'gcloud', 'compute', 'instances', 'describe', args.instance,
+            '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
+        if str(actual.get('id')) != approval['id'] or actual.get('status') != 'RUNNING':
+            raise RuntimeError('Approved remote builder identity changed or is not running')
     import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
@@ -167,6 +175,8 @@ def main(argv=None):
     evidence.mkdir(parents=True,exist_ok=True)
     receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
+    if approval:
+        receipt['approved_instance'] = approval
     def save():
         (evidence/'remote-build.json').write_text(json.dumps(receipt,indent=2))
     def ssh(command):

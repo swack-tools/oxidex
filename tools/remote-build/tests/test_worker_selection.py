@@ -3,6 +3,27 @@ from types import SimpleNamespace
 from lib.worker_selection import rank_workers
 
 class WorkerSelectionTests(unittest.TestCase):
+    def test_named_exception_is_selected_only_at_approved_instance_id(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        approved={'name':'approved-bench','id':'2','project':'project','zone':'z','enabled':True}
+        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'approved-bench','id':'2','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.approved_instances',return_value=[approved]), \
+             patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.2,.2)]) as metrics, \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)) as ssh:
+            vm,_=select_worker('project')
+            self.assertEqual(vm.name,'approved-bench')
+            self.assertEqual([v.instance_id for v in metrics.call_args.args[1]],['2'])
+            inventory[1]['id']='3'
+            metrics.reset_mock();ssh.reset_mock()
+            with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)):
+                with self.assertRaisesRegex(RuntimeError,'No available'):
+                    select_worker('project')
+            metrics.assert_not_called();ssh.assert_not_called()
+
     def test_only_dedicated_builder_vms_reach_metrics_or_ssh(self):
         import json
         from unittest.mock import patch

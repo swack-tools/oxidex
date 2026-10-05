@@ -205,7 +205,7 @@ reporting. Never commit `.env`, GitHub credentials, or SSH private keys.
 Provision hosts with `--remote-builder --resource-monitoring` in
 `src/spot_runner_manager.py`; preview first and use `--apply` to provision.
 The autoscaler enables the builder by default. For manual provisioning, use an
-instance name starting with `oxidex-runners-` so automatic selection discovers
+instance name starting with `builder-` so automatic selection discovers
 the host. The VM service account needs
 `roles/monitoring.metricWriter` and the Monitoring write OAuth scope so the
 metrics-only Ops Agent can publish memory utilization. CPU utilization uses
@@ -213,8 +213,8 @@ Compute Engine's built-in metric. Authenticated `gcloud compute ssh` must work;
 GCP manages the SSH access path, with no SSH server inside the build container.
 
 Building on an existing worker needs GCP/SSH/Monitoring access; it does not need
-a GitHub token. Selection considers running `oxidex-runners-*` and
-`oxidex-buildbench-*` hosts with complete recent metrics, CPU and memory both
+a GitHub token. `just build-debug-remote` and `just build-release-remote` select
+running `builder-*` hosts with complete recent metrics, CPU and memory both
 below 75%, the pinned executable builder launcher, and no drain marker.
 The selection probe checks the launcher's exact revision and executes its
 side-effect-free argument-validation path, so existing hosts must receive the
@@ -225,6 +225,15 @@ and RAM as balanced capacity (four GiB per available core); job and container
 counts do not influence selection. Monitoring uses complete five-minute
 windows ending two minutes ago, so selection reflects recent utilization
 rather than an instantaneous reservation.
+
+An explicitly maintainer-approved existing VM can be selected through
+`${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/config/remote-build.json`. Use schema version
+1 and an `instances` array of objects containing `name`, numeric string `id`,
+`project`, `zone`, and boolean `enabled`. Keep the entry disabled until its
+container, pinned toolchain and admission are verified. Selection requires the
+exact VM ID; direct builds recheck that ID through GCP before remote work. A
+replacement with the same name needs a new approval. The exception retains
+all utilization, launcher, drain and compiler checks.
 
 SSH disconnects, draining hosts, and killed containers cause another attempt
 on a different VM, with fresh inventory/metrics and source resync. Three

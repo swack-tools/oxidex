@@ -122,6 +122,13 @@ build-debug:
 build-release:
     python3 tools/remote-build/build.py --profile release
 
+# Explicit remote names share the same selection and verification path.
+build-debug-remote:
+    just build-debug
+
+build-release-remote:
+    just build-release
+
 # Build just the binary
 build-bin:
     @echo "Building binary..."
