@@ -41,7 +41,7 @@ def rank_workers(rows):
     return sorted(eligible, key=capacity)
 
 
-def select_worker(project, excluded_ids=()):
+def select_worker(project, excluded_ids=(), required_name=None, required_id=None, required_zone=None):
     inventory = json.loads(subprocess.check_output([
         'gcloud', 'compute', 'instances', 'list', '--project='+project,
         '--format=json(name,id,zone,status,machineType)'], text=True))
@@ -49,6 +49,10 @@ def select_worker(project, excluded_ids=()):
     approvals = approved_instances()
     for row in inventory:
         zone = row['zone'].rsplit('/',1)[-1]
+        if ((required_name is not None and row.get('name') != required_name)
+                or (required_id is not None and str(row.get('id')) != str(required_id))
+                or (required_zone is not None and zone != required_zone)):
+            continue
         permitted = builder_instance_name(row.get('name')) or matching_approval(
             approvals, project, row.get('name'), zone, row.get('id'))
         if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not permitted:

@@ -164,6 +164,9 @@ def main(argv=None):
             '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
         if str(actual.get('id')) != approval['id'] or actual.get('status') != 'RUNNING':
             raise RuntimeError('Approved remote builder identity changed or is not running')
+        from .worker_selection import select_worker
+        select_worker(args.project, required_name=args.instance,
+                      required_id=approval['id'], required_zone=args.zone)
     import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')

@@ -7,6 +7,25 @@ from lib.remote_build import make_snapshot
 
 
 class ClientTests(unittest.TestCase):
+    def test_direct_approved_vm_cannot_bypass_busy_admission(self):
+        import json
+        from lib import remote_build
+        from unittest.mock import patch
+        approved={'name':'approved-bench','id':'2','project':'homelab-424523','zone':'z','enabled':True}
+        inventory=[{'name':'approved-bench','id':'2','zone':'zones/z','status':'RUNNING'}]
+        def output(command, **kwargs):
+            return json.dumps({'id':'2','status':'RUNNING'} if 'describe' in command else inventory)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote_build,'approved_instances',return_value=[approved]), \
+             patch('lib.worker_selection.approved_instances',return_value=[approved]), \
+             patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.9,.2)]), \
+             patch.object(remote_build.subprocess,'run') as run:
+            with self.assertRaisesRegex(RuntimeError,'No available'):
+                remote_build.main(['--source',directory,'--instance','approved-bench','--zone','z',
+                                   '--worktree-id','checkout','--evidence-dir',str(Path(directory)/'evidence')])
+            run.assert_not_called()
+
     def test_direct_exception_refuses_replacement_before_remote_mutation(self):
         import json
         from lib import remote_build
