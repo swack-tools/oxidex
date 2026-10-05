@@ -43,6 +43,72 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
+def verify_signed_source(source, head):
+    identity = subprocess.check_output(
+        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
+        text=True).strip().split('|')
+    expected = ['swackhamer','swackhamer@users.noreply.github.com',
+                'swackhamer','swackhamer@users.noreply.github.com',
+                'G','swackhamer@users.noreply.github.com']
+    if identity != expected:
+        raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
+    subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
+                        expected_toolchain, expected_oracle, *, require_pass=True, transport=None):
+    import tempfile
+    import os
+    fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        command = (transport.scp(temporary, remote, download=True) if transport else
+            ['gcloud','compute','scp',ssh_transport.target(instance)+':'+remote,str(temporary),
+             '--zone='+zone,'--project='+project,'--quiet',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(command,check=True)
+        if hashlib.sha256(temporary.read_bytes()).hexdigest() != digest:
+            raise RuntimeError('Downloaded remote test proof checksum mismatch')
+        proof = json.loads(temporary.read_text())
+        if (proof.get('schema') != 1 or proof.get('kind') != 'oxidex_spot_workspace_test'
+                or proof.get('source_commit') != expected_commit
+                or proof.get('rust_pin') != expected_toolchain['channel']
+                or proof.get('rustc_commit') != expected_toolchain['rustc_commit']
+                or proof.get('cargo_version') != expected_toolchain['cargo_version']
+                or not isinstance(proof.get('rustc_version'), str)
+                or re.findall(r'^commit-hash: ([0-9a-f]{40})$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['rustc_commit']]
+                or re.findall(r'^release: (\S+)$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['channel']]
+                or proof.get('oracle_pin') != expected_oracle
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('exiftool_tree_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('corpus_tree_sha256', ''))
+                or proof.get('corpus_files', 0) < 4000):
+            raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        if (not isinstance(proof.get('python_command'), list)
+                or proof['python_command'][1:] != ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py']
+                or (proof.get('qualification_unit_command') is not None and
+                    (not isinstance(proof['qualification_unit_command'], list) or
+                     proof['qualification_unit_command'][1:] != ['-m', 'unittest', 'test_version_transition_qualification.py']))
+                or (proof.get('test_command') is not None and
+                    proof['test_command'] != ['cargo', 'test', '--workspace', '--all-features', '--locked', '--no-fail-fast'])):
+            raise RuntimeError('Remote test proof has an unexpected command')
+        if require_pass:
+            if (proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
+                    or proof.get('python_exit_code') != 0 or proof.get('qualification_unit_exit_code') != 0
+                    or proof.get('test_command') is None or proof.get('qualification_unit_command') is None):
+                raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        elif proof.get('status') != 'FAILED' or not isinstance(proof.get('test_exit_code'), int) or proof['test_exit_code'] == 0:
+            raise RuntimeError('Remote test proof does not establish a bound failure')
+        temporary.replace(local)
+        return proof
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def verify_remote_toolchain(expected, ssh, project):
     rustc_output = subprocess.check_output(
         ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} rustc -vV'), text=True)
@@ -204,7 +270,7 @@ def main(argv=None):
     parser.add_argument('--project',default='homelab-424523')
     parser.add_argument('--worktree-id',required=True)
     parser.add_argument('--evidence-dir',type=Path,required=True)
-    parser.add_argument('--profile',choices=['debug','release'],default='release')
+    parser.add_argument('--profile',choices=['debug','release','test'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
     ssh_transport.identity()  # Refuse incomplete authentication before any subprocess.
@@ -301,6 +367,10 @@ def main(argv=None):
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        if args.profile == 'test' and receipt['source_status']:
+            raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
+        if args.profile == 'test':
+            verify_signed_source(source, receipt['source_commit'])
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
@@ -334,7 +404,11 @@ def main(argv=None):
         stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
-        stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
+        if args.profile=='test':
+            stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '
+                           +receipt['source_commit']+' --rustc-commit '+receipt['toolchain']['rustc_commit']))
+        else:
+            stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
             receipt['stage']=stage
             start=time.monotonic()
@@ -346,7 +420,55 @@ def main(argv=None):
             receipt['retryable']=retryable_exit(result.returncode);save()
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
+                if stage == 'test':
+                    remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+                    try:
+                        remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+                        if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                            raise RuntimeError('Remote failed-test proof has no SHA-256')
+                        receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                            remote_proof,evidence/'remote-test.json',remote_hash,receipt['source_commit'],
+                            receipt['toolchain'],(source/'.exiftool-version').read_text().strip(),require_pass=False,transport=transport)
+                        receipt['test_proof_sha256']=remote_hash
+                    except Exception as proof_error:
+                        # The command may have failed before writing a proof or
+                        # SSH may have lost its result. Do not destroy evidence
+                        # whose process state and payload are unconfirmed.
+                        receipt['remote_retained']=True
+                        receipt['retryable']=False
+                        receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                                 'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                        receipt['failure_proof_error']=str(proof_error)
+                    save()
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
+        if args.profile=='test':
+            receipt['stage']='verify'
+            if receipt.get('test_exit_code') != 0:
+                raise RuntimeError('Remote workspace tests did not pass')
+            remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+            # A completed test is not a verified test until its proof reaches
+            # durable local evidence. Retain remote paths across SSH/download
+            # failures instead of deleting the only completed proof.
+            receipt['remote_retained']=True
+            receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                     'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+            save()
+            remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+            if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                raise RuntimeError('Remote test proof has no SHA-256')
+            local_proof=evidence/'remote-test.json'
+            receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain'],
+                (source/'.exiftool-version').read_text().strip(),transport=transport)
+            receipt['test_proof_sha256']=remote_hash
+            receipt['remote_retained']=False
+            receipt.pop('remote_paths',None)
+            receipt['stage']='cleanup'
+            cleanup(strict=True)
+            receipt['verified']=True
+            save()
+            print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
+            return 0
         binary=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/{args.profile}/oxidex'
         receipt['stage']='verify'
         verification=subprocess.check_output(ssh(shlex.quote(binary)+' --version && sha256sum '+shlex.quote(binary)),text=True)
@@ -373,7 +495,7 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain','cleanup'):
+        if receipt.get('stage') not in ('local_toolchain','cleanup') and not receipt.get('remote_retained'):
             cleanup()
         raise
     finally:

@@ -482,3 +482,166 @@ class RequiredIdentityTests(unittest.TestCase):
                 remote_build.main(['--source',directory,'--instance','builder-vm','--zone','z',
                     '--worktree-id','checkout','--evidence-dir',directory])
             run.assert_not_called();lookup.assert_not_called()
+
+
+class RemoteTestProfileTests(unittest.TestCase):
+    def test_remote_test_runs_workspace_suite_and_never_downloads_binary(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        calls=[]
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'.exiftool-version').write_text('13.59\n')
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1','rustc_commit':'f'*40}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
+                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'download_artifact') as download, \
+                 patch.object(remote_build,'download_test_proof',return_value={'status':'PASS'}) as proof_download:
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
+                    '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test']),0)
+            receipt=__import__('json').loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertEqual(receipt['test_exit_code'],0)
+            self.assertTrue(receipt['verified'])
+            self.assertEqual(receipt['test_proof']['status'], 'PASS')
+        self.assertTrue(any('tools/remote-build/test_runner.py --source-sha' in ' '.join(c)
+                            for c in calls))
+        proof_download.assert_called_once()
+        download.assert_not_called()
+
+    def test_remote_test_refuses_unsigned_or_other_signer_before_upload(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with patch.object(remote_build.subprocess,'check_output',return_value=(
+             'swackhamer|swackhamer@users.noreply.github.com|'
+             'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
+             patch.object(remote_build.subprocess,'run') as verify:
+            with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
+                remote_build.verify_signed_source(Path('/repo'),'a'*40)
+            verify.assert_not_called()
+        signed=('swackhamer|swackhamer@users.noreply.github.com|'
+                'swackhamer|swackhamer@users.noreply.github.com|G|'
+                'swackhamer@users.noreply.github.com\n')
+        with patch.object(remote_build.subprocess,'check_output',return_value=signed), \
+             patch.object(remote_build.subprocess,'run') as verify:
+            remote_build.verify_signed_source(Path('/repo'),'a'*40)
+            self.assertIn('verify-commit', verify.call_args.args[0])
+            self.assertEqual(remote_build.subprocess.check_output.call_args.args[0][-1], 'a'*40)
+
+    def test_completed_test_retains_remote_proof_if_download_fails(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import json
+        calls=[]
+        def run(command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0)
+        def output(command, **kwargs):
+            if '--porcelain' in command:
+                return ''
+            if any('sha256sum' in str(item) for item in command):
+                return 'a'*64+'  proof\n'
+            return 'b'*40+'\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'.exiftool-version').write_text('13.59\n')
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={
+                     'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}), \
+                 patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run), \
+                 patch.object(remote_build,'verify_remote_toolchain'), \
+                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'download_test_proof',side_effect=RuntimeError('download unavailable')):
+                with self.assertRaisesRegex(RuntimeError,'download unavailable'):
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
+                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test'])
+            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+            self.assertTrue(receipt['remote_retained'])
+            self.assertIn('/remote-build/targets/',receipt['remote_paths']['target'])
+            self.assertNotIn('remote_cleanup',receipt)
+            self.assertFalse(any('sudo rm -rf --' in ' '.join(command) for command in calls))
+
+    def test_remote_test_proof_is_hash_checked_and_fail_closed(self):
+        from lib.remote_build import download_test_proof
+        from unittest.mock import patch
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            local=root/'remote-test.json'
+            proof={'schema':1,'kind':'oxidex_spot_workspace_test','source_commit':'a'*40,
+                   'rust_pin':'1.97.1','rustc_commit':'f'*40,
+                   'rustc_version':'rustc 1.97.1\nrelease: 1.97.1\ncommit-hash: '+'f'*40+'\n',
+                   'cargo_version':'cargo 1.97.1 (abc)',
+                   'oracle_pin':'13.59','status':'PASS','test_exit_code':0,
+                   'test_command':['cargo','test','--workspace','--all-features','--locked','--no-fail-fast'],
+                   'python_exit_code':0,
+                   'python_command':['python3','-m','unittest','discover','-s','tests','-p','test_*.py'],
+                   'qualification_unit_exit_code':0,
+                   'qualification_unit_command':['python3','-m','unittest','test_version_transition_qualification.py'],
+                   'bootstrap_manifest_sha256':'b'*64,'perl_sha256':'c'*64,
+                   'exiftool_tree_sha256':'d'*64,'corpus_tree_sha256':'e'*64,'corpus_files':4000}
+            toolchain={'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}
+            def fetch(command, **kwargs):
+                Path(command[4]).write_text(json.dumps(proof))
+            digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                result=download_test_proof('vm','z','p','/remote',local,digest,'a'*40,toolchain,'13.59')
+            self.assertEqual(result['status'],'PASS')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
+            # An explicit uploader must download proofs through the same
+            # enrolled transport, without invoking gcloud SSH enrollment.
+            from unittest.mock import Mock
+            transport=Mock()
+            transport.scp.side_effect=lambda destination, remote, download: [
+                'scp', 'oxidex-uploader@host:'+remote, str(destination)]
+            def direct_fetch(command, **kwargs):
+                self.assertEqual(command[:2], ['scp', 'oxidex-uploader@host:/remote'])
+                Path(command[-1]).write_text(json.dumps(proof))
+            with patch('lib.remote_build.subprocess.run',side_effect=direct_fetch):
+                result=download_test_proof('vm','z','p','/remote',local,digest,
+                    'a'*40,toolchain,'13.59',transport=transport)
+            self.assertEqual(result['status'],'PASS')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),digest)
+            transport.scp.assert_called_once()
+            self.assertTrue(transport.scp.call_args.kwargs['download'])
+            proof['status']='FAILED'
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,toolchain,'13.59')
+            proof['python_exit_code']=0
+            proof['status']='FAILED'
+            proof['test_exit_code']=1
+            failed_digest=hashlib.sha256(json.dumps(proof).encode()).hexdigest()
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                failure=download_test_proof('vm','z','p','/remote',local,failed_digest,
+                                            'a'*40,toolchain,'13.59',require_pass=False)
+            self.assertEqual(failure['status'],'FAILED')
+            self.assertEqual(hashlib.sha256(local.read_bytes()).hexdigest(),failed_digest)
+            proof['status']='PASS'
+            proof['test_exit_code']=0
+            proof['rustc_commit']='e'*40
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,toolchain,'13.59')
+            proof['rustc_commit']='f'*40
+            proof['python_exit_code']=1
+            with patch('lib.remote_build.subprocess.run',side_effect=fetch):
+                with self.assertRaisesRegex(RuntimeError,'does not establish'):
+                    download_test_proof('vm','z','p','/remote',local,
+                                        hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
+                                        'a'*40,toolchain,'13.59')

@@ -147,8 +147,8 @@ random run suffix, so concurrent clients cannot overwrite each other's source
 or target directories even if they reuse the namespace. The Cargo download
 cache remains shared; compiled target output is scoped to one build. Every
 successful build downloads a verified local binary (by default under
-`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source,
-target, and uploaded archive. Failed builds attempt the same exact-run cleanup
+`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source
+and uploaded archive. Remote target output and Cargo caches are retained. Failed builds attempt the same exact-run cleanup
 while preserving local receipts and logs. An abruptly interrupted client may
 leave its run on the host; inspect the `run_id` and instance in its receipt,
 then dry-run the exact paths with `ls -ld` over authenticated SSH before any
@@ -190,6 +190,20 @@ host-key checking. Supply a trusted known-hosts file provisioned independently;
 the client does not enroll keys in VM metadata. Explicit worker dispatch requires
 the numeric VM ID and checks the installed launcher and current CPU/memory before
 source transfer. Automatic selection still requires complete Monitoring windows.
+
+`just test-remote` uses the same selected builder and restricted launcher. It
+requires a clean checkout with a verified maintainer-signed HEAD, provisions the
+locked Perl/ExifTool oracle and fixture corpus remotely, runs the remote-client
+and version-qualification Python suites, then executes
+`cargo test --workspace --all-features --locked --no-fail-fast`. No Rust tests or
+oracle bootstrap run locally. The downloaded `remote-test.json` proof must match
+the source SHA, compiler identity, oracle pin, fixture floor and test commands
+before the client reports success. Receipts and logs live under
+`$OXIDEX_OPS_DIR/evidence/auto-remote-<timestamp>` (default
+`$HOME/oxidex-ops/evidence`). When a test result cannot be retrieved and verified,
+the client retains the remote run and disables automatic retry; inspect the
+receipt and live process before resuming. Workspace test proof does not replace
+release qualification or CI.
 
 ### Credentials and VM setup
 

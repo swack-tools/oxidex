@@ -129,6 +129,10 @@ build-debug-remote:
 build-release-remote:
     just build-release
 
+# Workspace tests and pinned oracle bootstrap execute on the selected builder.
+test-remote:
+    python3 tools/remote-build/build.py --profile test
+
 # Build just the binary
 build-bin:
     @echo "Building binary..."
