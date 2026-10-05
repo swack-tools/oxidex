@@ -45,6 +45,29 @@ class ConvertFileSizeBootstrap(unittest.TestCase):
                 verify_exprs.checked_file_size_source("11.78", Path("/native/lib"), by_expr)
 
 
+class HarnessFunctionBounds(unittest.TestCase):
+    def test_all_probes_and_emitted_statements_survive_chunk_boundaries(self):
+        import re
+        jobs=[(i, "num", "divide", float(i)) for i in range(129)]
+        expressions={"divide": ("f64", "{v} / 10.0")}
+        src=verify_exprs.build_rust_harness(jobs, expressions)
+        chunks=re.findall(r"fn probe_chunk_\d+\(out: &mut String\) \{(.*?)\n\}",src,re.S)
+        self.assertEqual([part.count('out.push_str') for part in chunks],[64,64,1])
+        ids=re.findall(r'format!\("J(\d+)\\t',src)
+        self.assertEqual(ids,[str(i) for i in range(129)])
+        calls=re.findall(r'    probe_chunk_(\d+)\(&mut out\);',src)
+        self.assertEqual(calls,['0','1','2'])
+        # Compare each whole emitted statement to the corresponding isolated
+        # probe; chunks must only move statements, never alter their code.
+        actual=[line for line in src.splitlines() if 'out.push_str' in line]
+        expected=[]
+        for job in jobs:
+            single=verify_exprs.build_rust_harness([job],expressions)
+            expected.extend(line for line in single.splitlines() if 'out.push_str' in line)
+        self.assertEqual(actual,expected)
+        self.assertEqual(src.count('#[inline(never)]'),3)
+
+
 class ElementCount(unittest.TestCase):
     def test_sized_binary_format(self):
         self.assertEqual(verify_exprs.element_count({"Format": "int16s[4]"}, "int16u"), 4)
