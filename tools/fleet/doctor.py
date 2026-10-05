@@ -120,10 +120,13 @@ from keel.election import KEEL_VERSION  # noqa: E402  (the server/runner protoco
 # Regenerate with:
 #     bash -lc 'export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"; \
 #       rustc -vV | grep -v "^host:" | shasum -a 256'
+# The historical 1.97.1 ID above remains evidence for that fleet epoch.
+# This current ID is from rustup's 1.99.0 compiler with the same host-stripped
+# hash formula; confirm it on each fleet architecture before promotion.
 CANONICAL_TOOLCHAIN_ID = (
-    "b5d143364ae0334870dfbce0e72e0ea6ecb1bc07d68d023ab6c88b6d20f58577"
+    "915cdf265f9dfb04cbde17419cc327dbb8f030a6d0ee3a1f32d12f91e1d05817"
 )
-CANONICAL_CHANNEL = "1.97.1"  # must track rust-toolchain.toml's `channel`
+CANONICAL_CHANNEL = "1.99.0"  # must track rust-toolchain.toml's `channel`
 
 # R6: the literal used to be spelled out here directly; it now lives in
 # exactly one place (config.DEFAULT_EXIFTOOL_CACHE_DIR / units/fleet-env.sh)

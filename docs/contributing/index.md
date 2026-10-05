@@ -29,7 +29,7 @@ page summarises the measured state for readers outside the project.
 git clone https://github.com/swack-tools/oxidex.git
 cd oxidex
 git switch refactor/tag-machinery
-cargo build --release          # rust-toolchain.toml pins the toolchain (1.97.1)
+cargo build --release          # rust-toolchain.toml pins the toolchain (1.99.0)
 ```
 
 To measure anything against ExifTool you also need:

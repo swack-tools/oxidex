@@ -71,7 +71,7 @@ already the keys in 1.2.1.
   `TagValue`, `ExifToolError` and the `MetadataMap` methods that existed in
   1.2.1 keep their signatures.
 - **Toolchain:** the crate now uses edition 2024, so build it with a recent
-  Rust. The repository pins 1.97.1 in `rust-toolchain.toml`.
+  Rust. The repository pins 1.99.0 in `rust-toolchain.toml`.
 - **Depend on Git, not crates.io.** This beta is not published there. See
   [Installation](/guide/getting-started) for pre-tag development guidance.
 
