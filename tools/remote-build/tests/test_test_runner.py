@@ -37,7 +37,7 @@ class OracleCacheTests(unittest.TestCase):
             runner.provision_cached_oracle(bootstrap, identity, root / "cargo")
 
     def test_real_bootstrap_accepts_cache_root_and_restores_run_environment(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(runner.os.environ, {"OXIDEX_OPS_DIR": "/target/ops"}):
+        with tempfile.TemporaryDirectory(dir=runner.ROOT) as directory, patch.dict(runner.os.environ, {"OXIDEX_OPS_DIR": "/target/ops"}):
             cache = Path(directory) / "cache"
             bootstrap = runner.load_oracle_bootstrap(cache)
             self.assertEqual(bootstrap.resolve_durable_root(cache), cache.resolve())
