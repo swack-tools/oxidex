@@ -181,6 +181,20 @@ print(json.dumps({'cpu':1-(b[1]-a[1])/delta,'memory':1-mem['MemAvailable']/mem['
     return record
 
 
+
+def verify_builder_admission(instance, zone, project, instance_id, ssh):
+    from .worker_selection import launcher_probe
+    actual = json.loads(subprocess.check_output([
+        'gcloud', 'compute', 'instances', 'describe', instance,
+        '--zone='+zone, '--project='+project, '--format=json(id,status)'], text=True))
+    if str(actual.get('id')) != instance_id or actual.get('status') != 'RUNNING':
+        raise RuntimeError('Pinned remote builder identity changed or is not running')
+    subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
+    resource = explicit_resource_probe(ssh)
+    return {'instance_id':instance_id,'launcher_verified':True,
+            'resource_probe':resource,'admission_passed':True}
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',type=Path,required=True)
@@ -201,8 +215,12 @@ def main(argv=None):
         approval = matching_approval(approved_instances(), args.project, args.instance, args.zone)
         if approval is None:
             raise ValueError('Remote builds require a dedicated builder-* VM or an explicit identity-bound approval')
+    if args.instance_id is None and approval is None:
+        raise ValueError('Direct builder requires a pinned instance ID before remote work')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
+    if args.instance_id is None:
+        args.instance_id = approval['id']
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
@@ -251,24 +269,11 @@ def main(argv=None):
         return ['gcloud','compute','ssh',ssh_transport.target(args.instance),'--zone='+args.zone,'--project='+args.project,
                 '--quiet',*SSH_KEEPALIVE,*ssh_transport.flags('ssh'),'--command='+command]
     if args.instance_id is not None:
-        from .worker_selection import launcher_probe
         receipt['stage'] = 'identity_probe'
         receipt['admission_passed'] = False
         save()
         try:
-            actual = json.loads(subprocess.check_output([
-                'gcloud', 'compute', 'instances', 'describe', args.instance,
-                '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
-            if str(actual.get('id')) != args.instance_id or actual.get('status') != 'RUNNING':
-                receipt['error'] = 'Pinned remote builder identity changed or is not running'
-                save()
-                raise RuntimeError(receipt['error'])
-            receipt['instance_id'] = args.instance_id
-            subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
-            receipt['launcher_verified'] = True
-            receipt['resource_probe'] = explicit_resource_probe(ssh)
-            save()
-            receipt['admission_passed'] = True
+            receipt.update(verify_builder_admission(args.instance, args.zone, args.project, args.instance_id, ssh))
             save()
         except Exception as exc:
             transient = (isinstance(exc, (BuilderBusy, subprocess.TimeoutExpired))

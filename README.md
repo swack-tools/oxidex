@@ -178,8 +178,18 @@ just build-release
 # Optional: use a specific worker instead of automatic selection.
 export OXIDEX_REMOTE_INSTANCE=YOUR_INSTANCE
 export OXIDEX_REMOTE_ZONE=YOUR_ZONE
+export OXIDEX_REMOTE_INSTANCE_ID=YOUR_NUMERIC_VM_ID
+export OXIDEX_REMOTE_SSH_USER=YOUR_ENROLLED_BUILD_USER
+export OXIDEX_REMOTE_SSH_KEY="$HOME/.ssh/YOUR_APPROVED_KEY"
+export OXIDEX_REMOTE_SSH_KNOWN_HOSTS="$HOME/.ssh/YOUR_TRUSTED_BUILDER_HOSTS"
 python3 tools/remote-build/direct.py --profile debug
 ```
+
+An explicit build user uses direct SSH/SCP with the approved key and strict
+host-key checking. Supply a trusted known-hosts file provisioned independently;
+the client does not enroll keys in VM metadata. Explicit worker dispatch requires
+the numeric VM ID and checks the installed launcher and current CPU/memory before
+source transfer. Automatic selection still requires complete Monitoring windows.
 
 ### Credentials and VM setup
 

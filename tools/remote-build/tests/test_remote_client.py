@@ -132,13 +132,14 @@ class ClientTests(unittest.TestCase):
             return SimpleNamespace(returncode=1 if failed else 0)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}):
                 with self.assertRaisesRegex(RuntimeError,'header failed'):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
         self.assertFalse(any('cargo build' in value for command in calls for value in command))
 
@@ -187,12 +188,13 @@ class ClientTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'prepare')) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -224,13 +226,14 @@ class ClientTests(unittest.TestCase):
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
                  patch.object(remote_build,'verify_remote_toolchain',side_effect=RuntimeError('off pin')):
                 with self.assertRaisesRegex(RuntimeError,'off pin'):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -256,13 +259,14 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             failed=subprocess.CalledProcessError(66,'ssh',stderr='OXIDEX_SOURCE_CHECKSUM_MISMATCH\n')
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
                  patch.object(remote_build.subprocess,'run',side_effect=[SimpleNamespace(returncode=0),
                      SimpleNamespace(returncode=0),failed]):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -330,10 +334,11 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/'rust-toolchain.toml').write_text('[toolchain]\nchannel = "1.97.1"\n')
-            with patch.object(remote_build.subprocess,'check_output',side_effect=subprocess.CalledProcessError(1,'rustup')), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build.subprocess,'check_output',side_effect=subprocess.CalledProcessError(1,'rustup')), \
                  patch.object(remote_build.subprocess,'run') as run:
                 with self.assertRaisesRegex(RuntimeError,'Local rustup cannot resolve repository toolchain pin'):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             import json
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
@@ -361,16 +366,17 @@ class ClientTests(unittest.TestCase):
             artifact.write_bytes(b'verified binary')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',side_effect=lambda source,archive: (archive.write_bytes(b'upload'),{'archive_sha256':'0'*64})[1]), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
-                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence')]),0)
-                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                     '--worktree-id','checkout','--evidence-dir',str(root/'evidence2')]),0)
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             second=json.loads((root/'evidence2'/'remote-build.json').read_text())
@@ -403,7 +409,8 @@ class ClientTests(unittest.TestCase):
             artifact.write_bytes(b'verified binary')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            with patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
+            with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
+                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
@@ -411,7 +418,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                         '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
             receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
             self.assertTrue(receipt['verified'])
@@ -456,9 +463,22 @@ class DirectSetupReceiptTests(unittest.TestCase):
                      patch.object(remote_build.ssh_transport,'DirectTransport',side_effect=failure), \
                      patch.object(remote_build.subprocess,'run') as remote:
                     with self.assertRaises(type(failure)):
-                        remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z',
+                        remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
                             '--worktree-id','checkout','--evidence-dir',str(root/'evidence')])
                 receipt=json.loads((root/'evidence/remote-build.json').read_text())
                 self.assertEqual(receipt['stage'],'transport_identity')
                 self.assertEqual(receipt['retryable'],expected)
                 remote.assert_not_called()
+
+
+class RequiredIdentityTests(unittest.TestCase):
+    def test_missing_instance_id_refuses_all_remote_calls(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote_build.subprocess,'run') as run, \
+             patch.object(remote_build.subprocess,'check_output') as lookup:
+            with self.assertRaisesRegex(ValueError,'pinned instance ID'):
+                remote_build.main(['--source',directory,'--instance','builder-vm','--zone','z',
+                    '--worktree-id','checkout','--evidence-dir',directory])
+            run.assert_not_called();lookup.assert_not_called()
