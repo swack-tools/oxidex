@@ -38,6 +38,8 @@ args=['--source',str(source),'--instance',setting('OXIDEX_REMOTE_INSTANCE'),
       '--zone',setting('OXIDEX_REMOTE_ZONE'),'--project',setting('OXIDEX_REMOTE_PROJECT'),
       '--worktree-id',setting('OXIDEX_REMOTE_WORKTREE'),
       '--evidence-dir',str(ops_root()/'evidence'/('cargo-remote-'+stamp))]
+if os.environ.get('OXIDEX_REMOTE_INSTANCE_ID'):
+    args += ['--instance-id', os.environ['OXIDEX_REMOTE_INSTANCE_ID']]
 args += ['--profile',options.profile]
 if options.evidence_dir:
     args += ['--evidence-dir',str(options.evidence_dir)]

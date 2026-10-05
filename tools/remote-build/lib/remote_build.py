@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .config import approved_instances, builder_instance_name, matching_approval
+from . import ssh_transport
 
 
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
@@ -113,8 +114,9 @@ def download_artifact(instance, zone, project, binary, artifact, digest):
     os.close(fd)
     temporary=Path(name)
     try:
-        subprocess.run(['gcloud','compute','scp',instance+':'+binary,str(temporary),
-            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE],check=True)
+        subprocess.run(['gcloud','compute','scp',ssh_transport.target(instance)+':'+binary,str(temporary),
+            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE,
+            *ssh_transport.flags('scp')],check=True)
         if hashlib.sha256(temporary.read_bytes()).hexdigest()!=digest:
             raise RuntimeError('Downloaded binary checksum mismatch')
         temporary.chmod(0o755)
@@ -148,18 +150,21 @@ def main(argv=None):
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--instance',required=True)
     parser.add_argument('--zone',required=True)
+    parser.add_argument('--instance-id')
     parser.add_argument('--project',default='homelab-424523')
     parser.add_argument('--worktree-id',required=True)
     parser.add_argument('--evidence-dir',type=Path,required=True)
     parser.add_argument('--profile',choices=['debug','release'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
+    ssh_transport.identity()  # Refuse incomplete authentication before any subprocess.
+    if args.instance_id is not None and not re.fullmatch(r'[0-9]{1,20}', args.instance_id):
+        raise ValueError('Invalid pinned instance ID')
     approval = None
     if not builder_instance_name(args.instance):
         approval = matching_approval(approved_instances(), args.project, args.instance, args.zone)
         if approval is None:
             raise ValueError('Remote builds require a dedicated builder-* VM or an explicit identity-bound approval')
-    import re
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
     namespace=args.worktree_id
@@ -190,8 +195,23 @@ def main(argv=None):
             save()
             raise
     def ssh(command):
-        return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
-                '--quiet',*SSH_KEEPALIVE,'--command='+command]
+        return ['gcloud','compute','ssh',ssh_transport.target(args.instance),'--zone='+args.zone,'--project='+args.project,
+                '--quiet',*SSH_KEEPALIVE,*ssh_transport.flags('ssh'),'--command='+command]
+    if args.instance_id is not None:
+        from .worker_selection import launcher_probe
+        receipt['stage'] = 'identity_probe'
+        save()
+        actual = json.loads(subprocess.check_output([
+            'gcloud', 'compute', 'instances', 'describe', args.instance,
+            '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
+        if str(actual.get('id')) != args.instance_id or actual.get('status') != 'RUNNING':
+            receipt['error'] = 'Pinned remote builder identity changed or is not running'
+            save()
+            raise RuntimeError(receipt['error'])
+        receipt['instance_id'] = args.instance_id
+        subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
+        receipt['launcher_verified'] = True
+        save()
     def cleanup(strict=False):
         try:
             subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
@@ -223,8 +243,9 @@ def main(argv=None):
         subprocess.run(ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} prepare'),check=True)
         receipt['stage']='sync_upload'
         start=time.monotonic()
-        subprocess.run(['gcloud','compute','scp',str(archive),args.instance+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
-                        '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE],check=True)
+        subprocess.run(['gcloud','compute','scp',str(archive),ssh_transport.target(args.instance)+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
+                        '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE,
+                        *ssh_transport.flags('scp')],check=True)
         digest=receipt['snapshot']['archive_sha256']
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'

@@ -6,10 +6,11 @@ import subprocess
 from types import SimpleNamespace
 from .config import approved_instances, builder_instance_name, matching_approval
 from .resource_metrics import read_utilization
+from . import ssh_transport
 
 # Exact launcher bytes provisioned by spot-github-runners' builder_assets.py.
 # The launcher has no version verb, so update this digest with its protocol.
-LAUNCHER_SHA256 = 'd3781dd0d320477ac7201a1e9b94ed2b59b829efb88b38b794ae93a467d0d2f4'
+LAUNCHER_SHA256 = '9b7e25c0ed1f2817f4704b9071b7bf03e5717d04dde66107de4c2e5334c9d104'
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 
@@ -70,8 +71,9 @@ def select_worker(project, excluded_ids=(), required_name=None, required_id=None
     probe = launcher_probe()
     for vm, sample in rank_workers(observations):
         try:
-            result = subprocess.run(['gcloud','compute','ssh',vm.name,'--zone='+vm.zone,
+            result = subprocess.run(['gcloud','compute','ssh',ssh_transport.target(vm.name),'--zone='+vm.zone,
             '--project='+project,'--quiet',*SSH_KEEPALIVE,
+            *ssh_transport.flags('ssh'),
             '--command=sh -c '+shlex.quote(probe)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
         except subprocess.TimeoutExpired:

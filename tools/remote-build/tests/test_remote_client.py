@@ -7,6 +7,18 @@ from lib.remote_build import make_snapshot
 
 
 class ClientTests(unittest.TestCase):
+    def test_explicit_builder_replacement_prevents_all_ssh(self):
+        import json
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote_build.subprocess,'check_output',return_value=json.dumps({'id':'3','status':'RUNNING'})), \
+             patch.object(remote_build.subprocess,'run') as run:
+            with self.assertRaisesRegex(RuntimeError,'identity changed'):
+                remote_build.main(['--source',directory,'--instance','builder-test','--zone','z',
+                    '--instance-id','2','--worktree-id','checkout','--evidence-dir',str(Path(directory)/'evidence')])
+            run.assert_not_called()
+
     def test_direct_approved_vm_cannot_bypass_busy_admission(self):
         import json
         from lib import remote_build

@@ -29,6 +29,14 @@ def main():
         raise RuntimeError('Set OXIDEX_REMOTE_PROJECT or configure a gcloud project')
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     evidence=ops_root()/'evidence'/('auto-remote-'+stamp)
+    if os.environ.get('OXIDEX_REMOTE_INSTANCE'):
+        # Explicit bootstrap route: actual provider ID and authenticated launcher
+        # are checked by direct.py; host admission still enforces resources.
+        from lib.ssh_transport import identity
+        if not identity() or not os.environ.get('OXIDEX_REMOTE_INSTANCE_ID') or not os.environ.get('OXIDEX_REMOTE_ZONE'):
+            raise ValueError('Explicit builder requires instance ID, zone and SSH user/key')
+        return subprocess.call([sys.executable, str(Path(__file__).with_name('direct.py')),
+            '--profile', args.profile, '--evidence-dir', str(evidence)])
     return run_attempts(project, source, args.profile, evidence, args.max_attempts)
 
 
