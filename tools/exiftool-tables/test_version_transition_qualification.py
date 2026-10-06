@@ -2404,5 +2404,80 @@ class MainOutcomeTests(unittest.TestCase):
         self.assertNotIn("refused", messages[-1])
 
 
+class PlatformPerlIdentityTests(unittest.TestCase):
+    def test_linux_accepts_only_bootstrap_bound_executable(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_bytes(b"synthetic Linux Perl")
+            perl.chmod(0o755)
+            digest = qualification._sha_file(perl)
+            probe = subprocess.CompletedProcess([], 0, "v5.38.2", "")
+            with patch.object(qualification.sys, "platform", "linux"), \
+                 patch("platform.machine", return_value="x86_64"), \
+                 patch.object(qualification, "_verified_linux_perl_sha", return_value=digest, create=True), \
+                 patch.object(qualification.subprocess, "run", return_value=probe):
+                self.assertEqual(qualification._perl(root), perl.resolve())
+            with patch.object(qualification.sys, "platform", "linux"), \
+                 patch("platform.machine", return_value="x86_64"), \
+                 patch.object(qualification, "_verified_linux_perl_sha", return_value="0" * 64, create=True):
+                with self.assertRaisesRegex(qualification.Refused, "bootstrap identity"):
+                    qualification._perl(root)
+
+    def test_linux_identity_comes_from_completed_bootstrap_verifier(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
+                "kind": "file", "path": str(perl), "sha256": "a" * 64}}}))
+            verifier = Mock(return_value=manifest)
+            loader = SimpleNamespace(exec_module=lambda module: setattr(module, "verify", verifier))
+            spec = SimpleNamespace(loader=loader)
+            with patch("importlib.util.spec_from_file_location", return_value=spec), \
+                 patch("importlib.util.module_from_spec", return_value=SimpleNamespace()):
+                self.assertEqual(qualification._verified_linux_perl_sha(root, perl), "a" * 64)
+                verifier.assert_called_once_with(root, "13.59", None)
+                manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
+                    "kind": "file", "path": str(root / "wrong"), "sha256": "a" * 64}}}))
+                with self.assertRaisesRegex(qualification.Refused, "path or type"):
+                    qualification._verified_linux_perl_sha(root, perl)
+                manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
+                    "kind": "file", "path": str(perl)}}}))
+                with self.assertRaisesRegex(qualification.Refused, "digest"):
+                    qualification._verified_linux_perl_sha(root, perl)
+                verifier.side_effect = RuntimeError("capability probe failed")
+                with self.assertRaisesRegex(qualification.Refused, "bootstrap verification failed"):
+                    qualification._verified_linux_perl_sha(root, perl)
+
+    def test_unsupported_linux_architecture_refuses_before_bootstrap(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_bytes(b"synthetic Linux Perl")
+            perl.chmod(0o755)
+            with patch.object(qualification.sys, "platform", "linux"), \
+                 patch("platform.machine", return_value="aarch64"), \
+                 patch.object(qualification, "_verified_linux_perl_sha") as verify:
+                with self.assertRaisesRegex(qualification.Refused, "Linux x86_64"):
+                    qualification._perl(root)
+                verify.assert_not_called()
+
+    def test_darwin_keeps_exact_executable_digest(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_bytes(b"not the pinned Darwin executable")
+            perl.chmod(0o755)
+            with patch.object(qualification.sys, "platform", "darwin"):
+                with self.assertRaisesRegex(qualification.Refused, "executable hash differs"):
+                    qualification._perl(root)
+
+
 if __name__ == "__main__":
     unittest.main()
