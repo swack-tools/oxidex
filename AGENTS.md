@@ -399,9 +399,14 @@ verbatim fails in whichever direction is hardest to see.
 CI/PR polling: persist state to a file as you go, choose configurable worker
 counts and build jobs from available cores and memory, isolate every worker in its own explicit
 worktree and target directory, and reserve corpus timing runs exclusively from
-competing builds. Workers and builds run directly on this laptop without SSH,
-fleet or hub. Use native desktop agents first (up to three workers), then CLI
-workers for additional independent work under the routing skill. Report a
+competing builds. Agents may edit and review on this laptop. Normal `just` builds,
+tests, Rust/Cargo work and compute-heavy Python validation run on dedicated,
+script-provisioned Spot builders through the reviewed remote control plane; the
+only intentional local build entrypoint is `just build-local`. Never substitute
+a laptop run when the remote route is missing. CI already executing on an
+eligible Spot runner may use its own worker context. Use native desktop agents
+first (up to three workers), then CLI workers for additional independent work
+under the routing skill. Report a
 blocked item as blocked instead of retrying it forever, and keep resumable
 evidence. A 45-minute poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.

@@ -114,12 +114,32 @@ class ClientTests(unittest.TestCase):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(data)
             subprocess.run(['git','-C',str(root),'add','.'],check=True)
             (root/'Cargo.toml').write_text('working change')
+            (root/'new_source.py').write_text('new untracked source')
+            (root/'.env.local').write_text('never transfer')
             archive=Path(directory)/'source.tar.gz'
             receipt=make_snapshot(root,archive)
             with tarfile.open(archive) as tar:
-                self.assertEqual(tar.getnames(), ['Cargo.toml'])
+                self.assertEqual(set(tar.getnames()), {'Cargo.toml','new_source.py'})
                 self.assertEqual(tar.extractfile('Cargo.toml').read(), b'working change')
-            self.assertEqual(receipt['file_count'],1)
+                self.assertEqual(tar.extractfile('new_source.py').read(), b'new untracked source')
+            self.assertEqual(receipt['file_count'],2)
+
+    def test_added_file_inside_existing_untracked_directory_refuses_snapshot(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/'src';root.mkdir()
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            folder=root/'new';folder.mkdir()
+            (folder/'a.py').write_text('original')
+            archive=Path(directory)/'source.tar.gz'
+            original_open=remote_build.tarfile.open
+            def add_during_pack(*args,**kwargs):
+                (folder/'b.py').write_text('added during pack')
+                return original_open(*args,**kwargs)
+            with patch.object(remote_build.tarfile,'open',side_effect=add_during_pack):
+                with self.assertRaisesRegex(RuntimeError,'Eligible source file set changed'):
+                    remote_build.make_snapshot(root,archive)
 
     def test_failed_remote_header_validation_prevents_release_compilation(self):
         from lib import remote_build

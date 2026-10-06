@@ -185,6 +185,41 @@ export OXIDEX_REMOTE_SSH_KNOWN_HOSTS="$HOME/.ssh/YOUR_TRUSTED_BUILDER_HOSTS"
 python3 tools/remote-build/direct.py --profile debug
 ```
 
+Normal `just build`, `just test`, the standard build/test/check/lint/bench
+recipes, and `just build-remote` use a dedicated Spot builder from a developer
+checkout. `just build-local` is the deliberate local debug-workspace exception.
+The generic recipe route snapshots the working tree, executes the **same Just
+recipe** in the restricted Linux builder container, and retains the remote
+source/target plus a local run receipt and hashed log. For build recipes it also
+downloads a SHA-checked Linux `oxidex` binary below
+`target/remote-linux/<profile>/<run-id>/`; other workspace outputs stay in the
+retained remote target. The generic recipe receipt is a development result, not
+the separate exact-head `just test-remote` qualification proof. Recipes that
+require local corpus inputs or return source changes refuse on a developer
+machine until their input/output mapping is reviewed.
+
+To keep personal worker details out of the checkout, put only the named remote
+settings in your existing user Cargo config (`$CARGO_HOME/config.toml`, or
+`$HOME/.cargo/config.toml` when `CARGO_HOME` is unset). Preserve its other
+entries. An example of the `[env]` section is:
+
+```toml
+[env]
+OXIDEX_REMOTE_PROJECT = "your-project"
+OXIDEX_REMOTE_INSTANCE = "builder-your-worker"
+OXIDEX_REMOTE_ZONE = "your-zone"
+OXIDEX_REMOTE_INSTANCE_ID = "123456789"
+OXIDEX_REMOTE_SSH_USER = "oxidex-uploader"
+OXIDEX_REMOTE_SSH_KEY = "/absolute/path/to/approved-key"
+OXIDEX_REMOTE_SSH_KNOWN_HOSTS = "/absolute/path/to/trusted-known-hosts"
+```
+
+Omit instance, zone and ID for automatic CPU/memory selection. The resolver
+uses process environment first, then checkout `.cargo/config.toml` `[env]`,
+then user Cargo `[env]`; empty or malformed named values refuse. Paths must be
+absolute. The direct route still checks current provider ID, strict host-key
+trust, installed launcher, image and CPU/memory admission before transfer.
+
 An explicit build user uses direct SSH/SCP with the approved key and strict
 host-key checking. Supply a trusted known-hosts file provisioned independently;
 the client does not enroll keys in VM metadata. Explicit worker dispatch requires
