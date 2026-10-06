@@ -11,7 +11,7 @@ RECIPE = re.compile(r'[a-z][a-z0-9_-]{0,63}\Z')
 ORACLE_TEST_RECIPES = frozenset({
     'test', 'test-nextest', 'test-debug', 'test-nocapture', 'test-unit',
     'test-integration', 'test-ffi-c', 'test-comparison', 'test-doc',
-    'test-package', 'test-tags',
+    'test-package', 'test-tags', 'ci',
 })
 
 

@@ -306,6 +306,9 @@ docs:
 
 # Generate documentation without opening
 docs-build:
+    python3 tools/remote-build/route.py docs-build
+
+_docs-build-worker:
     python3 tools/remote-build/route.py --require-local-context docs-build
     @echo "Generating documentation..."
     cargo doc --workspace --no-deps
@@ -440,6 +443,9 @@ rpm:
 # Run CI checks (optimized with nextest + merged doctests)
 # Edition 2024 merges doctests into single binary (~36s vs ~3min)
 ci:
+    python3 tools/remote-build/route.py ci
+
+_ci-worker:
     #!/usr/bin/env bash
     python3 tools/remote-build/route.py --require-local-context ci || exit $?
     set -euo pipefail
@@ -518,7 +524,10 @@ ci:
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
+ci-standard:
+    python3 tools/remote-build/route.py ci-standard
+
+_ci-standard-worker: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ C header up-to-date"
@@ -530,7 +539,10 @@ ci-standard: fmt-check cbindgen-check lint-release build-release-local test test
 # Pre-commit hook: format check, header check, lint, test
 # cbindgen-check runs early because it is the cheapest of the four and is the
 # check that broke main twice (#211, #256) by being absent from this list.
-pre-commit: fmt-check cbindgen-check lint test
+pre-commit:
+    python3 tools/remote-build/route.py pre-commit
+
+_pre-commit-worker: fmt-check cbindgen-check lint test
     @echo "Pre-commit checks passed!"
 
 # Install git hooks (absolute core.hooksPath so linked worktrees resolve the

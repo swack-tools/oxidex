@@ -104,6 +104,55 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(events, ['oracle', 'recipe'])
         self.assertEqual(launch.call_args.args[1], ['just', '_test-worker', '--exact', 'literal argument'])
 
+    def test_ci_and_docs_public_recipes_dispatch_before_worker_commands(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        for recipe in ('ci', 'ci-standard', 'pre-commit', 'docs-build'):
+            with self.subTest(recipe=recipe):
+                rendered = subprocess.run(['just', '--dry-run', recipe], cwd=repository,
+                                          capture_output=True, text=True, check=True).stderr
+                self.assertEqual(rendered.strip(),
+                                 'python3 tools/remote-build/route.py ' + recipe)
+        ci = subprocess.run(['just', '--dry-run', '_ci-worker'], cwd=repository,
+                            capture_output=True, text=True, check=True).stderr
+        steps = ('cargo fmt --all -- --check', 'just cbindgen-check',
+                 'cargo clippy --release --all-features -- -D warnings',
+                 'cargo build --release --all-features --all-targets',
+                 'cargo test --doc --release --all-features',
+                 'cargo nextest run --release --all-features --no-fail-fast',
+                 'cargo test --test ffi_c_integration -- --nocapture')
+        self.assertEqual([ci.index(step) for step in steps],
+                         sorted(ci.index(step) for step in steps))
+        docs = subprocess.run(['just', '--dry-run', '_docs-build-worker'], cwd=repository,
+                              capture_output=True, text=True, check=True).stderr
+        self.assertIn('cargo doc --workspace --no-deps', docs)
+        for recipe, ordered in (
+            ('ci-standard', ('cargo fmt --all -- --check',
+                             'Checking C header is up-to-date',
+                             'tools/remote-build/route.py lint-release',
+                             'tools/remote-build/route.py build-release-local',
+                             'tools/remote-build/route.py test\n',
+                             'tools/remote-build/route.py test-ffi-c')),
+            ('pre-commit', ('cargo fmt --all -- --check',
+                            'Checking C header is up-to-date',
+                            'tools/remote-build/route.py lint\n',
+                            'tools/remote-build/route.py test\n')),
+        ):
+            worker = subprocess.run(['just', '--dry-run', '_' + recipe + '-worker'],
+                                    cwd=repository, capture_output=True, text=True, check=True).stderr
+            self.assertEqual([worker.index(step) for step in ordered],
+                             sorted(worker.index(step) for step in ordered))
+
+    def test_ci_worker_prepares_oracle_before_original_compound_recipe(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('recipe')) as launch:
+            route.main(['ci'])
+        self.assertEqual(events, ['oracle', 'recipe'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_ci-worker'])
+
     def test_oracle_provision_failure_refuses_cargo_recipe(self):
         with patch.object(route, 'local_worker_context', return_value=True), \
              patch('test_runner.prepare_generic_recipe_oracle', side_effect=RuntimeError('invalid oracle')), \

@@ -459,6 +459,8 @@ def main(argv=None):
                 receipt['remote_retained']=True  # unknown child state on lost SSH acknowledgement
                 receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
                                          'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                if args.just_recipe == 'docs-build':
+                    receipt['rustdoc_path'] = receipt['remote_paths']['target'] + '/doc'
                 receipt['recipe_state']='RUNNING_OR_UNKNOWN'
                 receipt['remote_command']=remote
                 save()

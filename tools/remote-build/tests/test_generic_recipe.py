@@ -66,6 +66,13 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertIn('source',receipt['remote_paths'])
         self.assertIn('target',receipt['remote_paths'])
 
+    def test_docs_build_receipt_names_retained_remote_rustdoc_directory(self):
+        receipt, commands, _ = self.exercise(0, recipe='docs-build')
+        self.assertEqual(receipt['rustdoc_path'],
+                         receipt['remote_paths']['target'] + '/doc')
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
+
     def test_ssh_255_retains_unknown_and_never_retries_or_cleans(self):
         receipt,commands,_=self.exercise(255)
         self.assertEqual(receipt['recipe_state'],'UNKNOWN_RETAINED')
