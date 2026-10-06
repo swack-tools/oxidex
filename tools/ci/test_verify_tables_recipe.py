@@ -194,6 +194,10 @@ class VerifyTablesRecipeTests(unittest.TestCase):
         calls = self.read_calls()
         python_calls = [call for call in calls if call["kind"] == "python"]
         perl_calls = [call for call in calls if call["kind"] == "perl"]
+        self.assertEqual(
+            python_calls[0]["argv"],
+            ["tools/remote-build/route.py", "--require-local-context", "verify-tables"],
+        )
         by_script = {call["argv"][0]: call for call in python_calls if call["argv"]}
 
         release = by_script["tools/ci/release_oracle.py"]
@@ -250,7 +254,10 @@ class VerifyTablesRecipeTests(unittest.TestCase):
         result = self.run_recipe("13.58")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not match repository pin 13.59", result.stderr)
-        self.assertEqual(self.read_calls(), [])
+        self.assertEqual(
+            [call["argv"] for call in self.read_calls()],
+            [["tools/remote-build/route.py", "--require-local-context", "verify-tables"]],
+        )
 
     def test_missing_or_degraded_perl_refuses_before_verifiers(self):
         for overrides, expected in (

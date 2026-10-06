@@ -45,9 +45,27 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(launch.call_args.args[1][-1],'--just-arg=$(touch /tmp/should-never-run)')
 
     def test_worker_runs_private_original_recipe(self):
-        with patch.object(route,'local_worker_context',return_value=True),patch.object(os,'execvp') as launch:
+        with patch.object(route,'local_worker_context',return_value=True),patch.object(os,'execvp') as launch, \
+             patch('test_runner.prepare_generic_recipe_oracle'):
             route.main(['test-package','abc'])
         self.assertEqual(launch.call_args.args[1],['just','_test-package-worker','abc'])
+
+    def test_test_worker_provisions_oracle_before_original_recipe(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('recipe')) as launch:
+            route.main(['test', '--exact', 'literal argument'])
+        self.assertEqual(events, ['oracle', 'recipe'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_test-worker', '--exact', 'literal argument'])
+
+    def test_oracle_provision_failure_refuses_cargo_recipe(self):
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=RuntimeError('invalid oracle')), \
+             patch.object(os, 'execvp') as launch:
+            with self.assertRaisesRegex(RuntimeError, 'invalid oracle'):
+                route.main(['test'])
+        launch.assert_not_called()
 
     def test_bad_names_and_args_refuse_before_dispatch(self):
         with patch.object(os,'execv') as launch:

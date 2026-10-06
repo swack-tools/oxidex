@@ -1541,7 +1541,7 @@ bump-exiftool version *args:
 # oracle and passed forever. verify.py now refuses a stamp that isn't the pin.
 verify-tables version="":
     #!/usr/bin/env bash
-    python3 tools/remote-build/route.py --require-local-context verify-tables || exit $?
+    uv run python tools/remote-build/route.py --require-local-context verify-tables || exit $?
     set -euo pipefail
 
     GENERATED="src/exiftool_tables/binary/mod.rs"

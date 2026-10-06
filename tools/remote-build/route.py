@@ -8,6 +8,11 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 RECIPE = re.compile(r'[a-z][a-z0-9_-]{0,63}\Z')
+ORACLE_TEST_RECIPES = frozenset({
+    'test', 'test-nextest', 'test-debug', 'test-nocapture', 'test-unit',
+    'test-integration', 'test-ffi-c', 'test-comparison', 'test-doc',
+    'test-package', 'test-tags',
+})
 
 
 def trusted_marker(path):
@@ -50,6 +55,9 @@ def main(argv):
     if any(not value or len(value) > 4096 or any(ch in value for ch in '\x00\n\r') for value in args):
         raise SystemExit('Invalid recipe argument')
     if local_worker_context():
+        if recipe in ORACLE_TEST_RECIPES:
+            from test_runner import prepare_generic_recipe_oracle
+            prepare_generic_recipe_oracle()
         os.execvp('just', ['just', '_' + recipe + '-worker', *args])
         return 0  # execvp does not return outside synthetic controls
     command = [sys.executable, str(HERE/'build.py'), '--just-recipe', recipe]

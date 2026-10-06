@@ -88,6 +88,34 @@ def provision_cached_oracle(bootstrap, lock_path: Path, cargo_home: Path) -> tup
     return cache, manifest
 
 
+def prepare_generic_recipe_oracle() -> Path:
+    """Verify the locked oracle before an original Just test recipe can run."""
+    lock_path = ROOT / "tools/release/oracle-lock.json"
+    cargo_home = Path(os.environ.get("CARGO_HOME", "/cargo"))
+    pin = (ROOT / ".exiftool-version").read_text().strip()
+    cache = oracle_cache_root(lock_path, cargo_home)
+    # The Rust oracle gives EXIFTOOL priority over its pinned cache and permits
+    # degraded probes when the skew override is set. Neither is valid here.
+    os.environ.pop("EXIFTOOL", None)
+    os.environ.pop("OXIDEX_ALLOW_EXIFTOOL_SKEW", None)
+    os.environ["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"] = "1"
+    configure_oracle_environment(cache, pin)
+    bootstrap = load_oracle_bootstrap(cache)
+    _, manifest = provision_cached_oracle(bootstrap, lock_path, cargo_home)
+    # provision() validates the lock, authenticates the materialized artifacts,
+    # runs the Perl/ExifTool/DOCX/corpus probes, and writes this manifest.
+    report = json.loads(manifest.read_text())
+    print("=== pinned Just test oracle ===", json.dumps({
+        "oracle_pin": pin,
+        "lock_sha256": report["lock_sha256"],
+        "bootstrap_manifest_sha256": file_sha(manifest),
+        "perl_sha256": report["artifacts"]["perl_executable"]["sha256"],
+        "exiftool_tree_sha256": report["artifacts"]["exiftool_tree"]["sha256"],
+        "docx_probe": report["probes"]["docx"],
+    }, sort_keys=True), flush=True)
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
