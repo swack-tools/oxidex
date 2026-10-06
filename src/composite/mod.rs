@@ -134,9 +134,12 @@ fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
 /// binds to it, not to `Canon:BaseISO * Canon:AutoISO / 100`. No separate
 /// demoted-composite special case is needed for this anymore: it is the
 /// same rule as every other name.
-fn resolve_dependency(map: &MetadataMap, index: &mut NameIndex, key: &str) -> Option<String> {
-    let occurrence = index.resolve(map, key)?;
-    occurrence_value_string(occurrence)
+fn resolve_dependency<'m>(
+    map: &'m MetadataMap,
+    index: &mut NameIndex,
+    key: &str,
+) -> Option<&'m TagOccurrence> {
+    index.resolve(map, key)
 }
 
 /// Every occurrence position in a [`MetadataMap`], grouped by the
@@ -197,22 +200,38 @@ impl NameIndex {
             &owned
         };
         let positions = self.by_name.get(lower).map(Vec::as_slice).unwrap_or(&[]);
+        // CLI requests are deliberately case-insensitive. A Composite table's
+        // dependency is an internal ExifTool tag ID, however: `ISO` cannot
+        // bind `Iso`, an unknown default tag restored from an ExifTool -X
+        // namespace. Other reader occurrences keep the established CLI
+        // arbitration, including aliases used by existing composite tables.
+        let static_case_mismatch = positions
+            .iter()
+            .filter_map(|&idx| map.active_occurrence(idx))
+            .any(|occurrence| {
+                occurrence.origin.module == Some("XMP::StaticGroup")
+                    && occurrence.name.as_ref() != short_name
+            });
         let winner = arbitrate(
             positions
                 .iter()
                 .filter_map(|&idx| map.active_occurrence(idx))
                 .filter(|occurrence| {
                     qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+                        && (occurrence.origin.module != Some("XMP::StaticGroup")
+                            || occurrence.name.as_ref() == short_name)
                 }),
         );
-        debug_assert!(
-            std::ptr::eq(
-                winner.map_or(std::ptr::null(), |o| o as *const TagOccurrence),
-                crate::cli::tag_resolution::resolve_requested_tag(map, token)
-                    .map_or(std::ptr::null(), |o| o as *const TagOccurrence),
-            ),
-            "NameIndex disagrees with resolve_requested_tag for {token:?}"
-        );
+        if !static_case_mismatch {
+            debug_assert!(
+                std::ptr::eq(
+                    winner.map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+                    crate::cli::tag_resolution::resolve_requested_tag(map, token)
+                        .map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+                ),
+                "NameIndex disagrees with resolve_requested_tag for {token:?}"
+            );
+        }
         winner
     }
 }
@@ -258,14 +277,26 @@ fn resolve_lens_occurrence(
 /// to normalize the two dependency-name notations ExifTool's generated
 /// tables use (`Module::Tag` for QuickTime, `Group:Tag` for everything
 /// parsed) onto one separator before delegating.
-fn resolve_indexed(map: &MetadataMap, index: &mut NameIndex, name: &str) -> Option<String> {
+fn resolve_indexed_with_source(
+    map: &MetadataMap,
+    index: &mut NameIndex,
+    name: &str,
+) -> Option<(String, bool)> {
     // Only QuickTime's `Module::Tag` names need rewriting; borrowing the
     // rest keeps this per-dependency, per-pass call allocation-free.
-    if name.contains("::") {
+    let occurrence = if name.contains("::") {
         resolve_dependency(map, index, &name.replacen("::", ":", 1))
     } else {
         resolve_dependency(map, index, name)
-    }
+    }?;
+    Some((
+        occurrence_value_string(occurrence)?,
+        occurrence.origin.module == Some("XMP::StaticGroup"),
+    ))
+}
+
+fn resolve_indexed(map: &MetadataMap, index: &mut NameIndex, name: &str) -> Option<String> {
+    resolve_indexed_with_source(map, index, name).map(|(value, _)| value)
 }
 
 /// [`resolve_indexed`] against a fresh index, for tests that resolve one name.
@@ -322,6 +353,23 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // `lens_id::OMITTED`.
     let olympus_lens_type_pair = resolve_indexed(map, &mut names, "LensTypeMake").is_some()
         && resolve_indexed(map, &mut names, "LensTypeModel").is_some();
+    // A static ExifTool -X URI reports the named group but never loads that
+    // group's native Composite table. The URI may name any family 0 (even
+    // EXIF/Canon), while an embedded packet may coexist with native tags.
+    // Source provenance, not the displayed family-0/group-1 string, decides
+    // whether the module was actually activated by a file reader.
+    let mut native_source_modules = HashSet::new();
+    for occurrence in map.occurrences() {
+        if occurrence.origin.module != Some("XMP::StaticGroup") {
+            let family1 = crate::cli::tag_resolution::family1_label(occurrence);
+            native_source_modules.insert(family1.to_string());
+            // Panasonic.pm's nonzero LensTypeModel RawConv requires Olympus.pm,
+            // activating its Composite table without an Olympus-group row.
+            if family1 == "Panasonic" && occurrence.name.as_ref() == "LensTypeModel" {
+                native_source_modules.insert("Olympus".to_string());
+            }
+        }
+    }
     // Composites this run produced, keyed by each definition's own index
     // into COMPOSITES -- NOT by `comp.name`. Two distinct table rows can
     // share one output Name (`Exif::LensID` and `Exif::LensID-2` both
@@ -401,9 +449,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 .unwrap_or(0);
             let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
+            let mut uses_static_input = false;
             for &(index, dep) in comp.require {
-                match resolve_indexed(map, &mut names, dep) {
-                    Some(v) => owned[index] = Some(v),
+                match resolve_indexed_with_source(map, &mut names, dep) {
+                    Some((value, is_static)) => {
+                        owned[index] = Some(value);
+                        uses_static_input |= is_static;
+                    }
                     None => {
                         satisfied = false;
                         break;
@@ -414,7 +466,24 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 continue;
             }
             for &(index, dep) in comp.desire {
-                owned[index] = resolve_indexed(map, &mut names, dep);
+                if let Some((value, is_static)) = resolve_indexed_with_source(map, &mut names, dep)
+                {
+                    owned[index] = Some(value);
+                    uses_static_input |= is_static;
+                }
+            }
+            // A static URI can name a maker-note family without loading its
+            // Composite table. Gate on the resolved inputs, not on similarly
+            // spelled but unrelated static properties. RW2/RWL activate the
+            // PanasonicRaw reader even when all native rows display as IFD0.
+            let native_reader_active = native_source_modules.contains(comp.module)
+                || (comp.module == "PanasonicRaw"
+                    && matches!(file_type.as_deref(), Some("RW2" | "RWL")));
+            if !matches!(comp.module, "Exif" | "GPS" | "XMP")
+                && uses_static_input
+                && !native_reader_active
+            {
+                continue;
             }
             if comp.module == "QuickTime" && comp.name == "AvgBitrate" {
                 // Native RawConv walks every occurrence of its selected
@@ -1329,6 +1398,32 @@ mod tests {
         );
         assert_eq!(
             m.get_string("Composite:LensID"),
+            Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
+        );
+    }
+
+    #[test]
+    fn native_panasonic_model_activates_olympus_with_static_make() {
+        // Panasonic.pm's native LensTypeModel RawConv loads Olympus.pm when
+        // nonzero. A static XMP LensTypeMake may complete that table's pair.
+        let mut m = map_of(&[
+            ("Panasonic:LensTypeModel", "20 10"),
+            ("IFD0:Make", "Panasonic"),
+        ]);
+        m.insert_xmp_static_occurrence(
+            "Panasonic:LensTypeMake",
+            TagValue::new_string("2".to_string()),
+            Some("2"),
+            "Panasonic",
+            "Panasonic",
+            1,
+            false,
+            None,
+            None,
+        );
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensType"),
             Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
         );
     }

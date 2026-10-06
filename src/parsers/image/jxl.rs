@@ -235,7 +235,7 @@ impl JXLParser {
                                 brand_offset += 4;
                             }
                             if !brands.is_empty() {
-                                metadata.insert(
+                                metadata.insert_declared_list(
                                     "Jpeg2000:CompatibleBrands".to_string(),
                                     TagValue::Array(brands),
                                 );

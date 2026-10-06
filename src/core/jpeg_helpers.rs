@@ -735,7 +735,9 @@ pub fn process_iptc_segments(
         metadata.insert("File:CurrentIPTCDigest", TagValue::new_string(digest));
     }
 
-    match crate::parsers::jpeg::iptc_parser::extract_iptc_values_from_segments(segments) {
+    match crate::parsers::jpeg::iptc_parser::extract_iptc_values_with_list_flags_from_segments(
+        segments,
+    ) {
         Ok(iptc_tags) => {
             // Add all IPTC tags to metadata. Keywords and
             // SupplementalCategories arrive as a TagValue::Array -- they are
@@ -747,9 +749,11 @@ pub fn process_iptc_segments(
             // string it returns is ExifTool's final printed value. Re-parsing
             // it as int/float here would strip exactly what that pipeline
             // produced -- e.g. a `digits[N]`-format field's leading zeros.
-            for (tag_name, value) in iptc_tags {
+            for (tag_name, value, is_list) in iptc_tags {
                 if tag_name == "IPTC:ObjectPreviewData" {
                     metadata.insert_unavailable_binary_display(tag_name, value, "");
+                } else if is_list {
+                    metadata.insert_declared_list(tag_name, value);
                 } else {
                     metadata.insert(tag_name, value);
                 }

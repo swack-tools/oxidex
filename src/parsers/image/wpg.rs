@@ -88,6 +88,19 @@ fn format_records(record_runs: &[(u8, usize)]) -> Vec<String> {
         .collect()
 }
 
+fn record_values(record_runs: &[(u8, usize)]) -> Vec<TagValue> {
+    record_runs
+        .iter()
+        .map(|&(record_type, count)| {
+            if count > 1 {
+                TagValue::String(format!("{record_type}x{count}"))
+            } else {
+                TagValue::String(record_type.to_string())
+            }
+        })
+        .collect()
+}
+
 /// Parses only WPG v1's ExifTool-compatible `WPG:Records` list.
 pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<MetadataMap, String> {
     // Every row here is read from the file (`metadata_map::file_rows`):
@@ -146,7 +159,7 @@ pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
         }
 
         if !record_runs.is_empty() {
-            metadata.insert(
+            metadata.insert_declared_list_with_value_form(
                 "WPG:Records".to_string(),
                 TagValue::Array(
                     format_records(&record_runs)
@@ -154,6 +167,7 @@ pub fn parse_wpg_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
                         .map(TagValue::String)
                         .collect(),
                 ),
+                TagValue::Array(record_values(&record_runs)),
             );
         }
         Ok(metadata)

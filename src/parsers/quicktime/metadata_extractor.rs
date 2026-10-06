@@ -687,7 +687,7 @@ fn extract_file_level_metadata(root_atoms: &[Atom], metadata: &mut MetadataMap) 
                 offset += 4;
             }
             if !compatible_brands.is_empty() {
-                metadata.insert(
+                metadata.insert_declared_list(
                     "QuickTime:CompatibleBrands".to_string(),
                     TagValue::Array(compatible_brands),
                 );

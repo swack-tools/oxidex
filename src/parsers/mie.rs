@@ -969,7 +969,11 @@ fn record_mie_leaf(
         Some(lang) => format!("{group1}:{name}-{lang}"),
         None => format!("{group1}:{name}"),
     };
-    metadata.insert(key, value);
+    if matches!(kind, MieValue::StringList) {
+        metadata.insert_declared_list(key, value);
+    } else {
+        metadata.insert(key, value);
+    }
 }
 
 /// Strips a trailing `(units)` suffix from a raw on-disk MIE tag name.

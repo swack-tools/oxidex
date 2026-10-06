@@ -518,6 +518,64 @@ impl MetadataMap {
     /// metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
     /// ```
     pub fn insert<K: Into<String>>(&mut self, key: K, value: TagValue) -> Option<TagValue> {
+        self.insert_with_list_flag(key, value, false)
+    }
+
+    /// Insert a value whose source dataset declares ExifTool List semantics.
+    pub(crate) fn insert_declared_list<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+    ) -> Option<TagValue> {
+        self.insert_with_list_flag(key, value, true)
+    }
+
+    /// Keep a parser's expanded value while `-b` extracts its original scalar
+    /// source text. PDF Info Keywords is comma-delimited source text, not an
+    /// ExifTool List, even though the library exposes its parsed elements as
+    /// an array.
+    pub(crate) fn insert_with_scalar_binary_source<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        source: &str,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.stored = Some(TagValue::Binary(source.as_bytes().to_vec()));
+        occurrence.binary_extract_from_stored = true;
+        self.sink.record(key, occurrence);
+        self.sink.mark_assigned(order as usize);
+        previous
+    }
+
+    /// A source-declared list whose printed elements differ from its
+    /// ValueConv elements. Binary output and `--no-print-conv` use `value`.
+    pub(crate) fn insert_declared_list_with_value_form<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        value: TagValue,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.is_list = true;
+        occurrence.value = Some(value);
+        occurrence.print = Some(occurrence.raw.clone());
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    fn insert_with_list_flag<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         // Replacing the visible tag invalidates any ValueConv form belonging
         // to its predecessor: `TagOccurrence::from_insert_shim` always
@@ -527,7 +585,8 @@ impl MetadataMap {
         // attach a new form explicitly afterwards via `set_value_form`.
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
-        let occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         // A public mutation: the caller's assignment, whatever the value
         // (a reader recording through `insert` is marked read when its
@@ -677,10 +736,15 @@ impl MetadataMap {
             let mut copied = TagOccurrence::from_insert_shim(key, occurrence.raw.clone(), order);
             copied.group1 = occurrence.group1.clone();
             copied.value = occurrence.value.clone();
-            copied.print = occurrence.value.as_ref().map(|_| occurrence.raw.clone());
+            copied.print = occurrence
+                .print
+                .clone()
+                .or_else(|| occurrence.value.as_ref().map(|_| occurrence.raw.clone()));
             copied.stored = occurrence.stored.clone();
             copied.binary_payload_unavailable = occurrence.binary_payload_unavailable;
             copied.binary_extract_from_stored = occurrence.binary_extract_from_stored;
+            copied.is_list = occurrence.is_list;
+            copied.origin = occurrence.origin.clone();
             self.sink.record(key.clone(), copied);
             self.set_last_assigned(source.is_assigned(key));
         }
@@ -707,6 +771,19 @@ impl MetadataMap {
         group1: &str,
         instance: super::tag_occurrence::Instance,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_list_state(key, value, priority, group1, instance, false)
+    }
+
+    /// An occurrence whose producing table declared ExifTool List semantics.
+    pub(crate) fn insert_occurrence_with_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -714,6 +791,7 @@ impl MetadataMap {
         occurrence.priority = priority.into();
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         previous
     }
@@ -730,9 +808,32 @@ impl MetadataMap {
         priority: i16,
         group1: &str,
     ) {
+        let is_list = matches!(&display, TagValue::Array(_));
+        self.insert_xmp_occurrence_with_list_flag(
+            key,
+            display,
+            value_form,
+            stored_form,
+            priority,
+            group1,
+            is_list,
+        );
+    }
+
+    /// Preserve the RDF source list declaration even when a carrier requests
+    /// a joined display string instead of a typed array.
+    pub(crate) fn insert_xmp_occurrence_with_list_flag<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        value_form: Option<TagValue>,
+        stored_form: Option<TagValue>,
+        priority: i16,
+        group1: &str,
+        is_list: bool,
+    ) {
         let key = key.into();
         let order = self.sink.next_order();
-        let is_list = matches!(&display, TagValue::Array(_));
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
         occurrence.priority = priority;
         occurrence.is_list = is_list;
@@ -742,6 +843,70 @@ impl MetadataMap {
         if occurrence.value.is_some() {
             occurrence.print = Some(occurrence.raw.clone());
         }
+        self.sink.record(key, occurrence);
+    }
+
+    /// An oversized default RDF list prints a binary summary, while `-b`
+    /// extracts the original LF-joined elements. Keep both representations.
+    pub(crate) fn insert_xmp_binary_list_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        source: &[u8],
+        priority: i16,
+        group1: &str,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = priority;
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.is_list = true;
+        occurrence.stored = Some(TagValue::Binary(source.to_vec()));
+        occurrence.binary_extract_from_stored = true;
+        self.sink.record(key, occurrence);
+    }
+
+    /// An ExifTool `-X` RDF property whose resolved URI restores a non-XMP
+    /// family-0/1 group. Keep its source identity distinct from a real EXIF
+    /// or MakerNote parser, and retain the effective source priority: a
+    /// priority directory can promote a default XMP property above zero.
+    pub(crate) fn insert_xmp_static_occurrence<K: Into<String>>(
+        &mut self,
+        key: K,
+        display: TagValue,
+        source: Option<&str>,
+        group0: &str,
+        group1: &str,
+        priority: i16,
+        binary_payload_unavailable: bool,
+        static_binary_list_source: Option<&[u8]>,
+        static_binary_payload: Option<&[u8]>,
+    ) {
+        let key = key.into();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display, order);
+        occurrence.priority = priority;
+        occurrence.group0 = super::tag_occurrence::intern(group0);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        // The static URI property has already passed XMPAutoConv. Native
+        // EXIF/MakerNote formatters must not run again under its source label.
+        occurrence.print = Some(occurrence.raw.clone());
+        occurrence.is_list = matches!(&occurrence.raw, TagValue::Array(_));
+        // FoundXMP displays oversized default text as Binary, but `-b`
+        // still extracts the original property bytes. The parser retains
+        // scalar or LF-joined list source bytes here, never the placeholder.
+        if let Some(bytes) = static_binary_payload.or(static_binary_list_source) {
+            occurrence.stored = Some(TagValue::Binary(bytes.to_vec()));
+            occurrence.binary_extract_from_stored = true;
+        } else if binary_payload_unavailable && source.is_some() {
+            occurrence.stored = source.map(|text| TagValue::Binary(text.as_bytes().to_vec()));
+            occurrence.binary_extract_from_stored = true;
+        } else {
+            occurrence.stored = source.map(|text| TagValue::new_string(text.to_owned()));
+            occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        }
+        occurrence.origin.module = Some("XMP::StaticGroup");
         self.sink.record(key, occurrence);
     }
 
@@ -875,6 +1040,33 @@ impl MetadataMap {
         )
     }
 
+    /// Inserts a producer-declared List occurrence. An array alone is not
+    /// enough evidence: native fixed-length tuples also use `TagValue::Array`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_occurrence_with_forms_and_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        is_list: bool,
+    ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms_and_binary_list_state(
+            key,
+            display_value,
+            no_print_conv_value,
+            stored,
+            priority,
+            group1,
+            instance,
+            false,
+            is_list,
+        )
+    }
+
     /// Source-declared binary summary that retains the usual display and
     /// writer forms but cannot currently satisfy `-b`.
     #[allow(clippy::too_many_arguments)]
@@ -889,6 +1081,32 @@ impl MetadataMap {
         instance: super::tag_occurrence::Instance,
         binary_payload_unavailable: bool,
     ) -> Option<TagValue> {
+        self.insert_occurrence_with_forms_and_binary_list_state(
+            key,
+            display_value,
+            no_print_conv_value,
+            stored,
+            priority,
+            group1,
+            instance,
+            binary_payload_unavailable,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_occurrence_with_forms_and_binary_list_state<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        stored: Option<TagValue>,
+        priority: u8,
+        group1: &str,
+        instance: super::tag_occurrence::Instance,
+        binary_payload_unavailable: bool,
+        is_list: bool,
+    ) -> Option<TagValue> {
         let key = key.into();
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
@@ -900,6 +1118,7 @@ impl MetadataMap {
         occurrence.print = Some(occurrence.raw.clone());
         occurrence.stored = stored;
         occurrence.binary_payload_unavailable = binary_payload_unavailable;
+        occurrence.is_list = is_list;
         self.sink.record(key, occurrence);
         previous
     }
@@ -931,11 +1150,15 @@ impl MetadataMap {
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = source.value.clone();
-        occurrence.print = source.value.as_ref().map(|_| occurrence.raw.clone());
+        occurrence.print = source
+            .print
+            .clone()
+            .or_else(|| source.value.as_ref().map(|_| occurrence.raw.clone()));
         occurrence.stored = source.stored.clone();
         occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
         occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
         occurrence.is_list = source.is_list;
+        occurrence.origin = source.origin.clone();
         self.sink.record(key, occurrence);
         previous
     }
@@ -961,11 +1184,15 @@ impl MetadataMap {
         let previous = self.sink.get(&key).cloned();
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
+        occurrence.group0 = source.group0.clone();
+        occurrence.group1 = source.group1.clone();
         occurrence.value = source.value.clone();
         occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
         occurrence.binary_payload_unavailable = source.binary_payload_unavailable;
         occurrence.binary_extract_from_stored = source.binary_extract_from_stored;
+        occurrence.is_list = source.is_list;
+        occurrence.origin = source.origin.clone();
         self.sink.record(key, occurrence);
         previous
     }
@@ -1307,6 +1534,19 @@ impl MetadataMap {
     /// group/priority-aware request resolution (`cli::tag_resolution`).
     pub(crate) fn winner_occurrences(&self) -> impl Iterator<Item = (&String, &TagOccurrence)> {
         self.sink.winner_occurrences()
+    }
+
+    /// The full winning occurrence behind a projected map key.
+    pub(crate) fn winning_occurrence(&self, key: &str) -> Option<&TagOccurrence> {
+        self.sink.winner_occurrence(key)
+    }
+
+    /// Whether the winning value came from an ExifTool static-group RDF URI.
+    /// Output writers must not apply a native table's name-keyed PrintConv to it.
+    pub(crate) fn is_xmp_static_source(&self, key: &str) -> bool {
+        self.sink
+            .winner_occurrence(key)
+            .is_some_and(|occurrence| occurrence.origin.module == Some("XMP::StaticGroup"))
     }
 
     /// [`MetadataMap::winner_occurrences`] in file order (`TagOccurrence::
@@ -2435,6 +2675,58 @@ mod tests {
             occurrence.project(ValueChannel::Stored).as_ref(),
             &TagValue::new_rational(1, 80)
         );
+    }
+
+    #[test]
+    fn rehomed_occurrences_keep_static_source_and_declared_list_state() {
+        use super::super::tag_occurrence::Instance;
+
+        let mut source = MetadataMap::new();
+        source.insert_xmp_static_occurrence(
+            "GPS:GPSLatitudeRef",
+            TagValue::new_string("N"),
+            Some("N"),
+            "GPS",
+            "IFD0",
+            1,
+            false,
+            None,
+            None,
+        );
+        source.insert_declared_list(
+            "MIE:References",
+            TagValue::Array(vec![
+                TagValue::new_string("first"),
+                TagValue::new_string("second"),
+            ]),
+        );
+        let preserves_source = |map: &MetadataMap| {
+            assert!(map.is_xmp_static_source("GPS:GPSLatitudeRef"));
+            assert!(map.occurrences_for("MIE:References")[0].is_list);
+            assert_eq!(
+                map.occurrences_for("GPS:GPSLatitudeRef")[0].print,
+                Some(TagValue::new_string("N"))
+            );
+        };
+
+        let mut carried = MetadataMap::new();
+        let mut copied = MetadataMap::new();
+        for (key, occurrence) in source.winners_in_file_order() {
+            carried.insert_carrying_forms(key.clone(), occurrence);
+            copied.insert_copied_occurrence(key.clone(), occurrence, 1, "", Instance::default());
+        }
+        preserves_source(&carried);
+        preserves_source(&copied);
+        assert_eq!(
+            carried.occurrences_for("GPS:GPSLatitudeRef")[0]
+                .group1
+                .as_ref(),
+            "IFD0"
+        );
+
+        let mut merged = MetadataMap::new();
+        merged.merge_winners_keeping_group1(&source);
+        preserves_source(&merged);
     }
 
     #[test]

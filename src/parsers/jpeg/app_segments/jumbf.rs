@@ -295,10 +295,14 @@ impl Collector {
     /// before any JUMBF box keeps its name against every JUMBF copy
     /// (`t/images/ExifTool.jpg`'s `-Copyright` is never the C2PA manifest's), while one found after them still displaces them.
     fn emit(&mut self, name: &str, value: TagValue) {
+        self.emit_with_list_state(name, value, false);
+    }
+
+    fn emit_with_list_state(&mut self, name: &str, value: TagValue, is_list: bool) {
         let key = format!("JUMBF:{}", name);
         let instance = self.doc.unwrap_or_default();
         self.metadata
-            .insert_occurrence(key, value, 1, "JUMBF", instance);
+            .insert_occurrence_with_list_state(key, value, 1, "JUMBF", instance, is_list);
     }
 
     /// `ProcessJUMB`'s entry half (Jpeg2000.pm:779-786): number this
@@ -520,7 +524,7 @@ impl Collector {
         }
         for (name, values, is_list) in bag.entries {
             let value = collapse(values, is_list);
-            self.emit(&name, value);
+            self.emit_with_list_state(&name, value, is_list);
         }
     }
 }
@@ -1008,6 +1012,9 @@ mod tests {
                 TagValue::Integer(6239)
             ]))
         );
+        for tag in ["JUMBF:ExclusionsStart", "JUMBF:ExclusionsLength"] {
+            assert!(metadata.winning_occurrence(tag).unwrap().is_list, "{tag}");
+        }
     }
 
     #[test]

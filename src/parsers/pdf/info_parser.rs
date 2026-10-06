@@ -247,7 +247,7 @@ fn insert_keywords_metadata(metadata: &mut MetadataMap, value: &str) {
         ),
     };
 
-    metadata.insert("PDF:Keywords".to_string(), tag_value);
+    metadata.insert_with_scalar_binary_source("PDF:Keywords", tag_value, value);
 }
 
 /// Inserts trapped metadata, converting PDF name values to proper format.

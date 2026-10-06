@@ -172,7 +172,14 @@ fn process_attr(data: &[u8], data_pos: u32, metadata: &mut MetadataMap) {
         }
         let value = &data[offset..offset + len as usize];
         if let Some((name, tag_value)) = read_xattr_value(&attribute, value) {
-            metadata.insert(format!("MacOS:{name}"), tag_value);
+            let key = format!("MacOS:{name}");
+            if matches!(&tag_value, TagValue::Array(_)) {
+                // MacOS.pm's plist array is an ExifTool List, including
+                // elements whose own text contains line feeds.
+                metadata.insert_declared_list(key, tag_value);
+            } else {
+                metadata.insert(key, tag_value);
+            }
         }
 
         // MacOS.pm:690, `$pos += (11 + $n + 3) & -4`.

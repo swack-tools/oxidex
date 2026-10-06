@@ -218,6 +218,13 @@ pub struct XmpEntry {
     /// Source table/default-property binary declaration, retained separately
     /// from the printed summary so literal text with the same words stays text.
     pub binary_payload_unavailable: bool,
+    /// The RDF property came from an ExifTool static-group namespace URI.
+    pub source_is_static: bool,
+    /// Exact LF-joined source elements when a list includes a binary
+    /// placeholder. The displayed placeholder cannot be used for `-b`.
+    pub binary_list_source: Option<Vec<u8>>,
+    /// Decoded bytes from an RDF base64Binary property in a static URI.
+    pub static_binary_payload: Option<Vec<u8>>,
 }
 
 impl XmpEntry {
@@ -240,7 +247,65 @@ impl XmpEntry {
             shadowed,
             priority,
             binary_payload_unavailable,
+            source_is_static: false,
+            binary_list_source: None,
+            static_binary_payload: None,
         }
+    }
+
+    fn with_static_source(mut self, source_is_static: bool) -> Self {
+        self.source_is_static = source_is_static;
+        self
+    }
+
+    fn with_static_binary_payload(mut self, payload: Option<Vec<u8>>) -> Self {
+        self.static_binary_payload = payload;
+        self
+    }
+
+    fn with_binary_list_source(
+        mut self,
+        elements: Option<&[String]>,
+        binary_payloads: Option<&[Option<Vec<u8>>]>,
+        is_default: bool,
+    ) -> Self {
+        if let Some(elements) = elements
+            && let XmpValue::List(values) = &self.value
+            && values.len() == elements.len()
+        {
+            let mut has_binary_placeholder = false;
+            let mut has_decoded_payload = false;
+            let converted: Vec<Vec<u8>> = elements
+                .iter()
+                .enumerate()
+                .map(|(index, raw)| {
+                    if let Some(payload) = binary_payloads
+                        .and_then(|payloads| payloads.get(index))
+                        .and_then(Option::as_deref)
+                    {
+                        has_decoded_payload = true;
+                        return static_rdf_extract_bytes(&self.tag, payload);
+                    }
+                    let value = format_xmp_value_with_default(
+                        &self.tag,
+                        raw,
+                        is_default,
+                        self.source_is_static,
+                    );
+                    let placeholder = value != *raw && value.starts_with("(Binary data ");
+                    if placeholder {
+                        has_binary_placeholder = true;
+                        raw.as_bytes().to_vec()
+                    } else {
+                        value.into_bytes()
+                    }
+                })
+                .collect();
+            if has_binary_placeholder || has_decoded_payload {
+                self.binary_list_source = Some(converted.join(b"\n".as_slice()));
+            }
+        }
+        self
     }
 
     /// An entry for a tag outside the XMP groups (history, HDR+ makernote),
@@ -254,6 +319,9 @@ impl XmpEntry {
             shadowed: false,
             priority: 1,
             binary_payload_unavailable: false,
+            source_is_static: false,
+            binary_list_source: None,
+            static_binary_payload: None,
         }
     }
 
@@ -268,15 +336,15 @@ impl XmpEntry {
         }
     }
 
-    /// The value as stored: a list as an array of strings when `typed`,
-    /// else joined.
+    /// The value as stored: static-URI lists retain their array shape across
+    /// carriers; ordinary XMP lists follow the carrier's `typed` request.
     pub fn tag_value(&self, typed: bool) -> crate::core::TagValue {
         use crate::core::TagValue;
         match &self.value {
-            XmpValue::List(values) if typed => {
+            XmpValue::List(values) if typed || self.source_is_static => {
                 // Panasonic::DSA declares this sequence `Writable => real`.
                 // Its JSON values are numbers, unlike ordinary XMP text lists.
-                if self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
+                if !self.source_is_static && self.tag == "XMP-xmpDSA:NormalizedCropCorners" {
                     TagValue::Array(
                         values
                             .iter()
@@ -364,7 +432,10 @@ pub(crate) fn insert_xmp_packet_with_context(
 ) -> Result<usize> {
     let (_, entries, _, gps_sources) = parse_xmp_packet_in_directory(xml_bytes, low_default)?;
     for (entry, source) in entries.iter().zip(&gps_sources) {
-        if priority_directory && entry.priority == 0 && entry.group1.starts_with("XMP") {
+        if priority_directory
+            && entry.priority == 0
+            && (entry.group1.starts_with("XMP") || entry.source_is_static)
+        {
             let mut promoted = entry.clone();
             promoted.priority = 1;
             insert_xmp_entry_with_source(
@@ -421,10 +492,11 @@ pub(crate) fn insert_xmp_entry_with_source(
         metadata.insert(entry.key.clone(), value);
         return;
     }
-    let priority = if entry.group1 == "XMP" {
-        // The bare `XMP` group is a property no XMP table defines: one with
-        // no namespace, or in one of ExifTool's own `-X` static-group
-        // namespaces (`namespace_resolver::group_for_prefix`). FoundXMP gives
+    let priority = if entry.source_is_static {
+        entry.priority
+    } else if entry.group1 == "XMP" {
+        // The bare `XMP` group is a property no XMP table defines, such as
+        // one with no namespace. FoundXMP gives
         // such a tag the default `{ Name => $name, IsDefault => 1,
         // Priority => 0 }` (XMP.pm 13.59:3589-3596), so it never displaces a
         // same-named tag already found: `t/images/XMP.xml`'s bare
@@ -436,6 +508,21 @@ pub(crate) fn insert_xmp_entry_with_source(
     } else {
         entry.priority
     };
+    if entry.source_is_static {
+        let group0 = entry.key.split_once(':').map_or("", |(group, _)| group);
+        metadata.insert_xmp_static_occurrence(
+            entry.key.clone(),
+            value,
+            source,
+            group0,
+            &entry.group1,
+            priority,
+            entry.binary_payload_unavailable,
+            entry.binary_list_source.as_deref(),
+            entry.static_binary_payload.as_deref(),
+        );
+        return;
+    }
     if entry.group1 == super::google_hdrp::HDRP_GROUP1 {
         if entry.binary_payload_unavailable {
             metadata.insert_occurrence_with_group0_binary_state(
@@ -462,25 +549,43 @@ pub(crate) fn insert_xmp_entry_with_source(
         metadata.insert_xmp_binary_unavailable(entry.key.clone(), value, priority, &entry.group1);
         return;
     }
+    if let Some(bytes) = entry.binary_list_source.as_deref() {
+        metadata.insert_xmp_binary_list_occurrence(
+            entry.key.clone(),
+            value,
+            bytes,
+            priority,
+            &entry.group1,
+        );
+        return;
+    }
     if let Some((source, forms)) =
         source.and_then(|raw| convert_xmp_gps(&entry.tag, raw).map(|forms| (raw, forms)))
     {
-        metadata.insert_xmp_occurrence(
+        metadata.insert_xmp_occurrence_with_list_flag(
             entry.key.clone(),
             value,
             Some(crate::core::TagValue::new_string(forms.value)),
             Some(crate::core::TagValue::new_string(source.to_owned())),
             priority,
             &entry.group1,
+            matches!(entry.value, XmpValue::List(_)),
         );
     } else {
-        metadata.insert_xmp_occurrence(
+        let source_list = matches!(entry.value, XmpValue::List(_));
+        // Some carriers request a comma-joined display string. Preserve the
+        // source elements as ValueConv so -b can still emit LF-separated List
+        // values rather than the joined display text.
+        let value_form = (source_list && !matches!(&value, crate::core::TagValue::Array(_)))
+            .then(|| entry.tag_value(true));
+        metadata.insert_xmp_occurrence_with_list_flag(
             entry.key.clone(),
             value,
-            None,
+            value_form,
             None,
             priority,
             &entry.group1,
+            source_list,
         );
     }
 }
@@ -513,7 +618,10 @@ struct ResultOccurrence {
     tag: String,
     value: String,
     elements: Option<Vec<String>>,
+    list_binary_payloads: Option<Vec<Option<Vec<u8>>>>,
     path: Option<super::struct_flatten::RawPath>,
+    is_default: bool,
+    static_binary_payload: Option<Vec<u8>>,
 }
 
 impl ResultOccurrence {
@@ -522,7 +630,10 @@ impl ResultOccurrence {
             tag,
             value,
             elements: None,
+            list_binary_payloads: None,
             path: None,
+            is_default: false,
+            static_binary_payload: None,
         }
     }
 
@@ -531,13 +642,35 @@ impl ResultOccurrence {
             tag,
             value: elements.join(", "),
             elements: Some(elements),
+            list_binary_payloads: None,
             path: None,
+            is_default: false,
+            static_binary_payload: None,
         }
     }
 
     fn with_path(mut self, path: super::struct_flatten::RawPath) -> Self {
         self.path = Some(path);
         self
+    }
+
+    fn with_static_binary_payload(mut self, payload: Option<Vec<u8>>) -> Self {
+        self.static_binary_payload = payload;
+        self
+    }
+
+    fn with_list_binary_payloads(mut self, payloads: Vec<Option<Vec<u8>>>) -> Self {
+        self.list_binary_payloads = Some(payloads);
+        self
+    }
+
+    fn with_default(mut self, is_default: bool) -> Self {
+        self.is_default = is_default;
+        self
+    }
+
+    fn default_property(&self) -> bool {
+        self.is_default || is_static_path(self.path.as_ref())
     }
 }
 
@@ -661,8 +794,13 @@ fn canonical_standard_uri(uri: &str) -> Option<&'static str> {
 /// ExifImageHeight under plain `XMP`.
 fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> String {
     let name = tag.split_once(':').map_or(tag, |(_, name)| name);
+    if let Some((group0, _)) = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+    {
+        return format!("{group0}:{name}");
+    }
     let family = NamespaceResolver::extract_prefix(qname)
-        .and_then(|prefix| resolver.resolve_prefix(prefix))
+        .and_then(|prefix| resolver.property_uri_for_prefix(prefix))
         .map_or("XMP", |uri| match uri {
             "http://ns.adobe.com/xap/1.0/mm/" => "XMP-xmpMM",
             "http://ns.adobe.com/xap/1.0/rights/" => "XMP-xmpRights",
@@ -693,6 +831,11 @@ fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> St
 /// packet scope. FoundXMP looks up the raw ID, never the displayed tag name.
 fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_default: bool) -> i16 {
     let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+    if resolver.static_groups_for_prefix(prefix).is_some() {
+        // Unknown tags written by ExifTool -X use XMP.pm's IsDefault,
+        // Priority => 0, even though their family groups are non-XMP.
+        return 0;
+    }
     let group = resolver.group_for_prefix(prefix);
     let namespace = group.strip_prefix("XMP-").unwrap_or("");
     super::priority::simple_property_priority_in_directory(
@@ -707,12 +850,41 @@ fn source_property_priority(qname: &str, resolver: &NamespaceResolver, low_defau
 /// focused structure walker sees the property. Reported FlatName is never a
 /// safe lookup key: distinct raw paths may print the same name.
 fn raw_property(qname: &str, resolver: &NamespaceResolver) -> (String, String) {
+    if let Some(uri) = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.effective_static_uri(prefix))
+    {
+        return (
+            uri.to_string(),
+            NamespaceResolver::extract_local_name(qname).to_string(),
+        );
+    }
     let group = resolver.group_for_qname(qname);
     let namespace = group.strip_prefix("XMP-").unwrap_or("");
     (
         namespace.to_string(),
         NamespaceResolver::extract_local_name(qname).to_string(),
     )
+}
+
+/// Recover family 0 for a source path, including flattened structure fields.
+fn static_key_for_path(path: Option<&super::struct_flatten::RawPath>, tag: &str) -> Option<String> {
+    let uri = path?.first()?.0.as_str();
+    let (group0, _) = super::namespace_resolver::exiftool_static_groups(uri)?;
+    Some(format!("{group0}:{}", tag.split_once(':')?.1))
+}
+
+fn is_static_path(path: Option<&super::struct_flatten::RawPath>) -> bool {
+    path.and_then(|path| path.first())
+        .is_some_and(|(uri, _)| super::namespace_resolver::exiftool_static_groups(uri).is_some())
+}
+
+fn xmp_source_scalar(
+    tag: &str,
+    raw: &str,
+    source_is_static: bool,
+    is_scalar: bool,
+) -> Option<String> {
+    ((source_is_static && is_scalar) || convert_xmp_gps(tag, raw).is_some()).then(|| raw.to_owned())
 }
 
 fn raw_path_priority(path: &[(String, String)], low_default: bool) -> i16 {
@@ -769,10 +941,8 @@ fn parse_xmp_packet_in_directory(
 
     let mut resolver = NamespaceResolver::new();
     let mut results: Vec<ResultOccurrence> = Vec::new();
-    // A namespace with no selected ExifTool table gives its properties
-    // `IsDefault`. Capture that at the property's source element, before
-    // prefixes may be rebound later in the packet.
-    let mut default_namespace_tags = std::collections::HashSet::new();
+    // `IsDefault` is carried on each source occurrence, before prefixes can
+    // be rebound or distinct namespaces collapse to the same display name.
     // The same emissions under the keys this reader used before XMP tags
     // carried their namespace group -- see `LegacyResults`.
     let mut legacy = LegacyResults::default();
@@ -785,6 +955,10 @@ fn parse_xmp_packet_in_directory(
     // dropping every property written after it. On XMP3.xmp that was
     // CountryCode, Scene and both pdfx custom properties.
     let mut description_depth = 0usize;
+    // A referenced rdf:nodeID definition contributes through its referring
+    // property, not again as standalone fields on its rdf:Description.
+    let referenced_node_ids = referenced_blank_node_ids(xml_bytes)?;
+    let mut referenced_description_depth: Option<usize> = None;
     let mut current_property: Option<String> = None;
     // The reported `XMP-<ns>:Name` of `current_property`, resolved when its
     // start tag is read: ExifTool translates a property's prefix before
@@ -792,6 +966,8 @@ fn parse_xmp_packet_in_directory(
     // change it (see `NamespaceResolver::group_for_prefix`).
     let mut current_tag = String::new();
     let mut current_default_namespace = false;
+    let mut current_static_base64 = false;
+    let mut pending_static_base64_li = false;
     // ... and its legacy key, resolved at the same time.
     let mut current_legacy = String::new();
     let mut current_priority = 0i16;
@@ -803,6 +979,7 @@ fn parse_xmp_packet_in_directory(
     let mut inside_collection = false; // Are we in a Bag/Seq/Alt?
     let mut collection_is_alt = false;
     let mut collection_values: Vec<String> = Vec::new(); // Collect rdf:li values
+    let mut collection_binary_payloads: Vec<Option<Vec<u8>>> = Vec::new();
     // `xml:lang` of each collected `rdf:li`, parallel to `collection_values`.
     // A lang-alt is not one comma-joined value: ExifTool reports the
     // x-default entry under the plain tag name and every other language under
@@ -840,17 +1017,24 @@ fn parse_xmp_packet_in_directory(
                     description_depth += 1;
                     if current_property.is_some() {
                         property_is_struct = true;
+                    } else if rdf_node_id_attribute(&e, &resolver)
+                        .is_some_and(|id| referenced_node_ids.contains(&id))
+                    {
+                        referenced_description_depth = Some(depth);
                     }
-                    // Extract rdf:about and property attributes from Description
-                    extract_description_attributes(
-                        &e,
-                        &resolver,
-                        &mut results,
-                        &mut legacy,
-                        &mut default_namespace_tags,
-                        low_default,
-                    )?;
-                } else if description_depth > 0 && current_property.is_none() {
+                    if referenced_description_depth.is_none() {
+                        extract_description_attributes(
+                            &e,
+                            &resolver,
+                            &mut results,
+                            &mut legacy,
+                            low_default,
+                        )?;
+                    }
+                } else if description_depth > 0
+                    && current_property.is_none()
+                    && referenced_description_depth.is_none()
+                {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
@@ -861,6 +1045,8 @@ fn parse_xmp_packet_in_directory(
                         current_priority =
                             source_property_priority(&tag_name, &resolver, low_default);
                         current_path = vec![raw_property(&tag_name, &resolver)];
+                        current_static_base64 = is_static_path(Some(&current_path))
+                            && has_rdf_base64_datatype(&e, &resolver);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         after_collection_close = false;
@@ -877,10 +1063,13 @@ fn parse_xmp_packet_in_directory(
                         collection_is_alt =
                             NamespaceResolver::extract_local_name(&tag_name) == "Alt";
                         collection_values.clear();
+                        collection_binary_payloads.clear();
                         collection_langs.clear();
                         current_value.clear();
                     } else if inside_collection && is_rdf_li(&tag_name, &resolver) {
                         pending_lang = xml_lang_attribute(&e);
+                        pending_static_base64_li = is_static_path(Some(&current_path))
+                            && has_rdf_base64_datatype(&e, &resolver);
                         // Ignore indentation between list items while
                         // preserving the item's own leading/trailing text.
                         current_value.clear();
@@ -894,6 +1083,9 @@ fn parse_xmp_packet_in_directory(
                 let tag_name = extract_tag_name_from_bytes(e.name().as_ref())?;
 
                 if is_rdf_description(&tag_name, &resolver) {
+                    if referenced_description_depth == Some(depth) {
+                        referenced_description_depth = None;
+                    }
                     description_depth = description_depth.saturating_sub(1);
                 } else if is_rdf_li(&tag_name, &resolver) && inside_collection {
                     // End of rdf:li - save the collected value
@@ -903,10 +1095,19 @@ fn parse_xmp_packet_in_directory(
                         current_value.trim()
                     };
                     if !item.is_empty() {
-                        collection_values.push(item.to_string());
-                        collection_langs.push(pending_lang.take());
+                        let payload = if pending_static_base64_li {
+                            decode_static_rdf_base64(item).map(Some)
+                        } else {
+                            Some(None)
+                        };
+                        if let Some(payload) = payload {
+                            collection_values.push(item.to_string());
+                            collection_binary_payloads.push(payload);
+                            collection_langs.push(pending_lang.take());
+                        }
                     }
                     pending_lang = None;
+                    pending_static_base64_li = false;
                     current_value.clear();
                 } else if is_collection_container(&tag_name, &resolver) {
                     inside_collection = false;
@@ -918,9 +1119,6 @@ fn parse_xmp_packet_in_directory(
                     let prefixed_name = std::mem::take(&mut current_tag);
                     let legacy_name = std::mem::take(&mut current_legacy);
 
-                    if !property_is_struct && current_default_namespace {
-                        default_namespace_tags.insert(prefixed_name.clone());
-                    }
                     if property_is_struct {
                         // Reported only through its flattened fields.
                     } else if !collection_values.is_empty() {
@@ -960,9 +1158,6 @@ fn parse_xmp_packet_in_directory(
                             for (index, value) in collection_values.iter().enumerate() {
                                 let suffix = &suffixes[index];
                                 let tag = format!("{prefixed_name}{suffix}");
-                                if current_default_namespace {
-                                    default_namespace_tags.insert(tag.clone());
-                                }
                                 let legacy_tag = format!("{legacy_name}{suffix}");
                                 legacy.push_priority(&legacy_tag, &tag, value, current_priority);
                                 // Keep every source occurrence for -a; only the
@@ -973,7 +1168,11 @@ fn parse_xmp_packet_in_directory(
                                 if !results.iter().any(|result| result.tag == tag) {
                                     results.push(
                                         ResultOccurrence::scalar(tag, value.clone())
-                                            .with_path(current_path.clone()),
+                                            .with_path(current_path.clone())
+                                            .with_default(current_default_namespace)
+                                            .with_static_binary_payload(
+                                                collection_binary_payloads[index].clone(),
+                                            ),
                                     );
                                 }
                             }
@@ -988,13 +1187,21 @@ fn parse_xmp_packet_in_directory(
                             );
                             let result = if collection_values.len() > 1 {
                                 ResultOccurrence::list(prefixed_name, collection_values.clone())
+                                    .with_list_binary_payloads(collection_binary_payloads.clone())
                             } else {
                                 ResultOccurrence::scalar(
                                     prefixed_name,
                                     collection_values.join(", "),
                                 )
+                                .with_static_binary_payload(
+                                    collection_binary_payloads.first().cloned().flatten(),
+                                )
                             };
-                            results.push(result.with_path(current_path.clone()));
+                            results.push(
+                                result
+                                    .with_path(current_path.clone())
+                                    .with_default(current_default_namespace),
+                            );
                         }
                     } else {
                         // Default properties reach FoundXMP with decoded
@@ -1008,27 +1215,43 @@ fn parse_xmp_packet_in_directory(
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
                         // only content is an empty Bag/Seq/Alt -- is still
                         // reported by ExifTool as an empty value.
-                        legacy.push_priority_with_path(
-                            &legacy_name,
-                            &prefixed_name,
-                            value,
-                            current_priority,
-                            current_path.clone(),
-                        );
-                        results.push(
-                            ResultOccurrence::scalar(prefixed_name, value.to_string())
-                                .with_path(current_path.clone()),
-                        );
+                        // `rdf:datatype=base64Binary` is an encoded payload,
+                        // never ordinary text under the real source tag name.
+                        // A malformed encoding is withheld rather than published
+                        // as a confidently wrong value.
+                        let payload = if current_static_base64 {
+                            decode_static_rdf_base64(value).map(Some)
+                        } else {
+                            Some(None)
+                        };
+                        if let Some(payload) = payload {
+                            legacy.push_priority_with_path(
+                                &legacy_name,
+                                &prefixed_name,
+                                value,
+                                current_priority,
+                                current_path.clone(),
+                            );
+                            results.push(
+                                ResultOccurrence::scalar(prefixed_name, value.to_string())
+                                    .with_path(current_path.clone())
+                                    .with_default(current_default_namespace)
+                                    .with_static_binary_payload(payload),
+                            );
+                        }
                     }
                     current_property = None;
                     current_value.clear();
                     after_collection_close = false;
                     collection_values.clear();
+                    collection_binary_payloads.clear();
                     collection_langs.clear();
                     pending_lang = None;
+                    pending_static_base64_li = false;
                     inside_collection = false;
                     property_is_struct = false;
                     current_default_namespace = false;
+                    current_static_base64 = false;
                     current_path.clear();
                 }
                 depth -= 1;
@@ -1061,14 +1284,17 @@ fn parse_xmp_packet_in_directory(
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    extract_description_attributes(
-                        &e,
-                        &resolver,
-                        &mut results,
-                        &mut legacy,
-                        &mut default_namespace_tags,
-                        low_default,
-                    )?;
+                    if !rdf_node_id_attribute(&e, &resolver)
+                        .is_some_and(|id| referenced_node_ids.contains(&id))
+                    {
+                        extract_description_attributes(
+                            &e,
+                            &resolver,
+                            &mut results,
+                            &mut legacy,
+                            low_default,
+                        )?;
+                    }
                 } else if current_property.is_some()
                     && is_collection_container(&tag_name, &resolver)
                 {
@@ -1076,6 +1302,7 @@ fn parse_xmp_packet_in_directory(
                     // parent indentation that follows it, like End(Bag).
                     current_value.clear();
                     collection_values.clear();
+                    collection_binary_payloads.clear();
                     collection_langs.clear();
                     inside_collection = false;
                     after_collection_close = true;
@@ -1124,10 +1351,11 @@ fn parse_xmp_packet_in_directory(
 
     // The focused passes below keep their own source paths. This generic walk
     // handles the remaining flattened fields by their exact RDF path.
-    let flattened = super::struct_flatten::extract_flattened_struct_fields_with_identity(
-        xml_bytes,
-        low_default,
-    )?;
+    let (flattened, flattened_binary_payloads) =
+        super::struct_flatten::extract_flattened_struct_fields_with_identity_and_binary(
+            xml_bytes,
+            low_default,
+        )?;
     let raw_order: std::collections::HashMap<super::struct_flatten::RawPath, usize> = flattened
         .iter()
         .enumerate()
@@ -1412,6 +1640,29 @@ fn parse_xmp_packet_in_directory(
         results.push(ResultOccurrence::scalar(tag, value).with_path(path));
     }
 
+    // Focused structure passes run before the generic flatten pass and may
+    // claim the same raw path. Attach decoded leaf bytes after all passes so
+    // their chosen display names retain the source datatype and -b payload.
+    for result in &mut results {
+        let Some(path) = result.path.as_ref() else {
+            continue;
+        };
+        let Some(payloads) = flattened_binary_payloads.get(&(result.tag.clone(), path.clone()))
+        else {
+            continue;
+        };
+        if payloads.iter().all(Option::is_none) {
+            continue;
+        }
+        if let Some(elements) = result.elements.as_ref() {
+            if elements.len() == payloads.len() && result.list_binary_payloads.is_none() {
+                result.list_binary_payloads = Some(payloads.clone());
+            }
+        } else if payloads.len() == 1 && result.static_binary_payload.is_none() {
+            result.static_binary_payload = payloads[0].clone();
+        }
+    }
+
     // Distinct raw property IDs can print under the same family/name (for
     // example dc:Title and dc:title). FoundTag retains both occurrences for
     // -a, then arbitrates their signed priorities for the bare name. Focused
@@ -1455,11 +1706,16 @@ fn parse_xmp_packet_in_directory(
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
     // Format scalar values separately from each occurrence's list elements.
-    let mut format_value = |tag: &str, value: &str, record_forms: bool| -> XmpValue {
-        if let Some(forms) = convert_xmp_gps(tag, value) {
+    let mut format_value = |tag: &str,
+                            value: &str,
+                            record_forms: bool,
+                            is_static: bool,
+                            is_default: bool|
+     -> XmpValue {
+        if !is_static && let Some(forms) = convert_xmp_gps(tag, value) {
             return XmpValue::Scalar(forms.print);
         }
-        if record_forms {
+        if record_forms && !is_static && tag.starts_with("XMP") {
             if matches!(
                 tag.rsplit(':').next(),
                 Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
@@ -1494,9 +1750,7 @@ fn parse_xmp_packet_in_directory(
             }
         }
         XmpValue::Scalar(format_xmp_value_with_default(
-            tag,
-            value,
-            default_namespace_tags.contains(tag),
+            tag, value, is_default, is_static,
         ))
     };
 
@@ -1504,21 +1758,73 @@ fn parse_xmp_packet_in_directory(
     let mut formatted: Vec<(String, XmpValue)> = results
         .iter()
         .map(|result| {
-            let value = if let Some(elements) = &result.elements {
-                XmpValue::List(
-                    elements
-                        .iter()
-                        .map(|element| {
+            let is_static = is_static_path(result.path.as_ref());
+            let value = if let Some(payload) = &result.static_binary_payload {
+                XmpValue::Scalar(static_rdf_binary_display(&result.tag, payload))
+            } else if let Some(elements) = &result.elements {
+                let converted: Vec<String> = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        if let Some(payload) = result
+                            .list_binary_payloads
+                            .as_ref()
+                            .and_then(|payloads| payloads.get(index))
+                            .and_then(Option::as_deref)
+                        {
+                            static_rdf_binary_display(&result.tag, payload)
+                        } else {
                             format_xmp_value_with_default(
                                 &result.tag,
                                 element,
-                                default_namespace_tags.contains(&result.tag),
+                                result.default_property(),
+                                is_static,
                             )
+                        }
+                    })
+                    .collect();
+                // An oversized plain item makes FoundXMP treat the whole
+                // default-property list as binary. An explicit RDF base64
+                // item has only a per-item decoded payload and cannot by
+                // itself turn unrelated siblings into binary summaries.
+                let binary =
+                    is_static
+                        && result.default_property()
+                        && elements.iter().zip(&converted).enumerate().any(
+                            |(index, (raw, value))| {
+                                !result
+                                    .list_binary_payloads
+                                    .as_ref()
+                                    .and_then(|payloads| payloads.get(index))
+                                    .is_some_and(Option::is_some)
+                                    && value != raw
+                                    && value.starts_with("(Binary data ")
+                            },
+                        );
+                XmpValue::List(
+                    elements
+                        .iter()
+                        .zip(converted)
+                        .map(|(raw, value)| {
+                            if binary && !(value != *raw && value.starts_with("(Binary data ")) {
+                                format!(
+                                    "(Binary data {} bytes, use -b option to extract)",
+                                    value.len()
+                                )
+                            } else {
+                                value
+                            }
                         })
                         .collect(),
                 )
             } else {
-                format_value(&result.tag, &result.value, true)
+                format_value(
+                    &result.tag,
+                    &result.value,
+                    true,
+                    is_static,
+                    result.default_property(),
+                )
             };
             (result.tag.clone(), value)
         })
@@ -1527,6 +1833,8 @@ fn parse_xmp_packet_in_directory(
     // What callers store: every tag the reader used to report under its
     // legacy key first, then the rest of `formatted` (see `XmpEntry`).
     let mut entries: Vec<XmpEntry> = Vec::new();
+    // Ordinary XMP needs the scalar for GPS coordinate forms; static-group
+    // properties also need their exact scalar for `-b` extraction.
     let mut gps_sources: Vec<Option<String>> = Vec::new();
     let mut claimed = vec![false; results.len()];
     // Unclaimed `results` indices per (tag, value), earliest first.
@@ -1554,47 +1862,113 @@ fn parse_xmp_packet_in_directory(
             });
         if let Some(index) = matched {
             claimed[index] = true;
-            entries.push(XmpEntry::new(
-                legacy_key,
-                tag,
-                formatted[index].1.clone(),
-                false,
-                *priority,
-                xmp_binary_source(
+            let key = static_key_for_path(results[index].path.as_ref(), tag)
+                .unwrap_or_else(|| legacy_key.clone());
+            entries.push(
+                XmpEntry::new(
+                    &key,
                     tag,
-                    &results[index].value,
-                    default_namespace_tags.contains(tag),
+                    formatted[index].1.clone(),
+                    false,
+                    *priority,
+                    xmp_binary_source(
+                        tag,
+                        &results[index].value,
+                        results[index].default_property(),
+                        is_static_path(results[index].path.as_ref()),
+                        results[index].elements.is_none(),
+                    ),
+                )
+                .with_static_source(is_static_path(results[index].path.as_ref()))
+                .with_binary_list_source(
+                    results[index].elements.as_deref(),
+                    results[index].list_binary_payloads.as_deref(),
+                    results[index].default_property(),
+                )
+                .with_static_binary_payload(
+                    results[index]
+                        .static_binary_payload
+                        .as_deref()
+                        .map(|payload| static_rdf_extract_bytes(tag, payload)),
                 ),
-            ));
-            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
-        } else {
-            entries.push(XmpEntry::new(
-                legacy_key,
+            );
+            gps_sources.push(xmp_source_scalar(
                 tag,
-                format_value(tag, value, false),
-                false,
-                *priority,
-                xmp_binary_source(tag, value, default_namespace_tags.contains(tag)),
+                &results[index].value,
+                is_static_path(results[index].path.as_ref()),
+                results[index].elements.is_none(),
             ));
-            gps_sources.push(convert_xmp_gps(tag, value).map(|_| value.clone()));
+        } else {
+            let key = static_key_for_path(path.as_ref(), tag).unwrap_or_else(|| legacy_key.clone());
+            entries.push(
+                XmpEntry::new(
+                    &key,
+                    tag,
+                    format_value(
+                        tag,
+                        value,
+                        false,
+                        is_static_path(path.as_ref()),
+                        is_static_path(path.as_ref()),
+                    ),
+                    false,
+                    *priority,
+                    xmp_binary_source(
+                        tag,
+                        value,
+                        is_static_path(path.as_ref()),
+                        is_static_path(path.as_ref()),
+                        true,
+                    ),
+                )
+                .with_static_source(is_static_path(path.as_ref())),
+            );
+            gps_sources.push(xmp_source_scalar(
+                tag,
+                value,
+                is_static_path(path.as_ref()),
+                true,
+            ));
         }
     }
     for (index, result) in results.iter().enumerate() {
         if !claimed[index] {
-            entries.push(XmpEntry::new(
-                &legacy.key_for(&result.tag, &result.value),
-                &result.tag,
-                formatted[index].1.clone(),
-                true,
-                legacy.priority_for(&result.tag, &result.value),
-                xmp_binary_source(
+            let key = static_key_for_path(result.path.as_ref(), &result.tag)
+                .unwrap_or_else(|| legacy.key_for(&result.tag, &result.value));
+            entries.push(
+                XmpEntry::new(
+                    &key,
                     &result.tag,
-                    &result.value,
-                    default_namespace_tags.contains(&result.tag),
+                    formatted[index].1.clone(),
+                    true,
+                    legacy.priority_for(&result.tag, &result.value),
+                    xmp_binary_source(
+                        &result.tag,
+                        &result.value,
+                        result.default_property(),
+                        is_static_path(result.path.as_ref()),
+                        result.elements.is_none(),
+                    ),
+                )
+                .with_static_source(is_static_path(result.path.as_ref()))
+                .with_binary_list_source(
+                    result.elements.as_deref(),
+                    result.list_binary_payloads.as_deref(),
+                    result.default_property(),
+                )
+                .with_static_binary_payload(
+                    result
+                        .static_binary_payload
+                        .as_deref()
+                        .map(|payload| static_rdf_extract_bytes(&result.tag, payload)),
                 ),
+            );
+            gps_sources.push(xmp_source_scalar(
+                &result.tag,
+                &result.value,
+                is_static_path(result.path.as_ref()),
+                result.elements.is_none(),
             ));
-            gps_sources
-                .push(convert_xmp_gps(&result.tag, &result.value).map(|_| result.value.clone()));
         }
     }
 
@@ -2381,7 +2755,7 @@ fn extract_top_level_struct_values_in_directory(
                     && has_parse_type_resource(&e)
                 {
                     struct_depth = Some(depth);
-                    struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                    struct_name = structured_component_name(&tag_name, &resolver);
                     struct_group = resolver.group_for_qname(&tag_name);
                     struct_raw = Some(raw_property(&tag_name, &resolver));
                 } else if let Some(sd) = struct_depth {
@@ -2390,7 +2764,7 @@ fn extract_top_level_struct_values_in_directory(
                         && !is_rdf_namespace(&tag_name, &resolver)
                     {
                         field_depth = Some(depth);
-                        field_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        field_name = structured_component_name(&tag_name, &resolver);
                         field_raw = Some(raw_property(&tag_name, &resolver));
                         field_text.clear();
                         lang_values.clear();
@@ -2693,7 +3067,7 @@ fn extract_list_struct_values_in_directory(
                         && !is_property_in_namespace(&tag_name, "Regions", MWG_RS_NS, &resolver);
                     if is_container_candidate {
                         container_index += 1;
-                        let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        let local = structured_component_name(&tag_name, &resolver);
                         container_depth = Some(depth);
                         container_group = resolver.group_for_qname(&tag_name);
                         container_raw = Some(raw_property(&tag_name, &resolver));
@@ -2733,7 +3107,7 @@ fn extract_list_struct_values_in_directory(
                         text.clear();
                     }
                 } else {
-                    path.push(ucfirst(NamespaceResolver::extract_local_name(&tag_name)));
+                    path.push(structured_component_name(&tag_name, &resolver));
                     path_raw.push(raw_property(&tag_name, &resolver));
                     text.clear();
                 }
@@ -3542,6 +3916,114 @@ const FLAT_NAME_SUPPRESSED: &[&str] = &[
 ];
 
 /// Reports whether a structure property's name is dropped from flattened IDs.
+/// An RDF datatype declaration is semantic, not a shorthand structure field.
+/// Only static ExifTool URI properties use this binary path here.
+pub(super) fn has_rdf_base64_datatype(element: &BytesStart, resolver: &NamespaceResolver) -> bool {
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const ET_NS: [&str; 2] = ["http://ns.exiftool.org/1.0/", "http://ns.exiftool.ca/1.0/"];
+    let mut rdf_datatype = None;
+    let mut et_encoding = None;
+    for attr in element.attributes().flatten() {
+        let Some((prefix, local)) = std::str::from_utf8(attr.key.as_ref())
+            .ok()
+            .and_then(|key| key.split_once(':'))
+        else {
+            continue;
+        };
+        let value = std::str::from_utf8(attr.value.as_ref())
+            .ok()
+            .map(str::to_owned);
+        if local == "datatype" && resolver.resolve_prefix(prefix) == Some(RDF_NS) {
+            rdf_datatype = value;
+        } else if local == "encoding"
+            && resolver
+                .resolve_prefix(prefix)
+                .is_some_and(|uri| ET_NS.contains(&uri))
+        {
+            et_encoding = value;
+        }
+    }
+    // XMP.pm:3643-3646 checks `rdf:datatype || et:encoding` with /base64/.
+    rdf_datatype
+        .or(et_encoding)
+        .is_some_and(|value| value.contains("base64"))
+}
+
+/// XMP.pm:3645-3647 dereferences short decoded text, but retains a
+/// binary reference for values over 100 bytes or matching its literal
+/// control-character class. The class also contains `0`, `c` and `x` in
+/// 13.59 due to the source's `\0x0c` spelling; preserve that behavior.
+fn static_rdf_binary_is_binary(payload: &[u8]) -> bool {
+    payload.len() > 100
+        || payload
+            .iter()
+            .any(|byte| matches!(*byte, 0..=8 | 11 | 14..=31 | b'0' | b'c' | b'x'))
+}
+
+fn static_rdf_binary_display(tag: &str, payload: &[u8]) -> String {
+    if static_rdf_binary_is_binary(payload) {
+        return format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            payload.len()
+        );
+    }
+    // FoundXMP unescapes entities after decoding, then converts values.
+    // Preserve a valid U+FFFD while replacing malformed UTF-8 for display.
+    let text = crate::exiftool_tables::runtime::fix_utf8(payload)
+        .expect("FixUTF8 emits well-formed UTF-8");
+    let unescaped =
+        quick_xml::escape::unescape(&text).map_or(text.clone(), |value| value.into_owned());
+    format_xmp_value_with_default(tag, &unescaped, true, true)
+}
+
+fn static_rdf_extract_bytes(tag: &str, payload: &[u8]) -> Vec<u8> {
+    if static_rdf_binary_is_binary(payload) || std::str::from_utf8(payload).is_err() {
+        payload.to_vec()
+    } else {
+        // -b uses post-conversion text for short valid UTF-8, but true
+        // binary and malformed UTF-8 retain their decoded source bytes.
+        static_rdf_binary_display(tag, payload).into_bytes()
+    }
+}
+
+pub(super) fn decode_static_rdf_base64(value: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    // XMP.pm::DecodeBase64 truncates at the first character outside its
+    // base64 alphabet, then removes whitespace and '=' before decoding.
+    let compact: String = value
+        .chars()
+        .take_while(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, '+' | '/' | '=' | ' ' | '\t' | '\n' | '\r' | '\u{c}')
+        })
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '=')
+        .collect();
+    if compact.is_empty() {
+        return Some(Vec::new());
+    }
+    // Perl's unpack('u', ...) accepts non-zero trailing bits in partial
+    // quartets; strict RFC 4648 decoding would discard such values.
+    let decoder = base64::engine::general_purpose::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::general_purpose::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
+            .with_decode_allow_trailing_bits(true),
+    );
+    // Perl's uu unpack treats the extra sextet of a 4n+1 group as another
+    // line-length byte and emits that many zero bytes.
+    if compact.len() % 4 == 1 {
+        let (prefix, last) = compact.split_at(compact.len() - 1);
+        let mut decoded = decoder.decode(prefix).ok()?;
+        let extra = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+            .iter()
+            .position(|byte| Some(byte) == last.as_bytes().first())?;
+        decoded.resize(decoded.len() + extra, 0);
+        Some(decoded)
+    } else {
+        decoder.decode(&compact).ok()
+    }
+}
+
 /// Whether `element` carries RDF shorthand attributes -- namespaced attributes
 /// that are structure fields rather than XML bookkeeping.
 ///
@@ -3559,6 +4041,7 @@ fn has_shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> b
             .and_then(|key| key.split_once(':'))
             .is_some_and(|(prefix, local)| {
                 !matches!(prefix, "rdf" | "xml" | "xmlns" | "x")
+                    && resolver.resolve_prefix(prefix) != Some(super::struct_flatten::RDF_NS)
                     && !super::struct_flatten::is_ignored_et_attr(
                         resolver.resolve_prefix(prefix),
                         local,
@@ -3612,6 +4095,19 @@ fn ucfirst(name: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+fn structured_component_name(qname: &str, resolver: &NamespaceResolver) -> String {
+    if NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+        .is_some()
+    {
+        ucfirst(&super::namespace_resolver::static_export_component(
+            NamespaceResolver::extract_local_name(qname),
+        ))
+    } else {
+        ucfirst(NamespaceResolver::extract_local_name(qname))
     }
 }
 
@@ -3907,7 +4403,6 @@ fn extract_description_attributes(
     resolver: &NamespaceResolver,
     results: &mut Vec<ResultOccurrence>,
     legacy: &mut LegacyResults,
-    default_namespace_tags: &mut std::collections::HashSet<String>,
     low_default: bool,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
@@ -3972,9 +4467,6 @@ fn extract_description_attributes(
             }
             let prefixed_name = format_tag_name(key, resolver);
             let is_default = has_unregistered_namespace(key, resolver);
-            if is_default {
-                default_namespace_tags.insert(prefixed_name.clone());
-            }
             let legacy_name = legacy_simple_key(key, resolver, &prefixed_name);
             // FoundXMP sees the unescaped attribute value before its
             // >65536-byte IsDefault Binary check (XMP.pm:3650-3696).
@@ -3992,11 +4484,81 @@ fn extract_description_attributes(
             );
             results.push(
                 ResultOccurrence::scalar(prefixed_name, decoded)
-                    .with_path(vec![raw_property(key, resolver)]),
+                    .with_path(vec![raw_property(key, resolver)])
+                    .with_default(is_default),
             );
         }
     }
     Ok(())
+}
+
+/// IDs used by RDF properties to point at a separate node definition.
+/// A node definition is a direct child of rdf:RDF; a nodeID on another
+/// element (including a nested rdf:Description) is a reference.
+fn referenced_blank_node_ids(xml_bytes: &[u8]) -> Result<std::collections::HashSet<String>> {
+    // Most packets have no RDF blank nodes. Avoid another XML walk for them.
+    if memchr::memmem::find(xml_bytes, b"nodeID").is_none() {
+        return Ok(std::collections::HashSet::new());
+    }
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let mut reader = Reader::from_reader(xml_bytes);
+    reader.config_mut().trim_text(true);
+    let mut resolver = NamespaceResolver::new();
+    let mut parent_is_rdf_root = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut buf = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(Event::Start(ref element)) | Ok(Event::Empty(ref element)) => {
+                let empty = matches!(event, Ok(Event::Empty(_)));
+                register_namespaces_from_element(element, &mut resolver)?;
+                resolver.push_element_scope();
+                let tag_name = extract_tag_name(element)?;
+                let definition = is_rdf_description(&tag_name, &resolver)
+                    && parent_is_rdf_root.last() == Some(&true);
+                if !definition && let Some(id) = rdf_node_id_attribute(element, &resolver) {
+                    ids.insert(id);
+                }
+                if empty {
+                    resolver.pop_element_scope();
+                } else {
+                    parent_is_rdf_root.push(is_property_in_namespace(
+                        &tag_name, "RDF", RDF_NS, &resolver,
+                    ));
+                }
+            }
+            Ok(Event::End(_)) => {
+                parent_is_rdf_root.pop();
+                resolver.pop_element_scope();
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(ExifToolError::parse_error(format!(
+                    "Invalid XMP XML structure: {error}"
+                )));
+            }
+        }
+        buf.clear();
+    }
+    Ok(ids)
+}
+
+pub(super) fn rdf_node_id_attribute(
+    element: &BytesStart,
+    resolver: &NamespaceResolver,
+) -> Option<String> {
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    element.attributes().flatten().find_map(|attr| {
+        let key = std::str::from_utf8(attr.key.as_ref()).ok()?;
+        let (prefix, local) = key.split_once(':')?;
+        if local != "nodeID" || resolver.resolve_prefix(prefix) != Some(RDF_NS) {
+            return None;
+        }
+        let value = std::str::from_utf8(&attr.value).ok()?;
+        Some(quick_xml::escape::unescape(value).ok()?.into_owned())
+    })
 }
 
 /// Checks if a tag name represents an rdf:Description element.
@@ -4309,10 +4871,28 @@ const RAW_BINARY_TAGS: [&str; 3] = [
 /// The selected XMP source declares these scalar values binary before their
 /// public text is formatted. A default property becomes Binary only above
 /// FoundXMP's source-length threshold. Invalid base64 remains ordinary text.
-fn xmp_binary_source(tag: &str, raw: &str, is_default: bool) -> bool {
-    (is_default && raw.len() > 65536)
-        || RAW_BINARY_TAGS.contains(&tag)
-        || (BASE64_DECODED_BINARY_TAGS.contains(&tag) && base64_binary_placeholder(raw).is_some())
+fn xmp_binary_source(
+    tag: &str,
+    raw: &str,
+    is_default: bool,
+    source_is_static: bool,
+    is_scalar: bool,
+) -> bool {
+    // Name-keyed binary declarations belong to Adobe XMP table entries, not
+    // properties from ExifTool's static source URI. FoundXMP still applies
+    // its length limit to an unregistered default property from either source.
+    (is_default
+        && is_scalar
+        && if source_is_static {
+            let converted = format_xmp_value_with_default(tag, raw, is_default, true);
+            converted != raw && converted.starts_with("(Binary data ")
+        } else {
+            raw.len() > 65_536
+        })
+        || (!source_is_static
+            && (RAW_BINARY_TAGS.contains(&tag)
+                || (BASE64_DECODED_BINARY_TAGS.contains(&tag)
+                    && base64_binary_placeholder(raw).is_some())))
 }
 
 /// Renders a base64 XMP property the way ExifTool renders a binary tag.
@@ -4340,7 +4920,7 @@ fn has_unregistered_namespace(qname: &str, resolver: &NamespaceResolver) -> bool
     let Some(prefix) = NamespaceResolver::extract_prefix(qname) else {
         return true;
     };
-    let Some(uri) = resolver.resolve_prefix(prefix) else {
+    let Some(uri) = resolver.property_uri_for_prefix(prefix) else {
         return true;
     };
     canonical_standard_uri(uri).is_none()
@@ -4364,8 +4944,18 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     local_name.retain(|ch| ch != '\u{2182}');
 
     let group = resolver.group_for_qname(qname);
-    if let Some(uri) =
-        NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
+    // GetXMPTagID normalizes unknown all-uppercase components (ISO -> Iso,
+    // CAMERA_ID -> CameraId; XMP.pm:3038-3053). Ordinary source-table XMP
+    // property names retain their schema spelling.
+    let is_static = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.static_groups_for_prefix(prefix))
+        .is_some();
+    if is_static {
+        local_name = super::namespace_resolver::static_export_component(&local_name);
+    }
+    if !is_static
+        && let Some(uri) = NamespaceResolver::extract_prefix(qname)
+            .and_then(|prefix| resolver.property_uri_for_prefix(prefix))
     {
         // Renames keyed on the namespace URI apply to the raw local name,
         // before capitalization: Google writes `hdrp_makernote`, not
@@ -4383,7 +4973,16 @@ fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
     }
 
     // Some properties are reported by ExifTool under a different name.
-    let reported = exiftool_property_name(&group, &local_name);
+    let reported = if is_static {
+        // A preceding sibling can leave a prefix translation in force after
+        // this namespace is rebound to a static ExifTool URI. ExifTool still
+        // uses that translated schema's tag-name aliases.
+        let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+        let schema = resolver.translated_xmp_group_for_prefix(prefix);
+        exiftool_property_name(&schema, &local_name)
+    } else {
+        exiftool_property_name(&group, &local_name)
+    };
     format!("{group}:{reported}")
 }
 
@@ -4415,7 +5014,18 @@ fn capitalize_first_letter(s: &str) -> String {
 /// - **Basic Job Ticket (xmpBJ:)**: JobName, CreationDate, Status
 #[cfg(test)]
 fn format_xmp_value(tag: &str, value: &str) -> String {
-    format_xmp_value_with_default(tag, value, false)
+    format_xmp_value_with_default(tag, value, false, false)
+}
+
+/// XMP.pm's default `ConvertRational` recognizes `^(-?\d+)/(-?\d+)$`.
+/// Check the lexical shape independently of fixed-width integer capacity.
+fn default_xmp_rational_parts(value: &str) -> Option<(&str, &str)> {
+    let (numerator, denominator) = value.split_once('/')?;
+    let integer = |part: &str| {
+        let digits = part.strip_prefix('-').unwrap_or(part);
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    (integer(numerator) && integer(denominator)).then_some((numerator, denominator))
 }
 
 /// `FoundXMP` marks a newly defined property Binary when XMPAutoConv is on
@@ -4423,7 +5033,36 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 /// `is_default` is proven from a namespace absent from the selected source
 /// tables, not guessed from a displayed property name. Short GMask:Data text
 /// remains ordinary text.
-fn format_xmp_value_with_default(tag: &str, value: &str, is_default: bool) -> String {
+fn format_xmp_value_with_default(
+    tag: &str,
+    value: &str,
+    is_default: bool,
+    is_static: bool,
+) -> String {
+    // ExifTool -X's static-group properties are default XMP table entries,
+    // but their source names are not Adobe XMP schema names. Apply only
+    // FoundXMP's generic auto-conversions (XMP.pm:3670-3696), never the
+    // same-spelled XMP:Flash/Aperture/ShutterSpeed PrintConv tables.
+    if is_static || !tag.starts_with("XMP") {
+        let converted = if let Some((numerator, denominator)) = default_xmp_rational_parts(value) {
+            let is_zero = |part: &str| part.trim_start_matches('-').bytes().all(|b| b == b'0');
+            if is_zero(denominator) {
+                // Perl tests the captured numerator as a string: only "0" is false.
+                if numerator == "0" { "undef" } else { "inf" }.to_string()
+            } else {
+                format_xmp_plain_rational(value)
+            }
+        } else {
+            format_default_xmp_date(value)
+        };
+        if converted.len() > 65_536 {
+            return format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                converted.len()
+            );
+        }
+        return converted;
+    }
     // Dublin Core's lowercase raw `date` is declared with `%dateTimeInfo`
     // (XMP.pm) and prints through ConvertDateTime, including when carried
     // inside an SVG RDF packet. The reported name is capitalized to `Date`.
@@ -4983,6 +5622,29 @@ fn is_xmp_date_tag(local_name: &str) -> bool {
     ) || local_name.starts_with("HistoryWhen")
 }
 
+/// `ConvertXMPDate($value, 1)` for default XMP properties (13.59
+/// XMP.pm:3383-3396). Unlike a declared date tag, an unknown date-only
+/// string stays untouched; only the full timestamp shape is converted.
+fn format_default_xmp_date(value: &str) -> String {
+    static FULL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = FULL.get_or_init(|| {
+        regex::Regex::new(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})(:\d{2})?\s*(\S*)$")
+            .expect("literal XMP date pattern")
+    });
+    let Some(captures) = pattern.captures(value) else {
+        return value.to_string();
+    };
+    format!(
+        "{}:{}:{} {}{}{}",
+        &captures[1],
+        &captures[2],
+        &captures[3],
+        &captures[4],
+        captures.get(5).map_or("", |m| m.as_str()),
+        &captures[6],
+    )
+}
+
 /// Rewrites an ISO 8601 XMP timestamp the way ExifTool prints one:
 /// `2021-10-01T14:18:11.534+01:00` -> `2021:10:01 14:18:11.534+01:00`.
 ///
@@ -5505,6 +6167,16 @@ fn format_xmp_plain_rational(value: &str) -> String {
     let Some(number) = parse_xmp_number(value) else {
         return value.trim().to_string();
     };
+    // A computed quotient uses Perl's capitalized spelling; literal `inf`
+    // is text and retains its original case.
+    if number.is_infinite() && default_xmp_rational_parts(value).is_some() {
+        return if number.is_sign_negative() {
+            "-Inf"
+        } else {
+            "Inf"
+        }
+        .to_string();
+    }
     format_perl_g15(number)
 }
 
@@ -8146,10 +8818,8 @@ mod top_level_struct_tests {
         assert_eq!(
             typed
                 .iter()
-                // `http://ns.exiftool.org/EXIF/IFD0/1.0/` names ExifTool's
-                // own static groups, which are not modelled, so the leaf
-                // keeps the plain `XMP` group.
-                .find(|(tag, _)| tag == "XMP:Make")
+                // The resolved ExifTool -X URI supplies family-1 IFD0.
+                .find(|(tag, _)| tag == "IFD0:Make")
                 .map(|(_, value)| value.clone()),
             Some(XmpValue::Scalar("NIKON".to_string())),
             "real leaf missing or wrong: {typed:?}"
@@ -8193,6 +8863,9 @@ mod entry_tests {
             shadowed: false,
             priority: 0,
             binary_payload_unavailable: false,
+            source_is_static: false,
+            binary_list_source: None,
+            static_binary_payload: None,
         };
         assert_eq!(entry.group1, "XMP-exif");
     }
@@ -8268,6 +8941,24 @@ mod entry_tests {
                 .as_ref()
                 .and_then(TagValue::as_string),
             Some("42,1.654321S")
+        );
+    }
+
+    #[test]
+    fn untyped_carrier_keeps_rdf_list_elements_for_binary_selection() {
+        let xml = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:subject><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF>"#;
+        let mut metadata = MetadataMap::new();
+        insert_xmp_packet(&mut metadata, xml, false).unwrap();
+        let occurrences = metadata.occurrences_for("XMP:Subject");
+        assert_eq!(occurrences.len(), 1);
+        assert_eq!(occurrences[0].raw.as_string(), Some("alpha, beta"));
+        assert!(occurrences[0].is_list);
+        assert_eq!(
+            occurrences[0].value,
+            Some(TagValue::Array(vec![
+                TagValue::new_string("alpha"),
+                TagValue::new_string("beta"),
+            ]))
         );
     }
 

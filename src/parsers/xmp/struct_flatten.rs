@@ -75,7 +75,7 @@ const MWG_REGIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/region
 const MWG_COLLECTIONS_NS: &str = "http://www.metadataworkinggroup.com/schemas/collections/";
 const MWG_KEYWORDS_NS: &str = "http://www.metadataworkinggroup.com/schemas/keywords/";
 const GOOGLE_DEVICE_NS: &str = "http://ns.google.com/photos/dd/1.0/device/";
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub(super) const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 /// `(root namespace URI, ID prefix, replacement)` -- the schemas whose
 /// structures carry a `FlatName`. Matched longest-prefix-first, and only when
@@ -238,6 +238,8 @@ struct Frame {
     /// Whether this element carried shorthand attributes of its own, which
     /// already became fields one level down.
     has_fields: bool,
+    /// This static-group structure leaf declares an RDF base64 payload.
+    static_base64: bool,
 }
 
 /// Extracts every structure field in `xml_bytes` as
@@ -282,6 +284,16 @@ pub(crate) fn extract_flattened_struct_fields_with_identity(
     xml_bytes: &[u8],
     low_default: bool,
 ) -> Result<Vec<(String, Vec<String>, i16, RawPath)>> {
+    Ok(extract_flattened_struct_fields_with_identity_and_binary(xml_bytes, low_default)?.0)
+}
+
+pub(crate) fn extract_flattened_struct_fields_with_identity_and_binary(
+    xml_bytes: &[u8],
+    low_default: bool,
+) -> Result<(
+    Vec<(String, Vec<String>, i16, RawPath)>,
+    std::collections::HashMap<(String, RawPath), Vec<Option<Vec<u8>>>>,
+)> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
@@ -290,6 +302,7 @@ pub(crate) fn extract_flattened_struct_fields_with_identity(
     let mut stack: Vec<Frame> = Vec::new();
     // (flattened id, values) in first-seen order.
     let mut collected: Vec<(String, Vec<String>, i16, RawPath)> = Vec::new();
+    let mut binary_payloads = std::collections::HashMap::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -307,7 +320,12 @@ pub(crate) fn extract_flattened_struct_fields_with_identity(
                 let frame = push_frame(&e, &mut resolver, &mut stack)?;
                 stack.push(frame);
                 emit_attributes(&e, &resolver, &stack, &mut collected, low_default)?;
-                close_frame(&mut stack, &mut collected, low_default);
+                close_frame(
+                    &mut stack,
+                    &mut collected,
+                    &mut binary_payloads,
+                    low_default,
+                );
                 resolver.pop_element_scope();
             }
 
@@ -321,7 +339,12 @@ pub(crate) fn extract_flattened_struct_fields_with_identity(
             }
 
             Ok(Event::End(_)) => {
-                close_frame(&mut stack, &mut collected, low_default);
+                close_frame(
+                    &mut stack,
+                    &mut collected,
+                    &mut binary_payloads,
+                    low_default,
+                );
                 resolver.pop_element_scope();
             }
 
@@ -337,7 +360,7 @@ pub(crate) fn extract_flattened_struct_fields_with_identity(
         buf.clear();
     }
 
-    Ok(collected)
+    Ok((collected, binary_payloads))
 }
 
 /// Builds the [`Frame`] for `element` and counts it against its parent.
@@ -357,22 +380,35 @@ fn push_frame(
         ExifToolError::parse_error(format!("Invalid UTF-8 in XMP element name: {}", e))
     })?;
     let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
-    let uri = resolver.resolve_prefix(prefix).map(str::to_string);
+    let lexical_uri = resolver.resolve_prefix(prefix);
+    let uri = resolver
+        .property_uri_for_prefix(prefix)
+        .or(lexical_uri)
+        .map(str::to_string);
     let local = NamespaceResolver::extract_local_name(qname);
-    let ignored = IGNORED_PREFIXES.contains(&prefix) || is_ignored_et_attr(uri.as_deref(), local);
+    let ignored = IGNORED_PREFIXES.contains(&prefix)
+        || lexical_uri == Some(RDF_NS)
+        || is_ignored_et_attr(lexical_uri, local);
 
     if let Some(parent) = stack.last_mut() {
         parent.child_elements += 1;
     }
 
+    let static_uri = resolver.effective_static_uri(prefix);
+    let renamed = rename_field(uri.as_deref(), local);
+    let component = static_uri.map_or_else(
+        || renamed.to_string(),
+        |_| super::namespace_resolver::static_export_component(renamed),
+    );
+    let group = resolver.group_for_prefix(prefix);
+    let namespace = static_uri.map_or_else(
+        || group.strip_prefix("XMP-").unwrap_or("").to_string(),
+        str::to_string,
+    );
     Ok(Frame {
-        part: (!ignored).then(|| tag_id_segment(rename_field(uri.as_deref(), local))),
-        group: resolver.group_for_prefix(prefix),
-        namespace: resolver
-            .group_for_prefix(prefix)
-            .strip_prefix("XMP-")
-            .unwrap_or("")
-            .to_string(),
+        part: (!ignored).then(|| tag_id_segment(&component)),
+        group,
+        namespace,
         local: local.to_string(),
         uri,
         lang: lang_attribute(element)?,
@@ -388,9 +424,12 @@ fn push_frame(
                 .and_then(|key| key.split_once(':'))
                 .is_some_and(|(prefix, local)| {
                     !IGNORED_PREFIXES.contains(&prefix)
+                        && resolver.resolve_prefix(prefix) != Some(RDF_NS)
                         && !is_ignored_et_attr(resolver.resolve_prefix(prefix), local)
                 })
         }),
+        static_base64: static_uri.is_some()
+            && super::rdf_parser::has_rdf_base64_datatype(element, resolver),
     })
 }
 
@@ -399,6 +438,7 @@ fn push_frame(
 fn close_frame(
     stack: &mut Vec<Frame>,
     collected: &mut Vec<(String, Vec<String>, i16, RawPath)>,
+    binary_payloads: &mut std::collections::HashMap<(String, RawPath), Vec<Option<Vec<u8>>>>,
     low_default: bool,
 ) {
     let Some(frame) = stack.pop() else {
@@ -408,6 +448,16 @@ fn close_frame(
         return;
     }
     let value = frame.text.trim().to_string();
+    let payload = if frame.static_base64 {
+        // A malformed base64 leaf must not be published as encoded text under
+        // the real tag name. FoundXMP decodes the leaf before storing it.
+        let Some(payload) = super::rdf_parser::decode_static_rdf_base64(&value) else {
+            return;
+        };
+        Some(payload)
+    } else {
+        None
+    };
 
     // Google Device's `Cameras` and `Profiles` are list structures with an
     // `rdf:type` child under each `rdf:li`. The struct's `FlatName => ''`
@@ -440,7 +490,12 @@ fn close_frame(
     stack.push(frame);
     if let Some(tag) = flat_tag_name(stack, None) {
         let priority = path_priority(stack, None, low_default);
-        record(collected, tag, value, priority, raw_path(stack, None));
+        let path = raw_path(stack, None);
+        record(collected, tag.clone(), value, priority, path.clone());
+        binary_payloads
+            .entry((tag, path))
+            .or_default()
+            .push(payload);
     }
     stack.pop();
 }
@@ -483,10 +538,14 @@ fn emit_attributes(
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
-        if is_ignored_et_attr(uri, local) {
+        let lexical_uri = resolver.resolve_prefix(prefix);
+        if lexical_uri == Some(RDF_NS) {
+            continue; // RDF attributes describe the graph, not flattened fields.
+        }
+        if is_ignored_et_attr(lexical_uri, local) {
             continue; // et:desc/et:prt/et:val/et:id/et:tagid/et:toolkit/et:table/et:index
         }
+        let uri = resolver.property_uri_for_prefix(prefix).or(lexical_uri);
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -495,22 +554,22 @@ fn emit_attributes(
             continue;
         }
         let leaf = rename_field(uri, local);
-        if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(leaf))) {
-            let namespace = resolver.group_for_prefix(prefix);
-            let priority = path_priority(
-                stack,
-                Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
-                low_default,
-            );
+        let static_uri = resolver.effective_static_uri(prefix);
+        let component = static_uri.map_or_else(
+            || leaf.to_string(),
+            |_| super::namespace_resolver::static_export_component(leaf),
+        );
+        if let Some(tag) = flat_tag_name(stack, Some(&tag_id_segment(&component))) {
+            let ordinary_namespace = resolver.group_for_prefix(prefix);
+            let namespace =
+                static_uri.unwrap_or_else(|| ordinary_namespace.strip_prefix("XMP-").unwrap_or(""));
+            let priority = path_priority(stack, Some((namespace, local)), low_default);
             record(
                 collected,
                 tag,
                 value.to_string(),
                 priority,
-                raw_path(
-                    stack,
-                    Some((namespace.strip_prefix("XMP-").unwrap_or(""), local)),
-                ),
+                raw_path(stack, Some((namespace, local))),
             );
         }
     }
@@ -731,7 +790,7 @@ pub(crate) fn extract_blank_node_fields_with_identity(
                 let frame = push_frame(e, &mut resolver, &mut stack)?;
                 stack.push(frame);
 
-                let node_id = attribute_value(e, b"rdf:nodeID")?;
+                let node_id = super::rdf_parser::rdf_node_id_attribute(e, &resolver);
                 if let Some(node_id) = node_id {
                     // A named property carrying the reference itself
                     // (`<ph:tester rdf:nodeID="abc"/>`), or an rdf:Description
@@ -916,10 +975,14 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
         if IGNORED_PREFIXES.contains(&prefix) {
             continue;
         }
-        let uri = resolver.resolve_prefix(prefix);
-        if is_ignored_et_attr(uri, local) {
+        let lexical_uri = resolver.resolve_prefix(prefix);
+        if lexical_uri == Some(RDF_NS) {
             continue;
         }
+        if is_ignored_et_attr(lexical_uri, local) {
+            continue;
+        }
+        let uri = resolver.property_uri_for_prefix(prefix).or(lexical_uri);
         let Ok(value) = std::str::from_utf8(&attr.value) else {
             continue;
         };
@@ -927,14 +990,20 @@ fn shorthand_fields(element: &BytesStart, resolver: &NamespaceResolver) -> Resul
         if value.is_empty() {
             continue;
         }
+        let static_uri = resolver.effective_static_uri(prefix);
+        let leaf = rename_field(uri, local);
+        let component = static_uri.map_or_else(
+            || leaf.to_string(),
+            |_| super::namespace_resolver::static_export_component(leaf),
+        );
+        let group = resolver.group_for_prefix(prefix);
         out.push(NodeField {
-            name: tag_id_segment(rename_field(uri, local)),
+            name: tag_id_segment(&component),
             value: value.to_string(),
-            namespace: resolver
-                .group_for_prefix(prefix)
-                .strip_prefix("XMP-")
-                .unwrap_or("")
-                .to_string(),
+            namespace: static_uri.map_or_else(
+                || group.strip_prefix("XMP-").unwrap_or("").to_string(),
+                str::to_string,
+            ),
             local: local.to_string(),
         });
     }

@@ -332,10 +332,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         // Extract Info dictionary metadata
         match info_parser::parse_info_dict(reader) {
             Ok(info_metadata) => {
-                // Merge Info dictionary tags into main metadata
-                for (key, value) in info_metadata.iter() {
-                    metadata.insert(key.clone(), value.clone());
-                }
+                // Keep the Info reader's source/value channels so binary
+                // extraction can return the original PDF scalar bytes.
+                metadata.merge_winners_keeping_group1(&info_metadata);
             }
             Err(e) => {
                 // Log warning but continue - Info dict might not exist or be malformed

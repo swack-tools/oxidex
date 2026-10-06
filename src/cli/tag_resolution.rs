@@ -118,7 +118,11 @@ pub fn family1_label(occurrence: &TagOccurrence) -> &str {
 /// `-G0:1` (NikonCapture.pm:43 and Canon.pm `GROUPS => { 0 => 'MakerNotes'
 /// }`), never `[Nikon:NikonCapture]` or `[Canon:Canon]`.
 pub fn family0_label(occurrence: &TagOccurrence) -> &str {
-    resolve_family0(&occurrence.group0)
+    if occurrence.origin.module == Some("XMP::StaticGroup") {
+        &occurrence.group0
+    } else {
+        resolve_family0(&occurrence.group0)
+    }
 }
 
 /// The label for an arbitrary family number, for `-Gn` display.
@@ -529,6 +533,36 @@ pub fn render_binary_requested_tags(
                 entry.lookup_key
             ));
         }
+        // ExifTool's binary writer separates List elements with LF. A native
+        // fixed-length array is a numeric tuple, not a List, and uses spaces.
+        // Keep selected ValueConv elements rather than their display string.
+        if let TagValue::Array(values) = entry.occurrence.project(ValueChannel::ValueConv).as_ref()
+        {
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(if entry.occurrence.is_list {
+                        b'\n'
+                    } else {
+                        b' '
+                    });
+                }
+                match value {
+                    TagValue::String(text) => out.extend_from_slice(text.as_bytes()),
+                    TagValue::TextBytes(bytes) | TagValue::Binary(bytes) => {
+                        out.extend_from_slice(bytes)
+                    }
+                    other => out.extend_from_slice(
+                        super::output_formatter::format_tag_value_with_mode(
+                            &entry.lookup_key,
+                            other,
+                            true,
+                        )
+                        .as_bytes(),
+                    ),
+                }
+            }
+            continue;
+        }
         // ExifTool's -b disables PrintConv independently of -n. The
         // occurrence's ValueConv channel is the only honest source for text
         // and numeric extraction after binary payload cases above.
@@ -614,8 +648,13 @@ fn render_text_lines_bytes(
             format!("{}: ", entry.lookup_key)
         };
         out.extend_from_slice(prefix.as_bytes());
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
         out.extend_from_slice(&value_text_bytes(
-            &entry.lookup_key,
+            schema_name,
             &value,
             no_print_conv,
             short_level > 0,
@@ -635,7 +674,12 @@ fn render_map_text_bytes(metadata: &MetadataMap, no_print_conv: bool) -> Vec<u8>
         }
         out.extend_from_slice(key.as_bytes());
         out.extend_from_slice(b": ");
-        out.extend_from_slice(&value_text_bytes(key, value, no_print_conv, false));
+        let schema_name = if metadata.is_xmp_static_source(key) {
+            ""
+        } else {
+            key.as_str()
+        };
+        out.extend_from_slice(&value_text_bytes(schema_name, value, no_print_conv, false));
         out.push(b'\n');
     }
     out
@@ -1633,7 +1677,14 @@ pub fn build_display_map(
         };
         reserved.insert(base_key);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        out.insert(key, value);
+        // This is a display projection, but the output writer still needs
+        // the selected row's source kind: static RDF text must not acquire
+        // native name-keyed PrintConv after group/copy key synthesis.
+        let mut display = TagOccurrence::from_insert_shim(&key, value, 0);
+        if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            display.origin.module = Some("XMP::StaticGroup");
+        }
+        out.record_occurrence(key, display);
     }
     // A display projection of rows the read produced, never a caller's
     // assignment.
@@ -1673,11 +1724,13 @@ pub fn render_group_display_lines(
     for entry in resolved {
         let label = joined_family_label_for_entry(entry, families);
         let value = resolved_display_value(entry.occurrence, no_print_conv);
-        let rendered = super::output_formatter::format_tag_value_with_mode(
-            &entry.lookup_key,
-            &value,
-            no_print_conv,
-        );
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
+        let rendered =
+            super::output_formatter::format_tag_value_with_mode(schema_name, &value, no_print_conv);
         out.push_str(&format!(
             "[{label}] {}: {rendered}\n",
             entry.occurrence.name
@@ -1761,8 +1814,13 @@ pub fn render_short_lines(
         {
             continue;
         }
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
         let rendered = super::output_formatter::format_tag_value_short_with_mode(
-            &entry.lookup_key,
+            schema_name,
             &value,
             no_print_conv,
         );
@@ -1791,11 +1849,13 @@ pub fn render_human_lines(resolved: &[ResolvedOccurrence<'_>], no_print_conv: bo
         if super::output_formatter::hidden_from_ungrouped_short_listing(&entry.lookup_key, &value) {
             continue;
         }
-        let rendered = super::output_formatter::format_tag_value_with_mode(
-            &entry.lookup_key,
-            &value,
-            no_print_conv,
-        );
+        let schema_name = if entry.occurrence.origin.module == Some("XMP::StaticGroup") {
+            ""
+        } else {
+            &entry.lookup_key
+        };
+        let rendered =
+            super::output_formatter::format_tag_value_with_mode(schema_name, &value, no_print_conv);
         out.push_str(&format!("{}: {rendered}\n", entry.lookup_key));
     }
     out
@@ -2075,18 +2135,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     } else {
         ValueChannel::PrintConv
     };
-    let metadata = raw_metadata
+    let mut metadata = MetadataMap::new();
+    for (key, occurrence) in raw_metadata
         .winner_occurrences()
         .filter(|(key, _)| surviving.contains_key(*key))
-        .map(|(key, occurrence)| {
-            let value = if no_print_conv {
-                occurrence.project(channel).into_owned()
-            } else {
-                resolved_print_value(occurrence)
-            };
-            (key.clone(), value)
-        })
-        .collect();
+    {
+        let value = if no_print_conv {
+            occurrence.project(channel).into_owned()
+        } else {
+            resolved_print_value(occurrence)
+        };
+        // Keep source provenance on the display projection. The formatter
+        // otherwise treats a static RDF GPS field as a native GPS tag and
+        // runs its name-keyed PrintConv a second time (N -> North).
+        let mut display = TagOccurrence::from_insert_shim(key, value, 0);
+        if occurrence.origin.module == Some("XMP::StaticGroup") {
+            display.origin.module = Some("XMP::StaticGroup");
+        }
+        metadata.record_occurrence(key.clone(), display);
+    }
+    metadata.mark_read_complete();
     ResolvedFileOutput::Metadata(metadata)
 }
 

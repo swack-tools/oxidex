@@ -47,6 +47,39 @@ fn run(args: &[&str], path: &Path) -> Output {
 }
 
 #[test]
+fn native_iptc_list_keeps_newline_separator_in_binary_output() {
+    let Some(iptc) = fixtures::pinned_t_images_fixture_path("IPTC.jpg") else {
+        return;
+    };
+    // Pinned ExifTool 13.59: `-b -Keywords t/images/IPTC.jpg`.
+    let extracted = run(&["-b", "-Keywords"], &iptc);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(extracted.stdout, b"ExifTool\nTest\nIPTC");
+}
+
+#[test]
+fn native_numeric_tuple_keeps_space_separator_in_binary_output() {
+    let Some(pgf) = fixtures::pinned_t_images_fixture_path("PGF.pgf") else {
+        return;
+    };
+    // Pinned ExifTool 13.59: `-b -BackgroundColor t/images/PGF.pgf` is `0 0 0`.
+    let extracted = run(&["-b", "-BackgroundColor"], &pgf);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(extracted.stdout, b"0 0 0");
+}
+
+#[test]
+fn html_declared_list_keeps_newline_separator_in_binary_output() {
+    let Some(html) = fixtures::pinned_t_images_fixture_path("HTML.html") else {
+        return;
+    };
+    // Pinned ExifTool 13.59: `-b -HTML-dc:Creator t/images/HTML.html`.
+    let extracted = run(&["-b", "-HTML-dc:Creator"], &html);
+    assert!(extracted.status.success(), "{extracted:?}");
+    assert_eq!(extracted.stdout, b"Phil Harvey\nAnother Creator");
+}
+
+#[test]
 fn large_mpf_uid_stays_visible_and_extracts_exact_bytes() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("uid-264.jpg");

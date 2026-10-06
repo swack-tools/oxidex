@@ -731,7 +731,7 @@ impl Collector {
                 1 => values.remove(0),
                 _ => TagValue::Array(values),
             };
-            metadata.insert(key.clone(), value);
+            metadata.insert_declared_list(key.clone(), value);
         }
         for (key, form) in self.forms {
             metadata.set_value_form(key, form);

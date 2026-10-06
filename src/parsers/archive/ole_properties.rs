@@ -334,6 +334,9 @@ fn parse_section(
             let key = format!("FlashPix:{name}");
             if binary_source {
                 metadata.insert_unavailable_binary_display(key, value, "");
+            } else if matches!(&value, TagValue::Array(_)) {
+                // ProcessProperties returns an array for source list values.
+                metadata.insert_declared_list(key, value);
             } else {
                 metadata.insert(key, value);
             }
