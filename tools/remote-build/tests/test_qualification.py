@@ -1,5 +1,6 @@
 """Safety boundaries for the Spot qualification transport."""
 import hashlib
+from contextlib import ExitStack
 import io
 import json
 from pathlib import Path
@@ -689,3 +690,201 @@ class ExplicitQualificationWorkerTests(unittest.TestCase):
             self.assertEqual(transport.qualification_worker("project"), (vm, (.2, .3), direct))
             select.assert_called_once_with("project")
             admission.assert_called_once()
+
+
+class QualificationLifecycleRunTests(unittest.TestCase):
+    """Exercise the controller boundary with a fake SSH peer and durable files."""
+
+    def run_case(self, scenario, remote_exit="0"):
+        import qualification_transport as transport
+        head = "a" * 40
+        run_id = "qualification-aaaaaaaaaaaa-" + "b" * 32
+        archive_digest = "c" * 64
+        input_digest = "d" * 64
+        source_identity = {"mode": "maintainer-ssh", "head": head}
+        events = []
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            candidate = root / "candidate"
+            candidate.mkdir()
+            (candidate / ".exiftool-version").write_text("13.59\n")
+            signer = root / "allowed_signers"
+            signer.write_text("maintainer public key\n")
+            reference, provisioning = root / "reference", root / "provisioning"
+            reference.mkdir()
+            provisioning.mkdir()
+            (reference / "read-policy-input.json").write_text("approved policy\n")
+            output = root / "published"
+            transport_path = root / "evidence/remote-qualification" / run_id / "transport.json"
+            vm = SimpleNamespace(name="builder-test", zone="test-zone", instance_id="123")
+
+            class FakeDirect:
+                def ssh(self, shell):
+                    return ("ssh", shell)
+
+                def scp(self, source, destination, download=False):
+                    return ("scp", str(source), str(destination), download)
+
+            def fake_git(*args):
+                if args == ("rev-parse", "HEAD"):
+                    return head
+                if args == ("status", "--porcelain"):
+                    return ""
+                if args == ("config", "--path", "--get", "gpg.ssh.allowedSignersFile"):
+                    return str(signer)
+                raise AssertionError(args)
+
+            def fake_archive(_root, _reference, _provisioning, _bundle, _signer,
+                             destination, _attestation):
+                destination.write_bytes(b"source archive")
+                return hashlib.sha256(destination.read_bytes()).hexdigest()
+
+            def fake_process(argv, **kwargs):
+                if argv[0] == "git":
+                    if "create" in argv:
+                        Path(argv[-2]).write_bytes(b"bundle")
+                    return SimpleNamespace(stdout="", returncode=0)
+                if argv[0] == "scp":
+                    events.append("upload")
+                    return SimpleNamespace(stdout="", returncode=0)
+                self.assertEqual(argv[0], "ssh")
+                shell = argv[1]
+                if "nohup setsid" in shell:
+                    # Inspect the on-disk receipt before the fake remote peer
+                    # can acknowledge or execute the detached command.
+                    durable = json.loads(transport_path.read_text())
+                    self.assertEqual(durable["status"], "RUNNING_RETAINED")
+                    self.assertIs(durable["launch_acknowledged"], False)
+                    job = durable["remote_job"]
+                    source = transport.SOURCE_HOST + "/" + run_id
+                    self.assertEqual(job, {
+                        "run_script": source + "/run.sh",
+                        "launch_pid_file": source + "/launch.pid",
+                        "exit_status_file": source + "/exit.status",
+                        "exit_status_tmp_file": source + "/exit.status.tmp",
+                        "log": source + "/run.log"})
+                    events.append("launch")
+                    if scenario == "ack_loss":
+                        raise subprocess.CalledProcessError(255, argv)
+                    return SimpleNamespace(stdout="", returncode=0)
+                if shell.startswith("if test -f "):
+                    events.append("poll")
+                    return SimpleNamespace(stdout=remote_exit + "\n", returncode=0)
+                if "--pack-results" in shell:
+                    events.append("pack")
+                    if scenario == "pack_failure":
+                        raise subprocess.CalledProcessError(5, argv)
+                    return SimpleNamespace(stdout="", returncode=0)
+                if "--verify-results-tar" in shell:
+                    events.append("replay")
+                    return SimpleNamespace(stdout="", returncode=0)
+                if "spot-input.tar.gz" in shell:
+                    events.append("retained_check")
+                    return SimpleNamespace(stdout=input_digest + "  input\n", returncode=0)
+                if "/src/qualification_bootstrap.py" in shell:
+                    events.append("bootstrap")
+                    if scenario == "prelaunch_refusal":
+                        raise subprocess.CalledProcessError(2, argv)
+                return SimpleNamespace(stdout="", returncode=0)
+
+            def fake_result(_ssh, _direct, _target, _evidence, name):
+                events.append("collect_" + name)
+                if scenario == "collection_failure":
+                    raise ValueError("injected collection failure")
+                if name == "pack-result.json":
+                    return {"source_identity": source_identity,
+                            "archive_sha256": archive_digest}
+                return {"archive_sha256": archive_digest}
+
+            def fake_extract(_archive, staged):
+                staged_output = staged / "evidence/remote-qualification" / run_id
+                staged_output.mkdir(parents=True)
+                (staged_output / "remote-qualification.json").write_text(
+                    json.dumps({"input_archive_sha256": input_digest}))
+                policy = qualification.sha(reference / "read-policy-input.json")
+                (staged_output / "preparation.json").write_text(json.dumps({
+                    "head": head, "pin": "13.59", "policy_reference_sha256": policy,
+                    "policy_sha256": policy}))
+
+            with ExitStack() as patches:
+                patches.enter_context(patch.object(qualification, "ROOT", candidate))
+                patches.enter_context(patch.object(qualification, "ops_root", return_value=root))
+                patches.enter_context(patch.object(qualification, "git", side_effect=fake_git))
+                patches.enter_context(patch.object(qualification, "source_attestation", return_value=None))
+                patches.enter_context(patch.object(qualification, "resolve_project", return_value="test-project"))
+                patches.enter_context(patch.object(transport, "identity", return_value=("uploader", "/key")))
+                patches.enter_context(patch.object(transport, "unique_run_id", return_value=run_id))
+                patches.enter_context(patch.object(transport, "verify_source", return_value=source_identity))
+                patches.enter_context(patch.object(transport, "source_archive", side_effect=fake_archive))
+                patches.enter_context(patch.object(transport, "qualification_worker", return_value=(
+                    vm, (.1, .2), FakeDirect())))
+                patches.enter_context(patch.object(transport.subprocess, "run", side_effect=fake_process))
+                patches.enter_context(patch.object(transport, "downloaded_result", side_effect=fake_result))
+                patches.enter_context(patch.object(transport, "download", side_effect=lambda _direct, _remote, local, _digest: local.write_bytes(b"archive")))
+                patches.enter_context(patch.object(qualification, "safe_extract", side_effect=fake_extract))
+                patches.enter_context(patch.object(qualification, "verify_source_result_binding"))
+                patches.enter_context(patch.object(qualification, "verify_archived_receipts"))
+                patches.enter_context(patch.object(qualification, "publish_results", return_value=root / "published-result"))
+                patches.enter_context(patch.object(transport, "DirectTransport", return_value=FakeDirect()))
+                if scenario == "timeout":
+                    patches.enter_context(patch.dict(transport.os.environ,
+                                                     {"OXIDEX_REMOTE_QUALIFICATION_TIMEOUT_SECONDS": "1"}))
+                    patches.enter_context(patch.object(transport.time, "monotonic", side_effect=[0, 1]))
+                result = transport.run(output, reference, provisioning, None)
+            receipt = json.loads(transport_path.read_text())
+            return result, receipt, events
+
+    def test_lost_launch_ack_keeps_durable_unknown_job(self):
+        result, receipt, events = self.run_case("ack_loss")
+        self.assertEqual(result, 2)
+        self.assertEqual(receipt["status"], "RUNNING_RETAINED")
+        self.assertIs(receipt["launch_acknowledged"], False)
+        self.assertIn("remote_job", receipt)
+        self.assertEqual(events.count("launch"), 1)
+        self.assertNotIn("pack", events)
+
+    def test_timeout_and_malformed_poll_keep_unknown_job(self):
+        for scenario, status in (("timeout", "0"), ("malformed", "partial")):
+            with self.subTest(scenario=scenario):
+                result, receipt, events = self.run_case(scenario, status)
+                self.assertEqual(result, 2)
+                self.assertEqual(receipt["status"], "RUNNING_RETAINED")
+                self.assertIn("remote_job", receipt)
+                self.assertNotIn("pack", events)
+
+    def test_unconfirmed_exit_never_starts_pack_or_collection(self):
+        for status in ("4", "5", "137", "143"):
+            with self.subTest(status=status):
+                result, receipt, events = self.run_case("unknown", status)
+                self.assertEqual(result, 2)
+                self.assertEqual(receipt["status"], "RUNNING_RETAINED")
+                self.assertEqual(receipt["remote_exit_code"], int(status))
+                self.assertEqual(receipt["unconfirmed_task19_exit"], int(status))
+                self.assertNotIn("pack", events)
+                self.assertFalse(any(event.startswith("collect_") for event in events))
+
+    def test_confirmed_collection_failure_is_refusal_and_unknown_never_collects(self):
+        for status in ("0", "2"):
+            with self.subTest(status=status):
+                result, receipt, events = self.run_case("collection_failure", status)
+                self.assertEqual(result, 2)
+                self.assertEqual(receipt["status"], "REFUSED")
+                self.assertIs(receipt["remote_terminal_confirmed"], True)
+                self.assertIn("pack", events)
+        result, receipt, events = self.run_case("unknown", "5")
+        self.assertEqual(receipt["status"], "RUNNING_RETAINED")
+        self.assertNotIn("pack", events)
+
+    def test_confirmed_success_and_prelaunch_refusal_remain_distinct(self):
+        result, receipt, events = self.run_case("success")
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt["status"], "PASS")
+        self.assertEqual(receipt["remote_exit_code"], 0)
+        self.assertLess(events.index("launch"), events.index("poll"))
+        self.assertLess(events.index("poll"), events.index("pack"))
+        self.assertIn("replay", events)
+        result, receipt, events = self.run_case("prelaunch_refusal")
+        self.assertEqual(result, 2)
+        self.assertEqual(receipt["status"], "REFUSED")
+        self.assertNotIn("remote_job", receipt)
+        self.assertNotIn("launch", events)

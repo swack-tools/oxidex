@@ -177,7 +177,17 @@ def run(output: Path, reference: Path, provisioning: Path, project: str | None) 
                "reference_policy_sha256": q.sha(reference / "read-policy-input.json"),
                "provisioning_reference": str(provisioning)}
     def save():
-        transport_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        staged = transport_path.with_name(transport_path.name + ".new")
+        with staged.open("w") as stream:
+            stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        staged.replace(transport_path)
+        directory_fd = os.open(evidence, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     save()
     source_host = f"{SOURCE_HOST}/{run_id}"
     target_host = f"{TARGET_HOST}/{run_id}"
@@ -247,16 +257,23 @@ def run(output: Path, reference: Path, provisioning: Path, project: str | None) 
                  shlex.quote(source_host + "/exit.status.tmp") + "\nmv -f " + \
                  shlex.quote(source_host + "/exit.status.tmp") + " " + \
                  shlex.quote(source_host + "/exit.status") + "\n"
+        # A lost SSH acknowledgement can occur after nohup starts the child.
+        # Persist every recovery handle and the uncertain state first.
+        receipt["remote_job"] = {"run_script": source_host + "/run.sh",
+                                  "launch_pid_file": source_host + "/launch.pid",
+                                  "exit_status_file": source_host + "/exit.status",
+                                  "exit_status_tmp_file": source_host + "/exit.status.tmp",
+                                  "log": source_host + "/run.log"}
+        receipt["status"] = "RUNNING_RETAINED"
+        receipt["launch_acknowledged"] = False
+        save()
         ssh("printf '%s' " + shlex.quote(script) + " > " + shlex.quote(source_host + "/run.sh") +
             " && chmod 700 " + shlex.quote(source_host + "/run.sh") +
             " && { nohup setsid sh " + shlex.quote(source_host + "/run.sh") +
             " </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\" > " +
             shlex.quote(source_host + "/launch.pid") + "; }")
+        receipt["launch_acknowledged"] = True
         receipt["status"] = "running"
-        receipt["remote_job"] = {"run_script": source_host + "/run.sh",
-                                  "launch_pid_file": source_host + "/launch.pid",
-                                  "exit_status_file": source_host + "/exit.status",
-                                  "log": source_host + "/run.log"}
         save()
         deadline = time.monotonic() + timeout
         while True:
@@ -274,6 +291,12 @@ def run(output: Path, reference: Path, provisioning: Path, project: str | None) 
             status = poll.stdout.strip()
             if status != "running":
                 receipt["remote_exit_code"] = q.confirmed_exit_status(status, receipt)
+                # A valid numeric exit is not necessarily a proven terminal
+                # outcome. Task19 exits 4/5 and killed launchers retain work.
+                if receipt["remote_exit_code"] not in (0, 2):
+                    q.require_remote_success(receipt)
+                receipt["remote_terminal_confirmed"] = True
+                save()
                 break
             time.sleep(min(30, max(1, deadline - time.monotonic())))
         # Preserve a remote terminal failure. Packing and downloading receipts
@@ -336,7 +359,9 @@ def run(output: Path, reference: Path, provisioning: Path, project: str | None) 
         save()
         return 0
     except Exception as error:
-        if receipt["status"] != "RUNNING_RETAINED":
+        if receipt["status"] != "RUNNING_RETAINED" and receipt.get("remote_job") and not receipt.get("remote_terminal_confirmed"):
+            receipt["status"] = "RUNNING_RETAINED"
+        elif receipt["status"] != "RUNNING_RETAINED":
             receipt["status"] = "REFUSED"
         receipt["error"] = str(error)
         save()
