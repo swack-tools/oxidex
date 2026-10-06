@@ -13,6 +13,9 @@ import tomllib
 import time
 from pathlib import Path
 
+from .config import approved_instances, builder_instance_name, matching_approval
+from . import ssh_transport
+
 
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
@@ -38,6 +41,72 @@ def pinned_toolchain(source):
     if not commit or not release or release[1] != pin or not cargo_output.startswith('cargo '+pin+' '):
         raise RuntimeError('Local rustup cannot verify the repository toolchain pin')
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
+
+
+def verify_signed_source(source, head):
+    identity = subprocess.check_output(
+        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
+        text=True).strip().split('|')
+    expected = ['swackhamer','swackhamer@users.noreply.github.com',
+                'swackhamer','swackhamer@users.noreply.github.com',
+                'G','swackhamer@users.noreply.github.com']
+    if identity != expected:
+        raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
+    subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
+                        expected_toolchain, expected_oracle, *, require_pass=True, transport=None):
+    import tempfile
+    import os
+    fd, name = tempfile.mkstemp(prefix='.oxidex-test-proof-', dir=local.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        command = (transport.scp(temporary, remote, download=True) if transport else
+            ['gcloud','compute','scp',ssh_transport.target(instance)+':'+remote,str(temporary),
+             '--zone='+zone,'--project='+project,'--quiet',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(command,check=True)
+        if hashlib.sha256(temporary.read_bytes()).hexdigest() != digest:
+            raise RuntimeError('Downloaded remote test proof checksum mismatch')
+        proof = json.loads(temporary.read_text())
+        if (proof.get('schema') != 1 or proof.get('kind') != 'oxidex_spot_workspace_test'
+                or proof.get('source_commit') != expected_commit
+                or proof.get('rust_pin') != expected_toolchain['channel']
+                or proof.get('rustc_commit') != expected_toolchain['rustc_commit']
+                or proof.get('cargo_version') != expected_toolchain['cargo_version']
+                or not isinstance(proof.get('rustc_version'), str)
+                or re.findall(r'^commit-hash: ([0-9a-f]{40})$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['rustc_commit']]
+                or re.findall(r'^release: (\S+)$', proof['rustc_version'], re.M)
+                   != [expected_toolchain['channel']]
+                or proof.get('oracle_pin') != expected_oracle
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('bootstrap_manifest_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('perl_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('exiftool_tree_sha256', ''))
+                or not re.fullmatch(r'[0-9a-f]{64}', proof.get('corpus_tree_sha256', ''))
+                or proof.get('corpus_files', 0) < 4000):
+            raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        if (not isinstance(proof.get('python_command'), list)
+                or proof['python_command'][1:] != ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py']
+                or (proof.get('qualification_unit_command') is not None and
+                    (not isinstance(proof['qualification_unit_command'], list) or
+                     proof['qualification_unit_command'][1:] != ['-m', 'unittest', 'test_version_transition_qualification.py']))
+                or (proof.get('test_command') is not None and
+                    proof['test_command'] != ['cargo', 'test', '--workspace', '--all-features', '--locked', '--no-fail-fast'])):
+            raise RuntimeError('Remote test proof has an unexpected command')
+        if require_pass:
+            if (proof.get('status') != 'PASS' or proof.get('test_exit_code') != 0
+                    or proof.get('python_exit_code') != 0 or proof.get('qualification_unit_exit_code') != 0
+                    or proof.get('test_command') is None or proof.get('qualification_unit_command') is None):
+                raise RuntimeError('Remote test proof does not establish pinned exact-head PASS')
+        elif proof.get('status') != 'FAILED' or not isinstance(proof.get('test_exit_code'), int) or proof['test_exit_code'] == 0:
+            raise RuntimeError('Remote test proof does not establish a bound failure')
+        temporary.replace(local)
+        return proof
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def verify_remote_toolchain(expected, ssh, project):
@@ -66,11 +135,9 @@ def unique_run_id(worktree_id):
 def cleanup_command(run_id):
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}-[0-9a-f]{32}', run_id):
         raise ValueError('Refusing to clean an invalid remote run identifier')
-    root='/mnt/runner-data/remote-build'
-    source=shlex.quote(f'{root}/sources/{run_id}')
-    target=shlex.quote(f'{root}/targets/{run_id}')
     archive=f'~/oxidex-remote-source-{run_id}.tar.gz'
-    return f'sudo rm -rf -- {source} {target} && rm -f -- {archive}'
+    return f'sudo /usr/local/bin/oxidex-remote-build {shlex.quote(run_id)} cleanup && rm -f -- {archive}'
+
 
 
 def source_sync_command(digest, upload, destination):
@@ -104,15 +171,18 @@ def retryable_failure(exc, stage):
     return retryable_exit(exc.returncode)
 
 
-def download_artifact(instance, zone, project, binary, artifact, digest):
+def download_artifact(instance, zone, project, binary, artifact, digest, transport=None):
     import tempfile
     import os
     fd,name=tempfile.mkstemp(prefix='.oxidex-download-',dir=artifact.parent)
     os.close(fd)
     temporary=Path(name)
     try:
-        subprocess.run(['gcloud','compute','scp',instance+':'+binary,str(temporary),
-            '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE],check=True)
+        command = (transport.scp(temporary, binary, download=True) if transport else
+            ['gcloud','compute','scp',ssh_transport.target(instance)+':'+binary,str(temporary),
+             '--zone='+zone,'--project='+project,'--quiet','--scp-flag=-C',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(command,check=True)
         if hashlib.sha256(temporary.read_bytes()).hexdigest()!=digest:
             raise RuntimeError('Downloaded binary checksum mismatch')
         temporary.chmod(0o755)
@@ -141,20 +211,82 @@ def make_snapshot(source: Path, archive: Path) -> dict:
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
 
+class BuilderBusy(RuntimeError):
+    """Transient host utilization refusal, before any source mutation."""
+
+
+def explicit_resource_probe(ssh):
+    """Read native Linux CPU/memory before an explicit bootstrap dispatch.
+
+    This is a current-host admission probe, not a Monitoring window or release
+    qualification. The root launcher still owns atomic container admission.
+    """
+    script = """import json,time
+from pathlib import Path
+def cpu():
+    values=[int(v) for v in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
+    return sum(values),values[3]+values[4]
+a=cpu();time.sleep(1);b=cpu()
+delta=b[0]-a[0]
+if delta<=0:raise SystemExit('Invalid CPU observation')
+mem={line.split(':')[0]:int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith(('MemTotal:','MemAvailable:'))}
+print(json.dumps({'cpu':1-(b[1]-a[1])/delta,'memory':1-mem['MemAvailable']/mem['MemTotal'],'observed_at':time.time(),'method':'native-linux-one-second'}))
+"""
+    output=subprocess.check_output(ssh('python3 -c '+shlex.quote(script)),text=True,timeout=15)
+    record=json.loads(output)
+    import math
+    if (not isinstance(record,dict) or record.get('method')!='native-linux-one-second'
+            or any(type(record.get(k)) not in (int,float) or not math.isfinite(record[k])
+                   or not 0<=record[k]<=1 for k in ('cpu','memory'))
+            or type(record.get('observed_at')) not in (int,float)
+            or not math.isfinite(record['observed_at'])
+            or abs(time.time()-record['observed_at'])>15):
+        raise RuntimeError('Explicit builder CPU/memory admission refused')
+    if any(record[k]>=.75 for k in ('cpu','memory')):
+        raise BuilderBusy('Explicit builder CPU/memory admission refused: busy host')
+    return record
+
+
+
+def verify_builder_admission(instance, zone, project, instance_id, ssh):
+    from .worker_selection import launcher_probe
+    actual = json.loads(subprocess.check_output([
+        'gcloud', 'compute', 'instances', 'describe', instance,
+        '--zone='+zone, '--project='+project, '--format=json(id,status)'], text=True))
+    if str(actual.get('id')) != instance_id or actual.get('status') != 'RUNNING':
+        raise RuntimeError('Pinned remote builder identity changed or is not running')
+    subprocess.run(ssh('sh -c '+shlex.quote(launcher_probe())), check=True, timeout=60)
+    resource = explicit_resource_probe(ssh)
+    return {'instance_id':instance_id,'launcher_verified':True,
+            'resource_probe':resource,'admission_passed':True}
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--instance',required=True)
     parser.add_argument('--zone',required=True)
+    parser.add_argument('--instance-id')
     parser.add_argument('--project',default='homelab-424523')
     parser.add_argument('--worktree-id',required=True)
     parser.add_argument('--evidence-dir',type=Path,required=True)
-    parser.add_argument('--profile',choices=['debug','release'],default='release')
+    parser.add_argument('--profile',choices=['debug','release','test'],default='release')
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
-    import re
+    ssh_transport.identity()  # Refuse incomplete authentication before any subprocess.
+    if args.instance_id is not None and not re.fullmatch(r'[0-9]{1,20}', args.instance_id):
+        raise ValueError('Invalid pinned instance ID')
+    approval = None
+    if not builder_instance_name(args.instance):
+        approval = matching_approval(approved_instances(), args.project, args.instance, args.zone)
+        if approval is None:
+            raise ValueError('Remote builds require a dedicated builder-* VM or an explicit identity-bound approval')
+    if args.instance_id is None and approval is None:
+        raise ValueError('Direct builder requires a pinned instance ID before remote work')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}',args.worktree_id):
         raise ValueError('Invalid worktree identifier')
+    if args.instance_id is None:
+        args.instance_id = approval['id']
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
@@ -163,15 +295,63 @@ def main(argv=None):
     evidence.mkdir(parents=True,exist_ok=True)
     receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
+    if approval:
+        receipt['approved_instance'] = approval
     def save():
         (evidence/'remote-build.json').write_text(json.dumps(receipt,indent=2))
+    if approval:
+        from .worker_selection import select_worker
+        receipt['stage'] = 'admission'
+        try:
+            actual = json.loads(subprocess.check_output([
+                'gcloud', 'compute', 'instances', 'describe', args.instance,
+                '--zone='+args.zone, '--project='+args.project, '--format=json(id,status)'], text=True))
+            if str(actual.get('id')) != approval['id'] or actual.get('status') != 'RUNNING':
+                raise RuntimeError('Approved remote builder identity changed or is not running')
+            select_worker(args.project, required_name=args.instance,
+                          required_id=approval['id'], required_zone=args.zone)
+        except (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            receipt.update(error=str(exc), retryable=True)
+            save()
+            raise
+    transport = None
+    if ssh_transport.identity():
+        receipt['stage'] = 'transport_identity'
+        save()
+        try:
+            transport = ssh_transport.DirectTransport(args.instance, args.zone, args.project,
+                args.instance_id or (approval['id'] if approval else None))
+            receipt['transport'] = {'method':'direct-ssh', 'instance_id':transport.instance_id,
+                                    'address':transport.host}
+            save()
+        except Exception as exc:
+            receipt.update(error=str(exc), retryable=isinstance(exc,
+                (subprocess.CalledProcessError, subprocess.TimeoutExpired)))
+            save()
+            raise
     def ssh(command):
-        return ['gcloud','compute','ssh',args.instance,'--zone='+args.zone,'--project='+args.project,
-                '--quiet',*SSH_KEEPALIVE,'--command='+command]
+        if transport:
+            return transport.ssh(command)
+        return ['gcloud','compute','ssh',ssh_transport.target(args.instance),'--zone='+args.zone,'--project='+args.project,
+                '--quiet',*SSH_KEEPALIVE,*ssh_transport.flags('ssh'),'--command='+command]
+    if args.instance_id is not None:
+        receipt['stage'] = 'identity_probe'
+        receipt['admission_passed'] = False
+        save()
+        try:
+            receipt.update(verify_builder_admission(args.instance, args.zone, args.project, args.instance_id, ssh))
+            save()
+        except Exception as exc:
+            transient = (isinstance(exc, (BuilderBusy, subprocess.TimeoutExpired))
+                         or isinstance(exc, subprocess.CalledProcessError) and exc.returncode in (75, 255))
+            receipt.update(error=str(exc), retryable=transient, admission_passed=False)
+            save()
+            raise
     def cleanup(strict=False):
         try:
             subprocess.run(ssh(cleanup_command(args.worktree_id)),check=True)
             receipt['remote_cleanup']='complete'
+            receipt['remote_targets']='retained'
         except Exception as cleanup_error:
             receipt['remote_cleanup']='failed'
             receipt['cleanup_error']=str(cleanup_error)
@@ -187,6 +367,10 @@ def main(argv=None):
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        if args.profile == 'test' and receipt['source_status']:
+            raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
+        if args.profile == 'test':
+            verify_signed_source(source, receipt['source_commit'])
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
@@ -199,8 +383,12 @@ def main(argv=None):
         subprocess.run(ssh(f'sudo /usr/local/bin/oxidex-remote-build {project} prepare'),check=True)
         receipt['stage']='sync_upload'
         start=time.monotonic()
-        subprocess.run(['gcloud','compute','scp',str(archive),args.instance+':~/oxidex-remote-source-'+args.worktree_id+'.tar.gz',
-                        '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE],check=True)
+        upload_path='~/oxidex-remote-source-'+args.worktree_id+'.tar.gz'
+        upload_command = (transport.scp(archive, upload_path) if transport else
+            ['gcloud','compute','scp',str(archive),ssh_transport.target(args.instance)+':'+upload_path,
+             '--zone='+args.zone,'--project='+args.project,'--quiet',*SCP_KEEPALIVE,
+             *ssh_transport.flags('scp')])
+        subprocess.run(upload_command,check=True)
         digest=receipt['snapshot']['archive_sha256']
         destination='/mnt/runner-data/remote-build/sources/'+args.worktree_id
         upload='oxidex-remote-source-'+args.worktree_id+'.tar.gz'
@@ -216,7 +404,11 @@ def main(argv=None):
         stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
-        stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
+        if args.profile=='test':
+            stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '
+                           +receipt['source_commit']+' --rustc-commit '+receipt['toolchain']['rustc_commit']))
+        else:
+            stages.append(('compile','cargo build '+('--release ' if args.profile=='release' else '')+'--locked --bin oxidex'))
         for stage,command in stages:
             receipt['stage']=stage
             start=time.monotonic()
@@ -228,7 +420,55 @@ def main(argv=None):
             receipt['retryable']=retryable_exit(result.returncode);save()
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
+                if stage == 'test':
+                    remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+                    try:
+                        remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+                        if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                            raise RuntimeError('Remote failed-test proof has no SHA-256')
+                        receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                            remote_proof,evidence/'remote-test.json',remote_hash,receipt['source_commit'],
+                            receipt['toolchain'],(source/'.exiftool-version').read_text().strip(),require_pass=False,transport=transport)
+                        receipt['test_proof_sha256']=remote_hash
+                    except Exception as proof_error:
+                        # The command may have failed before writing a proof or
+                        # SSH may have lost its result. Do not destroy evidence
+                        # whose process state and payload are unconfirmed.
+                        receipt['remote_retained']=True
+                        receipt['retryable']=False
+                        receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                                 'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                        receipt['failure_proof_error']=str(proof_error)
+                    save()
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
+        if args.profile=='test':
+            receipt['stage']='verify'
+            if receipt.get('test_exit_code') != 0:
+                raise RuntimeError('Remote workspace tests did not pass')
+            remote_proof=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/remote-test.json'
+            # A completed test is not a verified test until its proof reaches
+            # durable local evidence. Retain remote paths across SSH/download
+            # failures instead of deleting the only completed proof.
+            receipt['remote_retained']=True
+            receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                     'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+            save()
+            remote_hash=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_proof)),text=True).split()[0]
+            if not re.fullmatch(r'[0-9a-f]{64}',remote_hash):
+                raise RuntimeError('Remote test proof has no SHA-256')
+            local_proof=evidence/'remote-test.json'
+            receipt['test_proof']=download_test_proof(args.instance,args.zone,args.project,
+                remote_proof,local_proof,remote_hash,receipt['source_commit'],receipt['toolchain'],
+                (source/'.exiftool-version').read_text().strip(),transport=transport)
+            receipt['test_proof_sha256']=remote_hash
+            receipt['remote_retained']=False
+            receipt.pop('remote_paths',None)
+            receipt['stage']='cleanup'
+            cleanup(strict=True)
+            receipt['verified']=True
+            save()
+            print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
+            return 0
         binary=f'/mnt/runner-data/remote-build/targets/{args.worktree_id}/{args.profile}/oxidex'
         receipt['stage']='verify'
         verification=subprocess.check_output(ssh(shlex.quote(binary)+' --version && sha256sum '+shlex.quote(binary)),text=True)
@@ -239,7 +479,8 @@ def main(argv=None):
         output.mkdir(parents=True,exist_ok=True)
         artifact=output/'oxidex'
         receipt['stage']='download'
-        download_artifact(args.instance,args.zone,args.project,binary,artifact,digest)
+        download_artifact(args.instance,args.zone,args.project,binary,artifact,digest,
+                          **({'transport':transport} if transport else {}))
         receipt['artifact']=str(artifact)
         receipt['verified']=True;save()
         receipt['stage']='cleanup'
@@ -254,7 +495,7 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain','cleanup'):
+        if receipt.get('stage') not in ('local_toolchain','cleanup') and not receipt.get('remote_retained'):
             cleanup()
         raise
     finally:

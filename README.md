@@ -147,8 +147,8 @@ random run suffix, so concurrent clients cannot overwrite each other's source
 or target directories even if they reuse the namespace. The Cargo download
 cache remains shared; compiled target output is scoped to one build. Every
 successful build downloads a verified local binary (by default under
-`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source,
-target, and uploaded archive. Failed builds attempt the same exact-run cleanup
+`target/remote-linux/<profile>/<run_id>/oxidex`) before removing its exact remote source
+and uploaded archive. Remote target output and Cargo caches are retained. Failed builds attempt the same exact-run cleanup
 while preserving local receipts and logs. An abruptly interrupted client may
 leave its run on the host; inspect the `run_id` and instance in its receipt,
 then dry-run the exact paths with `ls -ld` over authenticated SSH before any
@@ -178,8 +178,35 @@ just build-release
 # Optional: use a specific worker instead of automatic selection.
 export OXIDEX_REMOTE_INSTANCE=YOUR_INSTANCE
 export OXIDEX_REMOTE_ZONE=YOUR_ZONE
+export OXIDEX_REMOTE_INSTANCE_ID=YOUR_NUMERIC_VM_ID
+export OXIDEX_REMOTE_SSH_USER=YOUR_ENROLLED_BUILD_USER
+export OXIDEX_REMOTE_SSH_KEY="$HOME/.ssh/YOUR_APPROVED_KEY"
+export OXIDEX_REMOTE_SSH_KNOWN_HOSTS="$HOME/.ssh/YOUR_TRUSTED_BUILDER_HOSTS"
 python3 tools/remote-build/direct.py --profile debug
 ```
+
+An explicit build user uses direct SSH/SCP with the approved key and strict
+host-key checking. Supply a trusted known-hosts file provisioned independently;
+the client does not enroll keys in VM metadata. Explicit worker dispatch requires
+the numeric VM ID and checks the installed launcher and current CPU/memory before
+source transfer. Automatic selection still requires complete Monitoring windows.
+
+`just test-remote` uses the same selected builder and restricted launcher. It
+requires a clean checkout with a verified maintainer-signed HEAD, provisions the
+locked Perl/ExifTool oracle and fixture corpus remotely, runs the remote-client
+and version-qualification Python suites, then executes
+`cargo test --workspace --all-features --locked --no-fail-fast`. No Rust tests or
+oracle bootstrap run locally. The oracle installation is shared in the persistent
+Cargo mount, keyed by the locked oracle specification and verified on each run;
+a provisioning lock serializes concurrent installers. Test results remain in
+each run’s separate target directory. The downloaded `remote-test.json` proof must match
+the source SHA, compiler identity, oracle pin, fixture floor and test commands
+before the client reports success. Receipts and logs live under
+`$OXIDEX_OPS_DIR/evidence/auto-remote-<timestamp>` (default
+`$HOME/oxidex-ops/evidence`). When a test result cannot be retrieved and verified,
+the client retains the remote run and disables automatic retry; inspect the
+receipt and live process before resuming. Workspace test proof does not replace
+release qualification or CI.
 
 ### Credentials and VM setup
 
@@ -205,7 +232,7 @@ reporting. Never commit `.env`, GitHub credentials, or SSH private keys.
 Provision hosts with `--remote-builder --resource-monitoring` in
 `src/spot_runner_manager.py`; preview first and use `--apply` to provision.
 The autoscaler enables the builder by default. For manual provisioning, use an
-instance name starting with `oxidex-runners-` so automatic selection discovers
+instance name starting with `builder-` so automatic selection discovers
 the host. The VM service account needs
 `roles/monitoring.metricWriter` and the Monitoring write OAuth scope so the
 metrics-only Ops Agent can publish memory utilization. CPU utilization uses
@@ -213,8 +240,8 @@ Compute Engine's built-in metric. Authenticated `gcloud compute ssh` must work;
 GCP manages the SSH access path, with no SSH server inside the build container.
 
 Building on an existing worker needs GCP/SSH/Monitoring access; it does not need
-a GitHub token. Selection considers running `oxidex-runners-*` and
-`oxidex-buildbench-*` hosts with complete recent metrics, CPU and memory both
+a GitHub token. `just build-debug-remote` and `just build-release-remote` select
+running `builder-*` hosts with complete recent metrics, CPU and memory both
 below 75%, the pinned executable builder launcher, and no drain marker.
 The selection probe checks the launcher's exact revision and executes its
 side-effect-free argument-validation path, so existing hosts must receive the
@@ -225,6 +252,15 @@ and RAM as balanced capacity (four GiB per available core); job and container
 counts do not influence selection. Monitoring uses complete five-minute
 windows ending two minutes ago, so selection reflects recent utilization
 rather than an instantaneous reservation.
+
+An explicitly maintainer-approved existing VM can be selected through
+`${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}/config/remote-build.json`. Use schema version
+1 and an `instances` array of objects containing `name`, numeric string `id`,
+`project`, `zone`, and boolean `enabled`. Keep the entry disabled until its
+container, pinned toolchain and admission are verified. Selection requires the
+exact VM ID; direct builds recheck that ID through GCP before remote work. A
+replacement with the same name needs a new approval. The exception retains
+all utilization, launcher, drain and compiler checks.
 
 SSH disconnects, draining hosts, and killed containers cause another attempt
 on a different VM, with fresh inventory/metrics and source resync. Three
