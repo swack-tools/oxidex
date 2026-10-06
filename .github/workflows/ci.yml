@@ -195,7 +195,10 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    runs-on: spot
+    # Recovery route to a proposed reserved 8-vCPU/32-GiB runner. On the
+    # ordinary Spot route, multiple Cargo links were killed under the
+    # runner container's 15-GiB memory cap before tests started (PR #1052).
+    runs-on: spot-heavy32
     # Cold Spot runs need time for compilation, nextest, cargo test and parity checks.
     timeout-minutes: 45
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
@@ -205,15 +208,15 @@ jobs:
     # [profile.test] carries codegen-units = 4; that setting and the
     # per-package opt-level = 2 overrides exist to stop the generated tag
     # crates OOMing a small machine. 16 units matches [profile.dev]. This was
-    # sized on a retired pre-Spot 32 GB 8x hosted runner; the standard runner
-    # has 16 GB.
+    # sized on a retired pre-Spot 32 GB 8x hosted runner; the ordinary Spot
+    # runner container has a 15-GiB memory cap.
     #
     # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
     # workflow-wide) while skipping the full debuginfo this never reads.
     #
     # Two current-head Spot runs (PR #1052) had multiple concurrent linker
-    # processes killed by signal 9 before tests ran. Limit this job's Cargo
-    # compilation fanout while the eight container runners share one host;
+    # processes killed by signal 9 before tests ran. Keep Cargo's limited
+    # compilation fanout alongside the planned dedicated 32-GiB runner;
     # keep the required Build & Test check name unchanged.
     env:
       CARGO_BUILD_JOBS: 4
@@ -496,10 +499,10 @@ jobs:
     # test profile and rustdoc are three distinct fingerprints), so running
     # them on one runner only added their times together.
     #
-    # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
-    # it is not the long pole -- Build & Test is. Sizing it to finish just
-    # inside that job is what this is worth paying for, not raw speed.
-    runs-on: spot
+    # The fixloop link is memory-heavy even though this job is not the long
+    # pole. Route this recovery check with Build & Test to the proposed
+    # reserved 8-vCPU/32-GiB runner to avoid the ordinary 15-GiB container cap.
+    runs-on: spot-heavy32
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -695,7 +698,7 @@ jobs:
   # Checks that need only the fetched ExifTool tree, not the capture.
   verify-tables-source:
     name: Verify Generated Tables / source and tier 2
-    runs-on: spot
+    runs-on: spot-heavy32
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -768,7 +771,7 @@ jobs:
   verify-tables-catalog:
     name: Verify Generated Tables / catalog join
     needs: [verify-tables-capture]
-    runs-on: spot
+    runs-on: spot-heavy32
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -885,7 +888,7 @@ jobs:
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
-    runs-on: spot
+    runs-on: spot-heavy32
     timeout-minutes: 30
     strategy:
       fail-fast: false
