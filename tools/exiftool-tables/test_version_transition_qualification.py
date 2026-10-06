@@ -178,8 +178,7 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \
-             patch.object(qualification, "_perl", side_effect=perl_probe,
-                          return_value=Path(sys.executable).resolve()), \
+             patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=identity), \
              patch.object(qualification, "_evidence_location", side_effect=lambda path, _label: Path(path)), \
              patch.object(qualification, "run_qualification",
