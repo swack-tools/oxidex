@@ -44,6 +44,10 @@ default:
 # Run all tests (matches CI exactly)
 # Note: Doctests are run separately without --release due to panic='abort' incompatibility
 test:
+    python3 tools/remote-build/route.py test
+
+_test-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running all tests (matching CI)..."
     {{unwind}} cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
     @echo "Running doctests (requires panic=unwind)..."
@@ -52,66 +56,123 @@ test:
 
 # Run the repository-owned remote-builder client tests.
 test-remote-build:
+    python3 tools/remote-build/route.py test-remote-build
+
+_test-remote-build-worker:
+    python3 tools/remote-build/route.py --require-local-context
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
 
 # Run all tests with cargo-nextest (faster parallel execution)
 test-nextest:
+    python3 tools/remote-build/route.py test-nextest
+
+_test-nextest-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running all tests with nextest..."
     {{unwind}} cargo nextest run --release --all-features
 
 # Run tests in debug mode
 test-debug:
+    python3 tools/remote-build/route.py test-debug
+
+_test-debug-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running tests in debug mode..."
     cargo test --workspace
 
 # Run tests with output capture disabled
 test-nocapture:
+    python3 tools/remote-build/route.py test-nocapture
+
+_test-nocapture-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running all tests with output..."
     {{unwind}} cargo test --release --verbose --all-features -- --nocapture --test-threads=1
 
 # Run only unit tests
 test-unit:
+    python3 tools/remote-build/route.py test-unit
+
+_test-unit-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running unit tests..."
     cargo test --lib --workspace
 
 # Run only integration tests (excludes comparison tests)
 test-integration:
+    python3 tools/remote-build/route.py test-integration
+
+_test-integration-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running integration tests..."
     {{unwind}} cargo test --test integration --release
 
 # Run C FFI integration test
 test-ffi-c:
+    python3 tools/remote-build/route.py test-ffi-c
+
+_test-ffi-c-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running C FFI integration test..."
     cargo test --test ffi_c_integration -- --nocapture
 
 # Run ExifTool comparison tests (requires ExifTool installed)
 test-comparison:
+    python3 tools/remote-build/route.py test-comparison
+
+_test-comparison-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running ExifTool comparison tests..."
     @echo "Note: Requires 'exiftool' command to be available"
     {{unwind}} cargo test --release --features exiftool-comparison -- --nocapture
 
 # Run only doc tests
 test-doc:
+    python3 tools/remote-build/route.py test-doc
+
+_test-doc-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running doc tests..."
     cargo test --doc --workspace
 
 # Run tests for specific package
 test-package package:
-    @echo "Running tests for {{package}}..."
-    cargo test -p {{package}}
+    python3 tools/remote-build/route.py test-package {{quote(package)}}
+
+_test-package-worker package:
+    python3 tools/remote-build/route.py --require-local-context
+    @printf 'Running tests for %s...\n' {{quote(package)}}
+    cargo test -p {{quote(package)}}
 
 # Run tests for all tag crates
 test-tags:
+    python3 tools/remote-build/route.py test-tags
+
+_test-tags-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running tests for all tag crates..."
     cargo test -p oxidex-tags -p oxidex-tags-core -p oxidex-tags-camera -p oxidex-tags-media -p oxidex-tags-image -p oxidex-tags-document -p oxidex-tags-specialty -p oxidex-tags-shared
 
 # Build the project in debug mode
 build:
+    python3 tools/remote-build/route.py build
+
+_build-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Building project (debug)..."
     cargo build --workspace
 
+# The only intentionally local developer build entrypoint.
+build-local:
+    @echo "Building project locally (debug)..."
+    cargo build --workspace
+
 # Build the project in release mode (matches CI configuration)
-build-release-local: cbindgen-check
+build-release-local:
+    python3 tools/remote-build/route.py build-release-local
+
+_build-release-local-worker: cbindgen-check
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Building project (release, matching CI)..."
     cargo build --release --all-features
 
@@ -123,6 +184,9 @@ build-release:
     python3 tools/remote-build/build.py --profile release
 
 # Explicit remote names share the same selection and verification path.
+build-remote profile='debug':
+    python3 tools/remote-build/build.py --profile {{quote(profile)}}
+
 build-debug-remote:
     just build-debug
 
@@ -135,21 +199,37 @@ test-remote:
 
 # Build just the binary
 build-bin:
+    python3 tools/remote-build/route.py build-bin
+
+_build-bin-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Building binary..."
     cargo build --bin oxidex
 
 # Build release binary
 build-bin-release:
+    python3 tools/remote-build/route.py build-bin-release
+
+_build-bin-release-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Building release binary..."
     cargo build --bin oxidex --release
 
 # Check the project for errors without building
 check:
+    python3 tools/remote-build/route.py check
+
+_check-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Checking project..."
     cargo check --workspace
 
 # Check with all features
 check-all:
+    python3 tools/remote-build/route.py check-all
+
+_check-all-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Checking project with all features..."
     cargo check --workspace --all-features
 
@@ -162,6 +242,10 @@ check-corpus-guards:
 
 # Run clippy linter (dev profile)
 lint:
+    python3 tools/remote-build/route.py lint
+
+_lint-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running clippy (dev profile)..."
     cargo clippy --all-features -- -D warnings
     @just check-corpus-guards
@@ -169,11 +253,16 @@ lint:
 
 # Run clippy linter (release profile - shares artifacts with build-release)
 lint-release:
+    python3 tools/remote-build/route.py lint-release
+
+_lint-release-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running clippy (release profile)..."
     cargo clippy --release --all-features -- -D warnings
 
 # Fix clippy warnings automatically
 lint-fix:
+    python3 tools/remote-build/route.py --require-local-context lint-fix
     @echo "Running clippy with fixes..."
     cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged
 
@@ -199,26 +288,34 @@ clean:
 
 # Run the binary with arguments
 run *args:
+    python3 tools/remote-build/route.py --require-local-context run
     @echo "Running oxidex..."
     cargo run --bin oxidex -- {{args}}
 
 # Run the release binary with arguments
 run-release *args:
+    python3 tools/remote-build/route.py --require-local-context run-release
     @echo "Running oxidex (release)..."
     cargo run --bin oxidex --release -- {{args}}
 
 # Generate and open documentation
 docs:
+    python3 tools/remote-build/route.py --require-local-context docs
     @echo "Generating documentation..."
     cargo doc --workspace --no-deps --open
 
 # Generate documentation without opening
 docs-build:
+    python3 tools/remote-build/route.py --require-local-context docs-build
     @echo "Generating documentation..."
     cargo doc --workspace --no-deps
 
 # Run benchmarks
 bench:
+    python3 tools/remote-build/route.py bench
+
+_bench-worker:
+    python3 tools/remote-build/route.py --require-local-context
     @echo "Running benchmarks..."
     cargo bench --workspace
 
@@ -227,11 +324,13 @@ bench:
 
 # Simple text-based profiling (recommended, accessible)
 profile-simple:
+    python3 tools/remote-build/route.py --require-local-context profile-simple
     @echo "Running text-based performance profiling..."
     @./scripts/profile_simple.sh
 
 # Profile with flamegraph (requires sudo on macOS, generates SVG)
 profile-flamegraph benchmark:
+    python3 tools/remote-build/route.py --require-local-context profile-flamegraph
     @echo "Generating flamegraph for {{benchmark}}..."
     @echo "Note: Requires sudo on macOS. Use profile-simple for accessible alternative."
     CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none cargo flamegraph --bench parse_benchmarks --root -o flamegraph-{{benchmark}}.svg -- --bench {{benchmark}}
@@ -245,62 +344,74 @@ flamegraph-to-text svg:
 
 # Profile a specific benchmark with samply
 profile benchmark:
+    python3 tools/remote-build/route.py --require-local-context profile
     @echo "Profiling {{benchmark}} benchmark..."
     CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench parse_benchmarks {{benchmark}}
 
 # Profile integration benchmarks
 profile-integration benchmark:
+    python3 tools/remote-build/route.py --require-local-context profile-integration
     @echo "Profiling integration benchmark: {{benchmark}}..."
     CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench integration_benchmarks {{benchmark}}
 
 # Profile the CLI binary with arguments
 profile-bin *args:
+    python3 tools/remote-build/route.py --require-local-context profile-bin
     @echo "Profiling binary with args: {{args}}..."
     cargo build --release
     samply record ./target/release/oxidex {{args}}
 
 # Profile all parse benchmarks (warning: takes a while)
 profile-all:
+    python3 tools/remote-build/route.py --require-local-context profile-all
     @echo "Profiling all parse benchmarks..."
     CARGO_PROFILE_BENCH_DEBUG=2 CARGO_PROFILE_BENCH_STRIP=none samply record cargo bench --bench parse_benchmarks
 
 # Update dependencies
 update:
+    python3 tools/remote-build/route.py --require-local-context update
     @echo "Updating dependencies..."
     cargo update
 
 # Check for outdated dependencies
 outdated:
+    python3 tools/remote-build/route.py --require-local-context outdated
     @echo "Checking for outdated dependencies..."
     cargo outdated
 
 # Run cargo audit for security vulnerabilities
 audit:
+    python3 tools/remote-build/route.py --require-local-context audit
     @echo "Auditing dependencies..."
     cargo audit
 
 # Check for unused dependencies (requires cargo-udeps and nightly)
 udeps:
+    python3 tools/remote-build/route.py --require-local-context udeps
     @echo "Checking for unused dependencies..."
     cargo +nightly udeps --all-targets --all-features
 
 # Install the binary locally
 install:
+    python3 tools/remote-build/route.py --require-local-context install
     @echo "Installing oxidex..."
     cargo install --path .
 
 # Uninstall the binary
 uninstall:
+    python3 tools/remote-build/route.py --require-local-context uninstall
     @echo "Uninstalling oxidex..."
     cargo uninstall oxidex
 
 # Build Debian package (requires cargo-deb)
 deb:
+    python3 tools/remote-build/route.py --require-local-context deb
     @echo "Building Debian package..."
     cargo deb
 
 # Build Debian package for Linux x86_64 using zigbuild (requires cargo-zigbuild, zig, cargo-deb)
 deb-x86:
+    python3 tools/remote-build/route.py --require-local-context deb-x86
     @echo "Building Debian package for x86_64-unknown-linux-musl..."
     cargo zigbuild --release --target x86_64-unknown-linux-musl
     cargo deb --target x86_64-unknown-linux-musl --no-build
@@ -308,6 +419,7 @@ deb-x86:
 
 # Build Debian package for Linux aarch64 using zigbuild (requires cargo-zigbuild, zig, cargo-deb)
 deb-arm64:
+    python3 tools/remote-build/route.py --require-local-context deb-arm64
     @echo "Building Debian package for aarch64-unknown-linux-musl..."
     cargo zigbuild --release --target aarch64-unknown-linux-musl
     cargo deb --target aarch64-unknown-linux-musl --no-build
@@ -320,6 +432,7 @@ deb-all: deb-x86 deb-arm64
 
 # Build RPM package (requires cargo-generate-rpm)
 rpm:
+    python3 tools/remote-build/route.py --require-local-context rpm
     @echo "Building RPM package..."
     cargo build --release
     cargo generate-rpm
@@ -328,6 +441,7 @@ rpm:
 # Edition 2024 merges doctests into single binary (~36s vs ~3min)
 ci:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context ci || exit $?
     set -euo pipefail
 
     echo "🚀 Running CI checks..."
@@ -431,21 +545,25 @@ install-hooks:
 
 # Coverage report (requires cargo-tarpaulin)
 coverage:
+    python3 tools/remote-build/route.py --require-local-context coverage
     @echo "Generating coverage report..."
     cargo tarpaulin --out Html --output-dir coverage --workspace
 
 # Watch for changes and run tests (requires cargo-watch)
 watch:
+    python3 tools/remote-build/route.py --require-local-context watch
     @echo "Watching for changes..."
     cargo watch -x test
 
 # Watch for changes and run specific command
 watch-run cmd:
+    python3 tools/remote-build/route.py --require-local-context watch-run
     @echo "Watching for changes to run: {{cmd}}..."
     cargo watch -x "{{cmd}}"
 
 # Bloat analysis (requires cargo-bloat)
 bloat:
+    python3 tools/remote-build/route.py --require-local-context bloat
     @echo "Analyzing binary bloat..."
     cargo bloat --release -n 20
 
@@ -622,6 +740,7 @@ cbindgen_version := "0.29.2"
 # breaks it in CI, which looks identical to the bug it was meant to fix.
 _cbindgen-version-guard:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context cbindgen-check || exit $?
     set -euo pipefail
     if ! command -v cbindgen >/dev/null 2>&1; then
         echo "cbindgen is not installed. CI pins {{cbindgen_version}}:" >&2
@@ -639,12 +758,14 @@ _cbindgen-version-guard:
 
 # Regenerate C header file (requires cbindgen)
 cbindgen: _cbindgen-version-guard
+    python3 tools/remote-build/route.py --require-local-context cbindgen
     @echo "Regenerating C header..."
     cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h
     @echo "C header updated at api/oxidex.h"
 
 # Verify C header is up-to-date
 cbindgen-check: _cbindgen-version-guard
+    python3 tools/remote-build/route.py --require-local-context cbindgen-check
     @echo "Checking C header is up-to-date..."
     cbindgen --config cbindgen.toml --crate oxidex --output api/oxidex.h.tmp
     diff -q api/oxidex.h api/oxidex.h.tmp || (rm api/oxidex.h.tmp && echo "C header out of date! Run 'just cbindgen'" && exit 1)
@@ -656,6 +777,7 @@ cbindgen-check: _cbindgen-version-guard
 
 # Regenerate tag domain documentation
 docs-generate-tags:
+    python3 tools/remote-build/route.py --require-local-context docs-generate-tags
     @echo "Regenerating tag domain documentation..."
     cargo run -p oxidex-tags --example render_domain -- core docs/tag-domains/core.md
     cargo run -p oxidex-tags --example render_domain -- camera docs/tag-domains/camera.md
@@ -667,6 +789,7 @@ docs-generate-tags:
 # Regenerate tag coverage analysis (measured vs pinned ExifTool; OXIDEX_DEEP_CORPUS=1 for the deep corpus)
 docs-coverage:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context docs-coverage || exit $?
     set -euo pipefail
     # OXIDEX_DEEP_CORPUS=1 additionally scores $EXIFTOOL_CACHE_DIR/combined-samples
     # (~4,200 manufacturer sample files, populated by `just compare-exiftool-full`).
@@ -779,6 +902,7 @@ docs-coverage-definitions:
 # remains, so it doubles as a CI-style gate once the criterion is actually MET.
 duplicate-loss-scan *args:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context duplicate-loss-scan || exit $?
     set -euo pipefail
     OPS_ROOT=$(python3 scripts/ops_paths.py)
     CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$(python3 scripts/ops_paths.py --cache)}"
@@ -813,6 +937,7 @@ duplicate-loss-scan *args:
 # Occurrence-parity fixtures (PROJECTION 2) -- KNOWN FAILING until Stage 2B lands
 duplicate-loss-fixtures *args:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context duplicate-loss-fixtures || exit $?
     set -euo pipefail
     echo "Building oxidex (release: these fixtures assert on CLI output)..."
     cargo build --release --bin oxidex
@@ -827,6 +952,7 @@ duplicate-loss-fixtures *args:
 # Downloads ExifTool to /tmp, runs comparison, then cleans up
 compare-exiftool:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool || exit $?
     set -euo pipefail
 
     EXIFTOOL_DIR="/tmp/exiftool-test-$$"
@@ -885,6 +1011,7 @@ compare-exiftool:
 # Run comparison and update docs (like CI does)
 compare-exiftool-update:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-update || exit $?
     set -euo pipefail
 
     EXIFTOOL_DIR="/tmp/exiftool-test-$$"
@@ -945,11 +1072,13 @@ compare-exiftool-update:
 
 # Diff ONE file against the pinned oracle (fast, no re-download; exits non-zero on any difference)
 compare-file path *args:
+    python3 tools/remote-build/route.py --require-local-context compare-file
     uv run scripts/compare_file.py {{path}} {{args}}
 
 # Run comparison for a specific format only
 compare-exiftool-format format:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-format || exit $?
     set -euo pipefail
 
     EXIFTOOL_DIR="/tmp/exiftool-test-$$"
@@ -995,6 +1124,7 @@ compare-exiftool-format format:
 # Falls back to GCS cache at gs://oxidex-samples/exiftool/ if exiftool.org is unavailable
 compare-exiftool-samples:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-samples || exit $?
     set -euo pipefail
 
     EXIFTOOL_DIR="/tmp/exiftool-test-$$"
@@ -1079,6 +1209,7 @@ compare-exiftool-samples:
 # OPTIMIZED: Uses parallel downloads and caching
 compare-exiftool-full:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-full || exit $?
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
@@ -1227,6 +1358,7 @@ compare-exiftool-full:
 # Hosted documentation reports use runner storage and a capability-checked Perl.
 # Release qualification uses the authenticated durable recipes below/above.
 compare-exiftool-ci-update:
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-ci-update
     python3 tools/ci/docs_comparison.py
 
 # Run authenticated maintainer comparison and update docs
@@ -1234,6 +1366,7 @@ compare-exiftool-ci-update:
 # OPTIMIZED: Uses parallel downloads and caching
 compare-exiftool-full-update:
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context compare-exiftool-full-update || exit $?
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
@@ -1363,6 +1496,7 @@ compare-exiftool-full-update:
 # Extracts, generates Rust, and verifies the output against ExifTool itself.
 # The release defaults to .exiftool-version; regen.sh refuses any other.
 regen-tables version="":
+    python3 tools/remote-build/route.py --require-local-context regen-tables
     tools/exiftool-tables/regen.sh {{version}}
 
 # Regenerate EVERY committed ExifTool-table generator, tier 1 and tier 2 --
@@ -1370,11 +1504,13 @@ regen-tables version="":
 # grids, the six scripts/gen_*.pl transcriptions) that `regen-tables` alone
 # never touches. Always the pin; see tools/exiftool-tables/regen-all.sh.
 regen-tables-all:
+    python3 tools/remote-build/route.py --require-local-context regen-tables-all
     tools/exiftool-tables/regen-all.sh
 
 # Tier 2 only, against an already-current tier 1 -- what CI's verify-tables
 # job runs to catch a stale or hand-edited generated file.
 regen-tables-tier2:
+    python3 tools/remote-build/route.py --require-local-context regen-tables-tier2
     tools/exiftool-tables/regen-all.sh --tier2-only
 
 # Tag-machinery overhaul Step 17 (R8): bump the pinned ExifTool release.
@@ -1394,6 +1530,7 @@ regen-tables-tier2:
 # (--from, --report-dir, --corpus, --min-files, --min-tags,
 # --skip-conformance).
 bump-exiftool version *args:
+    python3 tools/remote-build/route.py --require-local-context bump-exiftool
     tools/exiftool-tables/bump-exiftool.sh {{version}} {{args}}
 
 # Verify the committed generated tables still match ExifTool exactly.
@@ -1404,6 +1541,7 @@ bump-exiftool version *args:
 # oracle and passed forever. verify.py now refuses a stamp that isn't the pin.
 verify-tables version="":
     #!/usr/bin/env bash
+    uv run python tools/remote-build/route.py --require-local-context verify-tables || exit $?
     set -euo pipefail
 
     GENERATED="src/exiftool_tables/binary/mod.rs"
@@ -1506,6 +1644,7 @@ verify-tables version="":
 # Step 28 table reachability: enabled / eligible / refused-with-reason.
 reachability json-out="":
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context reachability || exit $?
     set -euo pipefail
     if [[ -n "{{json-out}}" ]]; then
         python3 tools/exiftool-tables/reachability.py --json-out "{{json-out}}"
@@ -1527,6 +1666,7 @@ reachability json-out="":
 # Defaults to .exiftool-version, same pin discipline as verify-tables.
 check-staleness version="":
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context check-staleness || exit $?
     set -euo pipefail
 
     VERSION="{{version}}"
@@ -1614,11 +1754,13 @@ check-staleness version="":
 # Full gate on a branch: clones the hub, runs fmt/clippy/build/test/
 # verify-tables/ratchet, writes ~/gatelogs/gate-<tag>.{log,verdict,json}.
 gate branch tag:
+    python3 tools/remote-build/route.py --require-local-context gate
     tools/fleet/gate.sh {{branch}} {{tag}}
 
 # Ownership is provenance-only: it reconciles generated declarations and
 # explicit runtime residuals; it does not claim corpus observation.
 verify-runtime-ownership:
+    python3 tools/remote-build/route.py --require-local-context verify-runtime-ownership
     uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 
 # Fleet python suite (fleetlib CAS, claims, queue, verdict admissibility,
@@ -1626,6 +1768,7 @@ verify-runtime-ownership:
 # a stale one reports MISSING for formats the tip parses (measured: 11
 # phantom-missing SWF tags from a one-day-old binary).
 fleet-test: build-bin-release
+    python3 tools/remote-build/route.py --require-local-context fleet-test
     cd tools/fleet && python3 -m unittest discover -s tests -v
 
 # The non-seam fleet suite, twice: once against a plain bare-repo Hub, once
@@ -1638,6 +1781,7 @@ fleet-test: build-bin-release
 # server-only regression cannot hide behind a green bare run.
 fleet-tests-both: build-bin-release
     #!/usr/bin/env bash
+    python3 tools/remote-build/route.py --require-local-context fleet-tests-both || exit $?
     set -uo pipefail
     cd tools/fleet/tests
     mods=$(ls test_*.py | grep -v '^test_seams\.py$' | sed 's/\.py$//')

@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 import shlex
 import re
 import secrets
@@ -191,23 +192,43 @@ def download_artifact(instance, zone, project, binary, artifact, digest, transpo
         temporary.unlink(missing_ok=True)
 
 
+def eligible_snapshot_paths(source: Path) -> list[str]:
+    """Enumerate tracked plus nonignored untracked files under existing exclusions."""
+    names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
+                                     '--cached','--others','--exclude-standard']).decode().split('\0')
+    eligible=[]
+    for name in names:
+        parts=Path(name).parts
+        if not name or any(part in {'.git','.codex','.claude','.agents','target','node_modules','.venv'}
+                           for part in parts):
+            continue
+        path=source/name
+        if (path.name.startswith('.env') or path.suffix in {'.pem','.key'}
+                or not path.is_file() or path.is_symlink()):
+            continue
+        eligible.append(name)
+    if len(eligible)!=len(set(eligible)):
+        raise RuntimeError('Duplicate eligible source paths')
+    return sorted(eligible)
+
+
 def make_snapshot(source: Path, archive: Path) -> dict:
-    names = subprocess.check_output(['git','-C',str(source),'ls-files','-z']).decode().split('\0')
+    names=eligible_snapshot_paths(source)
     files=[]
     with tarfile.open(archive,'w:gz',compresslevel=3) as tar:
         for name in names:
-            parts=Path(name).parts
-            if not name or any(p in {'.git','.codex','.claude','.agents','target','node_modules','.venv'} for p in parts):
-                continue
             path=source/name
-            if path.name.startswith('.env') or path.suffix in {'.pem','.key'} or not path.is_file() or path.is_symlink():
-                continue
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError('Source file changed type during snapshot')
             data=path.read_bytes()
             info=tar.gettarinfo(str(path),arcname=name)
             info.size=len(data)
             files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
             tar.addfile(info,io.BytesIO(data))
-    return {'files':files,'file_count':len(files),'archive_bytes':archive.stat().st_size,
+    if eligible_snapshot_paths(source)!=names:
+        raise RuntimeError('Eligible source file set changed during snapshot')
+    return {'files':files,'eligible_paths':names,'file_count':len(files),
+            'archive_bytes':archive.stat().st_size,
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
 
 
@@ -270,10 +291,24 @@ def main(argv=None):
     parser.add_argument('--project',default='homelab-424523')
     parser.add_argument('--worktree-id',required=True)
     parser.add_argument('--evidence-dir',type=Path,required=True)
-    parser.add_argument('--profile',choices=['debug','release','test'],default='release')
+    task=parser.add_mutually_exclusive_group()
+    task.add_argument('--profile',choices=['debug','release','test'])
+    task.add_argument('--just-recipe')
+    parser.add_argument('--just-arg',action='append',default=[])
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
-    ssh_transport.identity()  # Refuse incomplete authentication before any subprocess.
+    if not args.profile and not args.just_recipe:
+        args.profile='release'
+    if args.just_arg and not args.just_recipe:
+        parser.error('--just-arg requires --just-recipe')
+    if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
+        parser.error('invalid Just recipe name')
+    if any(not value or len(value)>4096 or any(ch in value for ch in '\x00\n\r') for value in args.just_arg):
+        parser.error('invalid Just argument')
+    task_name=args.profile or 'recipe'
+    explicit_identity=ssh_transport.identity()  # Refuse incomplete authentication before any subprocess.
+    if args.just_recipe and (not explicit_identity or not os.environ.get('OXIDEX_REMOTE_SSH_KNOWN_HOSTS')):
+        raise ValueError('Generic Just recipe requires explicit uploader user/key and trusted known-hosts file')
     if args.instance_id is not None and not re.fullmatch(r'[0-9]{1,20}', args.instance_id):
         raise ValueError('Invalid pinned instance ID')
     approval = None
@@ -291,9 +326,9 @@ def main(argv=None):
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
     if args.artifact_dir is None:
-        args.artifact_dir=source/'target'/'remote-linux'/args.profile
+        args.artifact_dir=source/'target'/'remote-linux'/task_name
     evidence.mkdir(parents=True,exist_ok=True)
-    receipt={'profile':args.profile,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
+    receipt={'profile':args.profile,'just_recipe':args.just_recipe,'just_args':args.just_arg,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
     if approval:
         receipt['approved_instance'] = approval
@@ -366,7 +401,7 @@ def main(argv=None):
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
+        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
@@ -374,9 +409,14 @@ def main(argv=None):
         receipt['snapshot']=make_snapshot(source,archive)
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain'],text=True)
-        if after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']:
-            raise RuntimeError('Checkout metadata changed during snapshot; retry with a stable checkout')
+        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
+                or (receipt['snapshot'].get('eligible_paths') is not None
+                    and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
+                or any(not (source/row['path']).is_file() or (source/row['path']).is_symlink()
+                       or hashlib.sha256((source/row['path']).read_bytes()).hexdigest()!=row['sha256']
+                       for row in receipt['snapshot'].get('files',[]))):
+            raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')
         save()
         project=shlex.quote(args.worktree_id)
         receipt['stage']='prepare'
@@ -400,11 +440,13 @@ def main(argv=None):
         verify_remote_toolchain(receipt['toolchain'], ssh, project)
         receipt['remote_toolchain_verified']=True
         save()
-        # Dependencies are fetched separately; compile time excludes downloads.
-        stages=[('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
+        # Fixed profiles fetch separately; generic Just recipes own their own Cargo behavior.
+        stages=[] if args.just_recipe else [('fetch','cargo fetch --locked --target x86_64-unknown-linux-gnu')]
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
-        if args.profile=='test':
+        if args.just_recipe:
+            stages.append(('recipe',shlex.join(['just',args.just_recipe,*args.just_arg])))
+        elif args.profile=='test':
             stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '
                            +receipt['source_commit']+' --rustc-commit '+receipt['toolchain']['rustc_commit']))
         else:
@@ -413,11 +455,30 @@ def main(argv=None):
             receipt['stage']=stage
             start=time.monotonic()
             remote=f'sudo /usr/local/bin/oxidex-remote-build {project} {command}'
+            if args.just_recipe and stage=='recipe':
+                receipt['remote_retained']=True  # unknown child state on lost SSH acknowledgement
+                receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                         'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                receipt['recipe_state']='RUNNING_OR_UNKNOWN'
+                receipt['remote_command']=remote
+                save()
             with (evidence/f'{stage}.log').open('w') as log:
                 result=subprocess.run(ssh(remote),stdout=log,stderr=subprocess.STDOUT)
             receipt[stage+'_seconds']=time.monotonic()-start
             receipt[stage+'_exit_code']=result.returncode
-            receipt['retryable']=retryable_exit(result.returncode);save()
+            if args.just_recipe and stage=='recipe':
+                log_path=evidence/'recipe.log'
+                receipt['recipe_log_sha256']=hashlib.sha256(log_path.read_bytes()).hexdigest()
+                receipt['recipe_log_bytes']=log_path.stat().st_size
+                receipt['recipe_state']=('UNKNOWN_RETAINED' if result.returncode==255 else
+                                         'DIRECT_SUCCESS_RETAINED' if result.returncode==0 else
+                                         'DIRECT_FAILURE_RETAINED')
+            receipt['retryable']=False if args.just_recipe else retryable_exit(result.returncode)
+            if args.just_recipe and result.returncode:
+                receipt['remote_retained']=True
+                receipt['remote_paths']={'source':'/mnt/runner-data/remote-build/sources/'+args.worktree_id,
+                                         'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+            save()
             print(stage,receipt[stage+'_seconds'],'seconds; exit',result.returncode,flush=True)
             if result.returncode:
                 if stage == 'test':
@@ -441,6 +502,27 @@ def main(argv=None):
                         receipt['failure_proof_error']=str(proof_error)
                     save()
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
+        if args.just_recipe:
+            receipt['stage']='verify'
+            binary_kind={'build':'debug','build-bin':'debug',
+                         'build-release-local':'release','build-bin-release':'release'}.get(args.just_recipe)
+            if binary_kind:
+                binary='/mnt/runner-data/remote-build/targets/'+args.worktree_id+'/'+binary_kind+'/oxidex'
+                digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(binary)),text=True).split()[0]
+                if not re.fullmatch(r'[0-9a-f]{64}',digest):
+                    raise RuntimeError('Remote build artifact has no SHA-256')
+                output=source/'target'/'remote-linux'/binary_kind/args.worktree_id
+                output.mkdir(parents=True,exist_ok=True)
+                artifact=output/'oxidex'
+                download_artifact(args.instance,args.zone,args.project,binary,artifact,digest,
+                                  **({'transport':transport} if transport else {}))
+                receipt['binary_sha256']=digest
+                receipt['artifact']=str(artifact)
+            receipt['verified']=True
+            receipt['stage']='complete_retained'
+            save()
+            print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
+            return 0
         if args.profile=='test':
             receipt['stage']='verify'
             if receipt.get('test_exit_code') != 0:

@@ -5,25 +5,31 @@ import hashlib
 import os
 import subprocess
 import sys
-import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
 from ops_paths import ops_root
-from lib.config import cargo_env_value
+from lib.config import configured_remote_env
 from lib.remote_build import main
 
 parser=argparse.ArgumentParser(description='Build on a configured remote VM. Instance, zone, project and checkout are resolved from environment/Cargo configuration.')
-parser.add_argument('--profile',choices=['debug','release','test'],default='release')
+task=parser.add_mutually_exclusive_group()
+task.add_argument('--profile',choices=['debug','release','test'])
+task.add_argument('--just-recipe')
+parser.add_argument('--just-arg',action='append',default=[])
 parser.add_argument('--evidence-dir',type=Path)
 parser.add_argument('--artifact-dir',type=Path)
 options=parser.parse_args()
+if not options.profile and not options.just_recipe:
+    options.profile='release'
 
 
 source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
-settings=tomllib.loads((source/'.cargo/config.toml').read_text()).get('env',{})
+if options.just_arg and not options.just_recipe:
+    parser.error('--just-arg requires --just-recipe')
+os.environ.update(configured_remote_env(source))
 def setting(name):
-    value=os.environ.get(name) or cargo_env_value(settings, name)
+    value=os.environ.get(name)
     if value:
         return value
     if name=='OXIDEX_REMOTE_WORKTREE':
@@ -40,7 +46,9 @@ args=['--source',str(source),'--instance',setting('OXIDEX_REMOTE_INSTANCE'),
       '--evidence-dir',str(ops_root()/'evidence'/('cargo-remote-'+stamp))]
 if os.environ.get('OXIDEX_REMOTE_INSTANCE_ID'):
     args += ['--instance-id', os.environ['OXIDEX_REMOTE_INSTANCE_ID']]
-args += ['--profile',options.profile]
+args += (['--profile',options.profile] if options.profile else
+         ['--just-recipe',options.just_recipe]
+         +['--just-arg='+value for value in options.just_arg])
 if options.evidence_dir:
     args += ['--evidence-dir',str(options.evidence_dir)]
 if options.artifact_dir:

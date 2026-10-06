@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -11,6 +13,45 @@ spec.loader.exec_module(runner)
 
 
 class OracleCacheTests(unittest.TestCase):
+    def test_generic_recipe_inherits_only_locked_verified_oracle(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, clear=True):
+            root = Path(directory)
+            (root / "tools/release").mkdir(parents=True)
+            lock = root / "tools/release/oracle-lock.json"
+            lock.write_text("locked identity")
+            (root / ".exiftool-version").write_text("13.59\n")
+            cargo_home = root / "cargo"
+            os.environ["CARGO_HOME"] = str(cargo_home)
+            os.environ["EXIFTOOL"] = "/unverified/exiftool"
+            os.environ["OXIDEX_ALLOW_EXIFTOOL_SKEW"] = "1"
+            observed = []
+
+            def provision(cache):
+                observed.append((cache, dict(os.environ)))
+                manifest = cache / "manifest.json"
+                manifest.write_text(json.dumps({
+                    "lock_sha256": runner.file_sha(lock),
+                    "artifacts": {
+                        "perl_executable": {"sha256": "perl"},
+                        "exiftool_tree": {"sha256": "tree"},
+                    },
+                    "probes": {"docx": "DOCX"},
+                }))
+                return manifest
+
+            with patch.object(runner, "ROOT", root), \
+                 patch.object(runner, "load_oracle_bootstrap", return_value=SimpleNamespace(provision=provision)):
+                manifest = runner.prepare_generic_recipe_oracle()
+            cache, inherited = observed[0]
+            self.assertEqual(cache, runner.oracle_cache_root(lock, cargo_home))
+            self.assertEqual(manifest, cache / "manifest.json")
+            self.assertEqual(inherited["OXIDEX_OPS_DIR"], str(cache))
+            self.assertEqual(inherited["EXIFTOOL_CACHE_DIR"], str(cache / "cache/exiftool/13.59"))
+            self.assertEqual(inherited["EXIFTOOL_PERL"], str(cache / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"))
+            self.assertEqual(inherited["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"], "1")
+            self.assertNotIn("EXIFTOOL", inherited)
+            self.assertNotIn("OXIDEX_ALLOW_EXIFTOOL_SKEW", inherited)
+
     def test_same_lock_reuses_location_but_revalidates(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

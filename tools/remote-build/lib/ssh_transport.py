@@ -7,9 +7,10 @@ import re
 from pathlib import Path
 
 
-def identity():
-    user = os.environ.get('OXIDEX_REMOTE_SSH_USER')
-    key = os.environ.get('OXIDEX_REMOTE_SSH_KEY')
+def identity(environ=None):
+    environ = os.environ if environ is None else environ
+    user = environ.get('OXIDEX_REMOTE_SSH_USER')
+    key = environ.get('OXIDEX_REMOTE_SSH_KEY')
     if not user and not key:
         return None
     if not user or not key or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}', user):

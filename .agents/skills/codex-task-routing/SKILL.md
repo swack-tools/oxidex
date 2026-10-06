@@ -24,7 +24,7 @@ avoid full-history forks. Native subagents need explicit `model`,
 permission and give each implementer its own worktree and branch. Use native
 desktop agents first (up to three workers); use CLI workers for additional
 independent work. Both routes require the explicit model and effort above.
-Execute workers and builds directly on this laptop, without SSH, fleet or hub.
+Run agent editing and review locally, but route normal `just` builds, tests, Rust/Cargo work and compute-heavy Python validation through the dedicated script-provisioned Spot builder. Only `just build-local` is an intentional laptop build; a missing remote route is a refusal, not a local fallback.
 Do not delegate unless the user or applicable instructions authorize it.
 
 ## Before the first push
@@ -93,9 +93,9 @@ repository CI, unresolved-thread, or independent behavior-verification gates.
 
 Keep one active published candidate per dependency cluster. Local CPU concurrency
 may be high: choose configurable worker counts and `CARGO_BUILD_JOBS` from the
-available cores and memory, and lower them when memory pressure appears. Use a
-separate `CARGO_TARGET_DIR` for each worktree. Reserve the laptop exclusively for
-corpus timing measurements; finish or pause competing builds first.
+available cores and memory, and lower them when memory pressure appears. Keep a separate remote target namespace for each worktree and run. Reserve the
+Spot builder for corpus timing measurements; finish or pause competing builder
+work first.
 Update HANDOFF.md and record review rounds, routing reasons, and available token
 usage. Missing or all-zero CLI usage is recorded as unknown, not free work.
 The launcher stops its child process group on timeout, `SIGTERM`, `SIGHUP`,
