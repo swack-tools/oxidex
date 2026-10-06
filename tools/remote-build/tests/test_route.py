@@ -40,6 +40,19 @@ class RouteTests(unittest.TestCase):
              patch.object(Path,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFLNK|0o444,st_uid=0,st_nlink=1)):
             self.assertFalse(route.local_worker_context(env))
 
+    def test_fleet_checkout_requires_root_marker_and_source_verification(self):
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+             patch.object(route, 'verified_fleet_checkout', return_value=True) as verify, \
+             patch.object(route, 'trusted_marker', return_value=False):
+            self.assertFalse(route.local_worker_context({}))
+            verify.assert_not_called()
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+             patch.object(route, 'verified_fleet_checkout', return_value=False), \
+             patch.object(route, 'trusted_marker', return_value=True):
+            self.assertFalse(route.local_worker_context({}))
+
     def test_laptop_dispatch_preserves_recipe_and_literal_arguments(self):
         with patch.object(route,'local_worker_context',return_value=False),patch.object(os,'execv') as launch:
             route.main(['test-package','some-package'])
@@ -111,6 +124,68 @@ class RouteTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'invalid oracle'):
                 route.main(['test'])
         launch.assert_not_called()
+
+    def test_fleet_worker_verifies_checkout_and_fixtures_before_suite(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('locked fixtures')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['fleet-test'])
+        self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_fleet-test-worker'])
+
+    def test_both_hub_suite_uses_signed_checkout_without_oracle_bootstrap(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['fleet-tests-both'])
+        self.assertEqual(events, ['signed checkout', 'suite'])
+        oracle.assert_not_called()
+        self.assertEqual(launch.call_args.args[1], ['just', '_fleet-tests-both-worker'])
+
+    def test_fleet_fixture_refusal_prevents_suite_dispatch(self):
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout'), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=RuntimeError('corpus missing')), \
+             patch.object(os, 'execvp') as launch:
+            with self.assertRaisesRegex(RuntimeError, 'corpus missing'):
+                route.main(['fleet-test'])
+        launch.assert_not_called()
+
+    def test_staged_bundle_supplies_history_to_fleet_checkout(self):
+        import qualification_bootstrap
+        repo_root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(repo_root / 'tools/fleet'))
+        from intent import check_history
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source, checkout = root / 'source', root / 'checkout'
+            source.mkdir()
+            subprocess.run(['git', 'init', '-q', str(source)], check=True)
+            (source / 'sample').write_text('source')
+            subprocess.run(['git', '-C', str(source), 'add', 'sample'], check=True)
+            subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
+                            '-c', 'user.email=fixture@example.invalid', 'commit', '-q',
+                            '-m', 'Route SWF'], check=True)
+            head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+            subprocess.run(['git', '-C', str(source), 'bundle', 'create',
+                            str(source / 'repository.bundle'), 'HEAD'], check=True)
+            (source / 'fleet-source-head').write_text(head + '\n')
+            (source / 'maintainer.allowed_signers').write_text('fixture signer\n')
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(source)
+                with patch.object(route, 'FLEET_SOURCE', source), \
+                     patch.object(route, 'FLEET_CHECKOUT', checkout), \
+                     patch.object(qualification_bootstrap, 'verify_staged_checkout') as verify:
+                    route.prepare_fleet_checkout()
+                    self.assertTrue(check_history(checkout, {'formats': ['SWF']}).hit)
+                    self.assertEqual(verify.call_args.args[0:2], (checkout, head))
+            finally:
+                os.chdir(old_cwd)
 
     def test_bad_names_and_args_refuse_before_dispatch(self):
         with patch.object(os,'execv') as launch:

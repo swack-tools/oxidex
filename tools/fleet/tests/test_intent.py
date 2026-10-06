@@ -229,6 +229,34 @@ class IntentTestCase(HermeticCase):
         return Hub(url=self.hub_path, workdir=other_workdir)
 
 
+class TestFleetBinaryCallPath(IntentTestCase):
+    def test_registration_measures_explicit_cargo_target_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "sample").write_text("source")
+            subprocess.run(["git", "-C", str(repo), "add", "sample"], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture",
+                            "-c", "user.email=fixture@example.invalid", "commit", "-q",
+                            "-m", "Fixture source"], check=True)
+            binary = Path(td) / "remote-target" / "release" / "oxidex"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            measured = ledger.FormatCapability("TESTFORMAT", None, 1, 0, 0,
+                                               covered=True, reason="TESTFORMAT: measured MISSING 0")
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(binary.parents[1])}), \
+                 patch.object(ledger, "probe_capability", return_value=ledger.CapabilityProbe(True, "13.59", "DOCX", "verified")), \
+                 patch.object(ledger, "measure_format", return_value=measured) as measure, \
+                 patch.object(ledger.instrument, "staleness_note", return_value=None):
+                result = register(self.hub, repo, slug="remote-binary-check",
+                                  title="Remote binary check", claimed_by="fixture",
+                                  scope={"formats": ["TESTFORMAT"], "tags": [], "files": []})
+            self.assertFalse(result.ok)
+            self.assertTrue(result.reason.startswith("[capability-ledger]"), result.reason)
+            self.assertEqual(measure.call_args.args[1], binary.resolve())
+
+
 class TestFixtureGuard(IntentTestCase):
     def test_hub_url_is_a_temp_path(self):
         resolved = str(Path(self.hub.url).resolve())

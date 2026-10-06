@@ -116,6 +116,38 @@ def prepare_generic_recipe_oracle() -> Path:
     return manifest
 
 
+def prepare_fleet_recipe_oracle() -> Path:
+    """Expose verified locked fixtures through the fleet ledger's legacy path."""
+    for key in ("PERL5LIB", "PERLLIB", "PERL5OPT"):
+        os.environ.pop(key, None)
+    manifest = prepare_generic_recipe_oracle()
+    report = json.loads(manifest.read_text())
+    if report["probes"]["corpus_files"] < 4000:
+        raise RuntimeError("locked fleet corpus is below the required file floor")
+    pin = (ROOT / ".exiftool-version").read_text().strip()
+    cache = oracle_cache_root(ROOT / "tools/release/oracle-lock.json",
+                              Path(os.environ.get("CARGO_HOME", "/cargo")))
+    bootstrap = load_oracle_bootstrap(cache)
+    wrapper = Path(os.environ["EXIFTOOL_CACHE_DIR"]) / "exiftool-pinned.sh"
+    bootstrap.write_comparison_wrapper(
+        wrapper, bootstrap.perl_path(cache), bootstrap.exiftool_library_path(cache).parent.parent,
+        bootstrap.exiftool_path(cache), cache / "evidence/fleet-oracle-markers")
+    docx = bootstrap.exiftool_root(cache) / "t/images/OOXML.docx"
+    for arguments, expected in ((["-ver"], pin), (["-s3", "-FileType", str(docx)], "DOCX")):
+        result = subprocess.run([str(wrapper), *arguments], capture_output=True,
+                                text=True, timeout=30, check=True)
+        if result.stdout.strip() != expected:
+            raise RuntimeError("fleet ledger oracle capability probe failed")
+    if not (Path(os.environ["EXIFTOOL_CACHE_DIR"]) / "combined-samples").is_dir():
+        raise RuntimeError("locked fleet corpus is unavailable")
+    print("=== verified fleet ledger fixtures ===", json.dumps({
+        "oracle": str(wrapper),
+        "corpus_files": report["probes"]["corpus_files"],
+        "bootstrap_manifest_sha256": file_sha(manifest),
+    }, sort_keys=True), flush=True)
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
