@@ -141,8 +141,8 @@ test-package package:
 
 _test-package-worker package:
     python3 tools/remote-build/route.py --require-local-context
-    @echo "Running tests for {{package}}..."
-    cargo test -p {{package}}
+    @printf 'Running tests for %s...\n' {{quote(package)}}
+    cargo test -p {{quote(package)}}
 
 # Run tests for all tag crates
 test-tags:
