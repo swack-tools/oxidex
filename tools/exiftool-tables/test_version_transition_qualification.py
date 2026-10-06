@@ -178,7 +178,8 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \
-             patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
+             patch.object(qualification, "_perl", side_effect=perl_probe,
+                          return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=identity), \
              patch.object(qualification, "_evidence_location", side_effect=lambda path, _label: Path(path)), \
              patch.object(qualification, "run_qualification",
@@ -1362,7 +1363,7 @@ class WrapperCallTests(unittest.TestCase):
                           for name in qualification.INPUT_NAMES},
         }
 
-    def invoke(self, execute, *, matrix_path=None, repository=None, preflight=None):
+    def invoke(self, execute, *, matrix_path=None, repository=None, preflight=None, perl_probe=None):
         configs = []
         def initialize(run_dir, _capture, _catalog, _plan, _resolution, _materialization, config):
             run_dir.mkdir(parents=True)
@@ -1379,7 +1380,8 @@ class WrapperCallTests(unittest.TestCase):
              patch.object(qualification, "verify_caller"), \
              patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}), \
              patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
-             patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
+             patch.object(qualification, "_perl", side_effect=perl_probe,
+                          return_value=Path(sys.executable).resolve()), \
              patch.object(qualification, "resolve_source_identity", return_value=self.identity), \
              patch.object(qualification, "_evidence_location", side_effect=lambda path, _label: Path(path)), \
              patch.object(qualification.executor, "initialize_run", side_effect=initialize), \
@@ -1392,6 +1394,59 @@ class WrapperCallTests(unittest.TestCase):
                 read_policy_input=self.policy_input, **self.receipts,
             )
         return result, configs
+
+    def test_contender_never_runs_perl_or_mutates_bootstrap_evidence(self) -> None:
+        import fcntl
+        sentinel = self.root / "bootstrap-evidence"
+        sentinel.write_text("provisioned")
+        def probe(_root):
+            sentinel.write_text("reblessed")
+            return Path(sys.executable)
+        with self.lease.open("r+") as owner:
+            fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(qualification.Refused, "transition lease is held"):
+                self.invoke(None, perl_probe=probe)
+        self.assertEqual(sentinel.read_text(), "provisioned")
+        self.assertFalse(any(path.exists() for path in self.receipts.values()))
+
+    def test_perl_probe_runs_under_acquired_host_lease(self) -> None:
+        def probe(_root):
+            self.assertEqual(_contend(self.lease), "blocked")
+            self.assertTrue(self.receipts["owner_receipt"].is_file())
+            raise qualification.Refused("probe-stop")
+        with self.assertRaisesRegex(qualification.Refused, "probe-stop"):
+            self.invoke(None, perl_probe=probe)
+        self.assertEqual(_contend(self.lease), "acquired")
+        release = json.loads(self.receipts["release_receipt"].read_text())
+        self.assertTrue(release["flock_release_confirmed"])
+
+    def test_unproven_perl_child_retains_transition_lease(self) -> None:
+        child = None
+
+        def perl_probe(_root: Path):
+            nonlocal child
+            child = qualification.executor._spawn(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=False)
+            raise qualification.Refused("Perl probe cannot prove cleanup")
+
+        try:
+            with self.assertRaises(qualification.LeaseRetained) as raised:
+                self.invoke(lambda *_args, **_kwargs: self.fail("stages must not run"),
+                            perl_probe=perl_probe)
+            self.assertIsNotNone(child)
+            self.assertIn(f"PID {child.pid}", str(raised.exception))
+            self.assertEqual(_contend(self.lease), "blocked")
+            release = json.loads(self.receipts["release_receipt"].read_text())
+            self.assertEqual(release["release_status"], "retained-unproven-child")
+            self.assertFalse(self.row_output.exists(), "no stage output may be created")
+        finally:
+            if child is not None:
+                child.kill()
+                child.wait(10)
+        self.assertEqual(qualification.executor.release_retained_locks(), [])
+        self.assertEqual(_contend(self.lease), "acquired")
 
     def test_unproven_signing_preflight_child_retains_transition_lease(self) -> None:
         child = None
@@ -2417,7 +2472,7 @@ class PlatformPerlIdentityTests(unittest.TestCase):
             with patch.object(qualification.sys, "platform", "linux"), \
                  patch("platform.machine", return_value="x86_64"), \
                  patch.object(qualification, "_verified_linux_perl_sha", return_value=digest, create=True), \
-                 patch.object(qualification.subprocess, "run", return_value=probe):
+                 patch.object(qualification.executor, "_tracked_run", return_value=probe):
                 self.assertEqual(qualification._perl(root), perl.resolve())
             with patch.object(qualification.sys, "platform", "linux"), \
                  patch("platform.machine", return_value="x86_64"), \
@@ -2435,12 +2490,15 @@ class PlatformPerlIdentityTests(unittest.TestCase):
             manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
                 "kind": "file", "path": str(perl), "sha256": "a" * 64}}}))
             verifier = Mock(return_value=manifest)
-            loader = SimpleNamespace(exec_module=lambda module: setattr(module, "verify", verifier))
+            def load(module):
+                module.verify = verifier
+                module.manifest_path = lambda _root: manifest
+            loader = SimpleNamespace(exec_module=load)
             spec = SimpleNamespace(loader=loader)
             with patch("importlib.util.spec_from_file_location", return_value=spec), \
                  patch("importlib.util.module_from_spec", return_value=SimpleNamespace()):
                 self.assertEqual(qualification._verified_linux_perl_sha(root, perl), "a" * 64)
-                verifier.assert_called_once_with(root, "13.59", None)
+                verifier.assert_called_once_with(root, "13.59", manifest, runner=qualification._perl_probe)
                 manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
                     "kind": "file", "path": str(root / "wrong"), "sha256": "a" * 64}}}))
                 with self.assertRaisesRegex(qualification.Refused, "path or type"):
