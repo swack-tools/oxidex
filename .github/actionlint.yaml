@@ -2,10 +2,10 @@
 # without this file every `runs-on:` in this repo is reported as an unknown
 # label and the real findings are buried.
 #
-# This lists the labels that are *valid*, not the ones that are appropriate.
+# This lets actionlint parse the proposed labels; it is not live-runner proof.
 # Which size a given job should use is a separate judgement, argued at each
 # `runs-on:` -- see the comments there. Linux x64 jobs use `spot` or the
-# proposed `spot-heavy32` lane; ARM64 and macOS use GitHub-hosted runners.
+# proposed `spot-heavy32` recovery lane; ARM64 and macOS use GitHub-hosted runners.
 self-hosted-runner:
   labels:
     # Ubicloud (GitHub App): standard-N = N vCPU x64. Kept for workflows
@@ -16,7 +16,8 @@ self-hosted-runner:
     - oxidex-spot-7x27
     - oxidex
     - spot
-    # Proposed single reserved 8-vCPU/32-GiB Linux x64 runner; not installed yet.
+    # Proposed single reserved 8-vCPU/32-GiB Linux x64 recovery runner;
+    # registration here does not prove it is installed or persistent.
     - spot-heavy32
     # Docker-capable runners with the host Docker socket mounted.
     - docker

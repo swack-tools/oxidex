@@ -195,8 +195,9 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    # Proposed dedicated 8-vCPU/32-GiB runner: concurrent Cargo links exhausted the
-    # shared 16-GiB Spot host before tests could start (PR #1052).
+    # Recovery route to a proposed reserved 8-vCPU/32-GiB runner. On the
+    # ordinary Spot route, multiple Cargo links were killed under the
+    # runner container's 15-GiB memory cap before tests started (PR #1052).
     runs-on: spot-heavy32
     # Cold Spot runs need time for compilation, nextest, cargo test and parity checks.
     timeout-minutes: 45
@@ -207,8 +208,8 @@ jobs:
     # [profile.test] carries codegen-units = 4; that setting and the
     # per-package opt-level = 2 overrides exist to stop the generated tag
     # crates OOMing a small machine. 16 units matches [profile.dev]. This was
-    # sized on a retired pre-Spot 32 GB 8x hosted runner; the standard runner
-    # has 16 GB.
+    # sized on a retired pre-Spot 32 GB 8x hosted runner; the ordinary Spot
+    # runner container has a 15-GiB memory cap.
     #
     # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
     # workflow-wide) while skipping the full debuginfo this never reads.
@@ -499,8 +500,8 @@ jobs:
     # them on one runner only added their times together.
     #
     # The fixloop link is memory-heavy even though this job is not the long
-    # pole. Share the proposed 8-vCPU/32-GiB label with Build & Test; one
-    # reserved runner would queue these compiles instead of co-locating them.
+    # pole. Route this recovery check with Build & Test to the proposed
+    # reserved 8-vCPU/32-GiB runner to avoid the ordinary 15-GiB container cap.
     runs-on: spot-heavy32
     timeout-minutes: 20
     steps:

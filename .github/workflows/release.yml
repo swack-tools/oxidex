@@ -57,7 +57,7 @@ jobs:
           # `cargo build --release` with no warm cache, which parallelises
           # across codegen units.
           - target: x86_64-unknown-linux-musl
-            os: spot-heavy32
+            os: spot
           # Linux ARM64 builds run natively on GitHub's free hosted ARM64 runner.
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
@@ -109,7 +109,7 @@ jobs:
     needs: verify-version
     # 8x: same profile as the Linux x64 build -- a cold cross-compile of the
     # whole workspace via mingw.
-    runs-on: spot-heavy32
+    runs-on: spot
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
