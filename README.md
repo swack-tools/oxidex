@@ -287,3 +287,29 @@ Contributions are welcome. Before contributing, ensure:
 ## Acknowledgments
 
 Inspired by and compatible with [ExifTool](https://exiftool.org/) by Phil Harvey. OxiDex is an independent reimplementation.
+
+### Restricted remote Task19 qualification
+
+`just qualify-remote OUTPUT REFERENCE PROVISIONING` runs the existing three-row Task19
+qualification and corpus read gate on an approved restricted Linux builder.
+`OUTPUT` must be an unused directory below `OXIDEX_OPS_DIR`; `REFERENCE`
+points to the approved Task19 reference evidence directory containing the
+byte-frozen `read-policy-input.json` and `downloaded/inputs/provisioned`
+read selections. `PROVISIONING` names the retained Task19 `provisioned` input
+documents and write/native fixtures. The client
+requires a clean, maintainer-signed candidate HEAD and the pre-enrolled
+`OXIDEX_REMOTE_SSH_USER`, `OXIDEX_REMOTE_SSH_KEY`, and
+`OXIDEX_REMOTE_SSH_KNOWN_HOSTS` settings. It records transport evidence below
+`$OXIDEX_OPS_DIR/evidence/remote-qualification/<run-id>`.
+
+The canonical launcher owns `/src`, `/target`, the build lock, and the immutable
+builder image. Preparation verifies the transferred signed Git bundle and
+regenerates path-bound plans, source resolutions, materializations, cases, and
+fixture manifests under `/target`. It preserves the standalone floor policy
+byte-for-byte and refuses a changed ordered fixture selection. The three rows
+run serially; the remote source, targets, input archive and lease are retained
+for audit. A transport timeout leaves the exact job handle and namespace in
+`transport.json` and does not retry or terminate an unconfirmed run. Publication
+requires the remote committed-result loader, corpus gate, full archive replay,
+and hash-checked direct download. This recipe does not promote `main` or tag a
+release.

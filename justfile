@@ -1656,3 +1656,8 @@ fleet-tests-both: build-bin-release
 # Host health: toolchain id, oracle capability probe, corpus count, disk.
 fleet-doctor host:
     python3 tools/fleet/doctor.py {{host}}
+
+# Non-promoting Task19 qualification through the restricted remote builder.
+# Both paths must be new/real directories below OXIDEX_OPS_DIR as appropriate.
+qualify-remote output reference provisioning:
+    python3 tools/remote-build/qualification.py --output '{{output}}' --reference '{{reference}}' --provisioning-reference '{{provisioning}}'
