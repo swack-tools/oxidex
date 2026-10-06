@@ -4,11 +4,13 @@ import math
 import shlex
 import subprocess
 from types import SimpleNamespace
+from .config import approved_instances, builder_instance_name, matching_approval
 from .resource_metrics import read_utilization
+from . import ssh_transport
 
 # Exact launcher bytes provisioned by spot-github-runners' builder_assets.py.
 # The launcher has no version verb, so update this digest with its protocol.
-LAUNCHER_SHA256 = 'd3781dd0d320477ac7201a1e9b94ed2b59b829efb88b38b794ae93a467d0d2f4'
+LAUNCHER_SHA256 = '9b7e25c0ed1f2817f4704b9071b7bf03e5717d04dde66107de4c2e5334c9d104'
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 
@@ -40,13 +42,21 @@ def rank_workers(rows):
     return sorted(eligible, key=capacity)
 
 
-def select_worker(project, excluded_ids=()):
+def select_worker(project, excluded_ids=(), required_name=None, required_id=None, required_zone=None):
     inventory = json.loads(subprocess.check_output([
         'gcloud', 'compute', 'instances', 'list', '--project='+project,
         '--format=json(name,id,zone,status,machineType)'], text=True))
     candidates = []
+    approvals = approved_instances()
     for row in inventory:
-        if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not row['name'].startswith(('oxidex-runners-', 'oxidex-buildbench-')):
+        zone = row['zone'].rsplit('/',1)[-1]
+        if ((required_name is not None and row.get('name') != required_name)
+                or (required_id is not None and str(row.get('id')) != str(required_id))
+                or (required_zone is not None and zone != required_zone)):
+            continue
+        permitted = builder_instance_name(row.get('name')) or matching_approval(
+            approvals, project, row.get('name'), zone, row.get('id'))
+        if str(row.get('id')) in excluded_ids or row.get('status') != 'RUNNING' or not permitted:
             continue
         vm = SimpleNamespace(name=row['name'], instance_id=str(row['id']), zone=row['zone'].rsplit('/',1)[-1])
         if row.get('machineType'):
@@ -59,15 +69,25 @@ def select_worker(project, excluded_ids=()):
     observations=list(zip(candidates,samples)) if samples else [(vm,None) for vm in candidates]
     # Probe only candidates with trustworthy low utilization, best first.
     probe = launcher_probe()
+    refusals = []
     for vm, sample in rank_workers(observations):
         try:
-            result = subprocess.run(['gcloud','compute','ssh',vm.name,'--zone='+vm.zone,
-            '--project='+project,'--quiet',*SSH_KEEPALIVE,
-            '--command=sh -c '+shlex.quote(probe)],
+            if ssh_transport.identity():
+                transport = ssh_transport.DirectTransport(vm.name, vm.zone, project, vm.instance_id)
+                command = transport.ssh('sh -c '+shlex.quote(probe))
+            else:
+                command = ['gcloud','compute','ssh',vm.name,'--zone='+vm.zone,
+                    '--project='+project,'--quiet',*SSH_KEEPALIVE,
+                    '--command=sh -c '+shlex.quote(probe)]
+            result = subprocess.run(command,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, RuntimeError) as exc:
+            refusals.append((vm.name, exc))
             continue
         if result.returncode == 0:
             print(f'Selected {vm.name} ({vm.zone}): CPU {sample[0]:.1%}, memory {sample[1]:.1%}', flush=True)
             return vm, sample
-    raise RuntimeError('No available remote builder with complete CPU/memory metrics below 75%; retry later')
+    if refusals:
+        detail = '; '.join(name+': '+str(exc) for name, exc in refusals)
+        raise RuntimeError('Builder transport/provider probes refused: '+detail) from refusals[-1][1]
+    raise RuntimeError('No available builder-* or explicitly approved VM with complete CPU/memory metrics below 75%; retry later')

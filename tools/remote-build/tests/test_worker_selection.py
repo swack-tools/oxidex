@@ -3,6 +3,43 @@ from types import SimpleNamespace
 from lib.worker_selection import rank_workers
 
 class WorkerSelectionTests(unittest.TestCase):
+    def test_named_exception_is_selected_only_at_approved_instance_id(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        approved={'name':'approved-bench','id':'2','project':'project','zone':'z','enabled':True}
+        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'approved-bench','id':'2','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.approved_instances',return_value=[approved]), \
+             patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.2,.2)]) as metrics, \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)) as ssh:
+            vm,_=select_worker('project')
+            self.assertEqual(vm.name,'approved-bench')
+            self.assertEqual([v.instance_id for v in metrics.call_args.args[1]],['2'])
+            inventory[1]['id']='3'
+            metrics.reset_mock();ssh.reset_mock()
+            with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)):
+                with self.assertRaisesRegex(RuntimeError,'No available'):
+                    select_worker('project')
+            metrics.assert_not_called();ssh.assert_not_called()
+
+    def test_only_dedicated_builder_vms_reach_metrics_or_ssh(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'oxidex-buildbench-b','id':'2','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-fast','id':'3','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.2,.2)]) as metrics, \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)) as ssh:
+            vm,_=select_worker('project')
+        self.assertEqual(vm.name,'builder-fast')
+        self.assertEqual([candidate.name for candidate in metrics.call_args.args[1]],['builder-fast'])
+        self.assertEqual(ssh.call_count,1)
+        self.assertIn('builder-fast',ssh.call_args.args[0])
+
     def test_rank_by_bottleneck_not_cpu_only(self):
         rows=[(SimpleNamespace(name='memory-hot'), (.1,.7)),
               (SimpleNamespace(name='idle'),(.2,.3)),
@@ -17,13 +54,13 @@ class WorkerSelectionTests(unittest.TestCase):
         import json
         from unittest.mock import patch
         from lib.worker_selection import select_worker
-        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
-                   {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-b','id':'2','zone':'zones/z','status':'RUNNING'}]
         with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
              patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
              patch('lib.worker_selection.subprocess.run',side_effect=[SimpleNamespace(returncode=75),SimpleNamespace(returncode=0)]):
             vm,sample=select_worker('project')
-        self.assertEqual(vm.name,'oxidex-runners-b')
+        self.assertEqual(vm.name,'builder-b')
 
     def test_capacity_wins_over_lower_utilization_percentage(self):
         rows=[(SimpleNamespace(name='small',cpus=4,memory_gib=16),(.1,.1)),
@@ -35,13 +72,13 @@ class WorkerSelectionTests(unittest.TestCase):
         import subprocess
         from unittest.mock import patch
         from lib.worker_selection import LAUNCHER_SHA256, select_worker
-        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
-                   {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-b','id':'2','zone':'zones/z','status':'RUNNING'}]
         with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
              patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
              patch('lib.worker_selection.subprocess.run',side_effect=[subprocess.TimeoutExpired('ssh',60),SimpleNamespace(returncode=0)]) as run:
             vm,_=select_worker('project')
-        self.assertEqual(vm.name,'oxidex-runners-b')
+        self.assertEqual(vm.name,'builder-b')
         self.assertEqual(run.call_count,2)
         args=run.call_args.args[0]
         command=next(x for x in args if x.startswith('--command='))
@@ -77,12 +114,60 @@ class WorkerSelectionTests(unittest.TestCase):
         import json
         from unittest.mock import patch
         from lib.worker_selection import select_worker
-        inventory=[{'name':'oxidex-runners-a','id':'1','zone':'zones/z','status':'RUNNING'},
-                   {'name':'oxidex-runners-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-b','id':'2','zone':'zones/z','status':'RUNNING'}]
         with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
              patch('lib.worker_selection.read_utilization',return_value=[None,(.2,.2)]) as metrics, \
              patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)):
             vm,_=select_worker('project')
-        self.assertEqual(vm.name,'oxidex-runners-b')
+        self.assertEqual(vm.name,'builder-b')
         metrics.assert_called_once()
         self.assertEqual([vm.instance_id for vm in metrics.call_args.args[1]],['1','2'])
+
+
+class DirectSelectionTests(unittest.TestCase):
+    def test_vm_transport_refusal_tries_next_candidate(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'},
+                   {'name':'builder-b','id':'2','zone':'zones/z','status':'RUNNING'}]
+        transport=SimpleNamespace(ssh=lambda command:['ssh','builder-b',command])
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1),(.2,.2)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=[RuntimeError('No address'),transport]), \
+             patch('lib.worker_selection.subprocess.run',return_value=SimpleNamespace(returncode=0)) as run:
+            vm,_=select_worker('project')
+        self.assertEqual(vm.name,'builder-b')
+        self.assertEqual(run.call_count,1)
+
+    def test_shared_trust_configuration_refuses_without_fallback(self):
+        import json
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'}]
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=ValueError('Missing trust')):
+            with self.assertRaisesRegex(ValueError,'Missing trust'):
+                select_worker('project')
+
+
+class ProviderFailureEvidenceTests(unittest.TestCase):
+    def test_all_provider_failures_preserve_cause_instead_of_capacity_claim(self):
+        import json,subprocess
+        from unittest.mock import patch
+        from lib.worker_selection import select_worker
+        inventory=[{'name':'builder-a','id':'1','zone':'zones/z','status':'RUNNING'}]
+        error=subprocess.CalledProcessError(1,['gcloud','compute','instances','describe','builder-a'])
+        with patch('lib.worker_selection.subprocess.check_output',return_value=json.dumps(inventory)), \
+             patch('lib.worker_selection.read_utilization',return_value=[(.1,.1)]), \
+             patch('lib.worker_selection.ssh_transport.identity',return_value=('u','k')), \
+             patch('lib.worker_selection.ssh_transport.DirectTransport',side_effect=error):
+            with self.assertRaisesRegex(RuntimeError,'transport/provider') as caught:
+                select_worker('project')
+        self.assertIs(caught.exception.__cause__,error)
+        self.assertIn('gcloud',str(caught.exception))
+        self.assertNotIn('metrics below',str(caught.exception))

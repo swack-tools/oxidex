@@ -122,6 +122,17 @@ build-debug:
 build-release:
     python3 tools/remote-build/build.py --profile release
 
+# Explicit remote names share the same selection and verification path.
+build-debug-remote:
+    just build-debug
+
+build-release-remote:
+    just build-release
+
+# Workspace tests and pinned oracle bootstrap execute on the selected builder.
+test-remote:
+    python3 tools/remote-build/build.py --profile test
+
 # Build just the binary
 build-bin:
     @echo "Building binary..."

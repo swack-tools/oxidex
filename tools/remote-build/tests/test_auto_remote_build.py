@@ -11,6 +11,7 @@ class RetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             def build(command, env):
+                self.assertEqual(env['OXIDEX_REMOTE_INSTANCE_ID'],env['OXIDEX_REMOTE_INSTANCE'])
                 receipt=Path(command[command.index('--evidence-dir')+1])/'remote-build.json'
                 receipt.write_text(json.dumps({'retryable':env['OXIDEX_REMOTE_INSTANCE']=='a'}))
                 return 1 if env['OXIDEX_REMOTE_INSTANCE']=='a' else 0

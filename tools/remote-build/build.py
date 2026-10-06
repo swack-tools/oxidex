@@ -15,7 +15,7 @@ from lib.worker_selection import select_worker
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--profile', choices=['debug','release'],required=True)
+    parser.add_argument('--profile', choices=['debug','release','test'],required=True)
     parser.add_argument("--max-attempts",type=int,default=3)
     args=parser.parse_args()
     if args.max_attempts < 1:
@@ -29,6 +29,14 @@ def main():
         raise RuntimeError('Set OXIDEX_REMOTE_PROJECT or configure a gcloud project')
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     evidence=ops_root()/'evidence'/('auto-remote-'+stamp)
+    if os.environ.get('OXIDEX_REMOTE_INSTANCE'):
+        # Explicit bootstrap route: actual provider ID and authenticated launcher
+        # are checked by direct.py; host admission still enforces resources.
+        from lib.ssh_transport import identity
+        if not identity() or not os.environ.get('OXIDEX_REMOTE_INSTANCE_ID') or not os.environ.get('OXIDEX_REMOTE_ZONE'):
+            raise ValueError('Explicit builder requires instance ID, zone and SSH user/key')
+        return subprocess.call([sys.executable, str(Path(__file__).with_name('direct.py')),
+            '--profile', args.profile, '--evidence-dir', str(evidence)])
     return run_attempts(project, source, args.profile, evidence, args.max_attempts)
 
 
@@ -39,7 +47,7 @@ def run_attempts(project, source, profile, evidence, max_attempts):
         # Inventory and Monitoring are read again on every attempt.
         vm,sample=select_worker(project, excluded_ids=excluded)
         env=dict(os.environ,OXIDEX_REMOTE_INSTANCE=vm.name,OXIDEX_REMOTE_ZONE=vm.zone,
-                 OXIDEX_REMOTE_PROJECT=project)
+                 OXIDEX_REMOTE_PROJECT=project, OXIDEX_REMOTE_INSTANCE_ID=str(vm.instance_id))
         folder=evidence/str(attempt)
         folder.mkdir(parents=True)
         (folder/'selection.json').write_text(json.dumps({'instance':vm.name,'instance_id':vm.instance_id,
