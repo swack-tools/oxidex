@@ -47,6 +47,24 @@ class GenericRecipeTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertLessEqual(failures[0].stat().st_size, 64 * 1024)
 
+    def test_candidate_bad_hash_retains_exact_short_failure_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / 'candidate-receipt.json'
+            partial = b'partial receipt bytes'
+            transport = SimpleNamespace(scp=lambda destination, remote, download=False: [
+                sys.executable, '-c',
+                'import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b"partial receipt bytes")',
+                str(destination),
+            ])
+            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                remote_build._download_checked_candidate(
+                    transport, '/target/perl-candidate-export/candidate-receipt.json',
+                    local, '0' * 64, remote_build.MAX_CANDIDATE_RECEIPT_BYTES)
+            self.assertFalse(local.exists())
+            failures = list(Path(directory).glob('.perl-candidate-*.failed'))
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0].read_bytes(), partial)
+
     def test_candidate_archive_download_caps_real_child_during_transfer(self):
         with tempfile.TemporaryDirectory() as directory:
             local = Path(directory) / 'perl-5.38.2-prefix.tar.gz'

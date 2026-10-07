@@ -239,8 +239,9 @@ def _download_checked_candidate(transport, remote: str, local: Path, digest: str
     except Exception:
         # Keep failure bytes for diagnosis, including errors from the child.
         if temporary.exists():
-            with temporary.open('r+b') as stream:
-                stream.truncate(max_bytes)
+            if temporary.stat().st_size > max_bytes:
+                with temporary.open('r+b') as stream:
+                    stream.truncate(max_bytes)
             temporary.rename(temporary.with_name(temporary.name + '.failed'))
         raise
 
