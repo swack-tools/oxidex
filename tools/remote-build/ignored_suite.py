@@ -243,7 +243,7 @@ def main() -> int:
     staged = []
     try:
         manifest = json.loads(inputs.MANIFEST.read_text())
-        _, input_receipt = inputs.run(manifest, target)
+        _, input_receipt = inputs.run(manifest, inputs.ops_root())
         report['inputs'] = input_receipt
         save()
         if input_receipt['status'] != 'PASS':

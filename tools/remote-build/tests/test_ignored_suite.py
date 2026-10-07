@@ -13,6 +13,34 @@ import route
 
 
 class IgnoredSuiteControls(unittest.TestCase):
+    def test_full_suite_probes_inputs_under_ops_root_not_cargo_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / 'checkout'
+            checkout.mkdir()
+            (checkout / '.exiftool-version').write_text('13.59\n')
+            manifest = root / 'manifest.json'
+            manifest.write_text(json.dumps({'schema': 1, 'oracle_pin': '13.59', 'inputs': []}))
+            perl = root / 'perl'
+            perl.touch()
+            ops = root / 'persistent-ops'
+            target = root / 'regenerable-cargo-target'
+            with patch.object(suite, 'ROOT', checkout), \
+                 patch.object(suite, 'admitted_context', return_value=('signed-builder', target)), \
+                 patch.object(suite, 'clean_identity', return_value=('head', 'tree')), \
+                 patch.object(suite, 'suite_environment', return_value={}), \
+                 patch.object(suite.inputs, 'MANIFEST', manifest), \
+                 patch.object(suite.inputs, 'ops_root', return_value=ops), \
+                 patch.object(suite.inputs, 'run', return_value=(ops / 'receipt.json',
+                      {'status': 'FAILED'})) as run, \
+                 patch.dict(os.environ, {'EXIFTOOL_CACHE_DIR': str(root / 'oracle'),
+                                      'EXIFTOOL_PERL': str(perl)}):
+                self.assertEqual(suite.main(), 1)
+            self.assertEqual(run.call_args.args[1], ops)
+            self.assertNotEqual(run.call_args.args[1], target)
+            receipt = next((target / 'ignored-suite').glob('*/receipt.json'))
+            self.assertEqual(json.loads(receipt.read_text())['inputs']['status'], 'FAILED')
+
     def test_builder_and_actions_contexts_keep_distinct_owned_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory).resolve()

@@ -1,5 +1,6 @@
 """Synthetic controls for ignored-input admission; no Cargo or native oracle."""
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -14,6 +15,7 @@ from urllib.error import URLError
 from urllib.request import Request
 
 import ignored_fixture_probe as probe
+import route
 
 
 class IgnoredFixtureProbeTests(unittest.TestCase):
@@ -65,7 +67,9 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
             with patch.object(probe, '__file__', str(child)), \
                  patch.object(probe, 'DOWNLOAD_DEADLINE_SECONDS', 0.25):
                 with self.assertRaisesRegex(TimeoutError, 'total deadline'):
-                    probe.download('https://source.example/fixture', destination, 100)
+                    probe.download('https://source.example/fixture', destination,
+                                   {'id': 'slow', 'max_bytes': 100, 'bytes': 1,
+                                    'sha256': hashlib.sha256(b'x').hexdigest()})
             self.assertLess(time.monotonic() - started, 2)
             self.assertFalse(destination.exists())
             self.assertEqual(list(root.glob('*.part')), [])
@@ -74,15 +78,86 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'file'
             with self.assertRaisesRegex(ValueError, 'bounded HTTPS'):
-                probe.download('http://example.org/file', target, 2)
+                probe.download('http://example.org/file', target,
+                               {'id': 'file', 'max_bytes': 2, 'bytes': 2,
+                                'sha256': hashlib.sha256(b'xx').hexdigest()})
             def fail(command, **kwargs):
                 Path(command[4]).write_bytes(b'partial')
                 return subprocess.CompletedProcess(command, 1, '', 'source exceeds bounded download size')
             with patch.object(probe.subprocess, 'run', side_effect=fail):
                 with self.assertRaisesRegex(ValueError, 'bounded download size'):
-                    probe.download('https://example.org/file', target, 2)
+                    probe.download('https://example.org/file', target,
+                                   {'id': 'file', 'max_bytes': 2, 'bytes': 2,
+                                    'sha256': hashlib.sha256(b'xx').hexdigest()})
             self.assertFalse(target.exists())
             self.assertEqual(list(Path(directory).glob('*.part')), [])
+
+    def test_bad_200_never_promotes_and_valid_retry_authenticates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            authentic = b'authentic-source'
+            row = {'id': 'raw-sony', 'source': {'kind': 'download',
+                   'url': 'https://example.org/a.arw'}, 'bytes': len(authentic),
+                   'sha256': hashlib.sha256(authentic).hexdigest(), 'max_bytes': 100}
+            target = cache / 'raw-sony.source'
+            payloads = iter((b'<html>bad 200</html>', b'x' * len(authentic), authentic))
+            def serve(command, **_kwargs):
+                Path(command[4]).write_bytes(next(payloads))
+                return subprocess.CompletedProcess(command, 0, '', '')
+            with patch.object(probe.subprocess, 'run', side_effect=serve):
+                with self.assertRaisesRegex(ValueError, 'size'):
+                    probe.materialize(row, cache)
+                self.assertFalse(target.exists())
+                with self.assertRaisesRegex(ValueError, 'SHA-256 mismatch'):
+                    probe.materialize(row, cache)
+                self.assertFalse(target.exists())
+                path, verified = probe.materialize(row, cache)
+            self.assertEqual(path, target)
+            self.assertEqual(verified['sha256'], row['sha256'])
+            self.assertEqual(list(cache.glob('*.part')), [])
+
+    def test_shared_cache_serializes_two_owned_consumers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            payload = b'authenticated'
+            row = {'id': 'raw-sony', 'source': {'kind': 'download',
+                   'url': 'https://example.org/a.arw'}, 'bytes': len(payload),
+                   'sha256': hashlib.sha256(payload).hexdigest(), 'max_bytes': 100}
+            calls = []
+            def serve(command, **_kwargs):
+                calls.append(command)
+                Path(command[4]).write_bytes(payload)
+                time.sleep(0.03)
+                return subprocess.CompletedProcess(command, 0, '', '')
+            with patch.object(probe.subprocess, 'run', side_effect=serve):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(lambda _: probe.materialize(row, cache), range(2)))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual([verified['sha256'] for _, verified in results],
+                             [row['sha256'], row['sha256']])
+
+    def test_zip_archive_digest_checked_before_promotion_and_member_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as bundle:
+                bundle.writestr('notepad++.exe', b'MZ-real')
+            authentic = buffer.getvalue()
+            row = {'id': 'pe-notepad', 'source': {'kind': 'zip_member',
+                   'url': 'https://example.org/npp.zip', 'member': 'notepad++.exe'},
+                   'archive_bytes': len(authentic), 'archive_sha256': hashlib.sha256(authentic).hexdigest(),
+                   'max_bytes': 1000, 'max_member_bytes': 100}
+            payloads = iter((b'x' * len(authentic), authentic))
+            def serve(command, **_kwargs):
+                Path(command[4]).write_bytes(next(payloads))
+                return subprocess.CompletedProcess(command, 0, '', '')
+            with patch.object(probe.subprocess, 'run', side_effect=serve):
+                with self.assertRaisesRegex(ValueError, 'SHA-256 mismatch'):
+                    probe.materialize(row, cache)
+                self.assertFalse((cache / 'pe-notepad.zip').exists())
+                path, verified = probe.materialize(row, cache)
+            self.assertEqual(path.read_bytes(), b'MZ-real')
+            self.assertEqual(verified['sha256'], hashlib.sha256(b'MZ-real').hexdigest())
 
     def test_child_stream_enforces_byte_ceiling(self):
         class Response(io.BytesIO):
@@ -149,6 +224,58 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
             self.assertIn('zero native fields', receipt['inputs'][2]['error'])
             self.assertIn('total deadline', receipt['inputs'][3]['error'])
             self.assertEqual(json.loads(receipt_path.read_text())['status'], 'FAILED')
+            self.assertTrue(receipt_path.is_relative_to(Path(directory) / 'evidence'))
+            self.assertFalse(receipt_path.is_relative_to(Path(directory) / 'target'))
+
+    def test_interrupted_probe_keeps_last_atomic_partial_receipt(self):
+        rows = [{'id': f'media-{number}', 'kind': 'media',
+                 'target': f'test_data/audio/sample-{number}.aac',
+                 'source': {'kind': 'repo', 'path': 'sample.aac'},
+                 'required_tags': ['AAC:SampleRate']} for number in range(25)]
+        with tempfile.TemporaryDirectory() as directory:
+            ops = Path(directory)
+            seen = []
+            def materialize(row, cache):
+                self.assertEqual(cache, ops / 'cache/ignored-inputs')
+                seen.append(row['id'])
+                if len(seen) == 2:
+                    raise KeyboardInterrupt()
+                return ops / 'sample.aac', {'bytes': 1, 'sha256': 'test'}
+            with patch.object(probe, 'materialize', side_effect=materialize), \
+                 patch.object(probe, 'native_probe', return_value={'compared_count': 1}):
+                with self.assertRaises(KeyboardInterrupt):
+                    probe.run({'schema': 1, 'oracle_pin': '13.59', 'inputs': rows}, ops)
+            paths = list((ops / 'evidence/ignored-inputs/runs').glob('*/receipt.json'))
+            self.assertEqual(len(paths), 1)
+            receipt = json.loads(paths[0].read_text())
+            self.assertEqual(receipt['status'], 'FAILED')
+            self.assertEqual([row['status'] for row in receipt['inputs']], ['PASS', 'FAILED'])
+            self.assertIn('interrupted', receipt['inputs'][1]['error'])
+            self.assertEqual(list(paths[0].parent.glob('*.tmp')), [])
+
+    def test_worker_uses_ops_root_even_when_cargo_target_is_elsewhere(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ops = Path(directory) / 'persistent-ops'
+            cargo = Path(directory) / 'regenerable-target'
+            with patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(probe, 'ops_root', return_value=ops), \
+                 patch.object(probe, 'run', return_value=(ops / 'receipt.json',
+                      {'status': 'PASS'})) as run, \
+                 patch.dict(os.environ, {'CARGO_TARGET_DIR': str(cargo)}), \
+                 patch.object(probe.sys, 'argv', ['ignored_fixture_probe.py']):
+                self.assertEqual(probe.main(), 0)
+            self.assertEqual(run.call_args.args[1], ops)
+            self.assertNotEqual(run.call_args.args[1], cargo)
+
+    def test_failed_atomic_promotion_preserves_last_valid_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'receipt.json'
+            probe.write_receipt_atomic(path, {'status': 'FAILED', 'inputs': [{'id': 'first'}]})
+            with patch.object(probe.Path, 'replace', side_effect=OSError('replace interrupted')):
+                with self.assertRaisesRegex(OSError, 'replace interrupted'):
+                    probe.write_receipt_atomic(path, {'status': 'PASS', 'inputs': []})
+            self.assertEqual(json.loads(path.read_text())['inputs'], [{'id': 'first'}])
+            self.assertEqual(list(Path(directory).glob('*.tmp')), [])
 
     def test_makernote_uses_family_one_vendor_group_and_requires_it(self):
         with tempfile.TemporaryDirectory() as directory:

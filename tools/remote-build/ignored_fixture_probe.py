@@ -7,6 +7,7 @@ at their test paths or claim that the ignored suite has executed.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -21,6 +22,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from scripts.ops_paths import ops_root  # noqa: E402 - executable also runs by file path
+
 MANIFEST = Path(__file__).with_name('ignored-inputs.json')
 DOWNLOAD_DEADLINE_SECONDS = 180
 USER_AGENT = "OxiDex-ignored-fixture-probe/1.0 (metadata validation; https://github.com/swack-tools/oxidex)"
@@ -89,7 +93,10 @@ def download_child(url: str, destination: Path, max_bytes: int) -> None:
             output.write(block)
 
 
-def download(url: str, destination: Path, max_bytes: int) -> None:
+def download(url: str, destination: Path, row: dict, *, archive: bool = False) -> None:
+    max_bytes = row['max_bytes']
+    if not row.get('archive_sha256' if archive else 'sha256'):
+        raise ValueError(f'{row["id"]}: download requires a publisher SHA-256')
     if urlparse(url).scheme != 'https' or max_bytes <= 0:
         raise ValueError('source must be bounded HTTPS')
     temporary = destination.with_name(destination.name + '.' + secrets.token_hex(8) + '.part')
@@ -106,6 +113,9 @@ def download(url: str, destination: Path, max_bytes: int) -> None:
             raise ValueError('HTTPS download refused: ' + result.stderr[-1000:])
         if not temporary.is_file() or temporary.is_symlink():
             raise ValueError('HTTPS download child produced no regular file')
+        # Authenticate the disposable bytes before they acquire the canonical
+        # cache name. A transient 200 error page must not poison future runs.
+        verify_file(temporary, row, archive=archive)
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
@@ -122,41 +132,70 @@ def materialize(row: dict, cache: Path) -> tuple[Path, dict]:
         raise ValueError(f'{row["id"]}: unknown source kind {kind}')
     url = source['url']
     cache.mkdir(parents=True, exist_ok=True)
+    if cache.is_symlink():
+        raise ValueError(f'{row["id"]}: cache directory must not be a symlink')
     archive = kind == 'zip_member'
     cached = cache / (row['id'] + ('.zip' if archive else '.source'))
-    if cached.exists():
-        verify_file(cached, row, archive=archive)
-    else:
-        download(url, cached, row['max_bytes'])
-        verify_file(cached, row, archive=archive)
-    if not archive:
-        return cached, verify_file(cached, row)
-    member_name = source['member']
-    relative_path(member_name)
-    extracted = cache / (row['id'] + '.exe')
-    with zipfile.ZipFile(cached) as bundle:
-        members = [member for member in bundle.infolist() if member.filename == member_name]
-        if len(members) != 1 or members[0].is_dir() or \
-                stat.S_IFMT(members[0].external_attr >> 16) == stat.S_IFLNK:
-            raise ValueError(f'{row["id"]}: expected one regular {member_name} ZIP member')
-        member = members[0]
-        if member.file_size == 0 or member.file_size > row['max_member_bytes']:
-            raise ValueError(f'{row["id"]}: ZIP member exceeds bounds')
-        temporary = extracted.with_name(extracted.name + '.' + secrets.token_hex(8) + '.part')
+    # The durable cache can be shared by separate owned Spot targets. Hold a
+    # per-input lock through verification and ZIP extraction, never trusting a
+    # canonical entry merely because another run created it.
+    lock_path = cache / (row['id'] + '.lock')
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'rb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if cached.exists() or cached.is_symlink():
+            verify_file(cached, row, archive=archive)
+        else:
+            download(url, cached, row, archive=archive)
+        if not archive:
+            return cached, verify_file(cached, row)
+        member_name = source['member']
+        relative_path(member_name)
+        extracted = cache / (row['id'] + '.exe')
+        with zipfile.ZipFile(cached) as bundle:
+            members = [member for member in bundle.infolist() if member.filename == member_name]
+            if len(members) != 1 or members[0].is_dir() or \
+                    stat.S_IFMT(members[0].external_attr >> 16) == stat.S_IFLNK:
+                raise ValueError(f'{row["id"]}: expected one regular {member_name} ZIP member')
+            member = members[0]
+            if member.file_size == 0 or member.file_size > row['max_member_bytes']:
+                raise ValueError(f'{row["id"]}: ZIP member exceeds bounds')
+            temporary = extracted.with_name(extracted.name + '.' + secrets.token_hex(8) + '.part')
+            try:
+                with bundle.open(member) as src, temporary.open('xb') as dst:
+                    total = 0
+                    for block in iter(lambda: src.read(1024 * 1024), b''):
+                        total += len(block)
+                        if total > row['max_member_bytes']:
+                            raise ValueError(f'{row["id"]}: ZIP member exceeds bounds')
+                        dst.write(block)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                if temporary.stat().st_size != member.file_size:
+                    raise ValueError(f'{row["id"]}: ZIP member size changed')
+                verified = verify_file(temporary, row)
+                temporary.replace(extracted)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return extracted, verified
+
+
+def write_receipt_atomic(path: Path, receipt: dict) -> None:
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(8) + '.tmp')
+    try:
+        with temporary.open('x') as output:
+            json.dump(receipt, output, indent=2, sort_keys=True)
+            output.write('\n')
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            with bundle.open(member) as src, temporary.open('xb') as dst:
-                total = 0
-                for block in iter(lambda: src.read(1024 * 1024), b''):
-                    total += len(block)
-                    if total > row['max_member_bytes']:
-                        raise ValueError(f'{row["id"]}: ZIP member exceeds bounds')
-                    dst.write(block)
-            if temporary.stat().st_size != member.file_size:
-                raise ValueError(f'{row["id"]}: ZIP member size changed')
-            temporary.replace(extracted)
+            os.fsync(directory)
         finally:
-            temporary.unlink(missing_ok=True)
-    return extracted, verify_file(extracted, row)
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def native_probe(path: Path, row: dict) -> dict:
@@ -211,7 +250,7 @@ def native_probe(path: Path, row: dict) -> dict:
             'compared_count': len(compared), 'native_field_count': len(nonempty)}
 
 
-def run(manifest: dict, target: Path) -> tuple[Path, dict]:
+def run(manifest: dict, ops: Path) -> tuple[Path, dict]:
     if manifest.get('schema') != 1 or manifest.get('oracle_pin') != '13.59':
         raise ValueError('unsupported ignored-input manifest')
     rows = manifest['inputs']
@@ -219,28 +258,36 @@ def run(manifest: dict, target: Path) -> tuple[Path, dict]:
         raise ValueError('ignored-input manifest must name 25 distinct cases')
     for row in rows:
         relative_path(row['target'])
-    namespace = target / 'ignored-inputs'
-    runs = namespace / 'runs'
+    cache = ops / 'cache/ignored-inputs'
+    runs = ops / 'evidence/ignored-inputs/runs'
     runs.mkdir(parents=True, exist_ok=True)
+    if runs.is_symlink():
+        raise ValueError('ignored input evidence directory must not be a symlink')
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run_dir = runs / (stamp + '-' + secrets.token_hex(4))
     run_dir.mkdir()
     receipt = {'schema': 1, 'status': 'FAILED', 'manifest_sha256': digest(MANIFEST),
-               'oracle_pin': manifest['oracle_pin'], 'run_dir': str(run_dir), 'inputs': []}
+               'oracle_pin': manifest['oracle_pin'], 'run_dir': str(run_dir),
+               'evidence_class': ('hosted-ci-scratch' if os.environ.get('GITHUB_ACTIONS') == 'true'
+                                  else 'spot-ops'), 'inputs': []}
+    output = run_dir / 'receipt.json'
+    write_receipt_atomic(output, receipt)
     for row in rows:
         item = {'id': row['id'], 'kind': row['kind'], 'target': row['target'],
-                'source': row['source'], 'status': 'FAILED'}
+                'source': row['source'], 'status': 'FAILED', 'error': 'interrupted before completion'}
+        receipt['inputs'].append(item)
+        write_receipt_atomic(output, receipt)
         try:
-            path, verified = materialize(row, namespace / 'cache')
+            path, verified = materialize(row, cache)
             item.update({'path': str(path), 'verified': verified,
                          'native': native_probe(path, row), 'status': 'PASS'})
+            item.pop('error', None)
         except Exception as error:
             item['error'] = f'{type(error).__name__}: {error}'
-        receipt['inputs'].append(item)
+        write_receipt_atomic(output, receipt)
         print(f'IGNORED_INPUT {row["id"]} {item["status"]}', flush=True)
     receipt['status'] = 'PASS' if all(item['status'] == 'PASS' for item in receipt['inputs']) else 'FAILED'
-    output = run_dir / 'receipt.json'
-    output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+    write_receipt_atomic(output, receipt)
     print(f'IGNORED_INPUT_RECEIPT {output} status={receipt["status"]}', flush=True)
     return output, receipt
 
@@ -258,10 +305,7 @@ def main() -> int:
     if len(sys.argv) != 1:
         raise SystemExit('invalid ignored input probe arguments')
     manifest = json.loads(MANIFEST.read_text())
-    target = Path(os.environ.get('CARGO_TARGET_DIR', '/target'))
-    if not target.is_absolute() or target == Path('/src') or str(target).startswith('/src/'):
-        raise SystemExit('ignored input evidence requires an absolute target outside /src')
-    _, receipt = run(manifest, target)
+    _, receipt = run(manifest, ops_root())
     return 0 if receipt['status'] == 'PASS' else 1
 
 
