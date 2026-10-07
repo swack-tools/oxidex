@@ -329,6 +329,14 @@ _docs-build-worker:
     @echo "Generating documentation..."
     cargo doc --workspace --no-deps
 
+# Build the VitePress website from the signed source on the dedicated Spot builder.
+docs-site-build:
+    python3 tools/remote-build/route.py docs-site-build
+
+_docs-site-build-worker:
+    python3 tools/remote-build/route.py --require-local-context docs-site-build
+    python3 tools/remote-build/docs_site_worker.py
+
 # Run benchmarks
 bench:
     python3 tools/remote-build/route.py bench

@@ -90,6 +90,20 @@ class RouteTests(unittest.TestCase):
         stage.assert_not_called()
         ci.assert_not_called()
 
+    def test_docs_site_worker_uses_signed_checkout_without_oracle_setup(self):
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout') as stage, \
+             patch.object(route, 'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(os, 'execvp') as launch:
+            route.main(['docs-site-build'])
+        stage.assert_called_once_with()
+        target.assert_called_once_with()
+        oracle.assert_not_called()
+        self.assertEqual(launch.call_args.args[1], ['just', '_docs-site-build-worker'])
+
     def test_rendered_private_package_keeps_one_literal_cargo_argument(self):
         if shutil.which('just') is None:
             self.skipTest('just is unavailable')
@@ -200,7 +214,7 @@ class RouteTests(unittest.TestCase):
         if shutil.which('just') is None:
             self.skipTest('just is unavailable')
         repository = Path(__file__).resolve().parents[3]
-        for recipe in ('ci', 'ci-standard', 'pre-commit', 'docs-build'):
+        for recipe in ('ci', 'ci-standard', 'pre-commit', 'docs-build', 'docs-site-build'):
             with self.subTest(recipe=recipe):
                 rendered = subprocess.run(['just', '--dry-run', recipe], cwd=repository,
                                           capture_output=True, text=True, check=True).stderr
@@ -219,6 +233,11 @@ class RouteTests(unittest.TestCase):
         docs = subprocess.run(['just', '--dry-run', '_docs-build-worker'], cwd=repository,
                               capture_output=True, text=True, check=True).stderr
         self.assertIn('cargo doc --workspace --no-deps', docs)
+        website = subprocess.run(['just', '--dry-run', '_docs-site-build-worker'], cwd=repository,
+                                 capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py --require-local-context docs-site-build', website)
+        self.assertIn('python3 tools/remote-build/docs_site_worker.py', website)
+        self.assertNotIn('cargo doc', website)
         for recipe, ordered in (
             ('ci-standard', ('cargo fmt --all -- --check',
                              'Checking C header is up-to-date',

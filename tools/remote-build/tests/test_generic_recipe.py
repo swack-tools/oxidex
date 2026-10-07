@@ -375,6 +375,17 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
         self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
 
+    def test_docs_site_build_uses_signed_packet_and_names_retained_snapshot(self):
+        receipt, commands, _, extras, heads = self.exercise(0, recipe='docs-site-build')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['docs_site_snapshot_path'],
+                         receipt['remote_paths']['target'] + '/docs-site')
+        self.assertNotIn('rustdoc_path', receipt)
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
+
     def test_ssh_255_retains_unknown_and_never_retries_or_cleans(self):
         receipt,commands,_,_,_=self.exercise(255)
         self.assertEqual(receipt['recipe_state'],'UNKNOWN_RETAINED')
