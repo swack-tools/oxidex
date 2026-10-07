@@ -1805,3 +1805,11 @@ fleet-doctor host:
 # Both paths must be new/real directories below OXIDEX_OPS_DIR as appropriate.
 qualify-remote output reference provisioning:
     python3 tools/remote-build/qualification.py --output '{{output}}' --reference '{{reference}}' --provisioning-reference '{{provisioning}}'
+
+# Produce an unapproved Linux Perl candidate in a fresh ordinary Spot project.
+freeze-linux-perl-remote:
+    python3 tools/release/freeze_linux_perl.py launch
+
+freeze-linux-perl-worker head tree:
+    python3 tools/remote-build/route.py --require-local-context freeze-linux-perl
+    python3 tools/release/freeze_linux_perl.py worker --source-head '{{head}}' --source-tree '{{tree}}'
