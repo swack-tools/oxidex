@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,13 +12,42 @@ SOURCE = Path('/target/checkout')
 OUTPUT = Path('/target/docs-site')
 
 
-def run(source=SOURCE, output=OUTPUT):
+def selected_context():
+    """Use only the route-verified builder checkout or exact Actions workspace."""
+    import route
+
+    if not route.local_worker_context():
+        raise RuntimeError('Docs site worker requires a trusted Spot context')
+    source = Path.cwd()
+    if source == SOURCE and route.trusted_marker(route.BUILDER_MARKER):
+        if not route.verified_fleet_checkout():
+            raise RuntimeError('Docs site worker requires the signed builder checkout')
+        return source, OUTPUT
+
+    route.verify_ci_fleet_checkout()
+    from test_runner import fleet_recipe_target
+    target = fleet_recipe_target()
+    if (target.is_symlink() or target.resolve() != target
+            or target == source or target in source.parents):
+        raise RuntimeError('Docs site CI target is not a separate canonical directory')
+    run_id = os.environ.get('GITHUB_RUN_ID', '')
+    attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    job = os.environ.get('GITHUB_JOB', '')
+    if (not re.fullmatch(r'[0-9]+', run_id) or not re.fullmatch(r'[0-9]+', attempt)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', job)):
+        raise RuntimeError('Docs site CI run identity is incomplete')
+    head = os.environ['GITHUB_SHA']
+    nonce = secrets.token_hex(8)
+    return source, target / 'docs-site' / f'{run_id}-{attempt}-{job}-{head[:12]}-{nonce}'
+
+
+def run(source, output):
     if Path.cwd() != source or source.is_symlink():
-        raise RuntimeError('Docs site worker requires the signed builder checkout')
+        raise RuntimeError('Docs site worker source changed after context verification')
     if output.exists() or output.is_symlink():
         raise RuntimeError(f'Docs site snapshot destination must be new: {output}')
     if shutil.which('node') is None or shutil.which('npm') is None:
-        raise RuntimeError('Docs site build requires Node.js 24 and npm on the Spot builder')
+        raise RuntimeError('Docs site build requires Node.js 24 and npm on the Spot worker')
     version = subprocess.check_output(['node', '--version'], text=True).strip()
     if not re.fullmatch(r'v24\.[0-9]+\.[0-9]+', version):
         raise RuntimeError(f'Docs site build requires Node.js 24, found {version}')
@@ -48,4 +78,4 @@ def run(source=SOURCE, output=OUTPUT):
 
 
 if __name__ == '__main__':
-    run()
+    run(*selected_context())

@@ -7,12 +7,55 @@ import unittest
 from unittest.mock import patch
 
 import docs_site_worker
+import route
 
 HELPER = Path(__file__).resolve().parents[2] / 'docs' / 'dist-sha256.sh'
 REAL_RUN = subprocess.run
 
 
 class DocsSiteWorkerTests(unittest.TestCase):
+    def test_verified_actions_checkout_gets_unique_target_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory).resolve() / 'checkout'
+            source.mkdir()
+            target = source / 'target'
+            env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
+                   'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_JOB': 'docs-build'}
+            with patch.dict(docs_site_worker.os.environ, env), \
+                 patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=False), \
+                 patch.object(route, 'verify_ci_fleet_checkout') as verified, \
+                 patch.object(docs_site_worker.secrets, 'token_hex',
+                              side_effect=['b' * 16, 'c' * 16]), \
+                 patch('test_runner.fleet_recipe_target', return_value=target):
+                selected_source, output = docs_site_worker.selected_context()
+                _, second_output = docs_site_worker.selected_context()
+            self.assertEqual(verified.call_count, 2)
+            self.assertEqual(selected_source, source)
+            self.assertEqual(output, target / 'docs-site' /
+                             '123-2-docs-build-aaaaaaaaaaaa-bbbbbbbbbbbbbbbb')
+            self.assertNotEqual(second_output, output)
+            output.mkdir(parents=True)
+            with patch.object(docs_site_worker.Path, 'cwd', return_value=source):
+                with self.assertRaisesRegex(RuntimeError, 'destination must be new'):
+                    docs_site_worker.run(selected_source, output)
+
+    def test_builder_context_keeps_retained_target(self):
+        with patch.object(docs_site_worker.Path, 'cwd', return_value=docs_site_worker.SOURCE), \
+             patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'verified_fleet_checkout', return_value=True):
+            self.assertEqual(docs_site_worker.selected_context(),
+                             (docs_site_worker.SOURCE, docs_site_worker.OUTPUT))
+
+    def test_untrusted_context_refuses_before_checkout_verification(self):
+        with patch.object(route, 'local_worker_context', return_value=False), \
+             patch.object(route, 'verify_ci_fleet_checkout') as verify:
+            with self.assertRaisesRegex(RuntimeError, 'trusted Spot context'):
+                docs_site_worker.selected_context()
+            verify.assert_not_called()
+
     def test_requires_node_24_before_build(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'source'
