@@ -22,7 +22,8 @@ SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored', 'freeze-linux-perl'})
+FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
+                           'freeze-linux-perl', 'verify-linux-perl'})
 
 
 def pinned_toolchain(source):

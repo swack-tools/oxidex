@@ -8,6 +8,8 @@ import stat
 import subprocess
 import sys
 
+from lib.remote_build import FLEET_RECIPES
+
 HERE = Path(__file__).resolve().parent
 RECIPE = re.compile(r'[a-z][a-z0-9_-]{0,63}\Z')
 ORACLE_TEST_RECIPES = frozenset({
@@ -15,8 +17,6 @@ ORACLE_TEST_RECIPES = frozenset({
     'test-integration', 'test-ffi-c', 'test-comparison', 'test-doc',
     'test-package', 'test-tags', 'test-ignored', 'prepare-ignored-inputs', 'ci',
 })
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
-                           'freeze-linux-perl', 'verify-linux-perl'})
 FLEET_SOURCE = Path('/src')
 FLEET_CHECKOUT = Path('/target/checkout')
 FLEET_CARGO_TARGET = Path('/target/cargo')

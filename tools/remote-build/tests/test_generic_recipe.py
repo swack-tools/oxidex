@@ -12,9 +12,21 @@ import shutil
 import subprocess
 
 from lib import remote_build
+import route
 
 
 class GenericRecipeTests(unittest.TestCase):
+    def test_linux_perl_route_and_packet_share_fleet_policy(self):
+        self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
+        receipt, commands, _, extras, heads = self.exercise(0, 'verify-linux-perl')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['fleet_source_bundle_sha256'],
+                         hashlib.sha256(b'synthetic signed bundle').hexdigest())
+        self.assertTrue(any('bundle' in command and 'create' in command
+                            for command in commands))
+
     def test_perl_candidate_retrieval_checks_both_durable_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
