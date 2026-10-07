@@ -187,6 +187,36 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
         self.assertEqual(webm['sha256'],
                          'c6a21a3a7619ca7fbcbc1b4d012d7098d18f599f0200f735d31cae15a4772dd1')
 
+    def test_aac_manifest_requires_both_native_fields_and_consumer_comparisons(self):
+        manifest = json.loads(probe.MANIFEST.read_text())
+        row = next(item for item in manifest['inputs'] if item['id'] == 'media-aac')
+        self.assertEqual(row['required_tags'], ['AAC:Channels', 'AAC:SampleRate'])
+        self.assertEqual(row['expected_values'], {'AAC:Channels': 2,
+                                                  'AAC:SampleRate': 44100})
+        consumer = (probe.ROOT / 'tests/integration/aac_integration_tests.rs').read_text()
+        self.assertIn('("AAC:Channels", "2")', consumer)
+        self.assertIn('("AAC:SampleRate", "44100")', consumer)
+        self.assertNotIn('AAC:AudioChannels', consumer)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / 'perl'; perl.touch()
+            (root / 'exiftool').mkdir(); (root / 'exiftool/exiftool').touch()
+            env = {'EXIFTOOL_CACHE_DIR': str(root), 'EXIFTOOL_PERL': str(perl)}
+            def outcome(fields):
+                return subprocess.CompletedProcess([], 0, json.dumps([fields]), '')
+            native = {'AAC:Channels': 2, 'AAC:SampleRate': 44100}
+            with patch.dict(os.environ, env), patch.object(probe.subprocess, 'run',
+                    return_value=outcome(native)):
+                result = probe.native_probe(root / 'sample.aac', row)
+            self.assertEqual(result['compared_fields'], native)
+            for fields in ({'AAC:SampleRate': 44100},
+                           {'AAC:Channels': 2},
+                           {'AAC:Channels': 1, 'AAC:SampleRate': 44100}):
+                with self.subTest(fields=fields), patch.dict(os.environ, env), \
+                     patch.object(probe.subprocess, 'run', return_value=outcome(fields)):
+                    with self.assertRaisesRegex(ValueError, 'native AAC:'):
+                        probe.native_probe(root / 'sample.aac', row)
+
     def test_native_media_zero_fields_and_raw_identity_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

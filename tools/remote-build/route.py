@@ -48,8 +48,11 @@ def verified_fleet_checkout() -> bool:
         return False
     verify_staged_checkout(FLEET_CHECKOUT, head, signers,
                            None, hashlib.sha256(bundle.read_bytes()).hexdigest())
-    return not subprocess.check_output(
-        ['git', '-C', str(FLEET_CHECKOUT), 'status', '--porcelain', '--untracked-files=all'])
+    if subprocess.check_output(
+            ['git', '-C', str(FLEET_CHECKOUT), 'status', '--porcelain', '--untracked-files=all']):
+        return False
+    _verify_signed_worktree(FLEET_CHECKOUT, head)
+    return True
 
 
 def prepare_fleet_checkout() -> None:

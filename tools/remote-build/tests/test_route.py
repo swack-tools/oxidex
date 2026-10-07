@@ -300,8 +300,18 @@ class RouteTests(unittest.TestCase):
             source, checkout = root / 'source', root / 'checkout'
             source.mkdir()
             subprocess.run(['git', 'init', '-q', str(source)], check=True)
+            required = ('justfile', 'rust-toolchain.toml',
+                        'tools/remote-build/route.py',
+                        'tools/remote-build/qualification_bootstrap.py',
+                        'tools/remote-build/qualification_source.py',
+                        'tools/remote-build/test_runner.py',
+                        'tools/release/bootstrap_oracle.py')
+            for name in required:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name + '\n')
             (source / 'sample').write_text('source')
-            subprocess.run(['git', '-C', str(source), 'add', 'sample'], check=True)
+            subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
             subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
                             '-c', 'user.email=fixture@example.invalid', 'commit', '-q',
                             '-m', 'Route SWF'], check=True)
@@ -319,6 +329,20 @@ class RouteTests(unittest.TestCase):
                     route.prepare_fleet_checkout()
                     self.assertTrue(check_history(checkout, {'formats': ['SWF']}).hit)
                     self.assertEqual(verify.call_args.args[0:2], (checkout, head))
+                    subprocess.run(['git', '-C', str(checkout), 'update-index', '--assume-unchanged', 'sample'], check=True)
+                    (checkout / 'sample').write_text('hidden bytes')
+                    self.assertEqual(subprocess.check_output(
+                        ['git', '-C', str(checkout), 'status', '--porcelain']).strip(), b'')
+                    with self.assertRaisesRegex(RuntimeError, 'differs from selected HEAD: sample'):
+                        route.verified_fleet_checkout()
+                    (checkout / 'sample').write_text('source')
+                    subprocess.run(['git', '-C', str(checkout), 'update-index', '--no-assume-unchanged', 'sample'], check=True)
+                    subprocess.run(['git', '-C', str(checkout), 'update-index', '--skip-worktree', 'sample'], check=True)
+                    (checkout / 'sample').chmod(0o755)
+                    self.assertEqual(subprocess.check_output(
+                        ['git', '-C', str(checkout), 'status', '--porcelain']).strip(), b'')
+                    with self.assertRaisesRegex(RuntimeError, 'differs from selected HEAD: sample'):
+                        route.verified_fleet_checkout()
             finally:
                 os.chdir(old_cwd)
 

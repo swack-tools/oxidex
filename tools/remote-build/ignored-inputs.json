@@ -39,9 +39,13 @@
       "id": "media-aac",
       "kind": "media",
       "required_tags": [
-        "AAC:AudioChannels",
+        "AAC:Channels",
         "AAC:SampleRate"
       ],
+      "expected_values": {
+        "AAC:Channels": 2,
+        "AAC:SampleRate": 44100
+      },
       "sha256": "5eac3eb5435a37bcaaf4f81eb0f37e487e50b65b67d486ac7d671c3f0a1d4671",
       "source": {
         "kind": "pinned",
