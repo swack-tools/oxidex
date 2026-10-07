@@ -8,9 +8,9 @@ from .config import approved_instances, builder_instance_name, matching_approval
 from .resource_metrics import read_utilization
 from . import ssh_transport
 
-# Exact launcher bytes provisioned by spot-github-runners' builder_assets.py.
+# Exact qualification-aware launcher from spot-github-runners c259eb5676c2.
 # The launcher has no version verb, so update this digest with its protocol.
-LAUNCHER_SHA256 = '9b7e25c0ed1f2817f4704b9071b7bf03e5717d04dde66107de4c2e5334c9d104'
+LAUNCHER_SHA256 = '33d8d0f007e9c306ff31b5459221a4714e41f6bb6a4af4032bdb2b47382d92c4'
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 
