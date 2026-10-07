@@ -95,6 +95,32 @@ class RouteTests(unittest.TestCase):
             route.main(['test-package','abc'])
         self.assertEqual(launch.call_args.args[1],['just','_test-package-worker','abc'])
 
+    def test_ignored_suite_dispatches_to_existing_remote_client(self):
+        with patch.object(route, 'local_worker_context', return_value=False), \
+             patch.object(os, 'execv') as launch:
+            route.main(['test-ignored'])
+        self.assertEqual(launch.call_args.args[1][-2:], ['--just-recipe', 'test-ignored'])
+
+    def test_ignored_suite_routes_through_oracle_and_private_worker(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('recipe')) as launch:
+            route.main(['test-ignored'])
+        self.assertEqual(events, ['oracle', 'recipe'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_test-ignored-worker'])
+
+    def test_ignored_suite_renders_guarded_full_workspace_command(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        rendered = subprocess.run(['just', '--dry-run', '_test-ignored-worker'],
+                                  cwd=repository, capture_output=True, text=True, check=True)
+        self.assertEqual(rendered.stderr.splitlines(), [
+            'python3 tools/remote-build/route.py --require-local-context',
+            'CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --release --workspace --all-features --locked --no-fail-fast -- --include-ignored',
+        ])
+
     def test_test_worker_provisions_oracle_before_original_recipe(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \

@@ -54,6 +54,14 @@ _test-worker:
     cargo test --all-features --features tag-comparison-binary --doc
     just test-remote-build
 
+# Run the full beta.1 ignored test suite on the Spot builder.
+test-ignored:
+    python3 tools/remote-build/route.py test-ignored
+
+_test-ignored-worker:
+    python3 tools/remote-build/route.py --require-local-context
+    {{unwind}} cargo test --release --workspace --all-features --locked --no-fail-fast -- --include-ignored
+
 # Run the repository-owned remote-builder client tests.
 test-remote-build:
     python3 tools/remote-build/route.py test-remote-build
