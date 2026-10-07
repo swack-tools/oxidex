@@ -49,6 +49,7 @@ const EBML_SIGNATURE: &[u8] = b"\x1A\x45\xDF\xA3";
 // EBML Element IDs (as variable-length integers)
 const EBML_HEADER: u32 = 0x1A45DFA3;
 const EBML_DOC_TYPE: u32 = 0x4282;
+const EBML_DOC_TYPE_VERSION: u32 = 0x4287;
 
 // Matroska Segment Elements
 const SEGMENT: u32 = 0x18538067;
@@ -100,9 +101,9 @@ impl FormatParser for WebmParser {
 
             // Parse EBML header to verify it's a WebM file
             match parse_ebml_header(reader, 0, &mut metadata) {
-                Ok(_) => {
+                Ok(segment_offset) => {
                     // Verify this is actually WebM (DocType should be "webm")
-                    if let Some(TagValue::String(doc_type)) = metadata.get("WebM:DocType") {
+                    if let Some(TagValue::String(doc_type)) = metadata.get("Matroska:DocType") {
                         if doc_type != "webm" {
                             return Err(ExifToolError::parse_error(format!(
                                 "Invalid WebM DocType: expected 'webm', found '{}'",
@@ -112,12 +113,13 @@ impl FormatParser for WebmParser {
                     } else {
                         return Err(ExifToolError::parse_error("Missing WebM DocType"));
                     }
+
+                    // The EBML header has variable length; the Segment starts
+                    // after its declared payload, not at a fixed byte offset.
+                    parse_segment(reader, segment_offset, reader.size(), &mut metadata)?;
                 }
                 Err(e) => return Err(e),
             }
-
-            // Parse the Segment for audio/video information
-            parse_segment(reader, 12, reader.size(), &mut metadata)?;
 
             Ok(metadata)
         })
@@ -151,10 +153,24 @@ fn parse_ebml_header(
             Ok((elem_id, elem_size, hdr_size)) => {
                 let data_offset = offset + hdr_size;
 
-                if elem_id == EBML_DOC_TYPE {
-                    if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
-                        metadata.insert("WebM:DocType".to_string(), TagValue::new_string(value));
+                match elem_id {
+                    EBML_DOC_TYPE => {
+                        if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
+                            metadata.insert(
+                                "Matroska:DocType".to_string(),
+                                TagValue::new_string(value),
+                            );
+                        }
                     }
+                    EBML_DOC_TYPE_VERSION => {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                            metadata.insert(
+                                "Matroska:DocTypeVersion".to_string(),
+                                TagValue::new_integer(value as i64),
+                            );
+                        }
+                    }
+                    _ => {}
                 }
 
                 offset = data_offset + elem_size;
@@ -656,7 +672,9 @@ mod tests {
         let reader = TestReader::from_slice(&data);
         let parser = WebmParser;
         let result = parser.parse(&reader);
-        assert!(result.is_ok());
+        let metadata = result.expect("valid WebM header");
+        assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+        assert_eq!(metadata.get_integer("Matroska:DocTypeVersion"), Some(4));
     }
 
     #[test]

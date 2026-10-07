@@ -61,9 +61,10 @@ fn test_webm_metadata_parity_with_exiftool() {
     let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
-        if exiftool_value.is_null() {
-            continue; // Skip tags not present in test file
-        }
+        assert!(
+            !exiftool_value.is_null(),
+            "required native Matroska tag absent from authentic fixture: {tag}"
+        );
 
         let oxidex_value = oxidex_metadata.get(tag);
 
