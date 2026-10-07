@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -89,8 +90,8 @@ class DocsSiteWorkerTests(unittest.TestCase):
         self.assertEqual(child['GIT_CONFIG_SYSTEM'], os.devnull)
         self.assertEqual((child['DOCS_CHANNEL'], child['DOCS_BASE']), ('stable', '/'))
         self.assertEqual(child['HOME'], '/trusted/home')
-        self.assertEqual(child['NPM_CONFIG_USERCONFIG'], os.devnull)
-        self.assertEqual(child['NPM_CONFIG_GLOBALCONFIG'], os.devnull)
+        self.assertEqual(child['NPM_CONFIG_USERCONFIG'], '/trusted/home/npm-user.npmrc')
+        self.assertEqual(child['NPM_CONFIG_GLOBALCONFIG'], '/trusted/home/npm-global.npmrc')
         self.assertEqual(child['NPM_CONFIG_CACHE'], '/trusted/home/npm-cache')
         self.assertEqual(set(child), {
             'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
@@ -99,11 +100,63 @@ class DocsSiteWorkerTests(unittest.TestCase):
             'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_CACHE',
         })
 
-    def test_relative_or_empty_path_component_refuses(self):
-        for value in ('', 'bin:/usr/bin', '/usr/bin::/bin'):
-            with self.subTest(path=value), patch.dict(os.environ, {'PATH': value}):
-                with self.assertRaisesRegex(RuntimeError, 'absolute trusted PATH'):
-                    docs_site_worker.build_environment(Path('/trusted/home'))
+    def test_absolute_writable_ambient_path_cannot_select_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory).resolve() / 'node'
+            fake.write_text('#!/bin/sh\necho hostile\n')
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': str(fake.parent) + ':/usr/bin'}):
+                child = docs_site_worker.build_environment(Path('/trusted/home'))
+            self.assertEqual(child['PATH'], docs_site_worker.RUNTIME_PATH)
+            self.assertNotIn(str(fake.parent), child['PATH'])
+            self.assertFalse(docs_site_worker._root_owned_path(fake))
+
+    def test_runtime_tool_selection_requires_approved_root_owned_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory).resolve() / 'runtime'
+            runtime.mkdir()
+            for name in ('node', 'npm', 'git', 'bash'):
+                executable = runtime / name
+                executable.write_text('#!/bin/sh\nexit 0\n')
+                executable.chmod(0o755)
+            with patch.object(docs_site_worker, 'RUNTIME_PATH', str(runtime)):
+                with self.assertRaisesRegex(RuntimeError, 'root-owned approved runtime directory'):
+                    docs_site_worker.verify_runtime_tools()
+                with patch.object(docs_site_worker, '_root_owned_path', return_value=True):
+                    docs_site_worker.verify_runtime_tools()
+            (runtime / 'node').chmod(0o644)
+            with patch.object(docs_site_worker, 'RUNTIME_PATH', str(runtime)), \
+                 patch.object(docs_site_worker, '_root_owned_path', return_value=True):
+                with self.assertRaisesRegex(RuntimeError, 'approved runtime tool: node'):
+                    docs_site_worker.verify_runtime_tools()
+
+    def test_distinct_private_npm_configs_and_actual_config_only_startup(self):
+        if shutil.which('npm') is None or shutil.which('node') is None:
+            self.skipTest('npm and node are required for the config-only startup smoke')
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve() / 'private-home'
+            home.mkdir(mode=0o700)
+            ambient = Path(directory).resolve() / 'ambient-home'
+            ambient.mkdir()
+            (ambient / '.npmrc').write_text('cache=/wrong-cache\n')
+            docs_site_worker.prepare_npm_configs(home)
+            user = home / 'npm-user.npmrc'
+            global_config = home / 'npm-global.npmrc'
+            self.assertNotEqual(user, global_config)
+            for config in (user, global_config):
+                self.assertEqual(config.read_bytes(), b'')
+                self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                docs_site_worker.prepare_npm_configs(home)
+            with patch.dict(os.environ, {'HOME': str(ambient),
+                                      'NPM_CONFIG_USERCONFIG': str(ambient / '.npmrc')}):
+                env = docs_site_worker.build_environment(home)
+                # The Mac's npm needs its own Node directory for this config-only smoke.
+                # Production keeps the fixed approved runtime PATH asserted above.
+                env['PATH'] = str(Path(shutil.which('node')).parent) + os.pathsep + env['PATH']
+                cache = subprocess.check_output([shutil.which('npm'), 'config', 'get', 'cache'],
+                                                env=env, text=True).strip()
+            self.assertEqual(cache, str(home / 'npm-cache'))
 
     def test_real_bash_startup_and_node_preload_cannot_restore_site_url(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -119,7 +172,7 @@ class DocsSiteWorkerTests(unittest.TestCase):
                     ['bash', '-c', 'printf "%s" "${DOCS_STABLE_URL:-}"'],
                     env=child, text=True)
                 node_value = subprocess.check_output(
-                    ['node', '-e', 'process.stdout.write(process.env.DOCS_STABLE_URL||"")'],
+                    [shutil.which('node'), '-e', 'process.stdout.write(process.env.DOCS_STABLE_URL||"")'],
                     env=child, text=True)
             self.assertEqual((bash_value, node_value), ('', ''))
 
@@ -179,7 +232,7 @@ class DocsSiteWorkerTests(unittest.TestCase):
             source.mkdir()
             output = Path(directory).resolve() / 'site'
             with patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
-                 patch.object(docs_site_worker.shutil, 'which', return_value='/fake/bin'), \
+                 patch.object(docs_site_worker, 'verify_runtime_tools'), \
                  patch.object(docs_site_worker.subprocess, 'check_output', return_value='v22.0.0\n'), \
                  patch.object(docs_site_worker.subprocess, 'run') as command:
                 with self.assertRaisesRegex(RuntimeError, 'requires Node.js 24'):
@@ -230,7 +283,7 @@ class DocsSiteWorkerTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
-                 patch.object(docs_site_worker.shutil, 'which', return_value='/fake/bin'), \
+                 patch.object(docs_site_worker, 'verify_runtime_tools'), \
                  patch.object(docs_site_worker.subprocess, 'check_output', side_effect=output_for), \
                  patch.object(docs_site_worker.subprocess, 'run', side_effect=run_command), \
                  patch.dict(os.environ, {'GIT_DIR': '/wrong/repo',

@@ -5,25 +5,66 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 SOURCE = Path('/target/checkout')
 OUTPUT = Path('/target/docs-site')
+# The approved Spot image provides Node/npm here; CI must provide the same runtime.
+RUNTIME_PATH = '/opt/node/bin:/usr/bin:/bin'
+
+
+def _root_owned_path(path):
+    """Refuse writable or non-root-owned lexical and resolved path components."""
+    try:
+        resolved = path.resolve(strict=True)
+        for current_path in (path, resolved):
+            for component in (current_path, *current_path.parents):
+                info = component.lstat()
+                if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode)
+                                        and info.st_mode & 0o022):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def verify_runtime_tools():
+    """Require the approved root-owned runtime before invoking any child."""
+    for directory in RUNTIME_PATH.split(os.pathsep):
+        path = Path(directory)
+        if not path.is_dir() or not _root_owned_path(path):
+            raise RuntimeError(f'Docs site requires a root-owned approved runtime directory: {path}')
+    for name in ('node', 'npm', 'git', 'bash'):
+        resolved = shutil.which(name, path=RUNTIME_PATH)
+        if not resolved or not _root_owned_path(Path(resolved)):
+            raise RuntimeError(f'Docs site requires root-owned approved runtime tool: {name}')
+        info = Path(resolved).stat()
+        if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+            raise RuntimeError(f'Docs site requires executable approved runtime tool: {name}')
 
 
 def build_environment(home):
     """Pass only runtime tool lookup plus fixed Git, npm and site settings."""
-    path = os.environ.get('PATH', '')
-    if not path or any(not Path(part).is_absolute() for part in path.split(os.pathsep)):
-        raise RuntimeError('Docs site worker requires an absolute trusted PATH')
-    return {'PATH': path, 'HOME': str(home), 'TMPDIR': '/tmp',
+    return {'PATH': RUNTIME_PATH, 'HOME': str(home), 'TMPDIR': '/tmp',
             'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC',
             'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
             'GIT_CONFIG_SYSTEM': os.devnull, 'DOCS_CHANNEL': 'stable',
-            'DOCS_BASE': '/', 'NPM_CONFIG_USERCONFIG': os.devnull,
-            'NPM_CONFIG_GLOBALCONFIG': os.devnull,
+            'DOCS_BASE': '/', 'NPM_CONFIG_USERCONFIG': str(home / 'npm-user.npmrc'),
+            'NPM_CONFIG_GLOBALCONFIG': str(home / 'npm-global.npmrc'),
             'NPM_CONFIG_CACHE': str(home / 'npm-cache')}
+
+
+def prepare_npm_configs(home):
+    """Give npm two distinct, empty, private configs without ambient fallback."""
+    for filename in ('npm-user.npmrc', 'npm-global.npmrc'):
+        descriptor = os.open(home / filename,
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
 
 
 def check_output_path(output):
@@ -77,9 +118,9 @@ def run(source, output):
     check_output_path(home)
     home.mkdir(mode=0o700)
     check_output_path(home)
+    prepare_npm_configs(home)
     env = build_environment(home)
-    if shutil.which('node') is None or shutil.which('npm') is None:
-        raise RuntimeError('Docs site build requires Node.js 24 and npm on the Spot worker')
+    verify_runtime_tools()
     version = subprocess.check_output(['node', '--version'], text=True, env=env).strip()
     if not re.fullmatch(r'v24\.[0-9]+\.[0-9]+', version):
         raise RuntimeError(f'Docs site build requires Node.js 24, found {version}')
