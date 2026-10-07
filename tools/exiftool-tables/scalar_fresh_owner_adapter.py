@@ -64,25 +64,76 @@ def native_group1_pair(perl: Path, library: Path, script: Path,
 
 
 
-def compare_group1_with_proven_strip_relocation(seed: dict, expected: dict, actual: dict,
-                                                carrier: str, native_values: dict,
-                                                actual_values: dict) -> dict:
-    """Permit only an authenticated TIFF strip-address change after physical proof.
+def compare_group1_with_proven_pointer_relocation(seed: dict, expected: dict, actual: dict,
+                                                  carrier: str, native_values: dict,
+                                                  actual_values: dict) -> dict:
+    """Permit only authenticated TIFF strip or JPEG thumbnail relocation.
 
     The caller must first run compare_carrier, which proves exact strip payload
     bytes, all other TIFF entries, and directory topology. These explicit
     checks bind each displayed native -n address to its own parsed physical
     tag, so a dropped or fabricated Group1 field cannot be normalized away.
     """
-    if native_values == actual_values:
+    jpeg_thumbnail_present = (carrier == "jpeg" and any(
+        (document.get("exif") or {}).get("children", {}).get("NextIFD", {}).get("tags", {}).get("513")
+        for document in (seed, expected, actual)))
+    if native_values == actual_values and not jpeg_thumbnail_present:
         return {"policy": "exact_group1", "match": True}
+    differing = {name for name in native_values.keys() | actual_values.keys()
+                 if native_values.get(name) != actual_values.get(name)}
+    if carrier == "jpeg":
+        key = "IFD1:ThumbnailOffset"
+        if key not in native_values or key not in actual_values or differing not in (set(), {key}):
+            raise AssertionError("pinned native Group1 readback differs outside JPEG thumbnail relocation")
+        physical = {}
+        payloads = []
+        for label, document, readback in (("seed", seed, None),
+                                          ("native", expected, native_values),
+                                          ("candidate", actual, actual_values)):
+            exif = document.get("exif")
+            thumbnail = exif.get("children", {}).get("NextIFD") if isinstance(exif, dict) else None
+            pointer = thumbnail.get("tags", {}).get("513") if isinstance(thumbnail, dict) else None
+            length = thumbnail.get("tags", {}).get("514") if isinstance(thumbnail, dict) else None
+            base, tiff_length = document.get("exif_tiff_base"), document.get("exif_tiff_length")
+            if (not isinstance(pointer, dict) or pointer.get("type") != 4
+                    or type(pointer.get("count")) is not int or pointer["count"] != 1
+                    or not isinstance(length, dict) or length.get("type") != 4
+                    or type(length.get("count")) is not int or length["count"] != 1
+                    or type(base) is not int or type(tiff_length) is not int or base < 0 or tiff_length <= 0
+                    or thumbnail.get("thumbnail_payload_hex") is None):
+                raise AssertionError("JPEG thumbnail relocation lacks LONG pointer, length, or payload")
+            pointer_bytes = bytes.fromhex(pointer["value_hex"])
+            length_bytes = bytes.fromhex(length["value_hex"])
+            if len(pointer_bytes) != 4 or len(length_bytes) != 4:
+                raise AssertionError("JPEG thumbnail relocation has malformed physical pointer or length")
+            offset = int.from_bytes(pointer_bytes, thumbnail["byte_order"])
+            byte_count = int.from_bytes(length_bytes, thumbnail["byte_order"])
+            payload = bytes.fromhex(thumbnail["thumbnail_payload_hex"])
+            if offset < 8 or byte_count <= 0 or offset + byte_count > tiff_length or len(payload) != byte_count:
+                raise AssertionError("JPEG thumbnail relocation has out-of-bounds or changed referenced payload")
+            if readback is not None:
+                displayed = readback[key]
+                displayed_length = readback.get("IFD1:ThumbnailLength")
+                if (type(displayed) is not int or displayed != base + offset
+                        or type(displayed_length) is not int or displayed_length != byte_count
+                        or not readback.get("IFD1:ThumbnailImage")):
+                    raise AssertionError("JPEG thumbnail Group1 pointer or length disagrees with physical bytes")
+            payloads.append(payload)
+            physical[label] = {"tiff_base": base, "physical_address": offset,
+                               "displayed_address": base + offset, "type": pointer["type"],
+                               "count": pointer["count"], "byte_count": byte_count,
+                               "referenced_payload_sha256": hashlib.sha256(payload).hexdigest()}
+        if payloads[0] != payloads[1] or payloads[1] != payloads[2]:
+            raise AssertionError("JPEG thumbnail referenced payload differs across seed/native/candidate")
+        return {"policy": ("IFD1:ThumbnailOffset physical relocation only" if differing
+                           else "exact_group1_thumbnail_bound"), "match": True,
+                "readback": {"native": native_values[key], "candidate": actual_values[key]},
+                "physical": physical, "other_group1_keys_equal": True}
     key = "IFD0:StripOffsets"
     if carrier not in ("tiff_little", "tiff_big"):
         raise AssertionError("pinned native Group1 readback differs outside TIFF strip relocation")
     if key not in native_values or key not in actual_values:
         raise AssertionError("TIFF strip relocation lacks native or candidate Group1 pointer")
-    differing = {name for name in native_values.keys() | actual_values.keys()
-                 if native_values.get(name) != actual_values.get(name)}
     if differing != {key}:
         raise AssertionError("pinned native Group1 readback differs outside IFD0:StripOffsets")
     offsets = {}
@@ -365,7 +416,7 @@ def score(args) -> int:
                 native_values, actual_values = native_group1_pair(Path(manifest["perl"]), Path(manifest["library"]),
                                                                    Path(manifest["script"]), Path(row["expected"]),
                                                                    output, native)
-                detail["group1"] = compare_group1_with_proven_strip_relocation(
+                detail["group1"] = compare_group1_with_proven_pointer_relocation(
                     seed, expected, actual, row["carrier"], native_values, actual_values)
             except (AssertionError, ValueError, RuntimeError, OSError) as error:
                 status, detail = "failed", {"error": str(error), **detail}

@@ -533,6 +533,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
         raise ValueError("not a JPEG SOI")
     position = 2
     exif: dict[str, Any] | None = None
+    exif_tiff_base: int | None = None
+    exif_tiff_length: int | None = None
     sos_tail: bytes | None = None
     non_exif_parts = [data[:2]]
     while position < len(data):
@@ -564,6 +566,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
             if exif is not None:
                 raise ValueError("ambiguous multiple JPEG EXIF segments")
             exif = parse_tiff(payload[6:], require_strip=False)
+            exif_tiff_base = position + 8
+            exif_tiff_length = len(payload) - 6
             # Preserve marker fill bytes, which precede the final FF marker.
             non_exif_parts.append(data[marker_start:position - 2])
         else:
@@ -574,7 +578,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
     return {"sha256": hashlib.sha256(data).hexdigest(),
             "sos_to_end_sha256": hashlib.sha256(sos_tail).hexdigest(),
             "non_exif_sha256": hashlib.sha256(b"".join(non_exif_parts)).hexdigest(),
-            "sos_to_end_length": len(sos_tail), "exif": exif}
+            "sos_to_end_length": len(sos_tail), "exif": exif,
+            "exif_tiff_base": exif_tiff_base, "exif_tiff_length": exif_tiff_length}
 
 
 def inspect(path: Path, carrier: str) -> dict[str, Any]:
