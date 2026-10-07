@@ -209,13 +209,57 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
                     return_value=outcome(native)):
                 result = probe.native_probe(root / 'sample.aac', row)
             self.assertEqual(result['compared_fields'], native)
-            for fields in ({'AAC:SampleRate': 44100},
-                           {'AAC:Channels': 2},
-                           {'AAC:Channels': 1, 'AAC:SampleRate': 44100}):
+            for fields, error in (({'AAC:SampleRate': 44100}, 'missing native fields'),
+                                  ({'AAC:Channels': 2}, 'missing native fields'),
+                                  ({'AAC:Channels': 1, 'AAC:SampleRate': 44100}, 'native AAC:')):
                 with self.subTest(fields=fields), patch.dict(os.environ, env), \
                      patch.object(probe.subprocess, 'run', return_value=outcome(fields)):
-                    with self.assertRaisesRegex(ValueError, 'native AAC:'):
+                    with self.assertRaisesRegex(ValueError, error):
                         probe.native_probe(root / 'sample.aac', row)
+
+    def test_every_declared_media_field_is_required_by_native_admission(self):
+        manifest = json.loads(probe.MANIFEST.read_text())
+        media_rows = [row for row in manifest['inputs'] if row['kind'] == 'media']
+        self.assertEqual(len(media_rows), 12)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / 'perl'; perl.touch()
+            (root / 'exiftool').mkdir(); (root / 'exiftool/exiftool').touch()
+            env = {'EXIFTOOL_CACHE_DIR': str(root), 'EXIFTOOL_PERL': str(perl)}
+            for row in media_rows:
+                required = row['required_tags']
+                self.assertTrue(required, row['id'])
+                self.assertEqual(len(required), len(set(required)), row['id'])
+                fields = {tag: row.get('expected_values', {}).get(tag, 'native-value')
+                          for tag in required}
+                def outcome(values):
+                    return subprocess.CompletedProcess([], 0, json.dumps([values]), '')
+                with self.subTest(row=row['id']), patch.dict(os.environ, env), \
+                     patch.object(probe.subprocess, 'run', return_value=outcome(fields)):
+                    self.assertEqual(probe.native_probe(root / 'media', row)['compared_count'],
+                                     len(required))
+                for missing in required:
+                    partial = {tag: value for tag, value in fields.items() if tag != missing}
+                    with self.subTest(row=row['id'], missing=missing), patch.dict(os.environ, env), \
+                         patch.object(probe.subprocess, 'run', return_value=outcome(partial)):
+                        with self.assertRaisesRegex(ValueError,
+                                'missing native fields' if partial else 'zero native fields'):
+                            probe.native_probe(root / 'media', row)
+                with self.subTest(row=row['id'], missing='all'), patch.dict(os.environ, env), \
+                     patch.object(probe.subprocess, 'run', return_value=outcome({'File:FileType': 'media'})):
+                    with self.assertRaisesRegex(ValueError, 'zero native fields'):
+                        probe.native_probe(root / 'media', row)
+
+    def test_ogg_and_opus_channel_names_match_consumers(self):
+        manifest = json.loads(probe.MANIFEST.read_text())
+        by_id = {row['id']: row for row in manifest['inputs']}
+        self.assertIn('Vorbis:AudioChannels', by_id['media-ogg']['required_tags'])
+        self.assertIn('Opus:AudioChannels', by_id['media-opus']['required_tags'])
+        ogg = (probe.ROOT / 'tests/integration/ogg_integration_tests.rs').read_text()
+        opus = (probe.ROOT / 'tests/integration/opus_integration_tests.rs').read_text()
+        self.assertIn('"Vorbis:AudioChannels"', ogg)
+        self.assertIn('"Opus:AudioChannels"', opus)
+        self.assertNotIn('"Vorbis:Channels"', ogg)
 
     def test_native_media_zero_fields_and_raw_identity_refuse(self):
         with tempfile.TemporaryDirectory() as directory:

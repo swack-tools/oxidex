@@ -181,6 +181,9 @@ def native_probe(path: Path, row: dict) -> dict:
         compared = {key: nonempty[key] for key in required if key in nonempty}
         if not compared:
             raise ValueError(f'{row["id"]}: zero native fields from {required}')
+        missing = [key for key in required if key not in compared]
+        if missing:
+            raise ValueError(f'{row["id"]}: missing native fields {missing}')
         for key, value in row.get('expected_values', {}).items():
             if compared.get(key) != value:
                 raise ValueError(f'{row["id"]}: native {key} is {compared.get(key)!r}, expected {value!r}')

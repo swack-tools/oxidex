@@ -56,14 +56,15 @@ fn test_ogg_metadata_parity_with_exiftool() {
     let oxidex_metadata = parse_ogg_metadata(&reader).expect("Failed to parse OGG file");
 
     // Compare key tags
-    let tags_to_compare = ["Vorbis:SampleRate", "Vorbis:Channels"];
+    let tags_to_compare = ["Vorbis:SampleRate", "Vorbis:AudioChannels"];
 
     let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
-        if exiftool_value.is_null() {
-            continue; // Skip tags not present in test file
-        }
+        assert!(
+            !exiftool_value.is_null(),
+            "required native Ogg tag absent from authentic fixture: {tag}"
+        );
 
         let oxidex_value = oxidex_metadata.get(tag);
 
@@ -80,8 +81,9 @@ fn test_ogg_metadata_parity_with_exiftool() {
         );
         compared += 1;
     }
-    assert!(
-        compared > 0,
-        "no OGG tags compared with ExifTool for {test_file}"
+    assert_eq!(
+        compared,
+        tags_to_compare.len(),
+        "not every required Ogg tag was compared for {test_file}"
     );
 }

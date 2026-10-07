@@ -180,7 +180,7 @@
       "kind": "media",
       "required_tags": [
         "Vorbis:SampleRate",
-        "Vorbis:Channels"
+        "Vorbis:AudioChannels"
       ],
       "sha256": "4a11129f8cac7e53bca5eb9107ec660681cb7992881951e87654e76b57272ad1",
       "source": {
@@ -196,7 +196,7 @@
       "kind": "media",
       "required_tags": [
         "Opus:OpusVersion",
-        "Opus:Channels"
+        "Opus:AudioChannels"
       ],
       "sha256": "21dad35dfc1dc0529a9c9a01b6243f6d6e1dcef91026a812291be71aefa62f53",
       "source": {
