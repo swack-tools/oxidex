@@ -26,6 +26,40 @@ from native_write_matrix import parse_tiff
 
 
 class GeneratedTiffComparison(unittest.TestCase):
+    def test_jpeg_thumbnail_relocation_requires_same_referenced_bytes_and_length(self):
+        def carrier(offset=56, payload=b'THUMB', label=b'a', byte_count=None):
+            count = len(payload) if byte_count is None else byte_count
+            root = (b'II\x2a\0\x08\0\0\0' + (1).to_bytes(2, 'little')
+                    + (315).to_bytes(2, 'little') + (2).to_bytes(2, 'little')
+                    + (2).to_bytes(4, 'little') + label + b'\0\0\0'
+                    + (26).to_bytes(4, 'little'))
+            child = ((2).to_bytes(2, 'little')
+                     + (513).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + offset.to_bytes(4, 'little')
+                     + (514).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + count.to_bytes(4, 'little')
+                     + bytes(4))
+            return root + child + bytes(offset - len(root) - len(child)) + payload
+
+        seed = parse_tiff(carrier(), False)
+        native_relocated = parse_tiff(carrier(64, label=b'b'), False)
+        generated = parse_tiff(carrier(label=b'b'), False)
+        compare(seed, native_relocated, generated, 315)
+        self.assertEqual(seed['children']['NextIFD']['thumbnail_payload_hex'],
+                         native_relocated['children']['NextIFD']['thumbnail_payload_hex'])
+        with self.assertRaisesRegex(AssertionError, 'thumbnail payload'):
+            compare(seed, native_relocated, parse_tiff(carrier(label=b'b', payload=b'WRONG'), False), 315)
+        with self.assertRaisesRegex(AssertionError, 'thumbnail payload'):
+            compare(seed, native_relocated, parse_tiff(carrier(label=b'b', byte_count=4), False), 315)
+        out_of_bounds = bytearray(carrier())
+        out_of_bounds[36:40] = (500).to_bytes(4, 'little')
+        with self.assertRaisesRegex(ValueError, 'thumbnail payload'):
+            parse_tiff(bytes(out_of_bounds), False)
+        malformed = bytearray(carrier())
+        malformed[42:44] = (3).to_bytes(2, 'little')  # tag 514 type
+        with self.assertRaisesRegex(ValueError, 'thumbnail offset/length pair'):
+            parse_tiff(bytes(malformed), False)
+
     def test_predecessor_cohort_refuses_a_retired_identity(self):
         target = GeneratedTarget(315, "Artist", "EXIF", "IFD0")
         cohort = [{"raw_tag_id": 315, "name": "Artist", "group0": "EXIF", "write_group": "IFD0"}]
