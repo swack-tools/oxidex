@@ -21,6 +21,39 @@ spec.loader.exec_module(freeze)
 
 
 class FreezePerlTests(unittest.TestCase):
+    def test_uploader_export_only_opens_two_files_outside_private_ops(self) -> None:
+        def other_uid_can_read(path: Path, mount: Path) -> bool:
+            current = path.parent
+            while current != mount.parent:
+                if not current.stat().st_mode & stat.S_IXOTH:
+                    return False
+                current = current.parent
+            return bool(path.stat().st_mode & stat.S_IROTH)
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.mkdir(mode=0o755)
+            ops = target / "ops"
+            ops.mkdir(mode=0o700)
+            private = ops / "evidence"
+            private.mkdir(mode=0o700)
+            archive = private / "perl.tar.gz"
+            receipt = private / "candidate-receipt.json"
+            archive.write_bytes(b"candidate bytes")
+            receipt.write_bytes(b'{"status":"candidate"}')
+            self.assertFalse(other_uid_can_read(archive, target))
+            export = target / "perl-candidate-export"
+            freeze.publish_uploader_export(archive, receipt, export)
+            self.assertEqual(sorted(p.name for p in export.iterdir()),
+                             ["candidate-receipt.json", "perl-5.38.2-prefix.tar.gz"])
+            self.assertEqual((export / "perl-5.38.2-prefix.tar.gz").read_bytes(), archive.read_bytes())
+            self.assertEqual((export / "candidate-receipt.json").read_bytes(), receipt.read_bytes())
+            for path in export.iterdir():
+                self.assertTrue(other_uid_can_read(path, target))
+            self.assertEqual(stat.S_IMODE(ops.stat().st_mode), 0o700)
+            with self.assertRaises(freeze.Refused):
+                freeze.publish_uploader_export(archive, receipt, export)
+
     def test_freshness_refuses_existing_root_before_import_or_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
