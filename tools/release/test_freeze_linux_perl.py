@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import stat
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -21,6 +23,33 @@ spec.loader.exec_module(freeze)
 
 
 class FreezePerlTests(unittest.TestCase):
+    def test_hostile_perl_environment_is_removed_before_oracle_load(self) -> None:
+        hostile = {key: "hostile" for key in freeze.PERL_ENV_KEYS}
+        with mock.patch.dict(os.environ, {**hostile, "PRODUCER_KEEP": "yes"}):
+            with mock.patch.object(freeze, "_load_oracle", wraps=freeze._load_oracle) as load:
+                oracle, removed = freeze._load_clean_oracle()
+                self.assertEqual(load.call_count, 1)
+                self.assertTrue(all(key not in os.environ for key in freeze.PERL_ENV_KEYS))
+                self.assertEqual(removed, sorted(hostile))
+            self.assertEqual(os.environ["PRODUCER_KEEP"], "yes")
+            command = [sys.executable, "-c", "import json,os; print(json.dumps(dict(os.environ)))"]
+            # bootstrap.run without env is the Configure/make/install path.
+            built = json.loads(oracle.run(command))
+            self.assertTrue(all(key not in built for key in hostile))
+            with tempfile.TemporaryDirectory() as directory:
+                staged = oracle.staged_perl_environment(Path(directory))
+                self.assertTrue(all(key not in staged for key in hostile if key != "PERL5LIB"))
+                self.assertNotIn("hostile", staged["PERL5LIB"])
+            self.assertEqual(built["PRODUCER_KEEP"], "yes")
+
+    def test_producer_probe_excludes_late_hostile_perl_environment(self) -> None:
+        hostile = {key: "hostile" for key in freeze.PERL_ENV_KEYS}
+        with mock.patch.dict(os.environ, {**hostile, "PRODUCER_KEEP": "yes"}):
+            command = [sys.executable, "-c", "import json,os; print(json.dumps(dict(os.environ)))"]
+            observed = json.loads(freeze._command(command))
+            self.assertTrue(all(key not in observed for key in hostile))
+            self.assertEqual(observed["PRODUCER_KEEP"], "yes")
+
     def test_uploader_export_only_opens_two_files_outside_private_ops(self) -> None:
         def other_uid_can_read(path: Path, mount: Path) -> bool:
             current = path.parent

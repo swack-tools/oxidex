@@ -32,6 +32,10 @@ MAX_LINK_HOPS = 40
 MAX_PAX_HEADER_BYTES = 1024 * 1024
 MAX_TAR_METADATA_BYTES = 8 * 1024 * 1024
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
+PERL_ENV_KEYS = frozenset({
+    "PERL5LIB", "PERLLIB", "PERL5OPT", "PERL_MM_OPT", "PERL_MB_OPT",
+    "PERL_LOCAL_LIB_ROOT",
+})
 
 
 class Refused(RuntimeError):
@@ -330,8 +334,19 @@ def _load_oracle():
     return oracle
 
 
+def _load_clean_oracle():
+    """Exclude caller Perl startup/install overrides before bootstrap loads."""
+    removed = sorted(PERL_ENV_KEYS.intersection(os.environ))
+    for key in removed:
+        os.environ.pop(key)
+    return _load_oracle(), removed
+
+
 def _command(argv: list[str]) -> str:
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in PERL_ENV_KEYS}
+    result = subprocess.run(argv, env=environment, capture_output=True,
+                            text=True, check=False)
     if result.returncode:
         raise Refused(f"{argv[0]} failed ({result.returncode}): {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout.strip()
@@ -394,7 +409,7 @@ def worker(head: str, tree: str) -> None:
             or Path("/src/fleet-source-head").read_text().strip() != head):
         raise Refused("producer head/tree differs from signed source packet")
     os.environ["OXIDEX_OPS_DIR"] = str(OPS)
-    oracle = _load_oracle()
+    oracle, removed_perl_environment = _load_clean_oracle()
     oracle.validate_lock(oracle.LOCK)
     OPS.mkdir(mode=0o700)
     lock = oracle.LOCK
@@ -448,6 +463,7 @@ def worker(head: str, tree: str) -> None:
         "perl_executable_sha256": oracle.sha256_file(perl),
         "archive_zip_library_sha256": oracle.sha256_file(zip_module),
         "archive_zip_library_path": str(zip_module),
+        "perl_environment_removed_before_bootstrap": removed_perl_environment,
         "perl_version": _command([str(perl), "-v"]),
         "archive_zip_version": _command([str(perl), "-MArchive::Zip", "-e", "print $Archive::Zip::VERSION"]),
         "perl_configured_prefix": _command([str(perl), "-MConfig", "-e", "print $Config{prefix}"]),
