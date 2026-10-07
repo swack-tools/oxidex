@@ -313,8 +313,8 @@ typedef int ExifToolValueChannel;
 ```
 
 `exiftool_get_tag_string()` retains its PrintConv-default view. An unknown
-channel value makes this accessor return `NULL` and records
-`EXIFTOOL_ERR_INVALID_TAG_VALUE` as the last error.
+channel value makes this accessor return `NULL` and sets the thread-local
+last-error message to `Unknown value channel: <value>`.
 
 ```c
 const char* exiftool_get_tag_string_in_channel(
