@@ -28,6 +28,7 @@ class GenericRecipeTests(unittest.TestCase):
                        'source_bundle_sha256':'d'*64,
                        'config_prefix':'/target/ops/toolchains/perl-5.38.2/prefix',
                        'archive_path':'/target/ops/evidence/linux-perl-independent-identity/perl-5.38.2-prefix.tar.gz',
+                       'candidate_export_path':'/target/perl-candidate-export',
                        'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),
                        'archive_bytes':archive.stat().st_size,
                        'lock_sha256':hashlib.sha256(lock.read_bytes()).hexdigest(),
@@ -36,9 +37,13 @@ class GenericRecipeTests(unittest.TestCase):
             receipt=root/'remote-receipt';receipt.write_text(json.dumps(candidate))
             def ssh(command):return [command]
             def output(command,**kwargs):
+                self.assertIn('/perl-candidate-export/',command[0])
+                self.assertNotIn('/ops/',command[0])
                 path=receipt if 'candidate-receipt.json' in command[0] else archive
                 return hashlib.sha256(path.read_bytes()).hexdigest()+'  remote\n'
             def run(command,**kwargs):
+                self.assertIn('/perl-candidate-export/',command[1])
+                self.assertNotIn('/ops/',command[1])
                 source=receipt if 'candidate-receipt.json' in command[1] else archive
                 shutil.copyfile(source,command[2])
                 return SimpleNamespace(returncode=0)

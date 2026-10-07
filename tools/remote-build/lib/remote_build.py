@@ -224,7 +224,7 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
     """Download receipt and tar from the one retained project before PASS."""
     if transport is None:
         raise RuntimeError('Perl candidate requires authenticated direct transport')
-    remote_root=f'/mnt/runner-data/remote-build/targets/{run_id}/ops/evidence/linux-perl-independent-identity'
+    remote_root=f'/mnt/runner-data/remote-build/targets/{run_id}/perl-candidate-export'
     local=evidence/'linux-perl-candidate'
     local.mkdir(mode=0o700,exist_ok=False)
     receipt_remote=remote_root+'/candidate-receipt.json'
@@ -239,6 +239,7 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
             or candidate.get('source_bundle_sha256')!=bundle_sha256
             or candidate.get('config_prefix')!='/target/ops/toolchains/perl-5.38.2/prefix'
             or candidate.get('archive_path')!='/target/ops/evidence/linux-perl-independent-identity/perl-5.38.2-prefix.tar.gz'
+            or candidate.get('candidate_export_path')!='/target/perl-candidate-export'
             or candidate.get('lock_sha256')!=_sha256_file(lock_path)
             or candidate.get('status')!='candidate_only_requires_independent_review'
             or candidate.get('replay_tree_sha256')!=candidate.get('perl_tree_sha256')

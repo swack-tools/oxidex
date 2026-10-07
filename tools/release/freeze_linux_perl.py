@@ -337,6 +337,42 @@ def _command(argv: list[str]) -> str:
     return result.stdout.strip()
 
 
+def publish_uploader_export(archive: Path, receipt: Path, export: Path) -> None:
+    """Expose exactly two checked copies outside private ops, once per project."""
+    parent = export.parent
+    if (parent.is_symlink() or not parent.is_dir()
+            or not parent.stat().st_mode & stat.S_IXOTH
+            or export.exists() or export.is_symlink()):
+        raise Refused("candidate export needs fresh uploader-traversable target")
+    sources = ((archive, "perl-5.38.2-prefix.tar.gz"),
+               (receipt, "candidate-receipt.json"))
+    if any(source.is_symlink() or not source.is_file() for source, _ in sources):
+        raise Refused("candidate export source is not a regular file")
+    export.mkdir(mode=0o700)
+    for source, name in sources:
+        target = export / name
+        with source.open("rb") as incoming, target.open("xb") as outgoing:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: incoming.read(1024 * 1024), b""):
+                outgoing.write(chunk)
+                digest.update(chunk)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+        with target.open("rb") as copied:
+            actual = hashlib.sha256()
+            for chunk in iter(lambda: copied.read(1024 * 1024), b""):
+                actual.update(chunk)
+        if actual.digest() != digest.digest() or target.stat().st_size != source.stat().st_size:
+            raise Refused(f"candidate export copy changed: {name}")
+        target.chmod(0o644)
+    export.chmod(0o755)
+    directory = os.open(export, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def worker(head: str, tree: str) -> None:
     if not HEX40.fullmatch(head) or not HEX40.fullmatch(tree):
         raise Refused("invalid source identity arguments")
@@ -348,6 +384,8 @@ def worker(head: str, tree: str) -> None:
         raise Refused("producer requires fresh owned /target/ops")
     if not Path("/target").is_dir() or Path("/target").is_symlink():
         raise Refused("producer requires owned /target mount")
+    if not Path("/target").stat().st_mode & stat.S_IXOTH:
+        raise Refused("producer target is not traversable by authenticated uploader")
     sys.path.insert(0, str(ROOT / "tools/remote-build"))
     from route import verified_fleet_checkout
     if not verified_fleet_checkout():
@@ -402,6 +440,7 @@ def worker(head: str, tree: str) -> None:
         "locked_archives": {name: {"path": str(path), "sha256": oracle.sha256_file(path),
                                    "url": lock["archives"][name]["url"]} for name, path in archives.items()},
         "archive_path": str(archive),
+        "candidate_export_path": "/target/perl-candidate-export",
         "archive_sha256": oracle.sha256_file(archive),
         "archive_bytes": archive.stat().st_size,
         "perl_tree_sha256": before,
@@ -423,6 +462,7 @@ def worker(head: str, tree: str) -> None:
     with receipt_path.open("x", encoding="utf-8") as output:
         json.dump(receipt, output, indent=2, sort_keys=True)
         output.write("\n")
+    publish_uploader_export(archive, receipt_path, Path("/target/perl-candidate-export"))
     print(json.dumps(receipt, sort_keys=True), flush=True)
 
 
