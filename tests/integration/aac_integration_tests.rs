@@ -23,11 +23,10 @@ fn printed(value: &TagValue) -> String {
 fn test_aac_metadata_parity_with_exiftool() {
     let test_file = "test_data/audio/sample.aac";
 
-    // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
-        eprintln!("Warning: {} not found, skipping test", test_file);
-        return;
-    }
+    assert!(
+        Path::new(test_file).is_file(),
+        "required AAC parity fixture missing: {test_file}"
+    );
 
     // Run ExifTool
     // -G0 is required: the tags compared below are group-qualified
@@ -57,13 +56,15 @@ fn test_aac_metadata_parity_with_exiftool() {
     let oxidex_metadata = parse_aac_metadata(&reader).expect("Failed to parse AAC file");
 
     // Compare key tags
-    let tags_to_compare = ["AAC:AudioChannels", "AAC:SampleRate"];
+    let tags_to_compare = [("AAC:Channels", "2"), ("AAC:SampleRate", "44100")];
 
-    for tag in &tags_to_compare {
+    let mut compared = 0;
+    for (tag, expected) in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
-        if exiftool_value.is_null() {
-            continue; // Skip tags not present in test file
-        }
+        assert!(
+            !exiftool_value.is_null(),
+            "ExifTool missing required AAC tag: {tag}"
+        );
 
         let oxidex_value = oxidex_metadata.get(tag);
 
@@ -72,11 +73,18 @@ fn test_aac_metadata_parity_with_exiftool() {
         // Compare values (convert to strings for comparison)
         let exiftool_str = exiftool_value.to_string().trim_matches('"').to_string();
         let oxidex_str = printed(oxidex_value.unwrap());
+        assert_eq!(exiftool_str, *expected, "unexpected native value for {tag}");
 
         assert_eq!(
             exiftool_str, oxidex_str,
             "Mismatch for tag {}: ExifTool={}, OxiDex={}",
             tag, exiftool_str, oxidex_str
         );
+        compared += 1;
     }
+    assert_eq!(
+        compared,
+        tags_to_compare.len(),
+        "not every required AAC tag was compared for {test_file}"
+    );
 }

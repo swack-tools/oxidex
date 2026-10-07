@@ -484,6 +484,10 @@ def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[in
         raise AssertionError("generated write changed image payload")
     if expected["image_payload_hex"] != actual["image_payload_hex"]:
         raise AssertionError("native/generated image payload differs")
+    if seed.get("thumbnail_payload_hex") != actual.get("thumbnail_payload_hex"):
+        raise AssertionError("generated write changed JPEG thumbnail payload")
+    if expected.get("thumbnail_payload_hex") != actual.get("thumbnail_payload_hex"):
+        raise AssertionError("native/generated JPEG thumbnail payload differs")
     if expected["byte_order"] != actual["byte_order"]:
         raise AssertionError("native/generated TIFF byte order differs")
     if set(expected["tags"]) != set(actual["tags"]):
@@ -499,6 +503,12 @@ def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[in
     for name in removed:
         assert_prunable_ifd1(seed_children[name], changed_tag_ids(target_tag_id))
     for tag, value in expected["tags"].items():
+        if tag == "513":
+            if (expected.get("thumbnail_payload_hex") is None
+                    or any(value[key] != actual["tags"][tag][key] for key in ("type", "count"))):
+                raise AssertionError("native/generated JPEG thumbnail pointer type/count differs")
+            # The pointed-to bytes are compared above; ExifTool may relocate them.
+            continue
         # Native may relocate the strip; its actual bytes are checked above.
         if tag == "273" and any(value[key] != actual["tags"][tag][key] for key in ("type", "count")):
             raise AssertionError("native/generated strip pointer type/count differs")
@@ -511,6 +521,10 @@ def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[in
         if tag != "273" and native.entry_storage(value) != native.entry_storage(actual["tags"][tag]):
             raise AssertionError(f"native/generated unrelated tag type/count/value differs for {tag}")
     for tag, value in seed["tags"].items():
+        if tag == "513":
+            if seed.get("thumbnail_payload_hex") is None:
+                raise AssertionError("seed JPEG thumbnail payload was not inspected")
+            continue
         pointer_name = native.IFD_POINTERS.get(tag)
         if pointer_name in expected_children:
             # The expected-to-actual pass above already verified this is the

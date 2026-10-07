@@ -324,7 +324,9 @@ class GuardrailsPresentTest(ClauseAssertions):
         manufactures phantom regressions AND phantom fixes."""
         for label, prompt in self.prompts.items():
             self.assertClause(prompt, "Never invoke bare `exiftool`", label)
-            self.assertClause(prompt, "/tmp/oxidex-exiftool-cache/exiftool-pinned.sh", label)
+            # Prompts must name the selected pinned wrapper, including when
+            # the verified remote fixture uses EXIFTOOL_CACHE_DIR=/target/...
+            self.assertClause(prompt, f"{agentworker.CACHE_DIR}/exiftool-pinned.sh", label)
 
     def test_no_weakening_tests_to_get_green(self):
         self.assertClause(self.prompts["build_prompt"],

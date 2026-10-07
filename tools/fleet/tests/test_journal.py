@@ -878,10 +878,28 @@ class TestAdoptFromJournal(JournalCase):
         self.assertEqual(res.sweep_skipped, "journal adoption never sweeps")
 
     def test_our_own_process_group_is_never_adopted(self):
-        self.journal_job("staging-one", pgid=os.getpgrp())
-        res = self.adopt()
+        # Docker may put this test process in group 1, which is not a
+        # plausible worker pgid. Use a real isolated group and report it
+        # as the runner's own so this reaches the own-group guard.
+        own_group = self.spawn_stub()
+        self.journal_job("staging-one", pgid=own_group.pid)
+        with mock.patch.object(jr.os, "getpgrp", return_value=own_group.pid):
+            res = self.adopt()
         self.assertEqual(res.adopted, [])
+        self.assertEqual(res.to_release, [])
+        self.assertEqual(self.workers, [])
         self.assertIn("own group", res.refused[0][1])
+        self.assertIsNone(own_group.poll(), "own group must remain alive")
+
+    def test_pid_one_is_never_adopted_even_if_reported_live(self):
+        self.journal_job("staging-one", pgid=1)
+        with mock.patch.object(jr.os, "killpg", side_effect=AssertionError("pid 1 signalled")):
+            res = self.adopt(pgid_probe=lambda: {1})
+        self.assertEqual(res.adopted, [])
+        self.assertEqual(self.workers, [])
+        self.assertEqual(len(res.to_release), 1)
+        self.assertIn("never spawned (pgid=1)", res.to_release[0].reason)
+        self.assertEqual(res.sweep_skipped, "journal adoption never sweeps")
 
 
 # --------------------------------------------------------------------- #

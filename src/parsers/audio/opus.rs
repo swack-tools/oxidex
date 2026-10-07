@@ -11,8 +11,8 @@
 //! # ExifTool Compatibility
 //!
 //! Maps to ExifTool tags from `Opus.pm` module:
-//! - `Opus:Version` → Version from OpusHead
-//! - `Opus:Channels` → Channel count from OpusHead
+//! - `Opus:OpusVersion` → Version from OpusHead
+//! - `Opus:AudioChannels` → Channel count from OpusHead
 //! - `Opus:SampleRate` → Input sample rate from OpusHead
 //!
 //! # File Structure
@@ -182,11 +182,11 @@ fn parse_opus_head(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     let channel_mapping_family = reader.u8_at(10).unwrap_or(0);
 
     metadata.insert(
-        "Opus:Version".to_string(),
+        "Opus:OpusVersion".to_string(),
         TagValue::new_integer(version as i64),
     );
     metadata.insert(
-        "Opus:Channels".to_string(),
+        "Opus:AudioChannels".to_string(),
         TagValue::new_integer(channels as i64),
     );
     metadata.insert(
@@ -199,7 +199,7 @@ fn parse_opus_head(data: &[u8], metadata: &mut MetadataMap) -> Result<()> {
     );
     metadata.insert(
         "Opus:OutputGain".to_string(),
-        TagValue::new_integer(output_gain as i64),
+        TagValue::Float(10f64.powf(f64::from(output_gain as u16) / 5120.0)),
     );
     metadata.insert(
         "Opus:ChannelMappingFamily".to_string(),
@@ -308,8 +308,18 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.get("Opus:Version").unwrap().as_integer(), Some(1));
-        assert_eq!(metadata.get("Opus:Channels").unwrap().as_integer(), Some(2));
+        assert_eq!(
+            metadata.get("Opus:OpusVersion").unwrap().as_integer(),
+            Some(1)
+        );
+        assert_eq!(
+            metadata.get("Opus:AudioChannels").unwrap().as_integer(),
+            Some(2)
+        );
+        assert_eq!(
+            metadata.get("Opus:OutputGain").unwrap().as_float(),
+            Some(1.0)
+        );
     }
 
     #[test]

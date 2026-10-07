@@ -86,11 +86,10 @@ fn real_avi_carriers_keep_riff_values_without_an_avi_group() {
 fn test_avi_metadata_parity_with_exiftool() {
     let test_file = "test_data/video/sample.avi";
 
-    // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
-        eprintln!("Warning: {} not found, skipping test", test_file);
-        return;
-    }
+    assert!(
+        Path::new(test_file).is_file(),
+        "required AVI parity fixture missing: {test_file}"
+    );
 
     // Run ExifTool
     // -G0 is required: the tags compared below are group-qualified
@@ -122,6 +121,7 @@ fn test_avi_metadata_parity_with_exiftool() {
     // Compare key tags
     let tags_to_compare = ["RIFF:FrameRate", "RIFF:ImageWidth", "RIFF:ImageHeight"];
 
+    let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
         if exiftool_value.is_null() {
@@ -141,5 +141,10 @@ fn test_avi_metadata_parity_with_exiftool() {
             "Mismatch for tag {}: ExifTool={}, OxiDex={}",
             tag, exiftool_str, oxidex_str
         );
+        compared += 1;
     }
+    assert!(
+        compared > 0,
+        "no AVI tags compared with ExifTool for {test_file}"
+    );
 }
