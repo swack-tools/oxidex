@@ -273,8 +273,21 @@ class TestResolveOxidexBinary(HermeticCase):
         with tempfile.TemporaryDirectory() as td:
             empty_repo = Path(td)
             (empty_repo / "target").mkdir()
-            with self.assertRaises(ledger.LedgerError):
-                ledger.resolve_oxidex_binary(empty_repo)
+            # The remote recipe has already built in /target. An ambient
+            # CARGO_TARGET_DIR must not turn this empty fixture into a hit.
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(empty_repo / "empty-target")}):
+                with self.assertRaises(ledger.LedgerError):
+                    ledger.resolve_oxidex_binary(empty_repo)
+
+    def test_explicit_target_missing_refuses_stale_default_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            stale = repo / "target" / "release" / "oxidex"
+            stale.parent.mkdir(parents=True)
+            stale.touch()
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(repo / "remote-target")}):
+                with self.assertRaisesRegex(ledger.LedgerError, "CARGO_TARGET_DIR"):
+                    ledger.resolve_oxidex_binary(repo)
 
     def test_override_to_nonexistent_path_raises(self):
         with self.assertRaises(ledger.LedgerError):

@@ -381,32 +381,55 @@ mod tests {
     use crate::test_support::TestReader;
 
     #[test]
-    #[ignore] // ADTS parsing test - needs proper frame validation
+    #[ignore = "synthetic ADTS frame validation"]
     fn test_aac_adts_signature_valid() {
-        // Create minimal AAC ADTS header
-        // 0xFFF1 = sync word (0xFFF) + MPEG-4 (1) + Layer (00) + no CRC (1)
-        let mut data = vec![0u8; 1000];
-        data[0] = 0xFF; // Sync word high byte
-        data[1] = 0xF1; // Sync word low nibble + flags
-        data[2] = 0x50; // Profile=1 (LC), Sample rate=4 (44100), private=0, channel start=0
-        data[3] = 0x80; // Channel=2 (stereo), other flags
-        // Frame length = 100 bytes (0x64 = 0b0000001100100)
-        // Bits 11-12 in byte 3 (lower 2 bits): 0b00
-        // Bits 3-10 in byte 4: 0b00001100 = 0x0C
-        // Bits 0-2 in byte 5 (upper 3 bits): 0b100 = 0x80
-        data[4] = 0x0C; // Frame length middle byte
-        data[5] = 0x80; // Frame length low bits + buffer fullness start
-        data[6] = 0xFC; // Buffer fullness + frame count
-
+        // Two complete 100-byte ADTS frames: LC, 44100 Hz, two channels.
+        // The payload is opaque to this metadata parser; the declared frame
+        // lengths and the next header positions are what its scanner checks.
+        let header = [0xFF, 0xF1, 0x50, 0x80, 0x0C, 0x80, 0xFC];
+        let mut data = vec![0u8; 200];
+        data[..7].copy_from_slice(&header);
+        data[100..107].copy_from_slice(&header);
         let reader = TestReader::new(data);
         let parser = AacParser;
-        let result = parser.parse(&reader);
-        assert!(result.is_ok());
-
-        let metadata = result.unwrap();
+        let metadata = parser
+            .parse(&reader)
+            .expect("two bounded ADTS frames parse");
         assert_eq!(
             metadata.get("AAC:SampleRate").unwrap().as_integer(),
             Some(44100)
+        );
+        assert_eq!(
+            metadata.get("AAC:ProfileType").unwrap().as_string(),
+            Some("Low Complexity")
+        );
+        assert_eq!(
+            metadata
+                .get("AAC:ChannelConfiguration")
+                .unwrap()
+                .as_integer(),
+            Some(2)
+        );
+        assert_eq!(metadata.get("AAC:Channels").unwrap().as_string(), Some("2"));
+        assert_eq!(
+            metadata.get("AAC:FrameLength").unwrap().as_integer(),
+            Some(100)
+        );
+        assert_eq!(
+            metadata.get("AAC:FrameCount").unwrap().as_integer(),
+            Some(2)
+        );
+
+        // Header truncation and a declared frame shorter than its seven-byte
+        // header are the bounds this parser explicitly rejects.
+        assert!(parse_adts_header(&header[..6]).is_err());
+        let mut short_frame = header;
+        short_frame[4] = 0;
+        short_frame[5] = 0;
+        assert!(
+            parser
+                .parse(&TestReader::new(short_frame.to_vec()))
+                .is_err()
         );
     }
 

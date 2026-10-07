@@ -162,14 +162,25 @@ fn test_canon_lens_database_integration() {
 }
 
 #[test]
-#[ignore = "placeholder without a fixture or behavioral assertion"]
+#[ignore = "requires pinned ExifTool 13.59 t/images"]
 fn test_canon_phase3_tags_extracted() {
-    // Verify that Phase 3 tags are being extracted from Canon files
-    // This is a placeholder test - in production, use real Canon test files
+    use oxidex::core::operations::read_metadata;
 
-    // Test that the extraction functions are available
-    // (More comprehensive testing would require real Canon JPEG fixtures)
-    println!("Canon MakerNotes Phase 3 integration test placeholder");
+    // Pinned ExifTool 13.59 -G1 on t/images/Canon.jpg (SHA-256
+    // 98c290283dbff10950bd0eac63bf95804fd09661de727df4f2946d203ca9e7a2)
+    // reports this AFInfo geometry. Other tests in this module cover direct
+    // MakerNote and BinaryData fields; this one exercises the Phase 3 AFInfo
+    // path with an actual Canon image rather than repeating those assertions.
+    let path = crate::fixtures::required_t_images_fixture_path(CANON_SAMPLE);
+    let metadata = read_metadata(&path).expect("Canon sample parses");
+    for (tag, expected) in [
+        ("Canon:NumAFPoints", "7"),
+        ("Canon:AFImageWidth", "3072"),
+        ("Canon:AFAreaWidth", "151"),
+        ("Canon:AFAreaXPositions", "1014 608 0 0 0 -608 -1014"),
+    ] {
+        assert_eq!(metadata.get_string(tag), Some(expected), "{tag}");
+    }
 }
 
 #[test]

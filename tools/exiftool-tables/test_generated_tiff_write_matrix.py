@@ -8,6 +8,7 @@ import json
 import tempfile
 
 import generated_tiff_write_matrix as matrix
+import scalar_fresh_owner_adapter as fresh
 from generated_tiff_write_matrix import (
     GeneratedTarget,
     RULES,
@@ -26,6 +27,140 @@ from native_write_matrix import parse_tiff
 
 
 class GeneratedTiffComparison(unittest.TestCase):
+    def test_group1_tiff_strip_relocation_policy_remains_bound(self):
+        def tiff(offset):
+            header = b'II\x2a\0\x08\0\0\0' + (2).to_bytes(2, 'little')
+            entries = ((273).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                       + (1).to_bytes(4, 'little') + offset.to_bytes(4, 'little')
+                       + (279).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                       + (1).to_bytes(4, 'little') + (5).to_bytes(4, 'little'))
+            return header + entries + bytes(4) + bytes(offset - len(header) - len(entries) - 4) + b'PIXEL'
+        seed = parse_tiff(tiff(50))
+        expected = parse_tiff(tiff(60))
+        actual = parse_tiff(tiff(50))
+        compare(seed, expected, actual, None)
+        native_values = {'IFD0:StripOffsets': 60, 'IFD0:StripByteCounts': 5}
+        actual_values = {'IFD0:StripOffsets': 50, 'IFD0:StripByteCounts': 5}
+        result = fresh.compare_group1_with_proven_pointer_relocation(
+            seed, expected, actual, 'tiff_little', native_values, actual_values)
+        self.assertEqual(result['policy'], 'IFD0:StripOffsets physical relocation only')
+        with self.assertRaisesRegex(AssertionError, 'differs outside'):
+            fresh.compare_group1_with_proven_pointer_relocation(
+                seed, expected, actual, 'tiff_little', native_values,
+                {**actual_values, 'IFD0:StripByteCounts': 4})
+
+    def test_jpeg_group1_thumbnail_relocation_binds_display_to_physical_payload(self):
+        def jpeg(offset=56, payload=b'THUMB', label=b'a', byte_count=None):
+            count = len(payload) if byte_count is None else byte_count
+            root = (b'II\x2a\0\x08\0\0\0' + (1).to_bytes(2, 'little')
+                    + (315).to_bytes(2, 'little') + (2).to_bytes(2, 'little')
+                    + (2).to_bytes(4, 'little') + label + b'\0\0\0'
+                    + (26).to_bytes(4, 'little'))
+            child = ((2).to_bytes(2, 'little')
+                     + (513).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + offset.to_bytes(4, 'little')
+                     + (514).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + count.to_bytes(4, 'little')
+                     + bytes(4))
+            tiff = root + child + bytes(offset - len(root) - len(child)) + payload
+            app1 = b'Exif\0\0' + tiff
+            return b'\xff\xd8\xff\xe1' + (len(app1) + 2).to_bytes(2, 'big') + app1 + b'\xff\xda'
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = {name: root / (name + '.jpg') for name in ('seed', 'native', 'candidate')}
+            paths['seed'].write_bytes(jpeg())
+            paths['native'].write_bytes(jpeg(offset=64, label=b'b'))
+            paths['candidate'].write_bytes(jpeg(label=b'b'))
+            docs = {name: native.inspect(path, 'jpeg') for name, path in paths.items()}
+            for doc in docs.values():
+                self.assertEqual(doc['exif_tiff_base'], 12)
+            compare_carrier(docs['seed'], docs['native'], docs['candidate'], 'jpeg', 315)
+            def group1(doc):
+                child = doc['exif']['children']['NextIFD']
+                offset = int.from_bytes(bytes.fromhex(child['tags']['513']['value_hex']), 'little')
+                return {'IFD0:Artist': 'b', 'IFD1:ThumbnailOffset': doc['exif_tiff_base'] + offset,
+                        'IFD1:ThumbnailLength': 5, 'IFD1:ThumbnailImage': 'binary thumbnail'}
+            expected, actual = group1(docs['native']), group1(docs['candidate'])
+            compare = fresh.compare_group1_with_proven_pointer_relocation
+            result = compare(docs['seed'], docs['native'], docs['candidate'], 'jpeg', expected, actual)
+            self.assertEqual(result['policy'], 'IFD1:ThumbnailOffset physical relocation only')
+            self.assertEqual(result['readback'], {'native': 76, 'candidate': 68})
+            same = compare(docs['seed'], docs['candidate'], docs['candidate'],
+                           'jpeg', actual, actual)
+            self.assertEqual(same['policy'], 'exact_group1_thumbnail_bound')
+            absent = {key: value for key, value in actual.items() if key != 'IFD1:ThumbnailOffset'}
+            with self.assertRaisesRegex(AssertionError, 'differs outside'):
+                compare(docs['seed'], docs['candidate'], docs['candidate'], 'jpeg', absent, absent)
+            for changed, error in (({'IFD1:ThumbnailOffset': 999}, 'disagrees with physical'),
+                                   ({'IFD1:ThumbnailOffset': None}, 'disagrees with physical'),
+                                   ({'IFD0:Artist': 'wrong'}, 'differs outside'),
+                                   ({'IFD1:ThumbnailImage': None}, 'differs outside')):
+                with self.subTest(changed=changed), self.assertRaisesRegex(AssertionError, error):
+                    compare(docs['seed'], docs['native'], docs['candidate'], 'jpeg',
+                            expected, {**actual, **changed})
+            for key in ('IFD1:ThumbnailLength', 'IFD1:ThumbnailImage'):
+                with self.subTest(missing=key), self.assertRaisesRegex(AssertionError,
+                        'pointer or length disagrees|differs outside'):
+                    compare(docs['seed'], docs['native'], docs['candidate'], 'jpeg',
+                            {k: v for k, v in expected.items() if k != key},
+                            {k: v for k, v in actual.items() if k != key})
+            wrong_length = {**expected, 'IFD1:ThumbnailLength': 6}
+            with self.assertRaisesRegex(AssertionError, 'pointer or length disagrees'):
+                compare(docs['seed'], docs['native'], docs['candidate'], 'jpeg',
+                        wrong_length, {**actual, 'IFD1:ThumbnailLength': 6})
+            for mutation in ('missing', 'type', 'count', 'boolean_count', 'bounds', 'payload', 'base'):
+                candidate = copy.deepcopy(docs['candidate'])
+                child = candidate['exif']['children']['NextIFD']
+                if mutation == 'missing':
+                    del child['tags']['513']
+                elif mutation in ('type', 'count'):
+                    child['tags']['513'][mutation] = 3
+                elif mutation == 'boolean_count':
+                    child['tags']['513']['count'] = True
+                elif mutation == 'bounds':
+                    candidate['exif_tiff_length'] = 50
+                elif mutation == 'payload':
+                    child['thumbnail_payload_hex'] = b'WRONG'.hex()
+                else:
+                    candidate['exif_tiff_base'] = 99
+                with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                    compare(docs['seed'], docs['native'], candidate, 'jpeg', expected, actual)
+
+    def test_jpeg_thumbnail_relocation_requires_same_referenced_bytes_and_length(self):
+        def carrier(offset=56, payload=b'THUMB', label=b'a', byte_count=None):
+            count = len(payload) if byte_count is None else byte_count
+            root = (b'II\x2a\0\x08\0\0\0' + (1).to_bytes(2, 'little')
+                    + (315).to_bytes(2, 'little') + (2).to_bytes(2, 'little')
+                    + (2).to_bytes(4, 'little') + label + b'\0\0\0'
+                    + (26).to_bytes(4, 'little'))
+            child = ((2).to_bytes(2, 'little')
+                     + (513).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + offset.to_bytes(4, 'little')
+                     + (514).to_bytes(2, 'little') + (4).to_bytes(2, 'little')
+                     + (1).to_bytes(4, 'little') + count.to_bytes(4, 'little')
+                     + bytes(4))
+            return root + child + bytes(offset - len(root) - len(child)) + payload
+
+        seed = parse_tiff(carrier(), False)
+        native_relocated = parse_tiff(carrier(64, label=b'b'), False)
+        generated = parse_tiff(carrier(label=b'b'), False)
+        compare(seed, native_relocated, generated, 315)
+        self.assertEqual(seed['children']['NextIFD']['thumbnail_payload_hex'],
+                         native_relocated['children']['NextIFD']['thumbnail_payload_hex'])
+        with self.assertRaisesRegex(AssertionError, 'thumbnail payload'):
+            compare(seed, native_relocated, parse_tiff(carrier(label=b'b', payload=b'WRONG'), False), 315)
+        with self.assertRaisesRegex(AssertionError, 'thumbnail payload'):
+            compare(seed, native_relocated, parse_tiff(carrier(label=b'b', byte_count=4), False), 315)
+        out_of_bounds = bytearray(carrier())
+        out_of_bounds[36:40] = (500).to_bytes(4, 'little')
+        with self.assertRaisesRegex(ValueError, 'thumbnail payload'):
+            parse_tiff(bytes(out_of_bounds), False)
+        malformed = bytearray(carrier())
+        malformed[42:44] = (3).to_bytes(2, 'little')  # tag 514 type
+        with self.assertRaisesRegex(ValueError, 'thumbnail offset/length pair'):
+            parse_tiff(bytes(malformed), False)
+
     def test_predecessor_cohort_refuses_a_retired_identity(self):
         target = GeneratedTarget(315, "Artist", "EXIF", "IFD0")
         cohort = [{"raw_tag_id": 315, "name": "Artist", "group0": "EXIF", "write_group": "IFD0"}]

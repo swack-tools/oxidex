@@ -54,6 +54,22 @@ _test-worker:
     cargo test --all-features --features tag-comparison-binary --doc
     just test-remote-build
 
+# Run the full beta.1 ignored test suite on the Spot builder.
+test-ignored:
+    python3 tools/remote-build/route.py test-ignored
+
+# Verify every required ignored-suite carrier with the pinned native oracle.
+prepare-ignored-inputs:
+    python3 tools/remote-build/route.py prepare-ignored-inputs
+
+_prepare-ignored-inputs-worker:
+    python3 tools/remote-build/route.py --require-local-context
+    python3 tools/remote-build/ignored_fixture_probe.py
+
+_test-ignored-worker:
+    python3 tools/remote-build/route.py --require-local-context
+    python3 tools/remote-build/ignored_suite.py
+
 # Run the repository-owned remote-builder client tests.
 test-remote-build:
     python3 tools/remote-build/route.py test-remote-build
@@ -306,6 +322,9 @@ docs:
 
 # Generate documentation without opening
 docs-build:
+    python3 tools/remote-build/route.py docs-build
+
+_docs-build-worker:
     python3 tools/remote-build/route.py --require-local-context docs-build
     @echo "Generating documentation..."
     cargo doc --workspace --no-deps
@@ -440,6 +459,9 @@ rpm:
 # Run CI checks (optimized with nextest + merged doctests)
 # Edition 2024 merges doctests into single binary (~36s vs ~3min)
 ci:
+    python3 tools/remote-build/route.py ci
+
+_ci-worker:
     #!/usr/bin/env bash
     python3 tools/remote-build/route.py --require-local-context ci || exit $?
     set -euo pipefail
@@ -518,7 +540,10 @@ ci:
     echo "   ✓ C FFI integration test"
 
 # Run CI without nextest (fallback if nextest not installed)
-ci-standard: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
+ci-standard:
+    python3 tools/remote-build/route.py ci-standard
+
+_ci-standard-worker: fmt-check cbindgen-check lint-release build-release-local test test-ffi-c
     @echo "All CI checks passed!"
     @echo "✓ Format check"
     @echo "✓ C header up-to-date"
@@ -530,7 +555,10 @@ ci-standard: fmt-check cbindgen-check lint-release build-release-local test test
 # Pre-commit hook: format check, header check, lint, test
 # cbindgen-check runs early because it is the cheapest of the four and is the
 # check that broke main twice (#211, #256) by being absent from this list.
-pre-commit: fmt-check cbindgen-check lint test
+pre-commit:
+    python3 tools/remote-build/route.py pre-commit
+
+_pre-commit-worker: fmt-check cbindgen-check lint test
     @echo "Pre-commit checks passed!"
 
 # Install git hooks (absolute core.hooksPath so linked worktrees resolve the
@@ -1767,7 +1795,10 @@ verify-runtime-ownership:
 # drift, intent/ledger). Needs a FRESH release binary for the ledger tests --
 # a stale one reports MISSING for formats the tip parses (measured: 11
 # phantom-missing SWF tags from a one-day-old binary).
-fleet-test: build-bin-release
+fleet-test:
+    python3 tools/remote-build/route.py fleet-test
+
+_fleet-test-worker: _build-bin-release-worker
     python3 tools/remote-build/route.py --require-local-context fleet-test
     cd tools/fleet && python3 -m unittest discover -s tests -v
 
@@ -1779,7 +1810,10 @@ fleet-test: build-bin-release
 # Runs both unconditionally so a maintainer sees both outcomes in one
 # invocation, then fails (non-zero exit) if either run failed -- a
 # server-only regression cannot hide behind a green bare run.
-fleet-tests-both: build-bin-release
+fleet-tests-both:
+    python3 tools/remote-build/route.py fleet-tests-both
+
+_fleet-tests-both-worker: _build-bin-release-worker
     #!/usr/bin/env bash
     python3 tools/remote-build/route.py --require-local-context fleet-tests-both || exit $?
     set -uo pipefail

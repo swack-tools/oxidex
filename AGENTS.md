@@ -21,14 +21,22 @@ We have: coreutils bat eza fd ripgrep hyperfine dust bottom tokei procs sd zoxid
 building the same thing basically
 
 ## Commands
+Normal build, test, lint, CI and documentation recipes dispatch to the dedicated
+Spot builder. Their full workspace outputs remain on that builder unless an
+artifact is explicitly retrieved and verified. The current Rust pin is 1.99.0.
+
 ```bash
-cargo build                    # Build debug
-cargo build --release          # Build release
-cargo test --workspace         # Run all tests
-just test                      # Run tests (CI config)
-just check                     # Quick check without build
-cargo clippy                   # Lint
-just build-bin-release         # Build release binary
+just build                     # Remote debug workspace build
+just build-release-local       # Remote release/all-features build (historical recipe name)
+just test                      # Remote tests (CI profile)
+just check                     # Remote quick check
+just lint                      # Remote lint
+just ci                        # Remote compound CI recipe
+just ci-standard               # Remote sequential CI recipe
+just pre-commit                # Remote pre-commit checks
+just docs-build                # Remote rustdoc; output path is in the receipt
+just build-bin-release         # Remote release binary
+just build-local               # Explicit local debug build exception
 ```
 
 ## Release test-profile collision

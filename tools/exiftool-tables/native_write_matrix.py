@@ -498,6 +498,18 @@ def parse_tiff(data: bytes, require_strip: bool = True, *, _offset=None, _visite
         image_payload_hex = data[strip_offset:strip_offset + strip_length].hex()
     elif require_strip:
         raise ValueError("carrier lacks StripOffsets/StripByteCounts")
+    thumbnail_payload_hex: str | None = None
+    if "513" in tags or "514" in tags:
+        pointer, byte_count = tags.get("513"), tags.get("514")
+        if (pointer is None or byte_count is None
+                or any(entry["type"] != 4 or entry["count"] != 1
+                       for entry in (pointer, byte_count))):
+            raise ValueError("malformed JPEG thumbnail offset/length pair")
+        thumbnail_offset = int.from_bytes(bytes.fromhex(pointer["value_hex"]), order)
+        thumbnail_length = int.from_bytes(bytes.fromhex(byte_count["value_hex"]), order)
+        if thumbnail_offset < 8 or thumbnail_length == 0 or thumbnail_offset + thumbnail_length > len(data):
+            raise ValueError("JPEG thumbnail payload is out of bounds or empty")
+        thumbnail_payload_hex = data[thumbnail_offset:thumbnail_offset + thumbnail_length].hex()
     children = {}
     for tag, name in IFD_POINTERS.items():
         if tag not in tags:
@@ -511,7 +523,8 @@ def parse_tiff(data: bytes, require_strip: bool = True, *, _offset=None, _visite
     if next_ifd:
         children["NextIFD"] = parse_tiff(data, False, _offset=next_ifd, _visited=visited)
     return {"byte_order": order, "sha256": hashlib.sha256(data).hexdigest(), "tags": tags, "children": children,
-            "image_payload_hex": image_payload_hex}
+            "image_payload_hex": image_payload_hex,
+            "thumbnail_payload_hex": thumbnail_payload_hex}
 
 
 def parse_jpeg(path: Path) -> dict[str, Any]:
@@ -520,6 +533,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
         raise ValueError("not a JPEG SOI")
     position = 2
     exif: dict[str, Any] | None = None
+    exif_tiff_base: int | None = None
+    exif_tiff_length: int | None = None
     sos_tail: bytes | None = None
     non_exif_parts = [data[:2]]
     while position < len(data):
@@ -551,6 +566,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
             if exif is not None:
                 raise ValueError("ambiguous multiple JPEG EXIF segments")
             exif = parse_tiff(payload[6:], require_strip=False)
+            exif_tiff_base = position + 8
+            exif_tiff_length = len(payload) - 6
             # Preserve marker fill bytes, which precede the final FF marker.
             non_exif_parts.append(data[marker_start:position - 2])
         else:
@@ -561,7 +578,8 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
     return {"sha256": hashlib.sha256(data).hexdigest(),
             "sos_to_end_sha256": hashlib.sha256(sos_tail).hexdigest(),
             "non_exif_sha256": hashlib.sha256(b"".join(non_exif_parts)).hexdigest(),
-            "sos_to_end_length": len(sos_tail), "exif": exif}
+            "sos_to_end_length": len(sos_tail), "exif": exif,
+            "exif_tiff_base": exif_tiff_base, "exif_tiff_length": exif_tiff_length}
 
 
 def inspect(path: Path, carrier: str) -> dict[str, Any]:
