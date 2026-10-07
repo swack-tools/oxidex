@@ -488,18 +488,17 @@ class RouteTests(unittest.TestCase):
         oracle.assert_not_called()
         execute.assert_called_once_with('just',['just','_freeze-linux-perl-worker',head,tree])
 
-    def test_linux_perl_synthetic_suite_uses_signed_route_without_oracle_bootstrap(self):
+    def test_linux_perl_full_suite_prepares_locked_oracle_before_worker(self):
+        events = []
         with patch.object(route,'local_worker_context',return_value=True), \
              patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
              patch.object(route,'trusted_marker',return_value=True), \
-             patch.object(route,'prepare_fleet_checkout') as prepare, \
-             patch.object(route,'select_signed_builder_target') as target, \
-             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
-             patch.object(route.os,'execvp') as execute:
+             patch.object(route,'prepare_fleet_checkout',side_effect=lambda: events.append('signed')), \
+             patch.object(route,'select_signed_builder_target',side_effect=lambda: events.append('target')), \
+             patch('test_runner.prepare_fleet_recipe_oracle',side_effect=lambda: events.append('oracle')), \
+             patch.object(route.os,'execvp',side_effect=lambda *_: events.append('worker')) as execute:
             route.main(['verify-linux-perl'])
-        prepare.assert_called_once()
-        target.assert_called_once()
-        oracle.assert_not_called()
+        self.assertEqual(events, ['signed', 'target', 'oracle', 'worker'])
         execute.assert_called_once_with('just',['just','_verify-linux-perl-worker'])
 
     def test_linux_perl_public_and_private_just_commands_are_guarded(self):

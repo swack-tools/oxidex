@@ -1851,7 +1851,7 @@ _freeze-linux-perl-worker head tree:
     python3 tools/remote-build/route.py --require-local-context freeze-linux-perl
     python3 tools/release/freeze_linux_perl.py worker --source-head '{{head}}' --source-tree '{{tree}}'
 
-# Synthetic Linux Perl and qualification boundary controls on signed Spot source.
+# Linux Perl guards and locked-oracle integration controls on signed Spot source.
 verify-linux-perl-remote:
     python3 tools/remote-build/route.py verify-linux-perl
 

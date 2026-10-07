@@ -241,8 +241,7 @@ def main(argv):
                 verify_ci_fleet_checkout()
             if signed_builder:
                 select_signed_builder_target()
-        if recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl',
-                                                     'verify-linux-perl'):
+        if recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl'):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
