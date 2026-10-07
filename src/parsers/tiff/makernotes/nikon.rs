@@ -718,10 +718,15 @@ impl MakerNoteParser for NikonParser {
             return Ok(());
         }
         if !ctx.payload().starts_with(b"Nikon\0") {
-            if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
-                tags.insert("PrintIM:PrintIMVersion".to_string(), version);
-            }
-            return Ok(());
+            return self.parse_headerless_with_context(
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                None,
+                None,
+            );
         }
         // `Nikon::PreviewIFD`'s 0x201 `PreviewImageStart` is `IsOffset`
         // (Nikon.pm:5414-5421), so ExifTool prints it with its directory's
@@ -758,6 +763,7 @@ impl MakerNoteParser for NikonParser {
             preview_ifd_base,
             None,
             None,
+            None,
         )
     }
 
@@ -779,9 +785,6 @@ impl MakerNoteParser for NikonParser {
             parse_legacy_type2(ctx.window(), located, tags);
             return Ok(());
         }
-        if !ctx.payload().starts_with(b"Nikon\0") {
-            return self.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms);
-        }
         let file_type = match session.member("FILE_TYPE") {
             crate::exiftool_tables::session::MemberVal::Str(value) => match value.as_str() {
                 "JPEG" => Some("JPEG"),
@@ -790,6 +793,17 @@ impl MakerNoteParser for NikonParser {
             },
             _ => None,
         };
+        if !ctx.payload().starts_with(b"Nikon\0") {
+            return self.parse_headerless_with_context(
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                file_type,
+                None,
+            );
+        }
         let preview_ifd_base = ctx
             .is_located()
             .then(|| ctx.payload_base().checked_add(10))
@@ -803,6 +817,7 @@ impl MakerNoteParser for NikonParser {
             preview_ifd_base,
             file_type,
             None,
+            None,
         )
     }
 
@@ -813,7 +828,7 @@ impl MakerNoteParser for NikonParser {
         byte_order: ByteOrder,
         model: Option<&str>,
         session: &mut crate::exiftool_tables::session::Session,
-        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        _cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
         occurrences: &mut Vec<(String, crate::core::TagOccurrence)>,
@@ -825,17 +840,6 @@ impl MakerNoteParser for NikonParser {
             parse_legacy_type2(ctx.window(), located, tags);
             return Ok(());
         }
-        if !ctx.payload().starts_with(b"Nikon\0") {
-            return self.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            );
-        }
         let file_type = match session.member("FILE_TYPE") {
             crate::exiftool_tables::session::MemberVal::Str(value) => match value.as_str() {
                 "JPEG" => Some("JPEG"),
@@ -844,6 +848,17 @@ impl MakerNoteParser for NikonParser {
             },
             _ => None,
         };
+        if !ctx.payload().starts_with(b"Nikon\0") {
+            return self.parse_headerless_with_context(
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                file_type,
+                Some(occurrences),
+            );
+        }
         let preview_ifd_base = ctx
             .is_located()
             .then(|| ctx.payload_base().checked_add(10))
@@ -857,6 +872,7 @@ impl MakerNoteParser for NikonParser {
             preview_ifd_base,
             file_type,
             Some(occurrences),
+            None,
         )
     }
 
@@ -877,11 +893,47 @@ impl MakerNoteParser for NikonParser {
             None,
             None,
             None,
+            None,
         )
     }
 }
 
 impl NikonParser {
+    /// `MakerNoteNikon3` starts directly at an IFD. Its out-of-line offsets
+    /// refer to the enclosing TIFF header, so a located context must use that
+    /// entire block rather than the MakerNote-relative window.
+    #[allow(clippy::too_many_arguments)]
+    fn parse_headerless_with_context(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        file_type: Option<&'static str>,
+        structured_rows: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+    ) -> std::result::Result<(), String> {
+        if let Some(version) = decode_print_im_from_ifd(ctx, 0, byte_order) {
+            tags.insert("PrintIM:PrintIMVersion".to_string(), version);
+        }
+        // Without the enclosing TIFF block an out-of-line TIFF-relative
+        // offset could land on unrelated bytes inside this detached payload.
+        if !ctx.is_located() {
+            return Ok(());
+        }
+        self.parse_with_preview_ifd_base(
+            ctx.tiff(),
+            byte_order,
+            model,
+            tags,
+            value_forms,
+            Some(ctx.tiff_base()),
+            file_type,
+            structured_rows,
+            Some(ctx.payload_offset()),
+        )
+    }
+
     fn parse_with_preview_ifd_base(
         &self,
         data: &[u8],
@@ -892,6 +944,7 @@ impl NikonParser {
         preview_ifd_base: Option<u64>,
         file_type: Option<&'static str>,
         mut structured_rows: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+        headerless_ifd: Option<usize>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -902,25 +955,26 @@ impl NikonParser {
             return Ok(());
         }
 
-        // Validate Nikon header
-        if !self.validate_header(data) {
+        // Validate a signed Nikon header; a headerless Nikon3 directory was
+        // selected by camera Make and carries its IFD offset separately.
+        if headerless_ifd.is_none() && !self.validate_header(data) {
             return Err("Invalid Nikon MakerNote header".to_string());
         }
 
-        // Nikon Type 2/3 MakerNotes have an embedded TIFF structure after the Nikon header
-        // Structure: "Nikon\0" (6 bytes) + version (4 bytes) + TIFF header + IFD
-        // The TIFF header contains its own byte order indicator and IFD offset
+        // Signed Nikon notes embed a TIFF header after their ten-byte prefix.
+        // Headerless Nikon3 notes inherit the enclosing TIFF byte order and
+        // use the MakerNote entry's location as their IFD start.
+        let tiff_start = if headerless_ifd.is_some() { 0 } else { 10 };
 
-        // Skip Nikon-specific header (10 bytes: "Nikon\0" + 4-byte version)
-        let tiff_start = 10;
-
-        if data.len() < tiff_start + 8 {
+        if headerless_ifd.is_none() && data.len() < tiff_start + 8 {
             return Ok(());
         }
 
-        // Parse embedded TIFF byte order from bytes 10-11
+        // Signed notes read their embedded TIFF byte order at bytes 10-11.
         let tiff_data = &data[tiff_start..];
-        let tiff_byte_order = if tiff_data.len() >= 2 {
+        let tiff_byte_order = if headerless_ifd.is_some() {
+            byte_order
+        } else if tiff_data.len() >= 2 {
             if &tiff_data[0..2] == b"MM" {
                 ByteOrder::BigEndian
             } else if &tiff_data[0..2] == b"II" {
@@ -932,14 +986,16 @@ impl NikonParser {
             byte_order // Fallback to provided byte order
         };
 
-        // Read IFD offset from TIFF header (bytes 4-7 of TIFF structure)
-        let ifd_offset_in_tiff = if tiff_byte_order == ByteOrder::BigEndian {
+        // Signed notes read the IFD offset from their TIFF header at bytes 4-7.
+        let ifd_offset_in_tiff = if let Some(offset) = headerless_ifd {
+            offset
+        } else if tiff_byte_order == ByteOrder::BigEndian {
             u32::from_be_bytes([tiff_data[4], tiff_data[5], tiff_data[6], tiff_data[7]]) as usize
         } else {
             u32::from_le_bytes([tiff_data[4], tiff_data[5], tiff_data[6], tiff_data[7]]) as usize
         };
 
-        // IFD offset is relative to the start of the TIFF structure (byte 10 in full data)
+        // Both IFD offsets are relative to their respective TIFF header.
         let ifd_absolute = tiff_start + ifd_offset_in_tiff;
 
         if data.len() <= ifd_absolute + 2 {
@@ -2332,6 +2388,7 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base(
         Some(preview_ifd_base),
         None,
         None,
+        None,
     )
 }
 
@@ -2354,6 +2411,7 @@ pub fn parse_nikon_makernotes_with_preview_ifd_base_and_occurrences(
         Some(preview_ifd_base),
         None,
         Some(occurrences),
+        None,
     )
 }
 

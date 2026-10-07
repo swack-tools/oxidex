@@ -87,4 +87,45 @@ if ! command -v just >/dev/null 2>&1; then
     exit 0
 fi
 
+# A normal checkout without uploader configuration cannot run the remote
+# composite. Treat that as missing tooling; malformed or partial settings are
+# errors, and a configured route's own validation result remains authoritative.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: 'python3' not installed; skipping pre-commit checks (fmt/lint/test)" >&2
+    exit 0
+fi
+python3 - <<'PYAVAIL'
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, 'tools/remote-build')
+from lib.config import REMOTE_ENV_KEYS, configured_remote_env
+from lib.ssh_transport import identity
+
+try:
+    settings = configured_remote_env(Path.cwd())
+    if not any(name in settings for name in REMOTE_ENV_KEYS):
+        raise SystemExit(10)
+    required = ('OXIDEX_REMOTE_SSH_USER', 'OXIDEX_REMOTE_SSH_KEY',
+                'OXIDEX_REMOTE_SSH_KNOWN_HOSTS')
+    missing = [name for name in required if name not in settings]
+    if missing:
+        raise ValueError('incomplete remote builder configuration: ' + ', '.join(missing))
+    os.environ.update(settings)
+    identity()
+    known = Path(settings['OXIDEX_REMOTE_SSH_KNOWN_HOSTS']).expanduser()
+    if not known.is_absolute() or not known.is_file():
+        raise ValueError('remote SSH known-hosts file is not an absolute readable file')
+except (OSError, ValueError) as exc:
+    print(f'error: {exc}', file=sys.stderr)
+    raise SystemExit(1)
+PYAVAIL
+route_status=$?
+if [ "$route_status" -eq 10 ]; then
+    echo "warning: remote builder not configured; skipping pre-commit checks (fmt/lint/test)" >&2
+    exit 0
+fi
+[ "$route_status" -eq 0 ] || exit "$route_status"
+
 exec just pre-commit

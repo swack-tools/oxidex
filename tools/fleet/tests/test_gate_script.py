@@ -27,10 +27,10 @@ POLICY comment above `GATE_VERSION` in gate.sh). This file gives R7 teeth:
      else in the pipeline runs for real: `git clone`/`merge`, the pinned
      ExifTool oracle-precondition probe, `verdict.py`'s hub-backed cache,
      and the fleet-tests stage's own `python3 -m py_compile` +
-     `python3 -m unittest` run. SKIPPED when the real pinned oracle this
-     machine's gate.sh hardcodes (`/tmp/oxidex-exiftool-cache/...`) is not
-     present -- same convention as test_intent.py/test_ledger.py's own
-     oracle-gated tests, and for the same reason: faking the oracle here
+     `python3 -m unittest` run. The harness passes its capability-verified
+     pinned oracle cache explicitly into its child gate environment, even
+     though HermeticCase scrubs the ambient EXIFTOOL_CACHE_DIR. SKIPPED
+     when that real pinned oracle is unavailable -- faking the oracle here
      would test nothing about whether R7's stage actually runs.
 
 BLOCKER A adds the isolation-retry half (see gate.sh's own header comment
@@ -83,6 +83,8 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 import uuid
 from pathlib import Path
 
@@ -471,12 +473,15 @@ class _RealGateHarness:
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        # Capture the oracle selected when this suite was launched. Per-test
+        # HermeticCase scrubs its ambient variable; the nested gate gets this
+        # capability-checked path explicitly rather than falling to /tmp.
+        cls.oracle_cache_dir = ledger.CACHE_DIR
         probe = ledger.probe_capability()
         if not probe.ok:
             raise unittest.SkipTest(
-                f"real pinned ExifTool oracle unavailable ({probe.detail}) -- gate.sh "
-                f"hardcodes /tmp/oxidex-exiftool-cache/exiftool-pinned.sh and this test "
-                f"runs the REAL script, so it cannot fake this precondition away"
+                f"real pinned ExifTool oracle unavailable ({probe.detail}) -- "
+                f"this test runs the REAL gate and cannot fake its precondition"
             )
 
     def setUp(self):
@@ -503,6 +508,7 @@ class _RealGateHarness:
             "HOME": str(home),
             "USER": os.environ.get("USER", "fleet-test"),
             "PATH": f"{self.fakebin}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+            "EXIFTOOL_CACHE_DIR": str(self.oracle_cache_dir),
             "FLEET_HUB_URL": str(hub),
             "FLEET_CODE_URL": str(hub),
         }
@@ -523,6 +529,43 @@ class _RealGateHarness:
             "json": json.loads(json_path.read_text()) if json_path.exists() else None,
             "log": log_path.read_text(errors="replace") if log_path.exists() else "",
         }
+
+
+class TestRealGateOracleHandoff(HermeticCase):
+    """The nested real gate gets the already capability-checked cache."""
+
+    def test_scrubbed_ambient_cache_is_explicitly_passed_to_gate(self):
+        class Fixture(_RealGateHarness, HermeticCase):
+            pass
+
+        cache = Path("/target/verified-pinned-oracle")
+        with mock.patch.object(ledger, "CACHE_DIR", cache), \
+             mock.patch.object(ledger, "probe_capability", return_value=SimpleNamespace(ok=True)):
+            Fixture.setUpClass()
+        self.assertEqual(Fixture.oracle_cache_dir, cache)
+        self.assertNotIn("EXIFTOOL_CACHE_DIR", os.environ)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = SimpleNamespace(tmp=root, fakebin=_build_fake_bin(root),
+                                      oracle_cache_dir=Fixture.oracle_cache_dir)
+            calls = []
+            def capture(argv, **kwargs):
+                calls.append((argv, kwargs))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            with mock.patch.object(subprocess, "run", side_effect=capture):
+                _RealGateHarness._run_gate(fixture, "staging/fixture", root / "hub.git", "oracle")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0][:2], ["bash", str(GATE_SH)])
+            self.assertEqual(calls[0][1]["env"]["EXIFTOOL_CACHE_DIR"], str(cache))
+
+    def test_unavailable_oracle_still_refuses_the_real_gate_fixture(self):
+        class Fixture(_RealGateHarness, HermeticCase):
+            pass
+
+        with mock.patch.object(ledger, "probe_capability",
+                               return_value=SimpleNamespace(ok=False, detail="DOCX probe failed")):
+            with self.assertRaisesRegex(unittest.SkipTest, "DOCX probe failed"):
+                Fixture.setUpClass()
 
 
 class TestFleetTestsStageHasTeeth(_RealGateHarness, HermeticCase):

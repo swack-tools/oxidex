@@ -10,57 +10,54 @@ use std::path::Path;
 #[ignore] // Requires external PE file
 fn test_pe_parsing_notepad_plus_plus() {
     // This test requires Notepad++ to be downloaded
-    let test_file = "/tmp/notepad++.exe";
+    let test_file = "tests/samples/pe/notepad++.exe";
 
     let test_path = Path::new(test_file);
-    if test_path.exists() {
-        let reader = MMapReader::new(test_path).expect("Failed to open file");
-        let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE");
+    assert!(
+        test_path.is_file(),
+        "required versioned PE fixture missing: {test_file}"
+    );
+    let reader = MMapReader::new(test_path).expect("Failed to open file");
+    let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE");
 
-        println!("\n=== PE Tags Extracted: {} ===", metadata.len());
+    println!("\n=== PE Tags Extracted: {} ===", metadata.len());
 
-        // Verify key tags are present
-        assert!(
-            metadata.get("EXE:MachineType").is_some(),
-            "Missing PE:MachineType"
-        );
-        assert!(
-            metadata.get("EXE:CompanyName").is_some(),
-            "Missing PE:CompanyName"
-        );
-        assert!(
-            metadata.get("EXE:FileVersion").is_some(),
-            "Missing PE:FileVersion"
-        );
-        assert!(
-            metadata.get("EXE:ProductName").is_some(),
-            "Missing PE:ProductName"
-        );
-        assert!(
-            metadata.get("EXE:FileDescription").is_some(),
-            "Missing PE:FileDescription"
-        );
-        assert!(
-            metadata.get("EXE:LegalCopyright").is_some(),
-            "Missing PE:LegalCopyright"
-        );
+    // Verify key tags are present
+    assert!(
+        metadata.get("EXE:MachineType").is_some(),
+        "Missing PE:MachineType"
+    );
+    assert!(
+        metadata.get("EXE:CompanyName").is_some(),
+        "Missing PE:CompanyName"
+    );
+    assert!(
+        metadata.get("EXE:FileVersion").is_some(),
+        "Missing PE:FileVersion"
+    );
+    assert!(
+        metadata.get("EXE:ProductName").is_some(),
+        "Missing PE:ProductName"
+    );
+    assert!(
+        metadata.get("EXE:FileDescription").is_some(),
+        "Missing PE:FileDescription"
+    );
+    assert!(
+        metadata.get("EXE:LegalCopyright").is_some(),
+        "Missing PE:LegalCopyright"
+    );
 
-        // Print all tags for manual verification
-        let mut keys: Vec<_> = metadata.keys().collect();
-        keys.sort();
-        for key in keys {
-            if let Some(value) = metadata.get(key) {
-                println!("{}: {:?}", key, value);
-            }
+    // Print all tags for manual verification
+    let mut keys: Vec<_> = metadata.keys().collect();
+    keys.sort();
+    for key in keys {
+        if let Some(value) = metadata.get(key) {
+            println!("{}: {:?}", key, value);
         }
-
-        println!("\n✓ All critical PE tags extracted successfully!");
-    } else {
-        eprintln!("Skipping test: {} not found", test_file);
-        eprintln!(
-            "Download with: curl -sL https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.9/npp.8.6.9.portable.x64.zip -o /tmp/npp.zip && cd /tmp && unzip -q npp.zip"
-        );
     }
+
+    println!("\n✓ All critical PE tags extracted successfully!");
 }
 
 #[test]

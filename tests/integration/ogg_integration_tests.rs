@@ -23,11 +23,10 @@ fn printed(value: &TagValue) -> String {
 fn test_ogg_metadata_parity_with_exiftool() {
     let test_file = "test_data/audio/sample.ogg";
 
-    // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
-        eprintln!("Warning: {} not found, skipping test", test_file);
-        return;
-    }
+    assert!(
+        Path::new(test_file).is_file(),
+        "required OGG parity fixture missing: {test_file}"
+    );
 
     // Run ExifTool
     // -G0 is required: the tags compared below are group-qualified
@@ -57,13 +56,15 @@ fn test_ogg_metadata_parity_with_exiftool() {
     let oxidex_metadata = parse_ogg_metadata(&reader).expect("Failed to parse OGG file");
 
     // Compare key tags
-    let tags_to_compare = ["Vorbis:SampleRate", "Vorbis:Channels"];
+    let tags_to_compare = ["Vorbis:SampleRate", "Vorbis:AudioChannels"];
 
+    let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
-        if exiftool_value.is_null() {
-            continue; // Skip tags not present in test file
-        }
+        assert!(
+            !exiftool_value.is_null(),
+            "required native Ogg tag absent from authentic fixture: {tag}"
+        );
 
         let oxidex_value = oxidex_metadata.get(tag);
 
@@ -78,5 +79,11 @@ fn test_ogg_metadata_parity_with_exiftool() {
             "Mismatch for tag {}: ExifTool={}, OxiDex={}",
             tag, exiftool_str, oxidex_str
         );
+        compared += 1;
     }
+    assert_eq!(
+        compared,
+        tags_to_compare.len(),
+        "not every required Ogg tag was compared for {test_file}"
+    );
 }

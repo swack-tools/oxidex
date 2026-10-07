@@ -1,11 +1,14 @@
-"""Bounded generic Just dispatch controls; all external processes are mocked."""
+"""Bounded Just dispatch and signed fleet packet controls; no remote jobs."""
 import json
 from pathlib import Path
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import os
+import shutil
+import subprocess
 
 from lib import remote_build
 
@@ -14,11 +17,22 @@ class GenericRecipeTests(unittest.TestCase):
     def exercise(self, code, recipe="test-package"):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);commands=[]
-            def snapshot(source,archive):
+            signer=root/'maintainer.allowed_signers'
+            signer.write_text('fixture signer')
+            extras_seen=[]
+            signed_heads=[]
+            def snapshot(source,archive,extra_files=None,*,signed_head=None):
+                signed_heads.append(signed_head)
                 archive.write_bytes(b'synthetic source')
-                return {'archive_sha256':'0'*64}
+                extras_seen.extend((extra_files or {}).keys())
+                return {'archive_sha256':'0'*64,
+                        'files':[{'path':name,
+                                  'sha256':remote_build.hashlib.sha256(path.read_bytes()).hexdigest()}
+                                 for name,path in (extra_files or {}).items()]}
             def run(command, **kwargs):
                 commands.append(command)
+                if 'bundle' in command and 'create' in command:
+                    Path(command[-2]).write_bytes(b'synthetic signed bundle')
                 if 'stdout' in kwargs and hasattr(kwargs['stdout'],'write'):
                     kwargs['stdout'].write('synthetic recipe result\n')
                 return SimpleNamespace(returncode=code if ' just ' in ' '.join(command) else 0)
@@ -27,6 +41,10 @@ class GenericRecipeTests(unittest.TestCase):
             def output(command, **kwargs):
                 if 'sha256sum' in ' '.join(command):
                     return 'b'*64+'  /target/debug/oxidex\n'
+                if 'config' in command and 'gpg.ssh.allowedSignersFile' in command:
+                    return str(signer)+'\n'
+                if 'status' in command:
+                    return ''
                 return 'a'*40+'\n'
             def download(instance,zone,project,binary,artifact,digest,**kwargs):
                 artifact.write_bytes(b'verified synthetic binary')
@@ -35,6 +53,8 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
                  patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.99.0'}), \
+                 patch.object(remote_build,'verify_signed_source'), \
+                 patch('qualification_source.verify_source'), \
                  patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
@@ -51,10 +71,10 @@ class GenericRecipeTests(unittest.TestCase):
                 else:
                     self.assertEqual(remote_build.main(argv),0)
             receipt=json.loads((root/'evidence/remote-build.json').read_text())
-            return receipt,commands,root
+            return receipt,commands,root,extras_seen,signed_heads
 
     def test_success_runs_exact_recipe_without_fetch_or_cleanup_and_retains_targets(self):
-        receipt,commands,_=self.exercise(0)
+        receipt,commands,_,_,_=self.exercise(0)
         joined='\n'.join(map(str,commands))
         self.assertIn("just test-package 'package with spaces'",joined)
         self.assertNotIn('cargo fetch',joined)
@@ -66,8 +86,15 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertIn('source',receipt['remote_paths'])
         self.assertIn('target',receipt['remote_paths'])
 
+    def test_docs_build_receipt_names_retained_remote_rustdoc_directory(self):
+        receipt, commands, _, _, _ = self.exercise(0, recipe='docs-build')
+        self.assertEqual(receipt['rustdoc_path'],
+                         receipt['remote_paths']['target'] + '/doc')
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
+
     def test_ssh_255_retains_unknown_and_never_retries_or_cleans(self):
-        receipt,commands,_=self.exercise(255)
+        receipt,commands,_,_,_=self.exercise(255)
         self.assertEqual(receipt['recipe_state'],'UNKNOWN_RETAINED')
         self.assertEqual(receipt['recipe_exit_code'],255)
         self.assertFalse(receipt['retryable'])
@@ -88,8 +115,122 @@ class GenericRecipeTests(unittest.TestCase):
             run.assert_not_called();output.assert_not_called()
 
     def test_build_downloads_checked_linux_binary_and_retains_full_target(self):
-        receipt,commands,root=self.exercise(0,'build')
+        receipt,commands,root,_,_=self.exercise(0,'build')
         self.assertEqual(receipt['binary_sha256'],'b'*64)
         self.assertIn('/target/remote-linux/debug/',receipt['artifact'])
         self.assertTrue(receipt['remote_retained'])
         self.assertFalse(any('cleanup' in ' '.join(c) for c in commands))
+
+    def test_fleet_recipe_carries_only_signed_head_history(self):
+        receipt,commands,_,extras,heads=self.exercise(0,'fleet-test')
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                       'fleet-source-head'})
+        self.assertEqual(heads, ['a'*40])
+        self.assertEqual(receipt['fleet_source_bundle_sha256'],
+                         remote_build.hashlib.sha256(b'synthetic signed bundle').hexdigest())
+        self.assertTrue(any('bundle' in command and 'create' in command
+                            and command[-1] == 'HEAD' for command in commands))
+        self.assertNotIn('--all', '\n'.join(map(str, commands)))
+
+    def test_snapshot_carries_bundle_bytes_with_source_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source=root/'source';source.mkdir()
+            (source/'tracked.txt').write_text('tracked')
+            bundle=root/'repository.bundle';bundle.write_bytes(b'signed bundle')
+            archive=root/'source.tar.gz'
+            with patch.object(remote_build,'eligible_snapshot_paths',return_value=['tracked.txt']):
+                snapshot=remote_build.make_snapshot(source,archive,
+                    extra_files={'repository.bundle':bundle})
+            with tarfile.open(archive,'r:gz') as stream:
+                self.assertEqual(stream.getnames(),['tracked.txt','repository.bundle'])
+                self.assertEqual(stream.extractfile('repository.bundle').read(),b'signed bundle')
+            self.assertEqual(snapshot['files'][-1]['sha256'],
+                             remote_build.hashlib.sha256(b'signed bundle').hexdigest())
+
+    def test_signed_fleet_packet_uses_verified_head_and_rejects_hidden_edits(self):
+        if shutil.which('ssh-keygen') is None:
+            self.skipTest('ssh-keygen is unavailable')
+        import qualification_source
+        from qualification_bootstrap import verify_staged_checkout
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            source=root/'source';source.mkdir()
+            key=root/'signing-key'
+            subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True)
+            public=' '.join((root/'signing-key.pub').read_text().split()[:2])
+            fingerprint=subprocess.check_output(['ssh-keygen','-lf',str(key)+'.pub'],text=True).split()[1]
+            signers=root/'signers'
+            signers.write_text(qualification_source.PRINCIPAL+' '+public+'\n')
+            def git(*args):
+                return subprocess.check_output(['git','-C',str(source),*args],text=True).strip()
+            git('init','-q')
+            for name,value in {'.exiftool-version':'13.59\n',
+                               'rust-toolchain.toml':'[toolchain]\nchannel = "1.97.1"\n',
+                               'justfile':'fleet-test:\n  echo signed\n',
+                               'tools/remote-build/route.py':'print("signed")\n',
+                               'tools/remote-build/qualification_bootstrap.py':'# signed\n',
+                               'tools/remote-build/qualification_source.py':'# signed\n',
+                               'tools/remote-build/test_runner.py':'# signed\n',
+                               'tools/release/bootstrap_oracle.py':'# signed\n'}.items():
+                path=source/name;path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text(value)
+            git('config','user.name','swackhamer')
+            git('config','user.email',qualification_source.PRINCIPAL)
+            git('config','gpg.format','ssh')
+            git('config','user.signingkey',str(key))
+            git('config','gpg.ssh.allowedSignersFile',str(signers))
+            git('add','.')
+            git('commit','-q','-S','-m','Route SWF')
+            head=git('rev-parse','HEAD')
+            bundle=root/'repository.bundle'
+            git('bundle','create',str(bundle),'HEAD')
+            checkout=root/'checkout'
+            subprocess.run(['git','clone','-q',str(bundle),str(checkout)],check=True)
+            subprocess.run(['git','-C',str(checkout),'checkout','-q','--detach',head],check=True)
+            with patch.object(qualification_source,'KEY',public), \
+                 patch.object(qualification_source,'FINGERPRINT',fingerprint):
+                remote_build.verify_signed_source(source,head)
+                verified=verify_staged_checkout(checkout,head,signers,None,
+                    remote_build.hashlib.sha256(bundle.read_bytes()).hexdigest())
+                self.assertEqual(verified['head'],head)
+                archive=root/'snapshot.tar.gz'
+                snapshot=remote_build.make_snapshot(source,archive,signed_head=head)
+                with tarfile.open(archive,'r:gz') as stream:
+                    self.assertEqual(stream.extractfile('justfile').read(),
+                                     b'fleet-test:\n  echo signed\n')
+                self.assertEqual(snapshot['file_count'],8)
+                git('update-index','--skip-worktree','justfile')
+                (source/'justfile').write_text('fleet-test:\n  echo unsigned\n')
+                self.assertEqual(git('status','--porcelain','--untracked-files=all'),'')
+                with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: justfile'):
+                    remote_build.make_snapshot(source,archive,signed_head=head)
+                transport=SimpleNamespace(instance_id='2',host='192.0.2.1',
+                                          ssh=lambda _: self.fail('remote execution started'))
+                with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'fixture'}), \
+                     patch.object(remote_build.ssh_transport,'identity',
+                                  return_value=('fixture-uploader','fixture-key')), \
+                     patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
+                     patch.object(remote_build,'verify_builder_admission',
+                                  return_value={'admission_passed':True}), \
+                     patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}):
+                    with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: justfile'):
+                        remote_build.main(['--source',str(source),'--instance','builder-vm',
+                            '--zone','fixture','--instance-id','2','--worktree-id','fixture',
+                            '--evidence-dir',str(root/'evidence'),'--just-recipe','fleet-test'])
+                self.assertEqual(json.loads((root/'evidence/remote-build.json').read_text())['stage'],
+                                 'local_toolchain')
+                (source/'justfile').write_text('fleet-test:\n  echo signed\n')
+                git('update-index','--no-skip-worktree','justfile')
+                git('update-index','--assume-unchanged','tools/remote-build/route.py')
+                (source/'tools/remote-build/route.py').write_text('print("unsigned")\n')
+                self.assertEqual(git('status','--porcelain','--untracked-files=all'),'')
+                with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: tools/remote-build/route.py'):
+                    remote_build.make_snapshot(source,archive,signed_head=head)
+                (source/'tools/remote-build/route.py').write_text('print("signed")\n')
+                git('update-index','--no-assume-unchanged','tools/remote-build/route.py')
+                git('update-index','--skip-worktree','justfile')
+                (source/'justfile').chmod(0o755)
+                self.assertEqual(git('status','--porcelain','--untracked-files=all'),'')
+                with self.assertRaisesRegex(RuntimeError,'mode differs from signed HEAD: justfile'):
+                    remote_build.make_snapshot(source,archive,signed_head=head)

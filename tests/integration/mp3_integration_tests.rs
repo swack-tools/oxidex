@@ -47,11 +47,10 @@ fn mp3_fixture_reports_id3_size() {
 fn test_mp3_metadata_parity_with_exiftool() {
     let test_file = "test_data/audio/sample.mp3";
 
-    // Check if test file exists
-    if !std::path::Path::new(test_file).exists() {
-        eprintln!("Warning: {} not found, skipping test", test_file);
-        return;
-    }
+    assert!(
+        Path::new(test_file).is_file(),
+        "required MP3 parity fixture missing: {test_file}"
+    );
 
     // Run ExifTool
     // -G0 is required: the tags compared below are group-qualified
@@ -83,6 +82,7 @@ fn test_mp3_metadata_parity_with_exiftool() {
     // Compare key tags
     let tags_to_compare = ["ID3:Title", "ID3:Artist", "ID3:Album"];
 
+    let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
         if exiftool_value.is_null() {
@@ -102,5 +102,10 @@ fn test_mp3_metadata_parity_with_exiftool() {
             "Mismatch for tag {}: ExifTool={}, OxiDex={}",
             tag, exiftool_str, oxidex_str
         );
+        compared += 1;
     }
+    assert!(
+        compared > 0,
+        "no MP3 tags compared with ExifTool for {test_file}"
+    );
 }

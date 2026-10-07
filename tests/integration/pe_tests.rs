@@ -11,10 +11,11 @@ fn test_parse_real_pe_file() {
     // You can use any Windows executable or DLL
     let test_file = Path::new("tests/samples/pe/sample.exe");
 
-    if !test_file.exists() {
-        eprintln!("Skipping test: sample PE file not found");
-        return;
-    }
+    assert!(
+        test_file.is_file(),
+        "required generic PE fixture missing: {}",
+        test_file.display()
+    );
 
     let reader = MMapReader::new(test_file).expect("Failed to open PE file");
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE metadata");
