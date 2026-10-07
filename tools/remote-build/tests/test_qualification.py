@@ -445,6 +445,47 @@ if __name__ == "__main__":
     unittest.main()
 
 class RestrictedPreparationTests(unittest.TestCase):
+    def test_committed_canonical_write_carrier_is_copied_into_new_output(self):
+        import qualification_prepare as prepare
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            row = prepare.canonical_write_carrier(output)
+            self.assertEqual(row, {"path": str(output / "write-cohort/tag_matrix_base.jpg"),
+                                   "sha256": prepare.WRITE_COHORT_SHA256, "bytes": 771})
+            self.assertEqual(prepare.sha(Path(row["path"])), prepare.WRITE_COHORT_SHA256)
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                prepare.canonical_write_carrier(output)
+
+    def test_write_rebinding_uses_canonical_copy_and_checks_approved_source(self):
+        import qualification_prepare as prepare
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "source"
+            images = source / "t/images"
+            images.mkdir(parents=True)
+            old = images / "ExifTool.jpg"
+            old.write_bytes(b"\xff\xd8source")
+            reference = root / "old-write.json"
+            row = {"path": "/old/t/images/ExifTool.jpg", "sha256": prepare.sha(old),
+                   "bytes": old.stat().st_size}
+            reference.write_text(json.dumps({"schema": 1, "kind": prepare.WRITE_KIND,
+                                             "fixtures": [row]}))
+            canonical = prepare.canonical_write_carrier(root / "output")
+            destination = root / "output/write-fixtures.json"
+            proof = prepare.rebind_write_manifest(reference, destination, source, canonical)
+            self.assertEqual(proof["count"], 1)
+            self.assertEqual(json.loads(destination.read_text())["fixtures"], [canonical])
+            self.assertIn(Path(canonical["path"]), qualification.input_paths([destination], root))
+            self.assertNotEqual(canonical["sha256"], row["sha256"])
+            old.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "differs"):
+                prepare.rebind_write_manifest(reference, root / "output/other-write.json", source, canonical)
+            self.assertFalse((root / "output/other-write.json").exists())
+            reference.write_text(json.dumps({"schema": 1, "kind": prepare.WRITE_KIND,
+                                             "fixtures": [row, row]}))
+            with self.assertRaisesRegex(ValueError, "exactly one carrier"):
+                prepare.rebind_write_manifest(reference, root / "output/extra-write.json", source, canonical)
+
     def test_ordered_selection_rejects_same_count_different_content(self):
         import qualification_prepare as prepare
         rows = [{"path": "/old/t/images/a.jpg", "sha256": "a" * 64, "bytes": 12},
