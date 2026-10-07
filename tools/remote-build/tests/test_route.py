@@ -90,6 +90,30 @@ class RouteTests(unittest.TestCase):
         stage.assert_not_called()
         ci.assert_not_called()
 
+    def test_remote_builder_tests_use_signed_git_checkout_without_oracle(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch.object(route, 'select_signed_builder_target', side_effect=lambda: events.append('target')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['test-remote-build'])
+        self.assertEqual(events, ['signed checkout', 'target', 'suite'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_test-remote-build-worker'])
+
+        events.clear()
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=Path('/actions/verified')), \
+             patch.object(route, 'trusted_marker', return_value=False), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=lambda: events.append('verified CI')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')):
+            route.main(['test-remote-build'])
+            route.main(['--require-local-context', 'test-remote-build'])
+        self.assertEqual(events, ['verified CI', 'suite', 'verified CI'])
+
     def test_docs_site_worker_uses_signed_checkout_without_oracle_setup(self):
         with patch.object(route, 'local_worker_context', return_value=True), \
              patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
@@ -237,6 +261,9 @@ class RouteTests(unittest.TestCase):
                                  capture_output=True, text=True, check=True).stderr
         self.assertIn('route.py --require-local-context docs-site-build', website)
         self.assertIn('python3 tools/remote-build/docs_site_worker.py', website)
+        remote_suite = subprocess.run(['just', '--dry-run', '_test-remote-build-worker'],
+                                      cwd=repository, capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py --require-local-context test-remote-build', remote_suite)
         self.assertNotIn('cargo doc', website)
         for recipe, ordered in (
             ('ci-standard', ('cargo fmt --all -- --check',

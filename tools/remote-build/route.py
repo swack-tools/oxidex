@@ -254,7 +254,8 @@ def main(argv):
             prepare_generic_recipe_oracle()
         elif (recipe in FLEET_RECIPES
               and recipe not in ('test-ignored', 'freeze-linux-perl',
-                                 'prove-linux-perl-component', 'docs-site-build')):
+                                 'prove-linux-perl-component', 'docs-site-build',
+                                 'test-remote-build')):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:

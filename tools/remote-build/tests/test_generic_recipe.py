@@ -375,6 +375,17 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
         self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
 
+    def test_remote_builder_tests_carry_signed_git_history(self):
+        receipt, commands, _, extras, heads = self.exercise(0, recipe='test-remote-build')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertEqual(receipt['fleet_source_bundle_sha256'],
+                         remote_build.hashlib.sha256(b'synthetic signed bundle').hexdigest())
+        self.assertTrue(any('bundle' in command and 'create' in command
+                            and command[-1] == 'HEAD' for command in commands))
+
     def test_docs_site_build_uses_signed_packet_and_names_retained_snapshot(self):
         receipt, commands, _, extras, heads = self.exercise(0, recipe='docs-site-build')
         self.assertEqual(heads, ['a' * 40])

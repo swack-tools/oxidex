@@ -75,7 +75,7 @@ test-remote-build:
     python3 tools/remote-build/route.py test-remote-build
 
 _test-remote-build-worker:
-    python3 tools/remote-build/route.py --require-local-context
+    python3 tools/remote-build/route.py --require-local-context test-remote-build
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
 
 # Run all tests with cargo-nextest (faster parallel execution)
