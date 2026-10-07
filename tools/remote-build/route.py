@@ -74,15 +74,21 @@ def prepare_fleet_checkout() -> None:
     print(f'FLEET_SIGNED_SOURCE: head={head} checkout={FLEET_CHECKOUT}', flush=True)
 
 
+def verify_signed_builder_target() -> None:
+    """The selected Cargo path must be a canonical sibling of signed source."""
+    if FLEET_CARGO_TARGET == FLEET_CHECKOUT or FLEET_CARGO_TARGET in FLEET_CHECKOUT.parents:
+        raise RuntimeError('signed fleet Cargo target contains the source checkout')
+    if (FLEET_CARGO_TARGET.is_symlink() or FLEET_CARGO_TARGET.resolve() != FLEET_CARGO_TARGET
+            or (FLEET_CARGO_TARGET.exists() and not FLEET_CARGO_TARGET.is_dir())):
+        raise RuntimeError('signed fleet Cargo target is not canonical')
+
+
 def select_signed_builder_target() -> None:
     """Keep Cargo outside its signed checkout so trybuild can normalize source paths."""
     configured = os.environ.get('CARGO_TARGET_DIR')
     if configured not in (None, '/target', str(FLEET_CARGO_TARGET)):
         raise RuntimeError('signed fleet checkout has an unexpected Cargo target')
-    if FLEET_CARGO_TARGET == FLEET_CHECKOUT or FLEET_CARGO_TARGET in FLEET_CHECKOUT.parents:
-        raise RuntimeError('signed fleet Cargo target contains the source checkout')
-    if FLEET_CARGO_TARGET.is_symlink() or FLEET_CARGO_TARGET.resolve() != FLEET_CARGO_TARGET:
-        raise RuntimeError('signed fleet Cargo target is not canonical')
+    verify_signed_builder_target()
     os.environ['CARGO_TARGET_DIR'] = str(FLEET_CARGO_TARGET)
 
 
@@ -207,6 +213,8 @@ def main(argv):
         # the public route (or an explicit correctly bound environment) first.
         if builder_checkout and os.environ.get('CARGO_TARGET_DIR') != str(FLEET_CARGO_TARGET):
             raise SystemExit('Refusing signed fleet worker without its separate Cargo target')
+        if builder_checkout:
+            verify_signed_builder_target()
         if len(argv) == 2 and argv[1] in FLEET_RECIPES and not builder_checkout:
             verify_ci_fleet_checkout()
         marker = BUILDER_MARKER if (Path.cwd() in (FLEET_SOURCE, FLEET_CHECKOUT)

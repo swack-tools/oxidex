@@ -328,6 +328,47 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual(rendered.stderr.splitlines()[0],
                                  'python3 tools/remote-build/route.py --require-local-context')
 
+    def test_public_and_private_signed_targets_reject_aliases_and_ancestor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            checkout = root / 'checkout'
+            checkout.mkdir()
+            target = root / 'cargo'
+            other = root / 'other'
+            other.mkdir()
+            with patch.object(route, 'FLEET_CHECKOUT', checkout), \
+                 patch.object(route, 'FLEET_CARGO_TARGET', target), \
+                 patch.object(route.Path, 'cwd', return_value=checkout), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=True):
+                with patch.dict(os.environ, {'CARGO_TARGET_DIR': str(target)}):
+                    self.assertEqual(route.main(['--require-local-context']), 0)
+                    route.select_signed_builder_target()
+                    for destination in (checkout, other):
+                        with self.subTest(destination=destination):
+                            target.symlink_to(destination, target_is_directory=True)
+                            try:
+                                with self.assertRaisesRegex(RuntimeError, 'not canonical'):
+                                    route.main(['--require-local-context'])
+                                with self.assertRaisesRegex(RuntimeError, 'not canonical'):
+                                    route.select_signed_builder_target()
+                            finally:
+                                target.unlink()
+                    target.write_text('not a directory')
+                    with self.assertRaisesRegex(RuntimeError, 'not canonical'):
+                        route.main(['--require-local-context'])
+                    target.unlink()
+            with patch.object(route, 'FLEET_CHECKOUT', checkout), \
+                 patch.object(route, 'FLEET_CARGO_TARGET', root), \
+                 patch.object(route.Path, 'cwd', return_value=checkout), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=True), \
+                 patch.dict(os.environ, {'CARGO_TARGET_DIR': str(root)}):
+                with self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+                    route.main(['--require-local-context'])
+                with self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+                    route.select_signed_builder_target()
+
     def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \
