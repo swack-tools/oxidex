@@ -11,12 +11,14 @@ import platform
 import re
 import stat
 
+from tools.release.freeze_linux_perl import MAX_BYTES as MAX_TREE_BYTES
+from tools.release.freeze_linux_perl import MAX_MEMBERS as MAX_TREE_ENTRIES
+
 DESCRIPTOR = Path(__file__).with_name("oracle-linux-perl-identity.json")
 ENVELOPE = Path("/src/reference/approved-linux-perl.json")
 QUALIFICATION_ROOT = Path("/target/ops")
 PREFIX = QUALIFICATION_ROOT / "toolchains/perl-5.38.2/prefix"
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
-MAX_TREE_ENTRIES = 100_000
 MAX_ENVELOPE_BYTES = 4 * ((MAX_ARCHIVE_BYTES + 2) // 3) + 4096
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -140,6 +142,7 @@ def check_metadata(candidate: Path) -> None:
     # reading its bytes or executing the approved Perl, without following links.
     pending = [candidate]
     count = 0
+    regular_bytes = 0
     while pending:
         directory = pending.pop()
         try:
@@ -152,6 +155,10 @@ def check_metadata(candidate: Path) -> None:
                     info = path.lstat()
                     if info.st_uid != os.geteuid():
                         raise UnverifiableMetadata(f"approved Linux Perl tree has foreign owner: {path}")
+                    if stat.S_ISREG(info.st_mode):
+                        regular_bytes += info.st_size
+                        if info.st_size < 0 or regular_bytes > MAX_TREE_BYTES:
+                            raise UnverifiableMetadata("approved Linux Perl tree exceeds regular byte bound")
                     if stat.S_ISDIR(info.st_mode):
                         pending.append(path)
         except OSError as exc:

@@ -23,6 +23,16 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
             return info
         return mock.patch.object(Path, "lstat", lstat)
 
+    def oversized_metadata(self, target, size=8 * 1024**3):
+        original = Path.lstat
+        def lstat(path):
+            info = original(path)
+            if Path(path) == target:
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid,
+                                       st_size=size)
+            return info
+        return mock.patch.object(Path, "lstat", lstat)
+
     def setUp(self):
         evidence = Path.home() / "oxidex-ops/evidence/recovery/linux-perl-approved-identity-tests"
         evidence.mkdir(parents=True, exist_ok=True)
@@ -116,6 +126,68 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
              mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")):
             with self.assertRaisesRegex(approved.UnverifiableMetadata, "entry bound"):
                 approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_oversized_retained_file_refuses_before_tree_hash_or_probe(self):
+        with self.oversized_metadata(self.core_module), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")):
+            with self.assertRaisesRegex(approved.UnverifiableMetadata, "byte bound"):
+                approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_aggregate_regular_bytes_refuse_before_hash(self):
+        total = sum(path.stat().st_size for path in (self.perl, self.core_module, self.zip_module))
+        with mock.patch.object(approved, "MAX_TREE_BYTES", total - 1), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")):
+            with self.assertRaisesRegex(approved.UnverifiableMetadata, "byte bound"):
+                approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_oversized_verified_staging_preserves_recovery_evidence(self):
+        staging = self.prefix.with_name(".prefix.staging-999999999-oversized")
+        self.prefix.rename(staging)
+        sidecar = oracle.write_staging_intent(
+            staging, self.prefix, 999999999, "verified", self.approval["tree_sha256"])
+        before = sidecar.read_bytes()
+        with self.oversized_metadata(staging / "lib/Config.pm"), \
+             mock.patch.object(oracle, "_process_is_live", return_value=False), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")), \
+             mock.patch.object(oracle.shutil, "rmtree", side_effect=AssertionError("delete ran")), \
+             mock.patch.object(oracle, "_append_staging_journal", side_effect=AssertionError("journal mutated")):
+            with self.assertRaisesRegex(oracle.UnverifiableMetadata, "byte bound"):
+                oracle._materialize_perl(self.root, None, None, (self.approval, self.archive))
+        self.assertTrue(staging.is_dir())
+        self.assertFalse(self.prefix.exists())
+        self.assertEqual(sidecar.read_bytes(), before)
+
+    def test_oversized_new_staging_refuses_caught_error_cleanup(self):
+        import shutil
+        shutil.rmtree(self.prefix)
+        original = Path.lstat
+        def oversized_staging_lstat(path):
+            info = original(path)
+            if Path(path).name == "Config.pm":
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid,
+                                       st_size=8 * 1024**3)
+            return info
+        def populate(staging):
+            module = staging / "lib/Config.pm"
+            module.parent.mkdir(parents=True)
+            module.write_bytes(b"tiny synthetic module")
+            raise oracle.Refused("injected populate failure")
+        with mock.patch.object(Path, "lstat", oversized_staging_lstat), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")), \
+             mock.patch.object(oracle.shutil, "rmtree", side_effect=AssertionError("delete ran")), \
+             mock.patch.object(oracle, "_append_staging_journal", side_effect=AssertionError("journal mutated")):
+            with self.assertRaisesRegex(oracle.UnverifiableMetadata, "byte bound"):
+                oracle.install_immutable_tree(
+                    self.root, self.prefix, populate, lambda _candidate: None,
+                    preflight_candidate=oracle._preflight_perl_metadata)
+        staged = [path for path in self.prefix.parent.glob(".prefix.staging-*-*") if path.is_dir()]
+        self.assertEqual(len(staged), 1)
+        sidecar = oracle.staging_intent_path(staged[0])
+        self.assertEqual(json.loads(sidecar.read_text())["lifecycle"], "materializing")
+        self.assertFalse(self.prefix.exists())
 
     def test_foreign_owned_staging_descendant_preserves_verified_recovery(self):
         staging = self.prefix.with_name(".prefix.staging-999999999-foreign")
