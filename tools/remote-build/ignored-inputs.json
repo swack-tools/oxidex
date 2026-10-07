@@ -1,0 +1,485 @@
+{
+  "inputs": [
+    {
+      "bytes": 2697,
+      "id": "makernote-canon",
+      "kind": "makernote",
+      "required_tags": [
+        "Canon:*",
+        "Make",
+        "Model"
+      ],
+      "sha256": "98c290283dbff10950bd0eac63bf95804fd09661de727df4f2946d203ca9e7a2",
+      "source": {
+        "kind": "pinned",
+        "path": "exiftool/t/images/Canon.jpg",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/samples/canon_sample.jpg"
+    },
+    {
+      "bytes": 1703,
+      "id": "makernote-nikon",
+      "kind": "makernote",
+      "required_tags": [
+        "Nikon:*",
+        "Make",
+        "Model"
+      ],
+      "sha256": "26e9f26631281d399002b28ac2bb468cbb8cb12ffc7a309631bbfb18fed410be",
+      "source": {
+        "kind": "pinned",
+        "path": "exiftool/t/images/Nikon.jpg",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/samples/nikon_sample.jpg"
+    },
+    {
+      "bytes": 31,
+      "id": "media-aac",
+      "kind": "media",
+      "required_tags": [
+        "AAC:AudioChannels",
+        "AAC:SampleRate"
+      ],
+      "sha256": "5eac3eb5435a37bcaaf4f81eb0f37e487e50b65b67d486ac7d671c3f0a1d4671",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/AAC.aac",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.aac"
+    },
+    {
+      "bytes": 2166,
+      "id": "media-ape",
+      "kind": "media",
+      "required_tags": [
+        "APE:CompressionLevel",
+        "APE:SampleRate",
+        "APE:Channels"
+      ],
+      "sha256": "1776e847ec93481bc8fad3fa03b6437c4cb0167e093ee4e38e516ecaa02ec236",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/APE.ape",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.ape"
+    },
+    {
+      "bytes": 1262,
+      "id": "media-avi",
+      "kind": "media",
+      "required_tags": [
+        "RIFF:FrameRate",
+        "RIFF:ImageWidth",
+        "RIFF:ImageHeight"
+      ],
+      "sha256": "7c03b77d115118e3293833e6c1b5d5795c998051d145674368e0b97f02719d4b",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/RIFF.avi",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/video/sample.avi"
+    },
+    {
+      "bytes": 42,
+      "id": "media-flac",
+      "kind": "media",
+      "required_tags": [
+        "FLAC:SampleRate",
+        "FLAC:Channels",
+        "FLAC:BitsPerSample"
+      ],
+      "sha256": "928abc4f5695195e2445df6e31776abcf33202f2746f45ab1ccca18e64515a18",
+      "source": {
+        "kind": "repo",
+        "path": "test_data/audio/sample.flac",
+        "provenance": "repository tracked fixture"
+      },
+      "target": "test_data/audio/sample.flac"
+    },
+    {
+      "bytes": 1358,
+      "id": "media-flv",
+      "kind": "media",
+      "required_tags": [
+        "FLV:HasVideo",
+        "FLV:HasAudio"
+      ],
+      "sha256": "57ab91a3ac81eadbdceaa73a34ad007eac6bbb9bd870b7428238f83b79a33303",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Flash.flv",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/video/sample.flv"
+    },
+    {
+      "bytes": 507,
+      "id": "media-mkv",
+      "kind": "media",
+      "required_tags": [
+        "Matroska:DocType",
+        "Matroska:DocTypeVersion"
+      ],
+      "sha256": "9781505f6fd4262f045e0e4ec28e9ce93b9a1d5fa27a05e76f3fe7e26e0f0710",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Matroska.mkv",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/video/sample.mkv"
+    },
+    {
+      "bytes": 395,
+      "id": "media-mp3",
+      "kind": "media",
+      "required_tags": [
+        "ID3:Title",
+        "ID3:Artist",
+        "ID3:Album"
+      ],
+      "sha256": "9140f4708d4fa744651125486d287c2f2a7daab2caf83bfec9b17159486a746e",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/MP3.mp3",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.mp3"
+    },
+    {
+      "bytes": 1344,
+      "id": "media-mts",
+      "kind": "media",
+      "required_tags": [
+        "H264:ImageWidth",
+        "H264:ImageHeight"
+      ],
+      "sha256": "798f804f42d1a7ae2587556e4036e7e1d27c99f0296e7b6201f288b7746ebcf5",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/M2TS.mts",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/video/sample.mts"
+    },
+    {
+      "bytes": 5371,
+      "id": "media-ogg",
+      "kind": "media",
+      "required_tags": [
+        "Vorbis:SampleRate",
+        "Vorbis:Channels"
+      ],
+      "sha256": "4a11129f8cac7e53bca5eb9107ec660681cb7992881951e87654e76b57272ad1",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Vorbis.ogg",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.ogg"
+    },
+    {
+      "bytes": 1128,
+      "id": "media-opus",
+      "kind": "media",
+      "required_tags": [
+        "Opus:OpusVersion",
+        "Opus:Channels"
+      ],
+      "sha256": "21dad35dfc1dc0529a9c9a01b6243f6d6e1dcef91026a812291be71aefa62f53",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Opus.opus",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.opus"
+    },
+    {
+      "bytes": 224,
+      "id": "media-wav",
+      "kind": "media",
+      "required_tags": [
+        "RIFF:NumChannels",
+        "RIFF:SampleRate",
+        "RIFF:BitsPerSample"
+      ],
+      "sha256": "9cb1dcc30bd66f13642d39bea9b29d2c763480b1600bcc3a5b6c73cb3de61b8c",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/RIFF.wav",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "test_data/audio/sample.wav"
+    },
+    {
+      "bytes": 3145371,
+      "expected_values": {
+        "Matroska:DocType": "webm"
+      },
+      "id": "media-webm",
+      "kind": "media",
+      "max_bytes": 5000000,
+      "required_tags": [
+        "Matroska:DocType",
+        "Matroska:DocTypeVersion"
+      ],
+      "sha1": "8b88e51a5726642ec427b7067fd6f6743fe8c741",
+      "source": {
+        "audio_codec": "Opus",
+        "author": "BMKME",
+        "commons_api_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&titles=File%3AV8.webm&prop=imageinfo&iiprop=url%7Csize%7Csha1%7Cmime%7Ctimestamp%7Cextmetadata",
+        "duration_seconds": 6.4,
+        "file_upload_timestamp": "2025-07-15T18:31:50Z",
+        "height": 1080,
+        "kind": "download",
+        "license": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "mime_type": "video/webm",
+        "source_page": "https://commons.wikimedia.org/w/index.php?title=File:V8.webm&oldid=1060986341",
+        "source_page_revision": 1060986341,
+        "url": "https://upload.wikimedia.org/wikipedia/commons/a/a7/V8.webm",
+        "video_codec": "VP9",
+        "width": 1920
+      },
+      "target": "test_data/video/sample.webm"
+    },
+    {
+      "bytes": 5120,
+      "id": "pe-generic",
+      "kind": "pe",
+      "required_tags": [
+        "FileType"
+      ],
+      "sha256": "b7199e59cd2493449071337db4f47add307f82522a363f1bd6b5071e795b2790",
+      "source": {
+        "kind": "pinned",
+        "path": "exiftool/t/images/EXE.exe",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/samples/pe/sample.exe"
+    },
+    {
+      "archive_bytes": 8250001,
+      "archive_sha256": "beddf5548e75c97930d1575ba1c7d113e6e2b33d0a200310e734ca08e225f414",
+      "consumer_note": "Ignored PE comparison test still reads a system-temp absolute path and can skip; this manifest target is only a planned portable path.",
+      "consumer_status": "PENDING_SEPARATE_TEST_PATH_PATCH",
+      "id": "pe-notepad",
+      "kind": "pe",
+      "max_bytes": 15000000,
+      "max_member_bytes": 30000000,
+      "required_tags": [
+        "EXE:CompanyName",
+        "EXE:FileVersion",
+        "EXE:ProductName",
+        "EXE:FileDescription",
+        "EXE:LegalCopyright",
+        "EXE:MachineType"
+      ],
+      "source": {
+        "asset_name": "npp.8.9.8.1.portable.x64.zip",
+        "kind": "zip_member",
+        "member": "notepad++.exe",
+        "release_tag": "v8.9.8.1",
+        "source_page": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/tag/v8.9.8.1",
+        "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.8.1/npp.8.9.8.1.portable.x64.zip"
+      },
+      "target": "tests/samples/pe/notepad++.exe"
+    },
+    {
+      "bytes": 13662,
+      "id": "raw-adobe-dng",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "daa9ce7a2c6923815390d8566254ef4d4a75d68d1531afdb264bd4b39a8dfd89",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/DNG.dng",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/sample.dng"
+    },
+    {
+      "id": "raw-arw",
+      "kind": "raw",
+      "max_bytes": 30000000,
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "a35ebb2fbec929daa5beb20d1ce5c15a8aac7b1a7a231455387f3df8a7442e07",
+      "source": {
+        "format": "ARW",
+        "kind": "download",
+        "license": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "mode": "14bit 14bit compressed (3:2)",
+        "publisher_index_date": "2017-07-13",
+        "publisher_index_file_id": 1582,
+        "publisher_index_license": "CC0-1.0",
+        "publisher_index_sha256": "a35ebb2fbec929daa5beb20d1ce5c15a8aac7b1a7a231455387f3df8a7442e07",
+        "publisher_index_size_mb": 5.88,
+        "publisher_make": "Sony",
+        "publisher_model": "ILCE-7S",
+        "publisher_size_mb": 5.88,
+        "source_page": "https://raw.pixls.us/",
+        "url": "https://raw.pixls.us/getfile.php/1582/nice/Sony%20-%20ILCE-7S%20-%2014bit%2014bit%20compressed%20(3:2).ARW"
+      },
+      "target": "tests/fixtures/raw/real/sony.arw"
+    },
+    {
+      "bytes": 8724,
+      "id": "raw-canon-cr2",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "b5d3d26f3c85bcb35a52515eac060e2e362161893504013589ffd9ad2e9b004b",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/CanonRaw.cr2",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/canon.cr2"
+    },
+    {
+      "bytes": 52502,
+      "id": "raw-canon-cr3",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "dc02aa55e277935b690879584e97c2d013f54d854afaec6f9d3274c99a918fd6",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/CanonRaw.cr3",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/canon.cr3"
+    },
+    {
+      "bytes": 38452,
+      "id": "raw-fuji-raf",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "e12e30bd0cf5f160b82b93f043696c04d1d5f4628f1fdd19abdab9f8328d8bf0",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/FujiFilm.raf",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/fuji.raf"
+    },
+    {
+      "bytes": 6188,
+      "id": "raw-nikon-nef",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "6fae30a2809b52ece100316f33a3fade4b65cf5690af2d62bb00f44ae052bdd6",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Nikon.nef",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/nikon.nef"
+    },
+    {
+      "id": "raw-orf",
+      "kind": "raw",
+      "max_bytes": 30000000,
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "2bfdade72439017a60a47aad1e5bbcb1aca36f2be7a21e94a4257a678fb6f4da",
+      "source": {
+        "format": "ORF",
+        "kind": "download",
+        "license": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "mode": "16bit (4:3)",
+        "publisher_index_date": "2022-04-14",
+        "publisher_index_file_id": 5424,
+        "publisher_index_license": "CC0-1.0",
+        "publisher_index_sha256": "2bfdade72439017a60a47aad1e5bbcb1aca36f2be7a21e94a4257a678fb6f4da",
+        "publisher_index_size_mb": 7.26,
+        "publisher_make": "Olympus",
+        "publisher_model": "E-10",
+        "publisher_size_mb": 7.26,
+        "source_page": "https://raw.pixls.us/",
+        "url": "https://raw.pixls.us/getfile.php/5424/nice/Olympus%20-%20E-10%20-%2016bit%20(4:3).ORF"
+      },
+      "target": "tests/fixtures/raw/real/olympus.orf"
+    },
+    {
+      "bytes": 12344,
+      "id": "raw-panasonic-rw2",
+      "kind": "raw",
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "431a1239713ce1bca8f0b422b9a094372246669432060e2a0a21d1fd2f761678",
+      "source": {
+        "kind": "pinned",
+        "path": "combined-samples/Panasonic.rw2",
+        "provenance": "ExifTool 13.59 locked bootstrap"
+      },
+      "target": "tests/fixtures/raw/real/panasonic.rw2"
+    },
+    {
+      "id": "raw-pef",
+      "kind": "raw",
+      "max_bytes": 30000000,
+      "required_tags": [
+        "Make",
+        "Model",
+        "FileType"
+      ],
+      "sha256": "e35ae4154a468be3154f5f462e884ba5941f010d3e8f23d347fbec14809f44d3",
+      "source": {
+        "format": "PEF",
+        "kind": "download",
+        "license": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "mode": "12bit 12bit compressed (3:2)",
+        "publisher_index_date": "2018-01-15",
+        "publisher_index_file_id": 2239,
+        "publisher_index_license": "CC0-1.0",
+        "publisher_index_sha256": "e35ae4154a468be3154f5f462e884ba5941f010d3e8f23d347fbec14809f44d3",
+        "publisher_index_size_mb": 9.12,
+        "publisher_make": "Pentax",
+        "publisher_model": "K10D",
+        "publisher_size_mb": 9.12,
+        "source_page": "https://raw.pixls.us/",
+        "url": "https://raw.pixls.us/getfile.php/2239/nice/Pentax%20-%20K10D%20-%2012bit%2012bit%20compressed%20(3:2).PEF"
+      },
+      "target": "tests/fixtures/raw/real/pentax.pef"
+    }
+  ],
+  "oracle_pin": "13.59",
+  "purpose": "prepare and probe authentic ignored-suite inputs; no staging or full-suite claim",
+  "schema": 1
+}

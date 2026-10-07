@@ -58,6 +58,14 @@ _test-worker:
 test-ignored:
     python3 tools/remote-build/route.py test-ignored
 
+# Verify every required ignored-suite carrier with the pinned native oracle.
+prepare-ignored-inputs:
+    python3 tools/remote-build/route.py prepare-ignored-inputs
+
+_prepare-ignored-inputs-worker:
+    python3 tools/remote-build/route.py --require-local-context
+    python3 tools/remote-build/ignored_fixture_probe.py
+
 _test-ignored-worker:
     python3 tools/remote-build/route.py --require-local-context
     {{unwind}} cargo test --release --workspace --all-features --locked --no-fail-fast -- --include-ignored

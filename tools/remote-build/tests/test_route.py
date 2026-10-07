@@ -95,6 +95,30 @@ class RouteTests(unittest.TestCase):
             route.main(['test-package','abc'])
         self.assertEqual(launch.call_args.args[1],['just','_test-package-worker','abc'])
 
+    def test_ignored_input_probe_routes_through_oracle_and_guarded_worker(self):
+        with patch.object(route, 'local_worker_context', return_value=False), \
+             patch.object(os, 'execv') as launch:
+            route.main(['prepare-ignored-inputs'])
+        self.assertEqual(launch.call_args.args[1][-2:],
+                         ['--just-recipe', 'prepare-ignored-inputs'])
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle',
+                   side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('worker')) as launch:
+            route.main(['prepare-ignored-inputs'])
+        self.assertEqual(events, ['oracle', 'worker'])
+        self.assertEqual(launch.call_args.args[1],
+                         ['just', '_prepare-ignored-inputs-worker'])
+        if shutil.which('just'):
+            repository = Path(__file__).resolve().parents[3]
+            rendered = subprocess.run(['just', '--dry-run', '_prepare-ignored-inputs-worker'],
+                                      cwd=repository, capture_output=True, text=True, check=True)
+            self.assertEqual(rendered.stderr.splitlines(), [
+                'python3 tools/remote-build/route.py --require-local-context',
+                'python3 tools/remote-build/ignored_fixture_probe.py',
+            ])
+
     def test_ignored_suite_dispatches_to_existing_remote_client(self):
         with patch.object(route, 'local_worker_context', return_value=False), \
              patch.object(os, 'execv') as launch:
