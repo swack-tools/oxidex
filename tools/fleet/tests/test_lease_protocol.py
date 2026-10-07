@@ -48,6 +48,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -715,11 +716,31 @@ class TestFleetdStopsWorkOnLostLease(HermeticCase):
         )
 
     def test_kill_process_group_refuses_to_kill_fleetds_own_group(self):
-        """The belt to start_new_session's braces: a fleetd that SIGKILLs
-        its own process group takes out every gate on the host."""
-        outcome = fleetd.kill_process_group(os.getpgrp(), grace=0.1)
-        self.assertIn("refused", outcome)
-        self.assertIn("own process group", outcome)
+        """A plausible own pgid must be refused before any group signal."""
+        own_group = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            start_new_session=True, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            with mock.patch("keel.runner.os.getpgrp", return_value=own_group.pid), \
+                 mock.patch("keel.runner.os.killpg", side_effect=AssertionError("own group signalled")):
+                outcome = fleetd.kill_process_group(own_group.pid, grace=0.1)
+            self.assertIn("refused", outcome)
+            self.assertIn("own process group", outcome)
+            self.assertIsNone(own_group.poll(), "own group must remain alive")
+        finally:
+            try:
+                os.killpg(own_group.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            own_group.wait(timeout=10)
+
+    def test_pid_one_is_refused_before_any_group_signal(self):
+        with mock.patch("keel.runner.os.killpg", side_effect=AssertionError("pid 1 signalled")):
+            outcome = fleetd.kill_process_group(1, grace=0.1)
+        self.assertIn("refused: implausible pgid 1", outcome)
+        if os.getpgrp() == 1:
+            self.assertIn("implausible pgid", outcome, "Docker's actual own group is 1")
 
 
 # --------------------------------------------------------------------- #
