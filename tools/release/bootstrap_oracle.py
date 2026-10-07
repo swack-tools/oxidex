@@ -214,6 +214,8 @@ def write_comparison_wrapper(
     library: Path,
     script: Path,
     marker_directory: Path,
+    *,
+    marker_root: Path | None = None,
 ) -> None:
     """Atomically publish a private wrapper that execs the authenticated Perl.
 
@@ -221,15 +223,25 @@ def write_comparison_wrapper(
     directory so the successful measurement proves the interpreter and argv
     actually used by ``tag-comparison``.
     """
-    for value in (target, perl, library, script, marker_directory):
+    for value in (perl, library, script):
         require_descendant(value)
+    # The remote recipe may retain markers with its owned build target. Do not
+    # turn this into a general second writable root for release callers.
+    if marker_root is not None:
+        selected_target = os.environ.get("CARGO_TARGET_DIR")
+        if (not selected_target or not Path(selected_target).is_absolute()
+                or marker_root != Path(selected_target)):
+            raise Refused("comparison marker root must be the selected build target")
+    marker_boundary = DURABLE_ROOT if marker_root is None else marker_root
+    require_descendant(target, marker_boundary)
+    require_descendant(marker_directory, marker_boundary)
     if not perl.is_file() or not library.is_dir() or not script.is_file():
         raise Refused("comparison wrapper requires existing Perl, library, and script")
     target.parent.mkdir(parents=True, exist_ok=True)
     marker_directory.mkdir(parents=True, exist_ok=True)
     os.chmod(marker_directory, 0o700)
-    require_descendant(target)
-    require_descendant(marker_directory)
+    require_descendant(target, marker_boundary)
+    require_descendant(marker_directory, marker_boundary)
     body = (
         f"#!{perl}\n"
         "use strict; use warnings; use Fcntl qw(:DEFAULT); use IO::Handle; "

@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,6 +113,84 @@ def prepare_generic_recipe_oracle() -> Path:
         "perl_sha256": report["artifacts"]["perl_executable"]["sha256"],
         "exiftool_tree_sha256": report["artifacts"]["exiftool_tree"]["sha256"],
         "docx_probe": report["probes"]["docx"],
+    }, sort_keys=True), flush=True)
+    return manifest
+
+
+def fleet_recipe_target() -> Path:
+    """Use Cargo's selected target, including its Actions checkout default."""
+    configured = os.environ.get("CARGO_TARGET_DIR")
+    if configured:
+        target = Path(configured)
+    elif (os.environ.get("GITHUB_ACTIONS") == "true"
+          and os.environ.get("GITHUB_REPOSITORY") == "swack-tools/oxidex"
+          and os.environ.get("GITHUB_SERVER_URL") == "https://github.com"
+          and os.environ.get("GITHUB_WORKSPACE") == str(ROOT)
+          and Path.cwd() == ROOT):
+        target = ROOT / "target"
+    else:
+        target = TARGET
+    if not target.is_absolute():
+        raise RuntimeError("fleet recipe target must be absolute")
+    # The route has already authenticated the CI checkout or remote builder.
+    # Pin the selected Cargo target for the wrapper and its child recipe.
+    os.environ.setdefault("CARGO_TARGET_DIR", str(target))
+    return target
+
+
+def prepare_fleet_recipe_oracle() -> Path:
+    """Expose verified locked fixtures through the fleet ledger's legacy path."""
+    for key in ("PERL5LIB", "PERLLIB", "PERL5OPT"):
+        os.environ.pop(key, None)
+    manifest = prepare_generic_recipe_oracle()
+    report = json.loads(manifest.read_text())
+    if report["probes"]["corpus_files"] < 4000:
+        raise RuntimeError("locked fleet corpus is below the required file floor")
+    pin = (ROOT / ".exiftool-version").read_text().strip()
+    cache = oracle_cache_root(ROOT / "tools/release/oracle-lock.json",
+                              Path(os.environ.get("CARGO_HOME", "/cargo")))
+    bootstrap = load_oracle_bootstrap(cache)
+    source_cache = Path(os.environ["EXIFTOOL_CACHE_DIR"])
+    corpus = source_cache / "combined-samples"
+    if not corpus.is_dir():
+        raise RuntimeError("locked fleet corpus is unavailable")
+    bootstrap.reject_symlink_components(source_cache / "exiftool")
+    bootstrap.reject_symlink_components(corpus)
+    # The shared cache survives recipe containers. Keep both the wrapper and
+    # its PID-named markers in one owned target receipt so parallel recipes
+    # cannot republish each other's wrapper or collide on recycled PIDs.
+    target = fleet_recipe_target()
+    receipt_root = target / "fleet-oracle-receipts"
+    bootstrap.reject_symlink_components(receipt_root)
+    receipt_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    receipt_root.chmod(0o700)
+    receipt = Path(tempfile.mkdtemp(prefix="recipe-", dir=receipt_root))
+    receipt.chmod(0o700)
+    marker_directory = receipt / "identity"
+    marker_directory.mkdir(mode=0o700)
+    (receipt / "exiftool").symlink_to(source_cache / "exiftool", target_is_directory=True)
+    (receipt / "combined-samples").symlink_to(corpus, target_is_directory=True)
+    wrapper = receipt / "exiftool-pinned.sh"
+    bootstrap.write_comparison_wrapper(
+        wrapper, bootstrap.perl_path(cache), bootstrap.exiftool_library_path(cache).parent.parent,
+        bootstrap.exiftool_path(cache), marker_directory, marker_root=target)
+    docx = bootstrap.exiftool_root(cache) / "t/images/OOXML.docx"
+    for arguments, expected in ((["-ver"], pin), (["-s3", "-FileType", str(docx)], "DOCX")):
+        result = subprocess.run([str(wrapper), *arguments], capture_output=True,
+                                text=True, timeout=30, check=True)
+        if result.stdout.strip() != expected:
+            raise RuntimeError("fleet ledger oracle capability probe failed")
+    os.environ["EXIFTOOL_CACHE_DIR"] = str(receipt)
+    print("=== verified fleet ledger fixtures ===", json.dumps({
+        "oracle": str(wrapper),
+        "oracle_source_cache": str(source_cache),
+        "corpus": str(receipt / "combined-samples"),
+        "identity_markers": str(marker_directory),
+        "corpus_files": report["probes"]["corpus_files"],
+        "bootstrap_manifest_sha256": file_sha(manifest),
+        "perl_sha256": report["artifacts"]["perl_executable"]["sha256"],
+        "exiftool_tree_sha256": report["artifacts"]["exiftool_tree"]["sha256"],
+        "corpus_tree_sha256": report["artifacts"]["corpus_tree"]["sha256"],
     }, sort_keys=True), flush=True)
     return manifest
 

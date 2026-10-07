@@ -820,7 +820,13 @@ class TestTipSignalBump(TrainBase):
         self.add_branch("sig2", {"b.txt": "b\n"})
         res2, _ = self.run_train({}, epoch="e2")
         self.assertEqual([res1.outcome, res2.outcome], ["advanced", "advanced"])
-        signal = self.hub.read(train.TIP_SIGNAL_REF)
+        # Both trains write through a plain Hub, so the fixture server can
+        # still show no signal or generation 1 until its next cache sweep.
+        signal = within_sweep(
+            lambda: self.hub.read(train.TIP_SIGNAL_REF),
+            lambda v: isinstance(v, dict) and v.get("generation") == 2,
+        )
+        self.assertIsNotNone(signal, "the second train must bump refs/fleet/signals/tip")
         self.assertEqual(signal["generation"], 2)
         self.assertEqual(signal["sha"], res2.new_tip)
 

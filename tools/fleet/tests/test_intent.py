@@ -35,6 +35,7 @@ import tempfile
 import unittest
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -135,8 +136,10 @@ def _require_uncovered_exemplar():
     return result
 
 
-def _ensure_binary_built(timeout: int = 420):
-    candidate = REPO_ROOT / "target" / "release" / "oxidex"
+def _ensure_binary_built(timeout: int = 420) -> Path:
+    """Resolve the release binary in the target directory used by Cargo."""
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR") or "target")
+    candidate = REPO_ROOT / target_dir / "release" / "oxidex"
     if candidate.is_file():
         return candidate
     result = subprocess.run(
@@ -148,6 +151,48 @@ def _ensure_binary_built(timeout: int = 420):
     if result.returncode != 0 or not candidate.is_file():
         raise RuntimeError(f"could not build oxidex --release: exit {result.returncode}")
     return candidate
+
+
+class TestResolveIntentBinary(HermeticCase):
+    def test_default_target_dir_reuses_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            binary = repo / "target" / "release" / "oxidex"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": ""}), \
+                 patch(__name__ + ".REPO_ROOT", repo), \
+                 patch("subprocess.run", side_effect=AssertionError("unexpected rebuild")):
+                self.assertEqual(_ensure_binary_built(), binary)
+
+    def test_uses_cargo_target_dir_without_rebuilding(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            for target_value, target_root in (
+                (str(Path(td) / "external-target"), Path(td) / "external-target"),
+                ("relative-target", repo / "relative-target"),
+            ):
+                with self.subTest(target_value=target_value):
+                    binary = target_root / "release" / "oxidex"
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.touch()
+                    with patch.dict(os.environ, {"CARGO_TARGET_DIR": target_value}), \
+                         patch(__name__ + ".REPO_ROOT", repo), \
+                         patch("subprocess.run", side_effect=AssertionError("unexpected rebuild")):
+                        self.assertEqual(_ensure_binary_built(), binary)
+
+    def test_explicit_target_dir_never_falls_back_to_default_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            default = repo / "target" / "release" / "oxidex"
+            default.parent.mkdir(parents=True)
+            default.touch()
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(repo / "external")}), \
+                 patch(__name__ + ".REPO_ROOT", repo), \
+                 patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, b"", b"failed")):
+                with self.assertRaisesRegex(RuntimeError, "could not build oxidex"):
+                    _ensure_binary_built()
 
 
 class IntentTestCase(HermeticCase):
@@ -182,6 +227,34 @@ class IntentTestCase(HermeticCase):
         other_workdir = tempfile.mkdtemp(prefix="intent-test-cache2-")
         self.addCleanup(shutil.rmtree, other_workdir, ignore_errors=True)
         return Hub(url=self.hub_path, workdir=other_workdir)
+
+
+class TestFleetBinaryCallPath(IntentTestCase):
+    def test_registration_measures_explicit_cargo_target_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "sample").write_text("source")
+            subprocess.run(["git", "-C", str(repo), "add", "sample"], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture",
+                            "-c", "user.email=fixture@example.invalid", "commit", "-q",
+                            "-m", "Fixture source"], check=True)
+            binary = Path(td) / "remote-target" / "release" / "oxidex"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            measured = ledger.FormatCapability("TESTFORMAT", None, 1, 0, 0,
+                                               covered=True, reason="TESTFORMAT: measured MISSING 0")
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(binary.parents[1])}), \
+                 patch.object(ledger, "probe_capability", return_value=ledger.CapabilityProbe(True, "13.59", "DOCX", "verified")), \
+                 patch.object(ledger, "measure_format", return_value=measured) as measure, \
+                 patch.object(ledger.instrument, "staleness_note", return_value=None):
+                result = register(self.hub, repo, slug="remote-binary-check",
+                                  title="Remote binary check", claimed_by="fixture",
+                                  scope={"formats": ["TESTFORMAT"], "tags": [], "files": []})
+            self.assertFalse(result.ok)
+            self.assertTrue(result.reason.startswith("[capability-ledger]"), result.reason)
+            self.assertEqual(measure.call_args.args[1], binary.resolve())
 
 
 class TestFixtureGuard(IntentTestCase):

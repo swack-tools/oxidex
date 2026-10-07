@@ -1,4 +1,5 @@
 """Small control-plane checks: no Cargo, SSH, or provider calls."""
+import io
 import json
 import os
 import shutil
@@ -15,6 +16,22 @@ import route
 
 
 class RouteTests(unittest.TestCase):
+    def test_batch_blob_framing_refuses_wrong_type_identity_size_and_truncation(self):
+        oid = 'a' * 40
+        valid = (oid + ' blob 3\n').encode() + b'a\0b\n'
+        self.assertEqual(route._read_batch_blob(io.BytesIO(valid), oid, 3), b'a\0b')
+        bad = (
+            (oid + ' tree 3\n').encode() + b'a\0b\n',
+            (('b' * 40) + ' blob 3\n').encode() + b'a\0b\n',
+            (oid + ' blob 4\n').encode() + b'a\0b\n',
+            (oid + ' blob 3\n').encode() + b'a\0',
+            (oid + ' blob 3\n').encode() + b'a\0bX',
+            b'',
+        )
+        for response in bad:
+            with self.subTest(response=response), self.assertRaises(RuntimeError):
+                route._read_batch_blob(io.BytesIO(response), oid, 3)
+
     def test_marker_requires_exact_root_regular_nonwritable_file(self):
         good=SimpleNamespace(st_mode=stat.S_IFREG|0o444,st_uid=0,st_nlink=1)
         with patch.object(route.sys,'platform','linux'), patch.object(Path,'cwd',return_value=Path('/src')):
@@ -40,6 +57,19 @@ class RouteTests(unittest.TestCase):
              patch.object(Path,'lstat',return_value=SimpleNamespace(st_mode=stat.S_IFLNK|0o444,st_uid=0,st_nlink=1)):
             self.assertFalse(route.local_worker_context(env))
 
+    def test_fleet_checkout_requires_root_marker_and_source_verification(self):
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+             patch.object(route, 'verified_fleet_checkout', return_value=True) as verify, \
+             patch.object(route, 'trusted_marker', return_value=False):
+            self.assertFalse(route.local_worker_context({}))
+            verify.assert_not_called()
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+             patch.object(route, 'verified_fleet_checkout', return_value=False), \
+             patch.object(route, 'trusted_marker', return_value=True):
+            self.assertFalse(route.local_worker_context({}))
+
     def test_laptop_dispatch_preserves_recipe_and_literal_arguments(self):
         with patch.object(route,'local_worker_context',return_value=False),patch.object(os,'execv') as launch:
             route.main(['test-package','some-package'])
@@ -48,6 +78,16 @@ class RouteTests(unittest.TestCase):
         with patch.object(route,'local_worker_context',return_value=False),patch.object(os,'execv') as launch:
             route.main(['test-package','$(touch /tmp/should-never-run)'])
         self.assertEqual(launch.call_args.args[1][-1],'--just-arg=$(touch /tmp/should-never-run)')
+
+    def test_mac_fleet_recipe_still_dispatches_remote(self):
+        with patch.object(route.sys, 'platform', 'darwin'), \
+             patch.object(os, 'execv') as launch, \
+             patch.object(route, 'prepare_fleet_checkout') as stage, \
+             patch.object(route, 'verify_ci_fleet_checkout') as ci:
+            route.main(['fleet-test'])
+        self.assertEqual(launch.call_args.args[1][-2:], ['--just-recipe', 'fleet-test'])
+        stage.assert_not_called()
+        ci.assert_not_called()
 
     def test_rendered_private_package_keeps_one_literal_cargo_argument(self):
         if shutil.which('just') is None:
@@ -163,6 +203,184 @@ class RouteTests(unittest.TestCase):
                 route.main(['test'])
         launch.assert_not_called()
 
+    def test_fleet_worker_verifies_checkout_and_fixtures_before_suite(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('locked fixtures')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['fleet-test'])
+        self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_fleet-test-worker'])
+
+    def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('locked fixtures')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['fleet-tests-both'])
+        self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_fleet-tests-both-worker'])
+
+    def test_fleet_fixture_refusal_prevents_suite_dispatch(self):
+        for recipe in ('fleet-test', 'fleet-tests-both'):
+            with self.subTest(recipe=recipe), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+                 patch.object(route, 'trusted_marker', return_value=True), \
+                 patch.object(route, 'prepare_fleet_checkout'), \
+                 patch('test_runner.prepare_fleet_recipe_oracle', side_effect=RuntimeError('corpus missing')), \
+                 patch.object(os, 'execvp') as launch:
+                with self.assertRaisesRegex(RuntimeError, 'corpus missing'):
+                    route.main([recipe])
+                launch.assert_not_called()
+
+    def test_staged_bundle_supplies_history_to_fleet_checkout(self):
+        import qualification_bootstrap
+        repo_root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(repo_root / 'tools/fleet'))
+        from intent import check_history
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source, checkout = root / 'source', root / 'checkout'
+            source.mkdir()
+            subprocess.run(['git', 'init', '-q', str(source)], check=True)
+            (source / 'sample').write_text('source')
+            subprocess.run(['git', '-C', str(source), 'add', 'sample'], check=True)
+            subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
+                            '-c', 'user.email=fixture@example.invalid', 'commit', '-q',
+                            '-m', 'Route SWF'], check=True)
+            head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+            subprocess.run(['git', '-C', str(source), 'bundle', 'create',
+                            str(source / 'repository.bundle'), 'HEAD'], check=True)
+            (source / 'fleet-source-head').write_text(head + '\n')
+            (source / 'maintainer.allowed_signers').write_text('fixture signer\n')
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(source)
+                with patch.object(route, 'FLEET_SOURCE', source), \
+                     patch.object(route, 'FLEET_CHECKOUT', checkout), \
+                     patch.object(qualification_bootstrap, 'verify_staged_checkout') as verify:
+                    route.prepare_fleet_checkout()
+                    self.assertTrue(check_history(checkout, {'formats': ['SWF']}).hit)
+                    self.assertEqual(verify.call_args.args[0:2], (checkout, head))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_actions_fleet_routes_in_place_and_private_guard_rechecks_source(self):
+        events = []
+        ci_env = {'CI': 'true', 'GITHUB_ACTIONS': 'true',
+                  'RUNNER_ENVIRONMENT': 'self-hosted', 'RUNNER_OS': 'Linux',
+                  'RUNNER_NAME': 'spot-runner', 'GITHUB_RUN_ID': '123'}
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.dict(os.environ, ci_env), \
+             patch.object(route, 'trusted_marker', side_effect=lambda path: path == route.RUNNER_MARKER), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=lambda: events.append('verified CI checkout')), \
+             patch.object(route, 'prepare_fleet_checkout') as stage, \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('locked fixtures')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')):
+            route.main(['fleet-test'])
+            self.assertEqual(events, ['verified CI checkout', 'locked fixtures', 'suite'])
+            stage.assert_not_called()
+            events.clear()
+            route.main(['fleet-tests-both'])
+            self.assertEqual(events, ['verified CI checkout', 'locked fixtures', 'suite'])
+            stage.assert_not_called()
+            events.clear()
+            route.main(['--require-local-context', 'fleet-test'])
+            self.assertEqual(events, ['verified CI checkout'])
+
+    def test_actions_fleet_checkout_accepts_full_and_shallow_merge_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / 'source'
+            source.mkdir()
+            def git(*args, cwd=source):
+                return subprocess.run(['git', '-C', str(cwd), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            def commit(message):
+                git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    'commit', '-qm', message)
+            git('init', '-q')
+            required = ('justfile', 'rust-toolchain.toml',
+                        'tools/remote-build/route.py',
+                        'tools/remote-build/qualification_bootstrap.py',
+                        'tools/remote-build/qualification_source.py',
+                        'tools/remote-build/test_runner.py',
+                        'tools/release/bootstrap_oracle.py')
+            for name in required:
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name + '\n')
+            git('add', '.')
+            commit('SWF base')
+            base_branch = git('branch', '--show-current')
+            git('checkout', '-qb', 'feature')
+            (source / 'feature.txt').write_text('feature\n')
+            git('add', '.')
+            commit('feature')
+            git('checkout', '-q', base_branch)
+            (source / 'justfile').write_text('second\n')
+            git('add', 'justfile')
+            commit('base advance')
+            git('-c', 'user.name=GitHub', '-c', 'user.email=noreply@github.com',
+                'merge', '-q', '--no-ff', 'feature', '-m', 'synthetic PR merge')
+            merge_head = git('rev-parse', 'HEAD')
+            self.assertEqual(len(git('rev-list', '--parents', '-n', '1', 'HEAD').split()), 3)
+            ci_env = {'GITHUB_SERVER_URL': 'https://github.com',
+                      'GITHUB_REPOSITORY': 'swack-tools/oxidex',
+                      'GITHUB_WORKSPACE': str(source), 'GITHUB_SHA': merge_head}
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(source)
+                with patch.dict(os.environ, ci_env):
+                    route.verify_ci_fleet_checkout()
+                    with patch.dict(os.environ, {'GITHUB_WORKSPACE': str(root)}):
+                        with self.assertRaisesRegex(RuntimeError, 'canonical Actions workspace'):
+                            route.verify_ci_fleet_checkout()
+                    with patch.dict(os.environ, {'GITHUB_SHA': '0' * 40}):
+                        with self.assertRaisesRegex(RuntimeError, 'selected Actions commit'):
+                            route.verify_ci_fleet_checkout()
+                    with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'other/repo'}):
+                        with self.assertRaisesRegex(RuntimeError, 'expected Actions repository'):
+                            route.verify_ci_fleet_checkout()
+                    (source / 'justfile').write_text('dirty\n')
+                    with self.assertRaisesRegex(RuntimeError, 'not clean'):
+                        route.verify_ci_fleet_checkout()
+                    (source / 'justfile').write_text('second\n')
+                    git('update-index', '--skip-worktree', 'justfile')
+                    (source / 'justfile').write_text('unsigned change\n')
+                    self.assertEqual(git('status', '--porcelain'), '')
+                    with self.assertRaisesRegex(RuntimeError, 'differs from selected HEAD: justfile'):
+                        route.verify_ci_fleet_checkout()
+                shallow = root / 'shallow'
+                subprocess.run(['git', 'clone', '-q', '--depth=1', source.as_uri(), str(shallow)], check=True)
+                os.chdir(shallow)
+                shallow_head = git('rev-parse', 'HEAD', cwd=shallow)
+                self.assertEqual(shallow_head, merge_head)
+                self.assertEqual(git('rev-parse', '--is-shallow-repository', cwd=shallow), 'true')
+                shallow_env = {**ci_env, 'GITHUB_WORKSPACE': str(shallow)}
+                with patch.dict(os.environ, shallow_env), \
+                     patch.object(route, 'CI_ORIGIN_URLS', frozenset({source.as_uri()})):
+                    with patch.object(route, 'CI_ORIGIN_URLS', frozenset()):
+                        with self.assertRaisesRegex(RuntimeError, 'origin is not the approved repository'):
+                            route.verify_ci_fleet_checkout()
+                    route.verify_ci_fleet_checkout()
+                    self.assertEqual(git('rev-parse', '--is-shallow-repository', cwd=shallow), 'false')
+                    self.assertEqual(git('rev-parse', 'HEAD', cwd=shallow), merge_head)
+                    self.assertEqual(git('rev-list', '--count', 'HEAD', cwd=shallow), '4')
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'fleet'))
+                    from intent import check_history
+                    self.assertTrue(check_history(shallow, {'formats': ['SWF']}).hit)
+                    self.assertEqual(git('status', '--porcelain', cwd=shallow), '')
+            finally:
+                os.chdir(old_cwd)
+
     def test_bad_names_and_args_refuse_before_dispatch(self):
         with patch.object(os,'execv') as launch:
             for argv in (['-bad'],['build','bad\narg'],['build','']):
@@ -183,7 +401,7 @@ class FleetBuilderCallFlowControls(unittest.TestCase):
              patch.object(route, 'prepare_fleet_checkout', side_effect=prepare), \
              patch.object(route, 'verified_fleet_checkout', return_value=True), \
              patch.object(route, 'verify_ci_fleet_checkout', side_effect=AssertionError('CI guard on builder')) as ci, \
-             patch('test_runner.prepare_fleet_recipe_oracle', create=True, side_effect=lambda: events.append('oracle')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('oracle')), \
              patch.object(os, 'execvp', side_effect=lambda *_: events.append('private-recipe')):
             route.main(['fleet-test'])
             self.assertEqual(state['cwd'], route.FLEET_CHECKOUT)

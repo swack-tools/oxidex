@@ -277,6 +277,12 @@ def resolve_oxidex_binary(repo_root: Path, override: Optional[str] = None) -> Bi
         if not p.is_file():
             raise LedgerError(f"oxidex binary not found at {p} (--binary override)")
         candidate = override
+    elif os.environ.get("CARGO_TARGET_DIR"):
+        target = Path(os.environ["CARGO_TARGET_DIR"])
+        p = repo_root / target / "release" / "oxidex"
+        candidate = str(p)
+        if not p.is_file():
+            raise LedgerError(f"oxidex binary not found at {p} (CARGO_TARGET_DIR)")
     else:
         p = None
         for rel in BINARY_CANDIDATES:
