@@ -18,6 +18,10 @@ ORACLE_TEST_RECIPES = frozenset({
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both'})
 FLEET_SOURCE = Path('/src')
 FLEET_CHECKOUT = Path('/target/checkout')
+BUILDER_MARKER = Path('/run/oxidex-build-container')
+RUNNER_MARKER = Path('/run/oxidex-spot-runner')
+CI_ORIGIN_URLS = frozenset({'https://github.com/swack-tools/oxidex',
+                            'https://github.com/swack-tools/oxidex.git'})
 
 
 def trusted_marker(path):
@@ -66,8 +70,56 @@ def prepare_fleet_checkout() -> None:
     print(f'FLEET_SIGNED_SOURCE: head={head} checkout={FLEET_CHECKOUT}', flush=True)
 
 
-def local_worker_context(environ=None, marker=Path('/run/oxidex-build-container'),
-                         runner_marker=Path('/run/oxidex-spot-runner')):
+def verify_ci_fleet_checkout() -> None:
+    """Admit the selected Actions checkout and restore history if shallow."""
+    checkout = Path.cwd()
+    workspace = Path(os.environ.get('GITHUB_WORKSPACE', ''))
+    if (not workspace.is_absolute() or workspace.is_symlink()
+            or checkout != workspace or checkout.resolve() != checkout):
+        raise RuntimeError('fleet CI source must be the canonical Actions workspace')
+    if (os.environ.get('GITHUB_SERVER_URL') != 'https://github.com'
+            or os.environ.get('GITHUB_REPOSITORY') != 'swack-tools/oxidex'):
+        raise RuntimeError('fleet CI source is outside the expected Actions repository')
+    def git(*args):
+        return subprocess.check_output(
+            ['git', '-C', str(checkout), *args],
+            env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1'), text=True).strip()
+    if git('rev-parse', '--show-toplevel') != str(checkout):
+        raise RuntimeError('fleet CI source must be the checkout root')
+    if git('status', '--porcelain', '--untracked-files=all'):
+        raise RuntimeError('fleet CI source is not clean')
+    head = git('rev-parse', 'HEAD')
+    if head != os.environ.get('GITHUB_SHA'):
+        raise RuntimeError('fleet CI source is not the selected Actions commit')
+    # Status alone misses skip-worktree and assume-unchanged. Check the bytes
+    # this recipe can execute against the selected checkout commit.
+    from lib.remote_build import signed_snapshot_files
+    for name, (object_id, mode) in signed_snapshot_files(checkout, head).items():
+        path = checkout / name
+        data = subprocess.check_output(
+            ['git', '-C', str(checkout), 'cat-file', 'blob', object_id],
+            env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1'))
+        if (path.is_symlink() or not path.is_file() or path.read_bytes() != data
+                or bool(path.stat().st_mode & 0o111) != (mode == 0o755)):
+            raise RuntimeError(f'fleet CI source differs from selected HEAD: {name}')
+    if git('rev-parse', '--is-shallow-repository') == 'true':
+        origin = git('config', '--get', 'remote.origin.url')
+        if origin not in CI_ORIGIN_URLS or git('remote', 'get-url', 'origin') != origin:
+            raise RuntimeError('fleet CI history origin is not the approved repository')
+        subprocess.run(['git', '-C', str(checkout), 'fetch', '--no-tags', '--unshallow',
+                        'origin', head], check=True,
+                       env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1'))
+        if (git('rev-parse', '--is-shallow-repository') != 'false'
+                or git('rev-parse', 'HEAD') != head
+                or git('status', '--porcelain', '--untracked-files=all')):
+            raise RuntimeError('fleet CI history fetch changed the selected checkout')
+    elif git('rev-parse', '--is-shallow-repository') != 'false':
+        raise RuntimeError('fleet CI history state is unknown')
+    print(f'FLEET_CI_SOURCE: head={head} checkout={checkout} history=complete', flush=True)
+
+
+def local_worker_context(environ=None, marker=BUILDER_MARKER,
+                         runner_marker=RUNNER_MARKER):
     environ = os.environ if environ is None else environ
     if sys.platform != 'linux':
         return False
@@ -89,8 +141,11 @@ def main(argv):
         if not local_worker_context():
             name = argv[1] if len(argv) == 2 else 'heavy recipe'
             raise SystemExit(f'Refusing local {name}: remote input/output mapping is required')
-        marker = ('/run/oxidex-build-container' if Path.cwd() in (FLEET_SOURCE, FLEET_CHECKOUT)
-                  else '/run/oxidex-spot-runner')
+        builder_checkout = Path.cwd() == FLEET_CHECKOUT and trusted_marker(BUILDER_MARKER)
+        if len(argv) == 2 and argv[1] in FLEET_RECIPES and not builder_checkout:
+            verify_ci_fleet_checkout()
+        marker = BUILDER_MARKER if (Path.cwd() in (FLEET_SOURCE, FLEET_CHECKOUT)
+                                    and trusted_marker(BUILDER_MARKER)) else RUNNER_MARKER
         print(f'REMOTE_RECIPE_CONTEXT: root-owned 0444 marker {marker}',flush=True)
         return 0
     if not argv or not RECIPE.fullmatch(argv[0]):
@@ -100,7 +155,13 @@ def main(argv):
         raise SystemExit('Invalid recipe argument')
     if local_worker_context():
         if recipe in FLEET_RECIPES:
-            prepare_fleet_checkout()
+            if Path.cwd() == FLEET_SOURCE and trusted_marker(BUILDER_MARKER):
+                prepare_fleet_checkout()
+            elif Path.cwd() == FLEET_CHECKOUT and trusted_marker(BUILDER_MARKER):
+                if not verified_fleet_checkout():
+                    raise RuntimeError('signed fleet checkout is not the clean selected source')
+            else:
+                verify_ci_fleet_checkout()
         if recipe == 'fleet-test':
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
