@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 import ignored_fixture_probe as inputs
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILDER_TARGET = Path('/target')
 EXECUTABLE_COMMAND = ['cargo', 'test', '--release', '--workspace', '--all-features', '--locked',
                       '--no-fail-fast', '--lib', '--bins', '--tests', '--message-format=json',
                       '--', '--include-ignored']
@@ -205,7 +204,9 @@ def admitted_context() -> tuple[str, Path]:
     if ROOT == route.FLEET_CHECKOUT and route.trusted_marker(route.BUILDER_MARKER):
         if not route.verified_fleet_checkout():
             raise RuntimeError('ignored suite requires the clean signed builder checkout')
-        return 'signed-builder', BUILDER_TARGET
+        if os.environ.get('CARGO_TARGET_DIR') != str(route.FLEET_CARGO_TARGET):
+            raise RuntimeError('ignored suite requires the separate signed-builder Cargo target')
+        return 'signed-builder', route.FLEET_CARGO_TARGET
     route.verify_ci_fleet_checkout()
     configured = os.environ.get('CARGO_TARGET_DIR')
     target = Path(configured) if configured else ROOT / 'target'

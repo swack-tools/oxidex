@@ -17,15 +17,19 @@ class IgnoredSuiteControls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory).resolve()
             actions_env = {'CARGO_TARGET_DIR': str(workspace / 'target')}
-            with patch.object(suite, 'ROOT', route.FLEET_CHECKOUT), \
+            with patch.dict(os.environ, {'CARGO_TARGET_DIR': str(route.FLEET_CARGO_TARGET)}), \
+                 patch.object(suite, 'ROOT', route.FLEET_CHECKOUT), \
                  patch.object(route.Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
                  patch.object(route, 'local_worker_context', return_value=True), \
                  patch.object(route, 'trusted_marker', return_value=True), \
                  patch.object(route, 'verified_fleet_checkout', return_value=True) as signed, \
                  patch.object(route, 'verify_ci_fleet_checkout') as ci:
-                self.assertEqual(suite.admitted_context(), ('signed-builder', Path('/target')))
+                self.assertEqual(suite.admitted_context(), ('signed-builder', route.FLEET_CARGO_TARGET))
                 signed.assert_called_once()
                 ci.assert_not_called()
+                with patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
+                     self.assertRaisesRegex(RuntimeError, 'separate signed-builder Cargo target'):
+                    suite.admitted_context()
             with patch.object(suite, 'ROOT', workspace), \
                  patch.object(route.Path, 'cwd', return_value=workspace), \
                  patch.object(route, 'local_worker_context', return_value=True), \

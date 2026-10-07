@@ -265,6 +265,46 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
         self.assertEqual(launch.call_args.args[1], ['just', '_fleet-test-worker'])
 
+    def test_signed_builder_target_is_sibling_and_generic_source_stays_separate(self):
+        self.assertNotIn(route.FLEET_CARGO_TARGET, route.FLEET_CHECKOUT.parents)
+        self.assertNotEqual(route.FLEET_CARGO_TARGET, route.FLEET_CHECKOUT)
+        self.assertNotIn(Path('/target'), Path('/src').parents)
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}):
+            route.select_signed_builder_target()
+            self.assertEqual(os.environ['CARGO_TARGET_DIR'], '/target/cargo')
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': '/unexpected'}), \
+             self.assertRaisesRegex(RuntimeError, 'unexpected Cargo target'):
+            route.select_signed_builder_target()
+        with patch.object(route, 'FLEET_CARGO_TARGET', Path('/target')), \
+             patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
+             self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+            route.select_signed_builder_target()
+
+    def test_public_signed_fleet_selects_target_before_oracle_and_worker(self):
+        events = []
+        def oracle():
+            events.append(('oracle', os.environ.get('CARGO_TARGET_DIR')))
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
+             patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout'), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=oracle), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append(('worker', os.environ.get('CARGO_TARGET_DIR')))):
+            route.main(['test-ignored'])
+        self.assertEqual(events, [('oracle', '/target/cargo'), ('worker', '/target/cargo')])
+
+    def test_ordinary_just_test_keeps_separate_generic_target(self):
+        seen = []
+        with patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
+             patch.object(route, 'local_worker_context', return_value=True), \
+             patch('test_runner.prepare_generic_recipe_oracle',
+                   side_effect=lambda: seen.append(('oracle', os.environ['CARGO_TARGET_DIR']))), \
+             patch.object(os, 'execvp',
+                          side_effect=lambda *_: seen.append(('worker', os.environ['CARGO_TARGET_DIR']))):
+            route.main(['test'])
+        self.assertEqual(seen, [('oracle', '/target'), ('worker', '/target')])
+
     def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \

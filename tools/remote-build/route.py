@@ -18,6 +18,7 @@ ORACLE_TEST_RECIPES = frozenset({
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
 FLEET_SOURCE = Path('/src')
 FLEET_CHECKOUT = Path('/target/checkout')
+FLEET_CARGO_TARGET = Path('/target/cargo')
 BUILDER_MARKER = Path('/run/oxidex-build-container')
 RUNNER_MARKER = Path('/run/oxidex-spot-runner')
 CI_ORIGIN_URLS = frozenset({'https://github.com/swack-tools/oxidex',
@@ -71,6 +72,18 @@ def prepare_fleet_checkout() -> None:
     if not verified_fleet_checkout():
         raise RuntimeError('signed fleet checkout is not the clean selected source')
     print(f'FLEET_SIGNED_SOURCE: head={head} checkout={FLEET_CHECKOUT}', flush=True)
+
+
+def select_signed_builder_target() -> None:
+    """Keep Cargo outside its signed checkout so trybuild can normalize source paths."""
+    configured = os.environ.get('CARGO_TARGET_DIR')
+    if configured not in (None, '/target', str(FLEET_CARGO_TARGET)):
+        raise RuntimeError('signed fleet checkout has an unexpected Cargo target')
+    if FLEET_CARGO_TARGET == FLEET_CHECKOUT or FLEET_CARGO_TARGET in FLEET_CHECKOUT.parents:
+        raise RuntimeError('signed fleet Cargo target contains the source checkout')
+    if FLEET_CARGO_TARGET.is_symlink() or FLEET_CARGO_TARGET.resolve() != FLEET_CARGO_TARGET:
+        raise RuntimeError('signed fleet Cargo target is not canonical')
+    os.environ['CARGO_TARGET_DIR'] = str(FLEET_CARGO_TARGET)
 
 
 def _read_batch_blob(stream, object_id: str, expected_size: int) -> bytes:
@@ -191,6 +204,8 @@ def main(argv):
         builder_checkout = Path.cwd() == FLEET_CHECKOUT and trusted_marker(BUILDER_MARKER)
         if len(argv) == 2 and argv[1] in FLEET_RECIPES and not builder_checkout:
             verify_ci_fleet_checkout()
+        if len(argv) == 2 and argv[1] in FLEET_RECIPES and builder_checkout:
+            select_signed_builder_target()
         marker = BUILDER_MARKER if (Path.cwd() in (FLEET_SOURCE, FLEET_CHECKOUT)
                                     and trusted_marker(BUILDER_MARKER)) else RUNNER_MARKER
         print(f'REMOTE_RECIPE_CONTEXT: root-owned 0444 marker {marker}',flush=True)
@@ -202,13 +217,18 @@ def main(argv):
         raise SystemExit('Invalid recipe argument')
     if local_worker_context():
         if recipe in FLEET_RECIPES:
+            signed_builder = False
             if Path.cwd() == FLEET_SOURCE and trusted_marker(BUILDER_MARKER):
                 prepare_fleet_checkout()
+                signed_builder = True
             elif Path.cwd() == FLEET_CHECKOUT and trusted_marker(BUILDER_MARKER):
                 if not verified_fleet_checkout():
                     raise RuntimeError('signed fleet checkout is not the clean selected source')
+                signed_builder = True
             else:
                 verify_ci_fleet_checkout()
+            if signed_builder:
+                select_signed_builder_target()
         if recipe in FLEET_RECIPES and recipe != 'test-ignored':
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
