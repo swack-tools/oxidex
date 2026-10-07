@@ -206,7 +206,7 @@ def main(argv):
                     raise RuntimeError('signed fleet checkout is not the clean selected source')
             else:
                 verify_ci_fleet_checkout()
-        if recipe == 'fleet-test':
+        if recipe in FLEET_RECIPES:
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:

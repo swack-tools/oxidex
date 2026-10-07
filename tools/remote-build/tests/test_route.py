@@ -164,29 +164,30 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
         self.assertEqual(launch.call_args.args[1], ['just', '_fleet-test-worker'])
 
-    def test_both_hub_suite_uses_signed_checkout_without_oracle_bootstrap(self):
+    def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \
              patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
              patch.object(route, 'trusted_marker', return_value=True), \
              patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
-             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('locked fixtures')), \
              patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
             route.main(['fleet-tests-both'])
-        self.assertEqual(events, ['signed checkout', 'suite'])
-        oracle.assert_not_called()
+        self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
         self.assertEqual(launch.call_args.args[1], ['just', '_fleet-tests-both-worker'])
 
     def test_fleet_fixture_refusal_prevents_suite_dispatch(self):
-        with patch.object(route, 'local_worker_context', return_value=True), \
-             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
-             patch.object(route, 'trusted_marker', return_value=True), \
-             patch.object(route, 'prepare_fleet_checkout'), \
-             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=RuntimeError('corpus missing')), \
-             patch.object(os, 'execvp') as launch:
-            with self.assertRaisesRegex(RuntimeError, 'corpus missing'):
-                route.main(['fleet-test'])
-        launch.assert_not_called()
+        for recipe in ('fleet-test', 'fleet-tests-both'):
+            with self.subTest(recipe=recipe), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+                 patch.object(route, 'trusted_marker', return_value=True), \
+                 patch.object(route, 'prepare_fleet_checkout'), \
+                 patch('test_runner.prepare_fleet_recipe_oracle', side_effect=RuntimeError('corpus missing')), \
+                 patch.object(os, 'execvp') as launch:
+                with self.assertRaisesRegex(RuntimeError, 'corpus missing'):
+                    route.main([recipe])
+                launch.assert_not_called()
 
     def test_staged_bundle_supplies_history_to_fleet_checkout(self):
         import qualification_bootstrap
@@ -237,7 +238,7 @@ class RouteTests(unittest.TestCase):
             stage.assert_not_called()
             events.clear()
             route.main(['fleet-tests-both'])
-            self.assertEqual(events, ['verified CI checkout', 'suite'])
+            self.assertEqual(events, ['verified CI checkout', 'locked fixtures', 'suite'])
             stage.assert_not_called()
             events.clear()
             route.main(['--require-local-context', 'fleet-test'])
