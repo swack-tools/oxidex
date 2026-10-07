@@ -22,6 +22,7 @@ SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
+FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
 
 
 def pinned_toolchain(source):
@@ -212,16 +213,73 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
     return sorted(eligible)
 
 
-def make_snapshot(source: Path, archive: Path) -> dict:
-    names=eligible_snapshot_paths(source)
+def signed_snapshot_files(source: Path, head: str) -> dict[str, tuple[str, int]]:
+    """Enumerate fleet packet blobs and modes from the authenticated commit."""
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Fleet source HEAD must be a full commit ID')
+    env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+    tree=subprocess.check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
+    signed={}
+    for entry in tree.split(b'\0'):
+        if not entry:
+            continue
+        metadata, raw_name=entry.split(b'\t',1)
+        mode, kind, object_id=metadata.decode('ascii').split()
+        name=os.fsdecode(raw_name)
+        parts=Path(name).parts
+        if (not name or Path(name).is_absolute() or '..' in parts
+                or any(part in {'.git','.codex','.claude','.agents','target','node_modules','.venv'}
+                       for part in parts)
+                or Path(name).name.startswith('.env')
+                or Path(name).suffix in {'.pem','.key'}):
+            continue
+        if kind != 'blob' or mode not in {'100644','100755'} or name in signed:
+            raise RuntimeError(f'Unsupported signed fleet source member: {name}')
+        signed[name]=(object_id, 0o755 if mode=='100755' else 0o644)
+    required={'justfile','rust-toolchain.toml','tools/remote-build/route.py',
+              'tools/remote-build/qualification_bootstrap.py',
+              'tools/remote-build/qualification_source.py',
+              'tools/remote-build/test_runner.py','tools/release/bootstrap_oracle.py'}
+    if required-signed.keys():
+        raise RuntimeError(f'Signed fleet launcher is incomplete: {sorted(required-signed.keys())}')
+    return signed
+
+
+def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None) -> dict:
+    signed=signed_snapshot_files(source,signed_head) if signed_head is not None else None
+    names=sorted(signed) if signed is not None else eligible_snapshot_paths(source)
     files=[]
     with tarfile.open(archive,'w:gz',compresslevel=3) as tar:
         for name in names:
             path=source/name
-            if not path.is_file() or path.is_symlink():
-                raise RuntimeError('Source file changed type during snapshot')
+            if signed is None:
+                if not path.is_file() or path.is_symlink():
+                    raise RuntimeError('Source file changed type during snapshot')
+                data=path.read_bytes()
+                info=tar.gettarinfo(str(path),arcname=name)
+            else:
+                object_id, mode=signed[name]
+                data=subprocess.check_output(
+                    ['git','-C',str(source),'cat-file','blob',object_id],
+                    env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
+                if path.is_symlink() or not path.is_file() or path.read_bytes()!=data:
+                    raise RuntimeError(f'Fleet source differs from signed HEAD: {name}')
+                if bool(path.stat().st_mode & 0o111) != (mode==0o755):
+                    raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}')
+                info=tarfile.TarInfo(name)
+                info.mode=mode
+            info.size=len(data)
+            row={'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+            if signed is not None:
+                row['mode']=info.mode
+            files.append(row)
+            tar.addfile(info,io.BytesIO(data))
+        for name,path in (extra_files or {}).items():
+            if name in names or Path(name).name != name or path.is_symlink() or not path.is_file():
+                raise RuntimeError('Invalid signed fleet source member')
             data=path.read_bytes()
-            info=tar.gettarinfo(str(path),arcname=name)
+            info=tarfile.TarInfo(name)
+            info.mode=0o644
             info.size=len(data)
             files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
             tar.addfile(info,io.BytesIO(data))
@@ -406,7 +464,35 @@ def main(argv=None):
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
             verify_signed_source(source, receipt['source_commit'])
-        receipt['snapshot']=make_snapshot(source,archive)
+        extra_files={}
+        if args.just_recipe in FLEET_RECIPES:
+            if receipt['source_status']:
+                raise RuntimeError('Remote fleet tests require a clean exact-HEAD checkout')
+            verify_signed_source(source, receipt['source_commit'])
+            signer_path=Path(subprocess.check_output(
+                ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
+                text=True).strip())
+            if signer_path.is_symlink() or not signer_path.is_file():
+                raise RuntimeError('Maintainer allowed signers file is unavailable')
+            # Pin the local signer before any packet source runs on Spot.
+            from qualification_source import verify_source
+            verify_source(source, receipt['source_commit'], signer_path)
+            bundle=evidence/'repository.bundle'
+            subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
+                           env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
+            subprocess.run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
+                           stdout=subprocess.DEVNULL)
+            source_head=evidence/'fleet-source-head'
+            source_head.write_text(receipt['source_commit']+'\n')
+            extra_files={'repository.bundle':bundle,
+                         'maintainer.allowed_signers':signer_path,
+                         'fleet-source-head':source_head}
+        receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
+                                          signed_head=receipt['source_commit']) if extra_files else make_snapshot(source,archive)
+        if extra_files:
+            receipt['fleet_source_bundle_sha256']=next(
+                row['sha256'] for row in receipt['snapshot']['files']
+                if row['path']=='repository.bundle')
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
@@ -415,7 +501,11 @@ def main(argv=None):
                     and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
                 or any(not (source/row['path']).is_file() or (source/row['path']).is_symlink()
                        or hashlib.sha256((source/row['path']).read_bytes()).hexdigest()!=row['sha256']
-                       for row in receipt['snapshot'].get('files',[]))):
+                       or (row.get('mode') is not None and
+                           (0o755 if (source/row['path']).stat().st_mode & 0o111 else 0o644)
+                           != row['mode'])
+                       for row in receipt['snapshot'].get('files',[])
+                       if row['path'] in receipt['snapshot'].get('eligible_paths', []))):
             raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')
         save()
         project=shlex.quote(args.worktree_id)

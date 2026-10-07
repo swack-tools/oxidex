@@ -128,10 +128,11 @@ class RouteTests(unittest.TestCase):
     def test_ignored_suite_routes_through_oracle_and_private_worker(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=lambda: events.append('signed-source')), \
              patch('test_runner.prepare_generic_recipe_oracle', side_effect=lambda: events.append('oracle')), \
              patch.object(os, 'execvp', side_effect=lambda *_: events.append('recipe')) as launch:
             route.main(['test-ignored'])
-        self.assertEqual(events, ['oracle', 'recipe'])
+        self.assertEqual(events, ['signed-source', 'oracle', 'recipe'])
         self.assertEqual(launch.call_args.args[1], ['just', '_test-ignored-worker'])
 
     def test_ignored_suite_renders_guarded_full_workspace_command(self):
@@ -142,7 +143,7 @@ class RouteTests(unittest.TestCase):
                                   cwd=repository, capture_output=True, text=True, check=True)
         self.assertEqual(rendered.stderr.splitlines(), [
             'python3 tools/remote-build/route.py --require-local-context',
-            'CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --release --workspace --all-features --locked --no-fail-fast -- --include-ignored',
+            'python3 tools/remote-build/ignored_suite.py',
         ])
 
     def test_test_worker_provisions_oracle_before_original_recipe(self):

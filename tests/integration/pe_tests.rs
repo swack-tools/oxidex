@@ -11,10 +11,11 @@ fn test_parse_real_pe_file() {
     // You can use any Windows executable or DLL
     let test_file = Path::new("tests/samples/pe/sample.exe");
 
-    if !test_file.exists() {
-        eprintln!("Skipping test: sample PE file not found");
-        return;
-    }
+    assert!(
+        test_file.is_file(),
+        "required generic PE fixture missing: {}",
+        test_file.display()
+    );
 
     let reader = MMapReader::new(test_file).expect("Failed to open PE file");
     let metadata = parse_pe_metadata(&reader).expect("Failed to parse PE metadata");
@@ -140,7 +141,7 @@ fn test_pe_header_characteristics_decoded() {
     data.extend_from_slice(&[0; 4]); // Symbol table ptr
     data.extend_from_slice(&[0; 4]); // Number of symbols
     data.extend_from_slice(&96u16.to_le_bytes()); // Optional header size
-    // Characteristics: Executable (0x0002) + 32-bit (0x0100) = 0x0102
+                                                  // Characteristics: Executable (0x0002) + 32-bit (0x0100) = 0x0102
     data.extend_from_slice(&0x0102u16.to_le_bytes());
 
     // Optional Header Standard Fields
@@ -336,7 +337,7 @@ fn test_pe_with_exports() {
     // Export Directory (index 0)
     data.extend_from_slice(&0x3000u32.to_le_bytes()); // RVA of export directory
     data.extend_from_slice(&0x200u32.to_le_bytes()); // Size of export directory (must cover forwarder at 0x3110)
-    // Other directories (zeroed)
+                                                     // Other directories (zeroed)
     for _ in 1..16 {
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());

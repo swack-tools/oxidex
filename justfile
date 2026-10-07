@@ -68,7 +68,7 @@ _prepare-ignored-inputs-worker:
 
 _test-ignored-worker:
     python3 tools/remote-build/route.py --require-local-context
-    {{unwind}} cargo test --release --workspace --all-features --locked --no-fail-fast -- --include-ignored
+    python3 tools/remote-build/ignored_suite.py
 
 # Run the repository-owned remote-builder client tests.
 test-remote-build:

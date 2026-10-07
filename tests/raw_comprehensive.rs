@@ -7,7 +7,7 @@
 //! - Integration with real raw files (ignored tests for manual verification)
 
 use oxidex::core::operations::read_metadata;
-use oxidex::parsers::raw::{RawFormat, detect_raw_format, parse_raw_metadata};
+use oxidex::parsers::raw::{detect_raw_format, parse_raw_metadata, RawFormat};
 use std::path::Path;
 
 /// Test that all raw format extensions are correctly detected
@@ -394,41 +394,49 @@ fn test_read_real_raw_files() {
         ("tests/fixtures/raw/real/sample.dng", RawFormat::AdobeDNG),
     ];
 
-    for (file_path, _expected_format) in test_files {
+    for (file_path, expected_format) in test_files {
         let path = Path::new(file_path);
 
-        // Only test files that exist
-        if path.exists() {
-            println!("Testing real raw file: {}", file_path);
+        assert!(
+            path.is_file(),
+            "required RAW fixture missing: {}",
+            file_path
+        );
+        println!("Testing real raw file: {}", file_path);
 
-            // Test metadata extraction
-            let metadata = read_metadata(path);
-            assert!(
-                metadata.is_ok(),
-                "Failed to read metadata from {}. Error: {:?}",
-                file_path,
-                metadata.err()
-            );
+        // Test metadata extraction
+        let metadata = read_metadata(path);
+        assert!(
+            metadata.is_ok(),
+            "Failed to read metadata from {}. Error: {:?}",
+            file_path,
+            metadata.err()
+        );
 
-            let meta = metadata.unwrap();
-            assert!(!meta.is_empty(), "No metadata extracted from {}", file_path);
+        let meta = metadata.unwrap();
+        assert!(
+            meta.get("IFD0:Make").is_some(),
+            "RAW Make missing from {}",
+            file_path
+        );
+        assert!(
+            meta.get("IFD0:Model").is_some(),
+            "RAW Model missing from {}",
+            file_path
+        );
 
-            println!(
-                "  Successfully extracted {} metadata tags from {}",
-                meta.len(),
-                file_path
-            );
+        println!(
+            "  Successfully extracted {} metadata tags from {}",
+            meta.len(),
+            file_path
+        );
 
-            // Verify file type is set
-            if let Some(file_type) = meta.get("File:FileType") {
-                println!("  File type: {:?}", file_type);
-            }
-        } else {
-            println!(
-                "Skipping {} (file not found). Place real raw files in tests/fixtures/raw/real/ to test.",
-                file_path
-            );
-        }
+        assert_eq!(
+            meta.get_string("File:FileType"),
+            Some(expected_format.file_type()),
+            "RAW FileType differs from the native format for {}",
+            file_path
+        );
     }
 }
 

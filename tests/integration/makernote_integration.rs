@@ -20,10 +20,11 @@ fn get_test_image_path(filename: &str) -> PathBuf {
 fn test_canon_makernote_extraction() {
     let path = get_test_image_path("canon_sample.jpg");
 
-    if !path.exists() {
-        eprintln!("Skipping test: Canon sample image not found");
-        return;
-    }
+    assert!(
+        path.is_file(),
+        "required Canon MakerNote fixture missing: {}",
+        path.display()
+    );
 
     let metadata = read_metadata(&path).expect("Failed to parse JPEG");
 
@@ -44,10 +45,11 @@ fn test_canon_makernote_extraction() {
 fn test_nikon_makernote_extraction() {
     let path = get_test_image_path("nikon_sample.jpg");
 
-    if !path.exists() {
-        eprintln!("Skipping test: Nikon sample image not found");
-        return;
-    }
+    assert!(
+        path.is_file(),
+        "required Nikon MakerNote fixture missing: {}",
+        path.display()
+    );
 
     let metadata = read_metadata(&path).expect("Failed to parse JPEG");
 
