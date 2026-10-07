@@ -114,9 +114,10 @@ impl FormatParser for WebmParser {
                         return Err(ExifToolError::parse_error("Missing WebM DocType"));
                     }
 
-                    // The EBML header has variable length; the Segment starts
-                    // after its declared payload, not at a fixed byte offset.
-                    parse_segment(reader, segment_offset, reader.size(), &mut metadata)?;
+                    // The EBML header has variable length. Its next top-level
+                    // element is the Segment wrapper, whose payload holds
+                    // Info and Tracks.
+                    parse_top_level_segment(reader, segment_offset, &mut metadata)?;
                 }
                 Err(e) => return Err(e),
             }
@@ -128,6 +129,58 @@ impl FormatParser for WebmParser {
     fn supports_format(&self, format: FileFormat) -> bool {
         matches!(format, FileFormat::WEBM)
     }
+}
+
+/// Find the outer Segment and bound its children to the available file bytes.
+/// EBML permits an unknown-sized Segment; that form runs to end of file.
+/// A truncated declared Segment keeps metadata from complete children only.
+fn parse_top_level_segment(
+    reader: &dyn FileReader,
+    mut offset: u64,
+    metadata: &mut MetadataMap,
+) -> Result<()> {
+    let file_end = reader.size();
+    while offset < file_end {
+        let Ok((element_id, id_size)) = read_vint_id(reader, offset) else {
+            break;
+        };
+        let Some(size_offset) = offset.checked_add(id_size) else {
+            break;
+        };
+        let Ok((element_size, size_len)) = read_vint(reader, size_offset) else {
+            break;
+        };
+        let Some(data_offset) = size_offset
+            .checked_add(size_len)
+            .filter(|&start| start <= file_end)
+        else {
+            break;
+        };
+        let unknown_size = element_size == (1u64 << (7 * size_len)) - 1;
+        if element_id == SEGMENT {
+            let segment_end = if unknown_size {
+                file_end
+            } else {
+                let Some(declared_end) = data_offset.checked_add(element_size) else {
+                    break;
+                };
+                declared_end.min(file_end)
+            };
+            parse_segment(reader, data_offset, segment_end, metadata)?;
+            break;
+        }
+        if unknown_size {
+            break;
+        }
+        let Some(next_offset) = data_offset
+            .checked_add(element_size)
+            .filter(|&end| end <= file_end)
+        else {
+            break;
+        };
+        offset = next_offset;
+    }
+    Ok(())
 }
 
 /// Parse EBML header
@@ -192,8 +245,18 @@ fn parse_segment(
     while offset < end_offset {
         match parse_element_header(reader, offset) {
             Ok((element_id, element_size, header_size)) => {
-                let data_offset = offset + header_size;
-                let element_end = data_offset + element_size;
+                let Some(data_offset) = offset
+                    .checked_add(header_size)
+                    .filter(|&start| start <= end_offset)
+                else {
+                    break;
+                };
+                let Some(element_end) = data_offset
+                    .checked_add(element_size)
+                    .filter(|&end| end <= end_offset)
+                else {
+                    break;
+                };
 
                 match element_id {
                     INFO => {
@@ -646,6 +709,80 @@ pub fn parse_webm_metadata(reader: &dyn FileReader) -> std::result::Result<Metad
 mod tests {
     use super::*;
     use crate::test_support::TestReader;
+
+    fn element(id: &[u8], payload: &[u8]) -> Vec<u8> {
+        assert!(payload.len() < 127);
+        let mut bytes = id.to_vec();
+        bytes.push(0x80 | payload.len() as u8);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn header() -> Vec<u8> {
+        let mut payload = element(&[0x42, 0x86], &[1]);
+        payload.extend(element(&[0x42, 0x82], b"webm"));
+        payload.extend(element(&[0x42, 0x87], &[4]));
+        element(&[0x1A, 0x45, 0xDF, 0xA3], &payload)
+    }
+
+    fn info_and_tracks() -> Vec<u8> {
+        let duration = element(&[0x44, 0x89], &2f32.to_be_bytes());
+        let mut payload = element(&[0x15, 0x49, 0xA9, 0x66], &duration);
+        let mut track = element(&[0xD7], &[1]);
+        track.extend(element(&[0x86], b"V_VP9"));
+        let track_entry = element(&[0xAE], &track);
+        payload.extend(element(&[0x16, 0x54, 0xAE, 0x6B], &track_entry));
+        payload
+    }
+
+    fn with_segment(payload: &[u8], encoded_size: u8) -> Vec<u8> {
+        let mut bytes = header();
+        bytes.extend_from_slice(&[0x18, 0x53, 0x80, 0x67, encoded_size]);
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    #[test]
+    fn segment_children_are_read_inside_declared_or_unknown_size() {
+        let payload = info_and_tracks();
+        for size in [0x80 | payload.len() as u8, 0xFF] {
+            let data = with_segment(&payload, size);
+            let metadata = WebmParser
+                .parse(&TestReader::from_slice(&data))
+                .expect("valid WebM Segment");
+            assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+            assert_eq!(metadata.get_string("WEBM:Duration"), Some("0:00:02"));
+            assert_eq!(metadata.get_string("WEBM:VideoCodec"), Some("VP9"));
+        }
+    }
+
+    #[test]
+    fn segment_does_not_read_children_past_declared_or_truncated_end() {
+        let payload = info_and_tracks();
+        let duration = element(&[0x44, 0x89], &2f32.to_be_bytes());
+        let info_len = element(&[0x15, 0x49, 0xA9, 0x66], &duration).len();
+        for data in [
+            with_segment(&payload, 0x80 | info_len as u8),
+            with_segment(&payload[..payload.len() - 1], 0x80 | payload.len() as u8),
+        ] {
+            let metadata = WebmParser
+                .parse(&TestReader::from_slice(&data))
+                .expect("partial WebM Segment retains complete Info");
+            assert_eq!(metadata.get_string("WEBM:Duration"), Some("0:00:02"));
+            assert!(metadata.get("WEBM:VideoCodec").is_none());
+        }
+    }
+
+    #[test]
+    fn incomplete_segment_header_does_not_emit_child_tags() {
+        let mut data = header();
+        data.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]);
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&data))
+            .expect("EBML header is complete");
+        assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+        assert!(metadata.get("WEBM:Duration").is_none());
+    }
 
     #[test]
     fn test_webm_signature_valid() {
