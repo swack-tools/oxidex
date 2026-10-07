@@ -2494,10 +2494,15 @@ class PlatformPerlIdentityTests(unittest.TestCase):
                 module.manifest_path = lambda _root: manifest
             loader = SimpleNamespace(exec_module=load)
             spec = SimpleNamespace(loader=loader)
+            sys.path.insert(0, str(qualification.REPOSITORY_ROOT))
+            from tools.release import approved_linux_perl
+            approved_identity = ({"tree_sha256": "a" * 64}, b"synthetic archive")
             with patch("importlib.util.spec_from_file_location", return_value=spec), \
-                 patch("importlib.util.module_from_spec", return_value=SimpleNamespace()):
+                 patch("importlib.util.module_from_spec", return_value=SimpleNamespace()), \
+                 patch.object(approved_linux_perl, "load", return_value=approved_identity):
                 self.assertEqual(qualification._verified_linux_perl_sha(root, perl), "a" * 64)
-                verifier.assert_called_once_with(root, "13.59", manifest, runner=qualification._perl_probe)
+                verifier.assert_called_once_with(root, "13.59", manifest, runner=qualification._perl_probe,
+                                                 approved_perl=approved_identity)
                 manifest.write_text(json.dumps({"artifacts": {"perl_executable": {
                     "kind": "file", "path": str(root / "wrong"), "sha256": "a" * 64}}}))
                 with self.assertRaisesRegex(qualification.Refused, "path or type"):

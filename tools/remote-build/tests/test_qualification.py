@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import qualification
+sys.path.insert(0, str(qualification.ROOT))
 
 
 class QualificationTransportTests(unittest.TestCase):
@@ -473,9 +474,23 @@ class RestrictedPreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "differs"):
                 prepare.rebind_carrier({**row, "sha256": "0" * 64}, source)
 
+    def test_missing_source_approval_refuses_before_preparation_output(self):
+        import qualification_prepare as prepare
+        from tools.release import approved_linux_perl
+        with TemporaryDirectory() as directory, \
+             patch.object(approved_linux_perl.platform, "system", return_value="Linux"), \
+             patch.object(approved_linux_perl.platform, "machine", return_value="x86_64"):
+            output = Path(directory) / "unused-output"
+            with self.assertRaisesRegex(approved_linux_perl.Refused, "missing"):
+                prepare.prepare(Path("/src/reference"), output, "a" * 40)
+            self.assertFalse(output.exists())
+
     def test_stale_head_refuses_before_preparation(self):
         import qualification_prepare as prepare
-        with patch.object(prepare.subprocess, "check_output", return_value="b" * 40):
+        from tools.release import approved_linux_perl, bootstrap_oracle
+        with patch.object(approved_linux_perl, "load", return_value=({}, b"")), \
+             patch.object(bootstrap_oracle, "assert_approved_perl"), \
+             patch.object(prepare.subprocess, "check_output", return_value="b" * 40):
             with self.assertRaisesRegex(ValueError, "exact clean candidate HEAD"):
                 prepare.prepare(Path("/src/reference"), Path("/target/ops/new"), "a" * 40)
 
@@ -575,7 +590,9 @@ class LauncherConventionRegressionTests(unittest.TestCase):
             bundle, signer, archive = base / "bundle", base / "signers", base / "source.tar.gz"
             bundle.write_bytes(b"signed")
             signer.write_text("maintainer ssh-ed25519 AAAA\n")
-            transport.source_archive(root, approved, old, bundle, signer, archive)
+            (approved / "approved-linux-perl.json").write_text('{"schema":1}')
+            with patch.object(transport.approved_linux_perl, "load"):
+                transport.source_archive(root, approved, old, bundle, signer, archive)
             with tarfile.open(archive) as stream:
                 self.assertEqual(stream.extractfile("rust-toolchain.toml").read(), pin.read_bytes())
                 self.assertEqual(stream.extractfile("repository.bundle").read(), b"signed")
@@ -584,7 +601,8 @@ class LauncherConventionRegressionTests(unittest.TestCase):
             for name in ("document.json", "document.sig", "github-commit.json",
                          "pgp-proof.txt", "integration-ref.json"):
                 (attestation / name).write_text(name)
-            transport.source_archive(root, approved, old, bundle, signer, archive, attestation)
+            with patch.object(transport.approved_linux_perl, "load"):
+                transport.source_archive(root, approved, old, bundle, signer, archive, attestation)
             with tarfile.open(archive) as stream:
                 self.assertEqual(stream.extractfile("source-attestation/document.sig").read(),
                                  b"document.sig")
