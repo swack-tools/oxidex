@@ -1,8 +1,8 @@
 {
-  "archive_bytes": 17249402,
-  "archive_sha256": "411c68dc8ab027ee98ea021f2a9b7218cecb18ff3a5c0da74e49ffeec422a8eb",
+  "archive_bytes": 17249397,
+  "archive_sha256": "3acff118859126c3e7a91a44368cd76dd6718d3d3151f975f6afadcf07899a10",
   "archive_zip_source_sha256": "984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650",
-  "exe_sha256": "ffae55c4a97f3c32ece5082b2518ab9b4762873ac080a732acc8f8d090147b92",
+  "exe_sha256": "dffefac9c7e7638ffb79e7cd15fd989e73d98eb69516359edbc7bc16f63ca2fc",
   "kind": "oxidex_approved_linux_perl_installation",
   "lock_sha256": "7f763e0caa9c8d01bb7b8762b0405e3f7bf36bd5f780673d973cb6bf58a9904a",
   "perl_source_sha256": "a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e",
@@ -11,11 +11,11 @@
   "producer": {
     "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
     "image": "sha256:bee1e499f05944ae6728f3298af1525a55d2bf1d3063047e36a3b1330491a3f5",
-    "receipt_sha256": "9f325d08add6d70d84fff9f8c17af0353cfd57a1613a1878d2e531a1ebac77c8",
-    "source_head": "bdf718a31015c8200ad29d63d092dddff09ce80e"
+    "receipt_sha256": "64e46c2b7a43d0482e9e2e9e1aa2a6075e3045b32c38853474c60efc59614a71",
+    "source_head": "78a44bea8381c2b64f832578b66dc8051ea197b0"
   },
   "schema": 1,
-  "tree_sha256": "ee04d65096b94f4ef7f880805a565ec118f191f69c2e8665b9ad74c8b1cd405c",
+  "tree_sha256": "cb860a898709abff63885a22020aabaf1777cc34b5eb146a851b030e18e5b2c4",
   "zip_relative_path": "lib/site_perl/5.38.2/Archive/Zip.pm",
   "zip_sha256": "2025ab80c717e8b4cbdc393ee36aaf3c18edf53e4105f6626ef08c8e563a3db9"
 }
