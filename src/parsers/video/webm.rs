@@ -189,7 +189,8 @@ fn parse_ebml_header(
     mut offset: u64,
     metadata: &mut MetadataMap,
 ) -> Result<u64> {
-    let (element_id, element_size, header_size) = parse_element_header(reader, offset)?;
+    let (element_id, data_offset, header_end) =
+        parse_bounded_element_header(reader, offset, reader.size())?;
 
     if element_id != EBML_HEADER {
         return Err(ExifToolError::parse_error(format!(
@@ -198,17 +199,18 @@ fn parse_ebml_header(
         )));
     }
 
-    offset += header_size;
-    let header_end = offset + element_size;
+    offset = data_offset;
 
     while offset < header_end {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
+        match parse_bounded_element_header(reader, offset, header_end) {
+            Ok((elem_id, data_offset, element_end)) => {
+                let Ok(elem_size) = usize::try_from(element_end - data_offset) else {
+                    break;
+                };
 
                 match elem_id {
                     EBML_DOC_TYPE => {
-                        if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_string(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "Matroska:DocType".to_string(),
                                 TagValue::new_string(value),
@@ -216,7 +218,7 @@ fn parse_ebml_header(
                         }
                     }
                     EBML_DOC_TYPE_VERSION => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "Matroska:DocTypeVersion".to_string(),
                                 TagValue::new_integer(value as i64),
@@ -226,13 +228,13 @@ fn parse_ebml_header(
                     _ => {}
                 }
 
-                offset = data_offset + elem_size;
+                offset = element_end;
             }
             Err(_) => break,
         }
     }
 
-    Ok(offset)
+    Ok(header_end)
 }
 
 /// Parse Segment container
@@ -243,21 +245,8 @@ fn parse_segment(
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((element_id, element_size, header_size)) => {
-                let Some(data_offset) = offset
-                    .checked_add(header_size)
-                    .filter(|&start| start <= end_offset)
-                else {
-                    break;
-                };
-                let Some(element_end) = data_offset
-                    .checked_add(element_size)
-                    .filter(|&end| end <= end_offset)
-                else {
-                    break;
-                };
-
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((element_id, data_offset, element_end)) => {
                 match element_id {
                     INFO => {
                         parse_info(reader, data_offset, element_end, metadata)?;
@@ -288,25 +277,27 @@ fn parse_info(
     let mut duration = None;
 
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((elem_id, data_offset, element_end)) => {
+                let Ok(elem_size) = usize::try_from(element_end - data_offset) else {
+                    break;
+                };
 
                 match elem_id {
                     TIMECODE_SCALE => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             timecode_scale = value;
                         }
                     }
                     DURATION => {
-                        if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_float(reader, data_offset, elem_size) {
                             duration = Some(value);
                         }
                     }
                     _ => {}
                 }
 
-                offset = data_offset + elem_size;
+                offset = element_end;
             }
             Err(_) => break,
         }
@@ -335,11 +326,8 @@ fn parse_tracks(
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
-                let element_end = data_offset + elem_size;
-
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((elem_id, data_offset, element_end)) => {
                 if elem_id == TRACK_ENTRY {
                     parse_track_entry(reader, data_offset, element_end, metadata)?;
                 }
@@ -369,19 +357,20 @@ fn parse_track_entry(
 
     // First pass: collect track info
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
-                let element_end = data_offset + elem_size;
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((elem_id, data_offset, element_end)) => {
+                let Ok(elem_size) = usize::try_from(element_end - data_offset) else {
+                    break;
+                };
 
                 match elem_id {
                     TRACK_TYPE => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             track_type = value;
                         }
                     }
                     CODEC_ID => {
-                        if let Ok(value) = read_string(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_string(reader, data_offset, elem_size) {
                             codec_id = value;
                         }
                     }
@@ -446,13 +435,15 @@ fn parse_video_info(
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((elem_id, data_offset, element_end)) => {
+                let Ok(elem_size) = usize::try_from(element_end - data_offset) else {
+                    break;
+                };
 
                 match elem_id {
                     PIXEL_WIDTH => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "WEBM:Width".to_string(),
                                 TagValue::new_integer(value as i64),
@@ -460,7 +451,7 @@ fn parse_video_info(
                         }
                     }
                     PIXEL_HEIGHT => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "WEBM:Height".to_string(),
                                 TagValue::new_integer(value as i64),
@@ -468,7 +459,7 @@ fn parse_video_info(
                         }
                     }
                     FRAME_RATE => {
-                        if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_float(reader, data_offset, elem_size) {
                             let frame_rate_str = format!("{:.3} fps", value);
                             metadata.insert(
                                 "WEBM:FrameRate".to_string(),
@@ -479,7 +470,7 @@ fn parse_video_info(
                     _ => {}
                 }
 
-                offset = data_offset + elem_size;
+                offset = element_end;
             }
             Err(_) => break,
         }
@@ -496,13 +487,15 @@ fn parse_audio_info(
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     while offset < end_offset {
-        match parse_element_header(reader, offset) {
-            Ok((elem_id, elem_size, hdr_size)) => {
-                let data_offset = offset + hdr_size;
+        match parse_bounded_element_header(reader, offset, end_offset) {
+            Ok((elem_id, data_offset, element_end)) => {
+                let Ok(elem_size) = usize::try_from(element_end - data_offset) else {
+                    break;
+                };
 
                 match elem_id {
                     SAMPLING_FREQUENCY => {
-                        if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_float(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "WEBM:SampleRate".to_string(),
                                 TagValue::new_integer(value as i64),
@@ -510,7 +503,7 @@ fn parse_audio_info(
                         }
                     }
                     CHANNELS => {
-                        if let Ok(value) = read_uint(reader, data_offset, elem_size as usize) {
+                        if let Ok(value) = read_uint(reader, data_offset, elem_size) {
                             metadata.insert(
                                 "WEBM:Channels".to_string(),
                                 TagValue::new_integer(value as i64),
@@ -520,7 +513,7 @@ fn parse_audio_info(
                     _ => {}
                 }
 
-                offset = data_offset + elem_size;
+                offset = element_end;
             }
             Err(_) => break,
         }
@@ -549,12 +542,40 @@ fn convert_codec_id_to_name(codec_id: &str, track_type: u64) -> String {
     }
 }
 
-/// Parse EBML element header (ID + size)
-/// Returns (element_id, element_size, header_size)
-fn parse_element_header(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64, u64)> {
-    let (element_id, id_size) = read_vint_id(reader, offset)?;
-    let (element_size, size_len) = read_vint(reader, offset + id_size)?;
-    Ok((element_id, element_size, id_size + size_len))
+/// Return an element only when its entire header and payload fit in its parent.
+/// Unknown-sized nested elements cannot be bounded; the outer Segment handles
+/// its permitted unknown-size form separately.
+fn parse_bounded_element_header(
+    reader: &dyn FileReader,
+    offset: u64,
+    parent_end: u64,
+) -> Result<(u32, u64, u64)> {
+    if offset >= parent_end {
+        return Err(ExifToolError::parse_error("Element starts outside parent"));
+    }
+    let id_first = read_exact(reader, offset, 1)?[0];
+    let id_width = u64::from(id_first.leading_zeros()) + 1;
+    let size_offset = offset
+        .checked_add(id_width)
+        .filter(|&end| id_width <= 4 && end < parent_end)
+        .ok_or_else(|| ExifToolError::parse_error("Element ID exceeds parent"))?;
+    let (element_id, _) = read_vint_id(reader, offset)?;
+
+    let size_first = read_exact(reader, size_offset, 1)?[0];
+    let size_width = u64::from(size_first.leading_zeros()) + 1;
+    let data_offset = size_offset
+        .checked_add(size_width)
+        .filter(|&end| size_width <= 8 && end <= parent_end)
+        .ok_or_else(|| ExifToolError::parse_error("Element size header exceeds parent"))?;
+    let (element_size, _) = read_vint(reader, size_offset)?;
+    if element_size == (1u64 << (7 * size_width)) - 1 {
+        return Err(ExifToolError::parse_error("Unknown-sized nested element"));
+    }
+    let element_end = data_offset
+        .checked_add(element_size)
+        .filter(|&end| end <= parent_end)
+        .ok_or_else(|| ExifToolError::parse_error("Element payload exceeds parent"))?;
+    Ok((element_id, data_offset, element_end))
 }
 
 /// FileReader promises exact-length slices, but reject a short slice here as
@@ -805,6 +826,122 @@ mod tests {
     }
 
     #[test]
+    fn oversized_track_entry_cannot_read_trailing_segment_or_file_bytes() {
+        // Tracks contains only the TrackEntry header. Its claimed ten bytes
+        // are unrelated top-level data, either inside or after the Segment.
+        let tracks = element(&[0x16, 0x54, 0xAE, 0x6B], &[0xAE, 0x8A]);
+        let trailing = [0x83, 0x81, 1, 0x86, 0x85, b'V', b'_', b'V', b'P', b'9'];
+        let mut payload = tracks.clone();
+        payload.extend_from_slice(&trailing);
+        for declared_size in [tracks.len(), payload.len()] {
+            let data = with_segment(&payload, 0x80 | declared_size as u8);
+            let metadata = WebmParser
+                .parse(&TestReader::from_slice(&data))
+                .expect("valid header with malformed nested Tracks");
+            assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+            assert!(metadata.get("WEBM:VideoCodec").is_none());
+        }
+    }
+
+    #[test]
+    fn nested_fields_cannot_read_past_their_immediate_parent() {
+        // A Duration payload outside Info must not become an Info tag.
+        let mut payload = element(&[0x15, 0x49, 0xA9, 0x66], &[0x44, 0x89, 0x84]);
+        payload.extend_from_slice(&1000f32.to_be_bytes());
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&with_segment(
+                &payload,
+                0x80 | payload.len() as u8,
+            )))
+            .expect("malformed Info is bounded");
+        assert!(metadata.get("WEBM:Duration").is_none());
+
+        // CodecID starts within TrackEntry, but its payload is a sibling of
+        // TrackEntry. Neither Tracks nor Segment membership makes it valid.
+        let mut entry = element(&[0x83], &[1]);
+        entry.extend_from_slice(&[0x86, 0x85]);
+        let mut tracks_payload = element(&[0xAE], &entry);
+        tracks_payload.extend_from_slice(b"V_VP9");
+        let payload = element(&[0x16, 0x54, 0xAE, 0x6B], &tracks_payload);
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&with_segment(
+                &payload,
+                0x80 | payload.len() as u8,
+            )))
+            .expect("malformed TrackEntry is bounded");
+        assert!(metadata.get("WEBM:VideoCodec").is_none());
+
+        // PixelWidth's bytes are outside Video, although still within the
+        // enclosing TrackEntry. A complete sibling CodecID remains readable.
+        let mut track = element(&[0x83], &[1]);
+        track.extend(element(&[0x86], b"V_VP9"));
+        track.extend(element(&[0xE0], &[0xB0, 0x82]));
+        track.extend_from_slice(&[0, 128]);
+        let payload = element(&[0x16, 0x54, 0xAE, 0x6B], &element(&[0xAE], &track));
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&with_segment(
+                &payload,
+                0x80 | payload.len() as u8,
+            )))
+            .expect("malformed Video is bounded");
+        assert_eq!(metadata.get_string("WEBM:VideoCodec"), Some("VP9"));
+        assert!(metadata.get("WEBM:Width").is_none());
+    }
+
+    #[test]
+    fn video_and_audio_fields_require_complete_nested_payloads() {
+        let mut video_track = element(&[0x83], &[1]);
+        video_track.extend(element(&[0x86], b"V_VP9"));
+        video_track.extend(element(&[0xE0], &element(&[0xB0], &[0, 128])));
+        let mut audio_track = element(&[0x83], &[2]);
+        audio_track.extend(element(&[0x86], b"A_OPUS"));
+        audio_track.extend(element(&[0xE1], &element(&[0x9F], &[2])));
+        let mut tracks = element(&[0xAE], &video_track);
+        tracks.extend(element(&[0xAE], &audio_track));
+        let payload = element(&[0x16, 0x54, 0xAE, 0x6B], &tracks);
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&with_segment(
+                &payload,
+                0x80 | payload.len() as u8,
+            )))
+            .expect("complete nested video and audio tracks");
+        assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+        assert_eq!(metadata.get_string("WEBM:VideoCodec"), Some("VP9"));
+        assert_eq!(metadata.get_integer("WEBM:Width"), Some(128));
+        assert_eq!(metadata.get_string("WEBM:AudioCodec"), Some("Opus"));
+        assert_eq!(metadata.get_integer("WEBM:Channels"), Some(2));
+
+        // Audio declares a two-byte Channels value, but its bytes are a
+        // sibling of Audio inside TrackEntry. The codec is still complete.
+        let mut audio_track = element(&[0x83], &[2]);
+        audio_track.extend(element(&[0x86], b"A_OPUS"));
+        audio_track.extend(element(&[0xE1], &[0x9F, 0x82]));
+        audio_track.extend_from_slice(&[0, 2]);
+        let payload = element(&[0x16, 0x54, 0xAE, 0x6B], &element(&[0xAE], &audio_track));
+        let metadata = WebmParser
+            .parse(&TestReader::from_slice(&with_segment(
+                &payload,
+                0x80 | payload.len() as u8,
+            )))
+            .expect("malformed Audio is bounded");
+        assert_eq!(metadata.get_string("WEBM:AudioCodec"), Some("Opus"));
+        assert!(metadata.get("WEBM:Channels").is_none());
+    }
+
+    #[test]
+    fn bounded_headers_reject_split_truncated_and_unknown_sized_children() {
+        let split = TestReader::from_slice(&[0xAE, 0x80]);
+        assert!(parse_bounded_element_header(&split, 0, 1).is_err());
+
+        let oversized =
+            TestReader::from_slice(&[0xAE, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE]);
+        assert!(parse_bounded_element_header(&oversized, 0, oversized.size()).is_err());
+
+        let unknown = TestReader::from_slice(&[0xAE, 0xFF]);
+        assert!(parse_bounded_element_header(&unknown, 0, unknown.size()).is_err());
+    }
+
+    #[test]
     fn incomplete_segment_header_does_not_emit_child_tags() {
         let mut data = header();
         data.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]);
@@ -847,6 +984,7 @@ mod tests {
         data.extend_from_slice(&[0x42, 0x86]);
         data.push(0x81); // size = 1
         data.push(0x01); // value = 1
+
         // DocType (0x4282)
         data.extend_from_slice(&[0x42, 0x82]);
         data.push(0x84); // size = 4
