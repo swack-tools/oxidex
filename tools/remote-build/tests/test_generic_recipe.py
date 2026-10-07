@@ -114,12 +114,11 @@ class GenericRecipeTests(unittest.TestCase):
                       'cold':'installed','warm':'reused','source_head':'b'*40}
             observed={**expected,'cold':'reused','prefix_mode':0o700,'prefix_uid':1000}
             body=json.dumps(observed).encode()
-            digest=hashlib.sha256(body).hexdigest()
             transport=SimpleNamespace(scp=lambda local,remote,download=False:
                                       ['synthetic-scp',remote,str(local)])
             def receive(_transport,_remote,local,_digest,_limit):
                 local.write_bytes(body)
-            with patch.object(remote_build.subprocess,'check_output',return_value=digest+'  proof\n'), \
+            with patch.object(remote_build.subprocess,'check_output',side_effect=AssertionError('unbounded remote hash')), \
                  patch.object(remote_build,'_download_checked_candidate',side_effect=receive) as download:
                 with self.assertRaisesRegex(RuntimeError,'does not bind'):
                     remote_build.retrieve_component_proof(transport,lambda command:[command],
@@ -130,11 +129,12 @@ class GenericRecipeTests(unittest.TestCase):
             observed['cold']='installed'
             body=json.dumps(observed).encode()
             next_evidence=evidence/'next';next_evidence.mkdir()
-            with patch.object(remote_build.subprocess,'check_output',return_value=hashlib.sha256(body).hexdigest()+'  proof\n'), \
+            with patch.object(remote_build.subprocess,'check_output',side_effect=AssertionError('unbounded remote hash')), \
                  patch.object(remote_build,'_download_checked_candidate',side_effect=receive):
                 accepted=remote_build.retrieve_component_proof(transport,lambda command:[command],
                                                                expected['run_id'],next_evidence,expected)
             self.assertEqual(accepted['status'],'COMPONENT_ONLY_PASS')
+            self.assertEqual(accepted['sha256'], hashlib.sha256(body).hexdigest())
 
     def test_perl_candidate_retrieval_checks_both_durable_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,11 +157,6 @@ class GenericRecipeTests(unittest.TestCase):
                        'status':'candidate_only_requires_independent_review'}
             receipt=root/'remote-receipt';receipt.write_text(json.dumps(candidate))
             def ssh(command):return [command]
-            def output(command,**kwargs):
-                self.assertIn('/perl-candidate-export/',command[0])
-                self.assertNotIn('/ops/',command[0])
-                path=receipt if 'candidate-receipt.json' in command[0] else archive
-                return hashlib.sha256(path.read_bytes()).hexdigest()+'  remote\n'
             def run(command,**kwargs):
                 self.assertIn('/perl-candidate-export/',command[1])
                 self.assertNotIn('/ops/',command[1])
@@ -170,18 +165,20 @@ class GenericRecipeTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0)
             transport=SimpleNamespace(scp=lambda local,remote,download=False:
                                       ['mock-scp',remote,str(local)])
-            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+            with patch.object(remote_build.subprocess,'check_output',side_effect=AssertionError('unbounded remote hash')), \
                  patch.object(remote_build.subprocess,'run',side_effect=run):
                 result=remote_build.retrieve_perl_candidate(transport,ssh,'run',evidence,head,tree,'d'*64,lock)
             self.assertEqual(result['status'],'unapproved_candidate_retrieved')
+            self.assertEqual(result['receipt_sha256'],hashlib.sha256(receipt.read_bytes()).hexdigest())
+            self.assertEqual(result['archive_sha256'],candidate['archive_sha256'])
             self.assertEqual(Path(result['archive']).read_bytes(),archive.read_bytes())
             self.assertEqual(json.loads(Path(result['receipt']).read_text()),candidate)
             candidate['archive_sha256']='0'*64
             receipt.write_text(json.dumps(candidate))
             retry=evidence/'retry';retry.mkdir()
-            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+            with patch.object(remote_build.subprocess,'check_output',side_effect=AssertionError('unbounded remote hash')), \
                  patch.object(remote_build.subprocess,'run',side_effect=run):
-                with self.assertRaisesRegex(RuntimeError,'differs from candidate receipt'):
+                with self.assertRaisesRegex(RuntimeError,'checksum mismatch'):
                     remote_build.retrieve_perl_candidate(transport,ssh,'run2',retry,head,tree,'d'*64,lock)
             candidate['archive_sha256']=hashlib.sha256(archive.read_bytes()).hexdigest()
             candidate['archive_bytes']=remote_build.MAX_CANDIDATE_ARCHIVE_BYTES + 1
@@ -191,7 +188,7 @@ class GenericRecipeTests(unittest.TestCase):
             def bounded_run(command,**kwargs):
                 transfers.append(command[1])
                 return run(command,**kwargs)
-            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+            with patch.object(remote_build.subprocess,'check_output',side_effect=AssertionError('unbounded remote hash')), \
                  patch.object(remote_build.subprocess,'run',side_effect=bounded_run):
                 with self.assertRaisesRegex(RuntimeError,'receipt does not bind'):
                     remote_build.retrieve_perl_candidate(transport,ssh,'run3',oversized,head,tree,'d'*64,lock)
