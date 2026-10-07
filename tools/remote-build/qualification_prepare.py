@@ -137,6 +137,15 @@ def rebind_cases(reference: Path, destination: Path, source: Path, approved_read
 
 def prepare(reference: Path, output: Path, expected_head: str) -> dict:
     """Regenerate all six Task19 side inputs before allowing any row to start."""
+    # The descriptor is signed Git source; the JSON envelope is merely
+    # bounded transport. Check both before creating any preparation output.
+    sys.path.insert(0, str(ROOT))
+    from tools.release import approved_linux_perl, bootstrap_oracle
+    approval = approved_linux_perl.load(
+        ROOT / "tools/release/oracle-lock.json",
+        envelope=reference / "approved-linux-perl.json",
+    )
+    bootstrap_oracle.assert_approved_perl(Path("/target/ops"), approval, allow_absent=True)
     if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
         raise ValueError("candidate HEAD must be a full Git object ID")
     if (subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip() != expected_head

@@ -8,6 +8,8 @@ import stat
 import subprocess
 import sys
 
+from lib.remote_build import FLEET_RECIPES
+
 HERE = Path(__file__).resolve().parent
 RECIPE = re.compile(r'[a-z][a-z0-9_-]{0,63}\Z')
 ORACLE_TEST_RECIPES = frozenset({
@@ -15,7 +17,6 @@ ORACLE_TEST_RECIPES = frozenset({
     'test-integration', 'test-ffi-c', 'test-comparison', 'test-doc',
     'test-package', 'test-tags', 'test-ignored', 'prepare-ignored-inputs', 'ci',
 })
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
 FLEET_SOURCE = Path('/src')
 FLEET_CHECKOUT = Path('/target/checkout')
 FLEET_CARGO_TARGET = Path('/target/cargo')
@@ -224,9 +225,14 @@ def main(argv):
     if not argv or not RECIPE.fullmatch(argv[0]):
         raise SystemExit('Invalid remote recipe name')
     recipe, *args = argv
+    component = recipe == 'prove-linux-perl-component'
     if any(not value or len(value) > 4096 or any(ch in value for ch in '\x00\n\r') for value in args):
         raise SystemExit('Invalid recipe argument')
-    if local_worker_context():
+    worker_context = local_worker_context()
+    if component and ((worker_context and (len(args) != 1 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,30}-[0-9a-f]{32}', args[0])))
+                      or (not worker_context and (len(args) != 1 or not Path(args[0]).is_absolute()))):
+        raise SystemExit('Component proof requires one private run ID or one absolute envelope path')
+    if worker_context:
         if recipe in FLEET_RECIPES:
             signed_builder = False
             if Path.cwd() == FLEET_SOURCE and trusted_marker(BUILDER_MARKER):
@@ -240,7 +246,13 @@ def main(argv):
                 verify_ci_fleet_checkout()
             if signed_builder:
                 select_signed_builder_target()
-        if recipe in FLEET_RECIPES and recipe != 'test-ignored':
+        if recipe == 'verify-linux-perl':
+            # Bootstrap integration tests require the canonical cache paths.
+            for key in ('PERL5LIB', 'PERLLIB', 'PERL5OPT'):
+                os.environ.pop(key, None)
+            from test_runner import prepare_generic_recipe_oracle
+            prepare_generic_recipe_oracle()
+        elif recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl', 'prove-linux-perl-component'):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
@@ -249,8 +261,11 @@ def main(argv):
         os.execvp('just', ['just', '_' + recipe + '-worker', *args])
         return 0  # execvp does not return outside synthetic controls
     command = [sys.executable, str(HERE/'build.py'), '--just-recipe', recipe]
-    for value in args:
-        command.append('--just-arg=' + value)
+    if component:
+        command.append('--approved-linux-perl-envelope=' + args[0])
+    else:
+        for value in args:
+            command.append('--just-arg=' + value)
     os.execv(sys.executable, command)
 
 

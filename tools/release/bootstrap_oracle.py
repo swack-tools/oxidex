@@ -28,6 +28,7 @@ from typing import Any, Iterator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ops_paths import ops_root
+from tools.release import approved_linux_perl
 
 DURABLE_ROOT = ops_root()
 MIN_CORPUS_FILES = 4_000
@@ -38,6 +39,10 @@ LOCK = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
 
 class Refused(RuntimeError):
     """The requested operation failed a release-safety precondition."""
+
+
+class UnverifiableMetadata(Refused):
+    """Unsafe ownership or directory metadata leaves candidate bytes unjudged."""
 
 
 def resolve_durable_root(root: Path) -> Path:
@@ -547,6 +552,10 @@ def _recover_abandoned_staging(
             continue
         try:
             verify_candidate(staging)
+        except UnverifiableMetadata:
+            # Unsafe metadata does not prove corrupt content. Preserve both
+            # the tree and its ownership sidecar for explicit repair.
+            raise
         except Refused:
             # This is the sole automatic-delete case: current locked
             # verification positively proves that a dead, owned candidate is
@@ -610,6 +619,7 @@ def install_immutable_tree(
     verify_candidate: Callable[[Path], None],
     *,
     after_verify: Callable[[Path], None] | None = None,
+    preflight_candidate: Callable[[Path], None] | None = None,
 ) -> str:
     """Install a verified tree once; canonical paths are never replaced.
 
@@ -689,6 +699,10 @@ def install_immutable_tree(
     finally:
         if staging.exists():
             with _staging_lifecycle_lock(durable, destination):
+                # Before even hashing for caught-error cleanup, require the
+                # same metadata safety as normal candidate verification.
+                if preflight_candidate is not None:
+                    preflight_candidate(staging)
                 try:
                     state = _read_staging_intent(staging, destination, durable)
                     verified = (
@@ -705,6 +719,8 @@ def install_immutable_tree(
                 else:
                     try:
                         verify_candidate(staging)
+                    except UnverifiableMetadata:
+                        raise
                     except Refused:
                         _append_staging_journal(destination, {
                             "event": "removed-unverified-staging-after-caught-error",
@@ -788,7 +804,43 @@ def staged_perl_environment(candidate: Path) -> dict[str, str]:
     return {**os.environ, "PERL5LIB": ":".join(dict.fromkeys(map(str, paths)))}
 
 
-def _verify_perl_tree(root: Path, candidate: Path) -> None:
+def assert_approved_perl(root: Path, approval: tuple[dict, bytes],
+                         *, allow_absent: bool = False) -> None:
+    """Check a qualification installation before any cached Perl execution."""
+    durable = resolve_durable_root(root)
+    if durable != approved_linux_perl.QUALIFICATION_ROOT or perl_prefix(durable) != approved_linux_perl.PREFIX:
+        raise Refused("approved Linux Perl requires the exact qualification root")
+    if approval[0].get("prefix") != str(approved_linux_perl.PREFIX):
+        raise Refused("approved Linux Perl prefix differs from the qualification root")
+    candidate = perl_prefix(durable)
+    if not candidate.exists() and not candidate.is_symlink():
+        if allow_absent:
+            return
+        raise Refused("approved Linux Perl installation is missing")
+    try:
+        approved_linux_perl.check_tree(approval[0], candidate, sha256_tree)
+    except approved_linux_perl.UnverifiableMetadata as exc:
+        raise UnverifiableMetadata(str(exc)) from exc
+    except approved_linux_perl.Refused as exc:
+        raise Refused(str(exc)) from exc
+
+
+def _preflight_perl_metadata(candidate: Path) -> None:
+    try:
+        approved_linux_perl.check_metadata(candidate)
+    except approved_linux_perl.UnverifiableMetadata as exc:
+        raise UnverifiableMetadata(str(exc)) from exc
+
+
+def _verify_perl_tree(root: Path, candidate: Path,
+                      approved_perl: tuple[dict, bytes] | None = None) -> None:
+    if approved_perl is not None:
+        try:
+            approved_linux_perl.check_tree(approved_perl[0], candidate, sha256_tree)
+        except approved_linux_perl.UnverifiableMetadata as exc:
+            raise UnverifiableMetadata(str(exc)) from exc
+        except approved_linux_perl.Refused as exc:
+            raise Refused(str(exc)) from exc
     perl = candidate / "bin/perl5.38.2"
     if not perl.is_file() or perl.is_symlink():
         raise Refused(f"Perl tree is missing its executable: {candidate}")
@@ -800,11 +852,28 @@ def _verify_perl_tree(root: Path, candidate: Path) -> None:
         raise Refused(f"Archive::Zip must be 1.68, got {version}")
 
 
-def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path) -> None:
+def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path,
+                      approved_perl: tuple[dict, bytes] | None = None) -> str | None:
     """Build Perl and Archive::Zip in one immutable staging tree."""
     prefix = perl_prefix(root)
 
     def populate(staging: Path) -> None:
+        if approved_perl is not None:
+            # The envelope is independently SHA-bound to signed source. Reuse
+            # the producer's bounded tar inspector/extractor, then remove the
+            # temporary wrapper before hashing the exact install tree.
+            from tools.release import freeze_linux_perl
+            (root / "cache/sources").mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=root / "cache/sources",
+                                             prefix="approved-perl-") as work:
+                archive = Path(work) / "approved.tar.gz"
+                archive.write_bytes(approved_perl[1])
+                payload = staging / ".approved-payload"
+                freeze_linux_perl.extract_frozen(archive, payload)
+                for item in payload.iterdir():
+                    os.rename(item, staging / item.name)
+                payload.rmdir()
+            return
         install_root = staging / ".destdir"
         source_parent = root / "cache/sources"
         source_parent.mkdir(parents=True, exist_ok=True)
@@ -839,7 +908,14 @@ def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path) -> None
             run(["make", "install", f"DESTDIR={install_root}"], cwd=source, env=environment)
         _merge_payload(destdir_payload(prefix, install_root), staging, install_root)
 
-    install_immutable_tree(root, prefix, populate, lambda candidate: _verify_perl_tree(root, candidate))
+    if approved_perl is not None:
+        assert_approved_perl(root, approved_perl, allow_absent=True)
+    disposition = install_immutable_tree(
+        root, prefix, populate,
+        lambda candidate: _verify_perl_tree(root, candidate, approved_perl),
+        preflight_candidate=_preflight_perl_metadata if approved_perl is not None else None,
+    )
+    return disposition if approved_perl is not None else None
 
 
 def _materialize_exiftool(
@@ -1256,6 +1332,7 @@ def _verify_archive_sources(root: Path) -> dict[str, Path]:
 def materialize(
     root: Path,
     archives: Mapping[str, Mapping[str, str]],
+    *, approved_perl: tuple[dict, bytes] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Materialize immutable locked artifacts or reuse exact canonical trees."""
     validate_lock(LOCK)
@@ -1264,7 +1341,10 @@ def materialize(
     }
     perl_archive = downloaded["perl"]
     zip_archive = downloaded["archive_zip"]
-    _materialize_perl(root, perl_archive, zip_archive)
+    if approved_perl is None:
+        _materialize_perl(root, perl_archive, zip_archive)
+    else:
+        _materialize_perl(root, perl_archive, zip_archive, approved_perl)
     _materialize_exiftool(root, LOCK["exiftool"])
     _materialize_corpus(root, downloaded)
     corpus_manifest = _write_corpus_manifest(root)
@@ -1288,12 +1368,15 @@ def materialize(
 
 
 def verify(root: Path, pin: str, manifest: Path | None, *,
-           runner: Callable[..., str] | None = None) -> Path:
+           runner: Callable[..., str] | None = None,
+           approved_perl: tuple[dict, bytes] | None = None) -> Path:
     # Qualification supplies its owned, bounded process runner. Provisioning
     # retains its existing runner; neither path mutates the parent environment.
     run_probe = runner if runner is not None else run
     durable = resolve_durable_root(root)
     validate_lock(LOCK)
+    if approved_perl is not None:
+        assert_approved_perl(durable, approved_perl)
     assert_no_legacy_nested_corpus(durable)
     if pin != VERSION:
         raise Refused(f"ExifTool pin must be {VERSION}, got {pin}")
@@ -1389,12 +1472,14 @@ def verify(root: Path, pin: str, manifest: Path | None, *,
     return output
 
 
-def provision(root: Path) -> Path:
+def provision(root: Path, *, approved_perl: tuple[dict, bytes] | None = None) -> Path:
     durable = resolve_durable_root(root)
     journal = evidence_path(durable) / "bootstrap-journal.json"
     stage = "validate-lock"
     try:
         validate_lock(LOCK)
+        if approved_perl is not None:
+            assert_approved_perl(durable, approved_perl, allow_absent=True)
         assert_no_legacy_nested_corpus(durable)
         existing_manifest = manifest_path(durable)
         if existing_manifest.is_file():
@@ -1404,9 +1489,15 @@ def provision(root: Path) -> Path:
                 raise Refused("existing durable manifest is unreadable; explicit repair is required")
             validate_locked_manifest(existing, durable)
         stage = "materialize"
-        artifacts = materialize(durable, LOCK["archives"])
+        if approved_perl is None:
+            artifacts = materialize(durable, LOCK["archives"])
+        else:
+            artifacts = materialize(durable, LOCK["archives"], approved_perl=approved_perl)
         stage = "verify"
-        output = verify(durable, VERSION, None)
+        if approved_perl is None:
+            output = verify(durable, VERSION, None)
+        else:
+            output = verify(durable, VERSION, None, approved_perl=approved_perl)
         payload = json.loads(output.read_text(encoding="utf-8"))
         payload["artifacts"].update(artifacts)
         atomic_json(output, payload)

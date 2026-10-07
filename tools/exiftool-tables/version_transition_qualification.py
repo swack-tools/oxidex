@@ -561,9 +561,18 @@ def _verified_linux_perl_sha(ops_root: Path, perl: Path) -> str:
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
     try:
+        import sys as runtime_sys
+        if str(REPOSITORY_ROOT) not in runtime_sys.path:
+            runtime_sys.path.insert(0, str(REPOSITORY_ROOT))
+        from tools.release import approved_linux_perl
+        approval = approved_linux_perl.load(
+            REPOSITORY_ROOT / "tools/release/oracle-lock.json",
+            envelope=Path("/src/reference/approved-linux-perl.json"),
+        )
         manifest = bootstrap.verify(
             ops_root, (REPOSITORY_ROOT / ".exiftool-version").read_text().strip(),
-            bootstrap.manifest_path(ops_root), runner=_perl_probe)
+            bootstrap.manifest_path(ops_root), runner=_perl_probe,
+            approved_perl=approval)
         identity = json.loads(manifest.read_text(encoding="utf-8"))["artifacts"]["perl_executable"]
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         raise Refused(f"locked Linux Perl bootstrap verification failed: {exc}") from exc

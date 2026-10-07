@@ -20,6 +20,7 @@ def main():
     task.add_argument('--profile', choices=['debug','release','test'])
     task.add_argument('--just-recipe')
     parser.add_argument('--just-arg',action='append',default=[])
+    parser.add_argument('--approved-linux-perl-envelope',type=Path)
     parser.add_argument("--max-attempts",type=int,default=3)
     args=parser.parse_args()
     if args.max_attempts < 1:
@@ -28,6 +29,10 @@ def main():
         parser.error('--just-arg requires --just-recipe')
     if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
         parser.error('invalid Just recipe name')
+    if bool(args.approved_linux_perl_envelope) != (args.just_recipe == 'prove-linux-perl-component'):
+        parser.error('approved Linux Perl envelope belongs only to component proof')
+    if args.approved_linux_perl_envelope and args.just_arg:
+        parser.error('component proof does not take public Just arguments')
     if any(not value or len(value)>4096 or any(ch in value for ch in '\x00\n\r') for value in args.just_arg):
         parser.error('invalid Just argument')
     source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
@@ -44,7 +49,9 @@ def main():
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     evidence=ops_root()/'evidence'/('auto-remote-'+stamp)
     task_args=(['--profile',args.profile] if args.profile else ['--just-recipe',args.just_recipe]
-               +['--just-arg='+value for value in args.just_arg])
+               +['--just-arg='+value for value in args.just_arg]
+               +(['--approved-linux-perl-envelope='+str(args.approved_linux_perl_envelope)]
+                 if args.approved_linux_perl_envelope else []))
     if configured.get('OXIDEX_REMOTE_INSTANCE'):
         # Explicit bootstrap route: actual provider ID and authenticated launcher
         # are checked by direct.py; host admission still enforces resources.
