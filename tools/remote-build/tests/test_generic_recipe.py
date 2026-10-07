@@ -1,5 +1,6 @@
 """Bounded Just dispatch and signed fleet packet controls; no remote jobs."""
 import json
+import hashlib
 from pathlib import Path
 import tarfile
 import tempfile
@@ -14,7 +15,51 @@ from lib import remote_build
 
 
 class GenericRecipeTests(unittest.TestCase):
-    def exercise(self, code, recipe="test-package"):
+    def test_perl_candidate_retrieval_checks_both_durable_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            lock=root/'oracle-lock.json';lock.write_bytes(b'locked source')
+            evidence=root/'evidence';evidence.mkdir()
+            archive=root/'remote-archive';archive.write_bytes(b'synthetic frozen Perl bytes')
+            head='a'*40;tree='b'*40
+            candidate={'schema_version':1,'kind':'linux_perl_unapproved_candidate',
+                       'source_head':head,'source_tree':tree,
+                       'source_clean_context':'remote_verified_signed_fleet_checkout',
+                       'source_bundle_sha256':'d'*64,
+                       'config_prefix':'/target/ops/toolchains/perl-5.38.2/prefix',
+                       'archive_path':'/target/ops/evidence/linux-perl-independent-identity/perl-5.38.2-prefix.tar.gz',
+                       'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),
+                       'archive_bytes':archive.stat().st_size,
+                       'lock_sha256':hashlib.sha256(lock.read_bytes()).hexdigest(),
+                       'perl_tree_sha256':'c'*64,'replay_tree_sha256':'c'*64,
+                       'status':'candidate_only_requires_independent_review'}
+            receipt=root/'remote-receipt';receipt.write_text(json.dumps(candidate))
+            def ssh(command):return [command]
+            def output(command,**kwargs):
+                path=receipt if 'candidate-receipt.json' in command[0] else archive
+                return hashlib.sha256(path.read_bytes()).hexdigest()+'  remote\n'
+            def run(command,**kwargs):
+                source=receipt if 'candidate-receipt.json' in command[1] else archive
+                shutil.copyfile(source,command[2])
+                return SimpleNamespace(returncode=0)
+            transport=SimpleNamespace(scp=lambda local,remote,download=False:
+                                      ['mock-scp',remote,str(local)])
+            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run):
+                result=remote_build.retrieve_perl_candidate(transport,ssh,'run',evidence,head,tree,'d'*64,lock)
+            self.assertEqual(result['status'],'unapproved_candidate_retrieved')
+            self.assertEqual(Path(result['archive']).read_bytes(),archive.read_bytes())
+            self.assertEqual(json.loads(Path(result['receipt']).read_text()),candidate)
+            candidate['archive_sha256']='0'*64
+            receipt.write_text(json.dumps(candidate))
+            retry=evidence/'retry';retry.mkdir()
+            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=run):
+                with self.assertRaisesRegex(RuntimeError,'differs from candidate receipt'):
+                    remote_build.retrieve_perl_candidate(transport,ssh,'run2',retry,head,tree,'d'*64,lock)
+
+    def exercise(self, code, recipe="test-package", source_status="", producer_tree='a'*40,
+                 retrieval_fail=False):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);commands=[]
             signer=root/'maintainer.allowed_signers'
@@ -44,7 +89,7 @@ class GenericRecipeTests(unittest.TestCase):
                 if 'config' in command and 'gpg.ssh.allowedSignersFile' in command:
                     return str(signer)+'\n'
                 if 'status' in command:
-                    return ''
+                    return source_status
                 return 'a'*40+'\n'
             def download(instance,zone,project,binary,artifact,digest,**kwargs):
                 artifact.write_bytes(b'verified synthetic binary')
@@ -56,6 +101,9 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build,'verify_signed_source'), \
                  patch('qualification_source.verify_source'), \
                  patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
+                 patch.object(remote_build,'retrieve_perl_candidate',
+                              side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
+                              return_value={'status':'unapproved_candidate_retrieved'}) as retrieve, \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
@@ -65,11 +113,24 @@ class GenericRecipeTests(unittest.TestCase):
                       '--evidence-dir',str(root/'evidence'),'--just-recipe',recipe]
                 if recipe=='test-package':
                     argv += ['--just-arg=package with spaces']
+                if recipe=='freeze-linux-perl':
+                    argv += ['--just-arg='+'a'*40,'--just-arg='+producer_tree]
                 if code:
                     with self.assertRaisesRegex(RuntimeError,'recipe failed'):
                         remote_build.main(argv)
+                elif source_status and recipe=='freeze-linux-perl':
+                    with self.assertRaisesRegex(RuntimeError,'clean exact-HEAD'):
+                        remote_build.main(argv)
+                elif producer_tree!='a'*40 and recipe=='freeze-linux-perl':
+                    with self.assertRaisesRegex(RuntimeError,'selected signed HEAD/tree'):
+                        remote_build.main(argv)
+                elif retrieval_fail and recipe=='freeze-linux-perl':
+                    with self.assertRaisesRegex(RuntimeError,'synthetic transfer loss'):
+                        remote_build.main(argv)
                 else:
                     self.assertEqual(remote_build.main(argv),0)
+                    if recipe=='freeze-linux-perl':
+                        retrieve.assert_called_once()
             receipt=json.loads((root/'evidence/remote-build.json').read_text())
             return receipt,commands,root,extras_seen,signed_heads
 
@@ -131,6 +192,22 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertTrue(any('bundle' in command and 'create' in command
                             and command[-1] == 'HEAD' for command in commands))
         self.assertNotIn('--all', '\n'.join(map(str, commands)))
+
+    def test_perl_producer_uses_signed_packet_and_refuses_dirty_snapshot(self):
+        receipt,_,_,extras,heads=self.exercise(0,'freeze-linux-perl')
+        self.assertEqual(heads,['a'*40])
+        self.assertEqual(set(extras),{'repository.bundle','maintainer.allowed_signers','fleet-source-head'})
+        self.assertEqual(receipt['candidate_retrieval']['status'],'unapproved_candidate_retrieved')
+        refused,commands,_,_,_=self.exercise(0,'freeze-linux-perl',source_status=' M justfile\n')
+        self.assertIn('clean exact-HEAD',refused['error'])
+        self.assertFalse(any(' just ' in ' '.join(command) for command in commands))
+        mismatch,commands,_,_,_=self.exercise(0,'freeze-linux-perl',producer_tree='b'*40)
+        self.assertIn('selected signed HEAD/tree',mismatch['error'])
+        self.assertFalse(any(' just ' in ' '.join(command) for command in commands))
+        lost,_,_,_,_=self.exercise(0,'freeze-linux-perl',retrieval_fail=True)
+        self.assertEqual(lost['stage'],'verify')
+        self.assertTrue(lost['remote_retained'])
+        self.assertNotIn('verified',lost)
 
     def test_snapshot_carries_bundle_bytes_with_source_hashes(self):
         with tempfile.TemporaryDirectory() as directory:

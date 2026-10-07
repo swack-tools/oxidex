@@ -15,7 +15,7 @@ ORACLE_TEST_RECIPES = frozenset({
     'test-integration', 'test-ffi-c', 'test-comparison', 'test-doc',
     'test-package', 'test-tags', 'test-ignored', 'prepare-ignored-inputs', 'ci',
 })
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
+FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored', 'freeze-linux-perl'})
 FLEET_SOURCE = Path('/src')
 FLEET_CHECKOUT = Path('/target/checkout')
 FLEET_CARGO_TARGET = Path('/target/cargo')
@@ -240,7 +240,7 @@ def main(argv):
                 verify_ci_fleet_checkout()
             if signed_builder:
                 select_signed_builder_target()
-        if recipe in FLEET_RECIPES and recipe != 'test-ignored':
+        if recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl'):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:

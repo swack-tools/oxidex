@@ -1844,6 +1844,9 @@ qualify-remote output reference provisioning:
 freeze-linux-perl-remote:
     python3 tools/release/freeze_linux_perl.py launch
 
-freeze-linux-perl-worker head tree:
+freeze-linux-perl head tree:
+    python3 tools/remote-build/route.py freeze-linux-perl {{quote(head)}} {{quote(tree)}}
+
+_freeze-linux-perl-worker head tree:
     python3 tools/remote-build/route.py --require-local-context freeze-linux-perl
     python3 tools/release/freeze_linux_perl.py worker --source-head '{{head}}' --source-tree '{{tree}}'

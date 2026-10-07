@@ -473,6 +473,21 @@ class RouteTests(unittest.TestCase):
             route.main(['--require-local-context', 'fleet-test'])
             self.assertEqual(events, ['verified CI checkout'])
 
+    def test_perl_producer_uses_signed_builder_route_without_oracle_bootstrap(self):
+        head='a'*40;tree='b'*40
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout') as prepare, \
+             patch.object(route,'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(route.os,'execvp') as execute:
+            route.main(['freeze-linux-perl',head,tree])
+        prepare.assert_called_once()
+        target.assert_called_once()
+        oracle.assert_not_called()
+        execute.assert_called_once_with('just',['just','_freeze-linux-perl-worker',head,tree])
+
     def test_actions_fleet_checkout_accepts_full_and_shallow_merge_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
