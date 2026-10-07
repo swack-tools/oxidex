@@ -70,6 +70,58 @@ def prepare_fleet_checkout() -> None:
     print(f'FLEET_SIGNED_SOURCE: head={head} checkout={FLEET_CHECKOUT}', flush=True)
 
 
+def _read_batch_blob(stream, object_id: str, expected_size: int) -> bytes:
+    """Read one framed exact-object response from git cat-file --batch."""
+    header = stream.readline()
+    match = re.fullmatch(rb"([0-9a-f]{40}) blob ([0-9]+)\n", header)
+    if not match or match.group(1).decode('ascii') != object_id:
+        raise RuntimeError('fleet CI source has malformed or mismatched Git blob header')
+    size = int(match.group(2))
+    if size != expected_size:
+        raise RuntimeError('fleet CI source has mismatched Git blob size')
+    data = stream.read(size)
+    if len(data) != size or stream.read(1) != b'\n':
+        raise RuntimeError('fleet CI source has truncated Git blob response')
+    return data
+
+
+def _verify_signed_worktree(checkout: Path, head: str) -> None:
+    """Compare every included worktree byte and execute bit to exact HEAD."""
+    from lib.remote_build import signed_snapshot_files
+    signed = signed_snapshot_files(checkout, head)
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+    command = ['git', '-C', str(checkout), 'cat-file', '--batch']
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, env=env) as child:
+        try:
+            assert child.stdin is not None and child.stdout is not None
+            for name, (object_id, mode) in signed.items():
+                if not re.fullmatch(r'[0-9a-f]{40}', object_id):
+                    raise RuntimeError('fleet CI source has malformed Git object ID')
+                child.stdin.write((object_id + '\n').encode('ascii'))
+                child.stdin.flush()
+                path = checkout / name
+                info = path.lstat()
+                if (not stat.S_ISREG(info.st_mode)
+                        or bool(info.st_mode & 0o111) != (mode == 0o755)):
+                    raise RuntimeError(f'fleet CI source differs from selected HEAD: {name}')
+                try:
+                    data = _read_batch_blob(child.stdout, object_id, info.st_size)
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f'fleet CI source differs from selected HEAD: {name}: {exc}'
+                    ) from exc
+                if path.read_bytes() != data:
+                    raise RuntimeError(f'fleet CI source differs from selected HEAD: {name}')
+            child.stdin.close()
+            if child.stdout.read(1) != b'' or child.wait() != 0:
+                raise RuntimeError('fleet CI source has extra or failed Git blob response')
+        except BaseException:
+            child.kill()
+            child.wait()
+            raise
+
+
 def verify_ci_fleet_checkout() -> None:
     """Admit the selected Actions checkout and restore history if shallow."""
     checkout = Path.cwd()
@@ -93,15 +145,7 @@ def verify_ci_fleet_checkout() -> None:
         raise RuntimeError('fleet CI source is not the selected Actions commit')
     # Status alone misses skip-worktree and assume-unchanged. Check the bytes
     # this recipe can execute against the selected checkout commit.
-    from lib.remote_build import signed_snapshot_files
-    for name, (object_id, mode) in signed_snapshot_files(checkout, head).items():
-        path = checkout / name
-        data = subprocess.check_output(
-            ['git', '-C', str(checkout), 'cat-file', 'blob', object_id],
-            env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1'))
-        if (path.is_symlink() or not path.is_file() or path.read_bytes() != data
-                or bool(path.stat().st_mode & 0o111) != (mode == 0o755)):
-            raise RuntimeError(f'fleet CI source differs from selected HEAD: {name}')
+    _verify_signed_worktree(checkout, head)
     if git('rev-parse', '--is-shallow-repository') == 'true':
         origin = git('config', '--get', 'remote.origin.url')
         if origin not in CI_ORIGIN_URLS or git('remote', 'get-url', 'origin') != origin:

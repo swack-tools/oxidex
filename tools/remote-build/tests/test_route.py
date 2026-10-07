@@ -1,4 +1,5 @@
 """Small control-plane checks: no Cargo, SSH, or provider calls."""
+import io
 import json
 import os
 import shutil
@@ -15,6 +16,22 @@ import route
 
 
 class RouteTests(unittest.TestCase):
+    def test_batch_blob_framing_refuses_wrong_type_identity_size_and_truncation(self):
+        oid = 'a' * 40
+        valid = (oid + ' blob 3\n').encode() + b'a\0b\n'
+        self.assertEqual(route._read_batch_blob(io.BytesIO(valid), oid, 3), b'a\0b')
+        bad = (
+            (oid + ' tree 3\n').encode() + b'a\0b\n',
+            (('b' * 40) + ' blob 3\n').encode() + b'a\0b\n',
+            (oid + ' blob 4\n').encode() + b'a\0b\n',
+            (oid + ' blob 3\n').encode() + b'a\0',
+            (oid + ' blob 3\n').encode() + b'a\0bX',
+            b'',
+        )
+        for response in bad:
+            with self.subTest(response=response), self.assertRaises(RuntimeError):
+                route._read_batch_blob(io.BytesIO(response), oid, 3)
+
     def test_marker_requires_exact_root_regular_nonwritable_file(self):
         good=SimpleNamespace(st_mode=stat.S_IFREG|0o444,st_uid=0,st_nlink=1)
         with patch.object(route.sys,'platform','linux'), patch.object(Path,'cwd',return_value=Path('/src')):

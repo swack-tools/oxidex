@@ -953,6 +953,36 @@ class DurablePathTests(unittest.TestCase):
                         wrapper, perl, library, script, markers
                     )
                     self.assertEqual(wrapper.stat().st_mode & 0o777, 0o700)
+                    with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}):
+                        with self.assertRaisesRegex(oracle.Refused, "selected build target"):
+                            oracle.write_comparison_wrapper(
+                                wrapper, perl, library, script, root / "wrong-markers",
+                                marker_root=root / "other-target",
+                            )
+                        with self.assertRaisesRegex(oracle.Refused, "outside durable root"):
+                            oracle.write_comparison_wrapper(
+                                wrapper, perl, library, script, root / "escape-markers",
+                                marker_root=root / "target",
+                            )
+                    owned_target = root / "selected target"
+                    owned_target.mkdir()
+                    owned_target.chmod(0o700)
+                    (owned_target / "recipe").mkdir()
+                    (owned_target / "recipe").chmod(0o700)
+                    with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": str(owned_target)}):
+                        owned_wrapper = owned_target / "recipe" / "exiftool-pinned.sh"
+                        owned_markers = owned_target / "recipe" / "identity"
+                        oracle.write_comparison_wrapper(
+                            owned_wrapper, perl, library, script, owned_markers,
+                            marker_root=owned_target,
+                        )
+                        owned_run = subprocess.run(
+                            [str(owned_wrapper), "owned receipt"],
+                            capture_output=True, text=True, check=False,
+                        )
+                        self.assertEqual(owned_run.returncode, 0, owned_run.stderr)
+                        self.assertEqual(owned_run.stdout, "owned receipt")
+                        self.assertEqual(len(list(owned_markers.glob("perl-*.json"))), 1)
                     result = subprocess.run(
                         [str(wrapper), "argument with spaces", ""],
                         capture_output=True,
