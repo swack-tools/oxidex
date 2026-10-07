@@ -71,21 +71,63 @@ class DocsSiteWorkerTests(unittest.TestCase):
                    'GIT_CONFIG_VALUE_0': 'true', 'GIT_REPLACE_REF_BASE': 'refs/evil',
                    'DOCS_STABLE_URL': 'https://attacker.invalid/',
                    'DOCS_PREVIEW_URL': 'https://evil.invalid/',
-                   'DOCS_PREVIEW_SHA': '0' * 40}
+                   'DOCS_PREVIEW_SHA': '0' * 40,
+                   'BASH_ENV': '/tmp/startup.sh', 'ENV': '/tmp/shrc',
+                   'SHELLOPTS': 'xtrace', 'CDPATH': '/tmp/elsewhere',
+                   'NODE_OPTIONS': '--require=/tmp/preload.js',
+                   'NODE_PATH': '/tmp/node_modules', 'PYTHONPATH': '/tmp/python',
+                   'LD_PRELOAD': '/tmp/preload.so',
+                   'NPM_CONFIG_USERCONFIG': '/tmp/hostile.npmrc',
+                   'HTTPS_PROXY': 'https://attacker.invalid:443'}
         with patch.dict(os.environ, hostile):
-            child = docs_site_worker.build_environment()
+            child = docs_site_worker.build_environment(Path('/trusted/home'))
             self.assertEqual({key: os.environ[key] for key in hostile}, hostile)
-        self.assertTrue(all(key not in child for key in hostile))
+        self.assertTrue(all(key not in child for key in hostile
+                            if key != 'NPM_CONFIG_USERCONFIG'))
         self.assertEqual(child['GIT_NO_REPLACE_OBJECTS'], '1')
         self.assertEqual(child['GIT_CONFIG_GLOBAL'], os.devnull)
         self.assertEqual(child['GIT_CONFIG_SYSTEM'], os.devnull)
         self.assertEqual((child['DOCS_CHANNEL'], child['DOCS_BASE']), ('stable', '/'))
+        self.assertEqual(child['HOME'], '/trusted/home')
+        self.assertEqual(child['NPM_CONFIG_USERCONFIG'], os.devnull)
+        self.assertEqual(child['NPM_CONFIG_GLOBALCONFIG'], os.devnull)
+        self.assertEqual(child['NPM_CONFIG_CACHE'], '/trusted/home/npm-cache')
+        self.assertEqual(set(child), {
+            'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
+            'GIT_NO_REPLACE_OBJECTS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
+            'DOCS_CHANNEL', 'DOCS_BASE', 'NPM_CONFIG_USERCONFIG',
+            'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_CACHE',
+        })
+
+    def test_relative_or_empty_path_component_refuses(self):
+        for value in ('', 'bin:/usr/bin', '/usr/bin::/bin'):
+            with self.subTest(path=value), patch.dict(os.environ, {'PATH': value}):
+                with self.assertRaisesRegex(RuntimeError, 'absolute trusted PATH'):
+                    docs_site_worker.build_environment(Path('/trusted/home'))
+
+    def test_real_bash_startup_and_node_preload_cannot_restore_site_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            startup = root / 'startup.sh'
+            startup.write_text('export DOCS_STABLE_URL=https://attacker.invalid/\n')
+            preload = root / 'preload.js'
+            preload.write_text('process.env.DOCS_STABLE_URL="https://node-attacker.invalid/";\n')
+            with patch.dict(os.environ, {'BASH_ENV': str(startup),
+                                      'NODE_OPTIONS': '--require=' + str(preload)}):
+                child = docs_site_worker.build_environment(root / 'home')
+                bash_value = subprocess.check_output(
+                    ['bash', '-c', 'printf "%s" "${DOCS_STABLE_URL:-}"'],
+                    env=child, text=True)
+                node_value = subprocess.check_output(
+                    ['node', '-e', 'process.stdout.write(process.env.DOCS_STABLE_URL||"")'],
+                    env=child, text=True)
+            self.assertEqual((bash_value, node_value), ('', ''))
 
     def test_git_replacement_does_not_change_archived_head(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             subprocess.run(['git', 'init', '-q', str(root)], check=True)
-            env = docs_site_worker.build_environment()
+            env = docs_site_worker.build_environment(Path('/trusted/home'))
 
             def git(*args):
                 return subprocess.check_output(['git', '-C', str(root), *args],

@@ -12,14 +12,18 @@ SOURCE = Path('/target/checkout')
 OUTPUT = Path('/target/docs-site')
 
 
-def build_environment():
-    """Keep later Git and VitePress subprocesses on the verified source contract."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    for key in ('DOCS_STABLE_URL', 'DOCS_PREVIEW_URL', 'DOCS_PREVIEW_SHA'):
-        env.pop(key, None)
-    env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_CONFIG_SYSTEM=os.devnull, DOCS_CHANNEL='stable', DOCS_BASE='/')
-    return env
+def build_environment(home):
+    """Pass only runtime tool lookup plus fixed Git, npm and site settings."""
+    path = os.environ.get('PATH', '')
+    if not path or any(not Path(part).is_absolute() for part in path.split(os.pathsep)):
+        raise RuntimeError('Docs site worker requires an absolute trusted PATH')
+    return {'PATH': path, 'HOME': str(home), 'TMPDIR': '/tmp',
+            'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC',
+            'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_CONFIG_SYSTEM': os.devnull, 'DOCS_CHANNEL': 'stable',
+            'DOCS_BASE': '/', 'NPM_CONFIG_USERCONFIG': os.devnull,
+            'NPM_CONFIG_GLOBALCONFIG': os.devnull,
+            'NPM_CONFIG_CACHE': str(home / 'npm-cache')}
 
 
 def check_output_path(output):
@@ -69,7 +73,11 @@ def run(source, output):
     check_output_path(output)
     output.mkdir()
     check_output_path(output)
-    env = build_environment()
+    home = output.with_name(output.name + '-home')
+    check_output_path(home)
+    home.mkdir(mode=0o700)
+    check_output_path(home)
+    env = build_environment(home)
     if shutil.which('node') is None or shutil.which('npm') is None:
         raise RuntimeError('Docs site build requires Node.js 24 and npm on the Spot worker')
     version = subprocess.check_output(['node', '--version'], text=True, env=env).strip()
