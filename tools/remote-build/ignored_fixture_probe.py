@@ -17,12 +17,13 @@ import sys
 from datetime import datetime, timezone
 from urllib.error import URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path(__file__).with_name('ignored-inputs.json')
 DOWNLOAD_DEADLINE_SECONDS = 180
+USER_AGENT = "OxiDex-ignored-fixture-probe/1.0 (metadata validation; https://github.com/swack-tools/oxidex)"
 
 
 def digest(path: Path, algorithm: str = 'sha256') -> str:
@@ -73,7 +74,8 @@ class HTTPSOnlyRedirect(HTTPRedirectHandler):
 def download_child(url: str, destination: Path, max_bytes: int) -> None:
     """Run only in the disposable child; the parent enforces total wall time."""
     opener = build_opener(HTTPSOnlyRedirect)
-    with opener.open(url, timeout=30) as response, destination.open('xb') as output:
+    request = Request(url, headers={'User-Agent': USER_AGENT})
+    with opener.open(request, timeout=30) as response, destination.open('xb') as output:
         if urlparse(response.geturl()).scheme != 'https':
             raise ValueError('source redirected outside HTTPS')
         advertised = response.headers.get('Content-Length')
@@ -163,7 +165,10 @@ def native_probe(path: Path, row: dict) -> dict:
     exiftool = oracle_root / 'exiftool' / 'exiftool'
     if not perl.is_file() or not exiftool.is_file():
         raise ValueError('pinned Perl or ExifTool missing after bootstrap')
-    result = subprocess.run([str(perl), str(exiftool), '-G0', '-json', str(path)],
+    # Vendor MakerNote tags are family 1 (`Canon:*` / `Nikon:*`). Family 0
+    # calls both `MakerNotes:*`, obscuring the group asserted by the consumer.
+    group = '-G1' if row['kind'] == 'makernote' else '-G0'
+    result = subprocess.run([str(perl), str(exiftool), group, '-json', str(path)],
                             capture_output=True, text=True, timeout=60, check=True)
     parsed = json.loads(result.stdout)
     if len(parsed) != 1 or not isinstance(parsed[0], dict):
@@ -199,8 +204,8 @@ def native_probe(path: Path, row: dict) -> dict:
             if source_make := row['source'].get('publisher_make'):
                 if source_make.casefold() not in make.casefold():
                     raise ValueError(f'{row["id"]}: native make {make!r} differs from publisher {source_make!r}')
-    return {'compared_fields': compared, 'compared_count': len(compared),
-            'native_field_count': len(nonempty)}
+    return {'group_family': group, 'compared_fields': compared,
+            'compared_count': len(compared), 'native_field_count': len(nonempty)}
 
 
 def run(manifest: dict, target: Path) -> tuple[Path, dict]:

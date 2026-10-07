@@ -90,8 +90,9 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
             def geturl(self):
                 return 'https://mirror.example/file'
         class Opener:
-            def open(self, _url, timeout):
+            def open(self, request, timeout):
                 self.timeout = timeout
+                self.request = request
                 return Response(b'1234')
         opener = Opener()
         with tempfile.TemporaryDirectory() as directory, \
@@ -100,6 +101,7 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'bounded download size'):
                 probe.download_child('https://source.example/file', target, 2)
             self.assertEqual(opener.timeout, 30)
+            self.assertEqual(opener.request.get_header('User-agent'), probe.USER_AGENT)
 
     def test_zip_member_is_exact_and_reextracted_from_verified_archive(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -147,6 +149,43 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
             self.assertIn('zero native fields', receipt['inputs'][2]['error'])
             self.assertIn('total deadline', receipt['inputs'][3]['error'])
             self.assertEqual(json.loads(receipt_path.read_text())['status'], 'FAILED')
+
+    def test_makernote_uses_family_one_vendor_group_and_requires_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            perl = root / 'perl'; perl.touch()
+            (root / 'exiftool').mkdir(); (root / 'exiftool/exiftool').touch()
+            row = {'id': 'makernote-canon', 'kind': 'makernote',
+                   'required_tags': ['Canon:*', 'Make', 'Model']}
+            env = {'EXIFTOOL_CACHE_DIR': str(root), 'EXIFTOOL_PERL': str(perl)}
+            def outcome(fields):
+                return subprocess.CompletedProcess([], 0, json.dumps([fields]), '')
+            fields = {'Canon:OwnerName': 'Phil Harvey', 'IFD0:Make': 'Canon',
+                      'IFD0:Model': 'Canon EOS DIGITAL REBEL'}
+            with patch.dict(os.environ, env), patch.object(probe.subprocess, 'run',
+                    return_value=outcome(fields)) as native:
+                result = probe.native_probe(root / 'canon.jpg', row)
+            self.assertEqual(native.call_args.args[0][2], '-G1')
+            self.assertEqual(result['group_family'], '-G1')
+            self.assertIn('Canon:OwnerName', result['compared_fields'])
+            fields['MakerNotes:OwnerName'] = fields.pop('Canon:OwnerName')
+            with patch.dict(os.environ, env), patch.object(probe.subprocess, 'run',
+                    return_value=outcome(fields)):
+                with self.assertRaisesRegex(ValueError, r'Canon:\*'):
+                    probe.native_probe(root / 'canon.jpg', row)
+
+    def test_flv_manifest_matches_actual_consumer_group(self):
+        manifest = json.loads(probe.MANIFEST.read_text())
+        row = next(item for item in manifest['inputs'] if item['id'] == 'media-flv')
+        self.assertEqual(row['required_tags'], ['Flash:HasVideo', 'Flash:HasAudio'])
+        self.assertEqual(row['expected_values'], {'Flash:HasVideo': 'Yes',
+                                                  'Flash:HasAudio': 'Yes'})
+        consumer = (probe.ROOT / 'tests/integration/flv_integration_tests.rs').read_text()
+        self.assertIn('let tags_to_compare = ["Flash:HasVideo", "Flash:HasAudio"]', consumer)
+        self.assertNotIn('"FLV:HasVideo"', consumer)
+        webm = next(item for item in manifest['inputs'] if item['id'] == 'media-webm')
+        self.assertEqual(webm['sha256'],
+                         'c6a21a3a7619ca7fbcbc1b4d012d7098d18f599f0200f735d31cae15a4772dd1')
 
     def test_native_media_zero_fields_and_raw_identity_refuse(self):
         with tempfile.TemporaryDirectory() as directory:

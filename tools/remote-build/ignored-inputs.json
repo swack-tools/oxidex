@@ -103,11 +103,15 @@
     },
     {
       "bytes": 1358,
+      "expected_values": {
+        "Flash:HasAudio": "Yes",
+        "Flash:HasVideo": "Yes"
+      },
       "id": "media-flv",
       "kind": "media",
       "required_tags": [
-        "FLV:HasVideo",
-        "FLV:HasAudio"
+        "Flash:HasVideo",
+        "Flash:HasAudio"
       ],
       "sha256": "57ab91a3ac81eadbdceaa73a34ad007eac6bbb9bd870b7428238f83b79a33303",
       "source": {
@@ -228,6 +232,7 @@
         "Matroska:DocTypeVersion"
       ],
       "sha1": "8b88e51a5726642ec427b7067fd6f6743fe8c741",
+      "sha256": "c6a21a3a7619ca7fbcbc1b4d012d7098d18f599f0200f735d31cae15a4772dd1",
       "source": {
         "audio_codec": "Opus",
         "author": "BMKME",
@@ -239,6 +244,7 @@
         "license": "CC0-1.0",
         "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
         "mime_type": "video/webm",
+        "sha256_provenance": "Observed on authenticated full GET from idle Spot builder 438; publisher SHA-1 and byte count independently matched.",
         "source_page": "https://commons.wikimedia.org/w/index.php?title=File:V8.webm&oldid=1060986341",
         "source_page_revision": 1060986341,
         "url": "https://upload.wikimedia.org/wikipedia/commons/a/a7/V8.webm",

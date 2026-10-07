@@ -31,7 +31,7 @@ fn test_flv_metadata_parity_with_exiftool() {
 
     // Run ExifTool
     // -G0 is required: the tags compared below are group-qualified
-    // ("FLV:HasVideo"), and a plain `-json` emits bare tag names, so every
+    // ("Flash:HasVideo"), and a plain `-json` emits bare tag names, so every
     // lookup would miss and the comparison would silently pass on nothing.
     let oracle = exiftool_oracle::required();
     let exiftool_output = oracle
@@ -57,7 +57,7 @@ fn test_flv_metadata_parity_with_exiftool() {
     let oxidex_metadata = parse_flv_metadata(&reader).expect("Failed to parse FLV file");
 
     // Compare key tags
-    let tags_to_compare = ["FLV:HasVideo", "FLV:HasAudio"];
+    let tags_to_compare = ["Flash:HasVideo", "Flash:HasAudio"];
 
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
