@@ -608,6 +608,7 @@ class RouteTests(unittest.TestCase):
         self.assertIn('test_bootstrap_oracle',lines[1])
         self.assertIn('test_approved_linux_perl',lines[1])
         self.assertIn('test_freeze_linux_perl',lines[1])
+        self.assertIn('test_prove_linux_perl_component',lines[1])
         self.assertIn("test_qualification*.py",lines[2])
         self.assertIn("test_generic_recipe.py",lines[3])
         self.assertIn("test_route.py",lines[4])

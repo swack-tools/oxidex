@@ -1871,7 +1871,7 @@ verify-linux-perl:
 
 _verify-linux-perl-worker:
     python3 tools/remote-build/route.py --require-local-context verify-linux-perl
-    python3 -m unittest tools.release.test_bootstrap_oracle tools.release.test_approved_linux_perl tools.release.test_freeze_linux_perl
+    python3 -m unittest tools.release.test_bootstrap_oracle tools.release.test_approved_linux_perl tools.release.test_freeze_linux_perl tools.release.test_prove_linux_perl_component
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_qualification*.py'
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_generic_recipe.py'
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_route.py'
