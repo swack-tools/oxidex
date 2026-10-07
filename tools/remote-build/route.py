@@ -241,7 +241,13 @@ def main(argv):
                 verify_ci_fleet_checkout()
             if signed_builder:
                 select_signed_builder_target()
-        if recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl'):
+        if recipe == 'verify-linux-perl':
+            # Bootstrap integration tests require the canonical cache paths.
+            for key in ('PERL5LIB', 'PERLLIB', 'PERL5OPT'):
+                os.environ.pop(key, None)
+            from test_runner import prepare_generic_recipe_oracle
+            prepare_generic_recipe_oracle()
+        elif recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl'):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
