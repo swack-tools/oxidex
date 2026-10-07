@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import time
+import sys
 from types import SimpleNamespace
 
 from lib.remote_build import source_sync_command, unique_run_id, verify_builder_admission
@@ -20,6 +21,9 @@ from lib.ssh_transport import DirectTransport, identity
 from lib.worker_selection import select_worker
 from lib.config import builder_instance_name
 from qualification_source import verify_source, ATTESTED
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.release import approved_linux_perl
 
 SOURCE_HOST = "/mnt/runner-data/remote-build/sources"
 TARGET_HOST = "/mnt/runner-data/remote-build/targets"
@@ -57,7 +61,14 @@ def host_source_admission(ssh, run_id: str, head: str, bundle_sha256: str,
 def source_archive(root: Path, reference: Path, provisioning: Path, bundle: Path, signer: Path, destination: Path,
                    attestation: Path | None = None) -> str:
     """Package only public approved references and signed source for /src."""
-    members = [(root / "rust-toolchain.toml", "rust-toolchain.toml"),
+    approved_input = reference / "approved-linux-perl.json"
+    approved_linux_perl.load(
+        root / "tools/release/oracle-lock.json",
+        descriptor=root / "tools/release/oracle-linux-perl-identity.json",
+        envelope=approved_input, require_platform=False,
+    )
+    members = [(approved_input, "reference/approved-linux-perl.json"),
+               (root / "rust-toolchain.toml", "rust-toolchain.toml"),
                (root / "tools/remote-build/qualification_bootstrap.py", "qualification_bootstrap.py"),
                (root / "tools/remote-build/qualification_source.py", "qualification_source.py"),
                (bundle, "repository.bundle"), (signer, "maintainer.allowed_signers"),
@@ -74,7 +85,13 @@ def source_archive(root: Path, reference: Path, provisioning: Path, bundle: Path
         for path, name in members:
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"qualification transport input is not a regular file: {path}")
-            data = path.read_bytes()
+            if path == approved_input:
+                with path.open("rb") as stream:
+                    data = stream.read(approved_linux_perl.MAX_ENVELOPE_BYTES + 1)
+                if len(data) > approved_linux_perl.MAX_ENVELOPE_BYTES:
+                    raise ValueError("approved Linux Perl envelope exceeds transport bound")
+            else:
+                data = path.read_bytes()
             info = tarfile.TarInfo(name)
             info.size = len(data)
             info.mode = 0o644

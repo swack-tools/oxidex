@@ -492,7 +492,13 @@ def remote_run(output: Path, expected_head: str) -> int:
         spec = spec_from_file_location("oxidex_remote_bootstrap", ROOT / "tools/release/bootstrap_oracle.py")
         bootstrap = module_from_spec(spec)
         spec.loader.exec_module(bootstrap)
-        bootstrap.provision(ops_root())
+        sys.path.insert(0, str(ROOT))
+        from tools.release import approved_linux_perl
+        approval = approved_linux_perl.load(
+            ROOT / "tools/release/oracle-lock.json",
+            envelope=Path("/src/reference/approved-linux-perl.json"),
+        )
+        bootstrap.provision(ops_root(), approved_perl=approval)
         from qualification_prepare import verify_prepared
         verified_preparation = verify_prepared(Path("/src/reference"), output, expected_head)
         result["preparation_sha256"] = sha(output / "preparation.json")

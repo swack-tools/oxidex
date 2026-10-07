@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import re
+import resource
 import secrets
 import subprocess
 import sys
@@ -17,12 +18,19 @@ from pathlib import Path
 from .config import approved_instances, builder_instance_name, matching_approval
 from . import ssh_transport
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from tools.release import approved_linux_perl
+
 
 SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
+FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
+                           'freeze-linux-perl', 'verify-linux-perl',
+                           'prove-linux-perl-component'})
+MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
+MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
 def pinned_toolchain(source):
@@ -193,6 +201,118 @@ def download_artifact(instance, zone, project, binary, artifact, digest, transpo
         temporary.unlink(missing_ok=True)
 
 
+def _sha256_file(path: Path) -> str:
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_checked_candidate(transport, remote: str, local: Path, digest: str,
+                                max_bytes: int, expected_size: int | None = None) -> None:
+    """Persist bounded exact remote bytes; preserve failure evidence and project."""
+    import tempfile
+    if (not re.fullmatch(r'[0-9a-f]{64}', digest) or local.exists() or local.is_symlink()
+            or type(max_bytes) is not int or max_bytes <= 0
+            or (expected_size is not None and
+                (type(expected_size) is not int or not 0 < expected_size <= max_bytes))):
+        raise RuntimeError('Perl candidate destination, digest, or bound is invalid')
+    descriptor,name=tempfile.mkstemp(prefix='.perl-candidate-',dir=local.parent)
+    os.close(descriptor)
+    temporary=Path(name)
+    try:
+        try:
+            # The limit is inherited by scp and its children, closing the
+            # remote-stat-to-transfer race before local evidence is exhausted.
+            subprocess.run(transport.scp(temporary,remote,download=True),check=True,
+                           preexec_fn=lambda: resource.setrlimit(
+                               resource.RLIMIT_FSIZE, (max_bytes, max_bytes)))
+        except subprocess.CalledProcessError as exc:
+            if temporary.stat().st_size >= max_bytes:
+                raise RuntimeError('Perl candidate download bound exceeded') from exc
+            raise
+        size=temporary.stat().st_size
+        if size > max_bytes:
+            raise RuntimeError('Perl candidate download bound exceeded')
+        if expected_size is not None and size != expected_size:
+            raise RuntimeError('Downloaded Perl candidate size differs from receipt')
+        if _sha256_file(temporary)!=digest:
+            raise RuntimeError('Downloaded Perl candidate checksum mismatch')
+        temporary.replace(local)
+    except Exception:
+        # Keep failure bytes for diagnosis, including errors from the child.
+        if temporary.exists():
+            if temporary.stat().st_size > max_bytes:
+                with temporary.open('r+b') as stream:
+                    stream.truncate(max_bytes)
+            temporary.rename(temporary.with_name(temporary.name + '.failed'))
+        raise
+
+
+def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
+                            head: str, tree: str, bundle_sha256: str,
+                            lock_path: Path) -> dict:
+    """Download receipt and tar from the one retained project before PASS."""
+    if transport is None:
+        raise RuntimeError('Perl candidate requires authenticated direct transport')
+    remote_root=f'/mnt/runner-data/remote-build/targets/{run_id}/perl-candidate-export'
+    local=evidence/'linux-perl-candidate'
+    local.mkdir(mode=0o700,exist_ok=False)
+    receipt_remote=remote_root+'/candidate-receipt.json'
+    receipt_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(receipt_remote)),text=True).split()[0]
+    receipt_path=local/'candidate-receipt.json'
+    _download_checked_candidate(transport,receipt_remote,receipt_path,receipt_digest,
+                                MAX_CANDIDATE_RECEIPT_BYTES)
+    candidate=json.loads(receipt_path.read_text())
+    archive_remote=remote_root+'/perl-5.38.2-prefix.tar.gz'
+    if (candidate.get('schema_version')!=1 or candidate.get('kind')!='linux_perl_unapproved_candidate'
+            or candidate.get('source_head')!=head or candidate.get('source_tree')!=tree
+            or candidate.get('source_clean_context')!='remote_verified_signed_fleet_checkout'
+            or candidate.get('source_bundle_sha256')!=bundle_sha256
+            or candidate.get('config_prefix')!='/target/ops/toolchains/perl-5.38.2/prefix'
+            or candidate.get('archive_path')!='/target/ops/evidence/linux-perl-independent-identity/perl-5.38.2-prefix.tar.gz'
+            or candidate.get('candidate_export_path')!='/target/perl-candidate-export'
+            or candidate.get('lock_sha256')!=_sha256_file(lock_path)
+            or candidate.get('status')!='candidate_only_requires_independent_review'
+            or candidate.get('replay_tree_sha256')!=candidate.get('perl_tree_sha256')
+            or not re.fullmatch(r'[0-9a-f]{64}',str(candidate.get('archive_sha256','')))
+            or type(candidate.get('archive_bytes')) is not int
+            or not 0<candidate['archive_bytes']<=MAX_CANDIDATE_ARCHIVE_BYTES):
+        raise RuntimeError('Perl candidate receipt does not bind selected source and archive')
+    remote_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(archive_remote)),text=True).split()[0]
+    if remote_digest!=candidate['archive_sha256']:
+        raise RuntimeError('Remote Perl archive differs from candidate receipt')
+    archive_path=local/'perl-5.38.2-prefix.tar.gz'
+    _download_checked_candidate(transport,archive_remote,archive_path,remote_digest,
+                                candidate['archive_bytes'],
+                                expected_size=candidate['archive_bytes'])
+    if archive_path.stat().st_size!=candidate['archive_bytes']:
+        raise RuntimeError('Downloaded Perl archive size differs from candidate receipt')
+    return {'receipt':str(receipt_path),'receipt_sha256':receipt_digest,
+            'archive':str(archive_path),'archive_sha256':remote_digest,
+            'status':'unapproved_candidate_retrieved'}
+
+
+def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
+                             expected: dict) -> dict:
+    """Authenticate a small component-only receipt before reporting success."""
+    if transport is None:
+        raise RuntimeError('Component proof requires authenticated direct transport')
+    remote=f'/mnt/runner-data/remote-build/targets/{run_id}/linux-perl-component-proof.json'
+    digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote)),text=True).split()[0]
+    local=evidence/'linux-perl-component-proof.json'
+    _download_checked_candidate(transport,remote,local,digest,MAX_CANDIDATE_RECEIPT_BYTES)
+    proof=json.loads(local.read_text())
+    if (not isinstance(proof,dict) or set(proof)!=set(expected)|{'prefix_mode','prefix_uid'}
+            or any(proof.get(name)!=value for name,value in expected.items())
+            or proof.get('prefix_mode') not in (0o700,0o755)
+            or type(proof.get('prefix_uid')) is not int or proof['prefix_uid']<0):
+        raise RuntimeError('Downloaded component proof does not bind approved source, packet and cold/warm result')
+    return {'path':str(local),'sha256':digest,'kind':proof['kind'],
+            'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
+
+
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
     names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
@@ -277,7 +397,13 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
         for name,path in (extra_files or {}).items():
             if name in names or Path(name).name != name or path.is_symlink() or not path.is_file():
                 raise RuntimeError('Invalid signed fleet source member')
-            data=path.read_bytes()
+            if name == 'approved-linux-perl.json':
+                with path.open('rb') as stream:
+                    data=stream.read(approved_linux_perl.MAX_ENVELOPE_BYTES + 1)
+                if len(data)>approved_linux_perl.MAX_ENVELOPE_BYTES:
+                    raise RuntimeError('Component envelope exceeds approved transport bound')
+            else:
+                data=path.read_bytes()
             info=tarfile.TarInfo(name)
             info.mode=0o644
             info.size=len(data)
@@ -353,6 +479,7 @@ def main(argv=None):
     task.add_argument('--profile',choices=['debug','release','test'])
     task.add_argument('--just-recipe')
     parser.add_argument('--just-arg',action='append',default=[])
+    parser.add_argument('--approved-linux-perl-envelope',type=Path)
     parser.add_argument('--artifact-dir',type=Path)
     args=parser.parse_args(argv)
     if not args.profile and not args.just_recipe:
@@ -361,6 +488,9 @@ def main(argv=None):
         parser.error('--just-arg requires --just-recipe')
     if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
         parser.error('invalid Just recipe name')
+    component=args.just_recipe=='prove-linux-perl-component'
+    if bool(args.approved_linux_perl_envelope) != component or (component and args.just_arg):
+        parser.error('component proof requires only its explicit approved envelope')
     if any(not value or len(value)>4096 or any(ch in value for ch in '\x00\n\r') for value in args.just_arg):
         parser.error('invalid Just argument')
     task_name=args.profile or 'recipe'
@@ -383,6 +513,17 @@ def main(argv=None):
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
+    envelope=None
+    if component:
+        envelope=args.approved_linux_perl_envelope.expanduser()
+        if (not envelope.is_absolute() or envelope.is_symlink()
+                or envelope.resolve(strict=False)!=envelope or not envelope.is_file()):
+            raise RuntimeError('Component envelope must be an absolute regular file')
+        if not 0<envelope.stat().st_size<=approved_linux_perl.MAX_ENVELOPE_BYTES:
+            raise RuntimeError('Component envelope exceeds approved transport bound')
+        if envelope.is_relative_to(source):
+            raise RuntimeError('Component envelope must remain outside signed source checkout')
+        envelope_sha256=_sha256_file(envelope)
     if args.artifact_dir is None:
         args.artifact_dir=source/'target'/'remote-linux'/task_name
     evidence.mkdir(parents=True,exist_ok=True)
@@ -460,6 +601,10 @@ def main(argv=None):
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        if args.just_recipe == 'freeze-linux-perl':
+            source_tree=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
+            if args.just_arg != [receipt['source_commit'], source_tree]:
+                raise RuntimeError('Perl producer arguments differ from selected signed HEAD/tree')
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
@@ -487,12 +632,23 @@ def main(argv=None):
             extra_files={'repository.bundle':bundle,
                          'maintainer.allowed_signers':signer_path,
                          'fleet-source-head':source_head}
+            if component:
+                extra_files['approved-linux-perl.json']=envelope
         receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
                                           signed_head=receipt['source_commit']) if extra_files else make_snapshot(source,archive)
         if extra_files:
             receipt['fleet_source_bundle_sha256']=next(
                 row['sha256'] for row in receipt['snapshot']['files']
                 if row['path']=='repository.bundle')
+            if component:
+                envelope_row=next(row for row in receipt['snapshot']['files']
+                                  if row['path']=='approved-linux-perl.json')
+                if (envelope_row['sha256']!=envelope_sha256
+                        or envelope_row['bytes']!=envelope.stat().st_size
+                        or _sha256_file(envelope)!=envelope_sha256):
+                    raise RuntimeError('Component envelope changed during signed packet creation')
+                receipt['component_envelope_sha256']=envelope_sha256
+                receipt['component_envelope_bytes']=envelope_row['bytes']
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
@@ -526,6 +682,13 @@ def main(argv=None):
         receipt['stage']='sync_extract'
         subprocess.run(ssh(command),check=True,capture_output=True,text=True)
         receipt['sync_seconds']=time.monotonic()-start;save()
+        if component:
+            remote_envelope=destination+'/approved-linux-perl.json'
+            observed=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote_envelope)),text=True).split()[0]
+            if observed!=envelope_sha256:
+                raise RuntimeError('Extracted component envelope differs from signed packet')
+            receipt['component_remote_envelope_sha256']=observed
+            save()
         receipt['stage']='toolchain'
         verify_remote_toolchain(receipt['toolchain'], ssh, project)
         receipt['remote_toolchain_verified']=True
@@ -535,7 +698,8 @@ def main(argv=None):
         if args.profile=='release':
             stages.append(('header','just cbindgen-check'))
         if args.just_recipe:
-            stages.append(('recipe',shlex.join(['just',args.just_recipe,*args.just_arg])))
+            recipe_args=([args.worktree_id] if component else args.just_arg)
+            stages.append(('recipe',shlex.join(['just',args.just_recipe,*recipe_args])))
         elif args.profile=='test':
             stages.append(('test','python3 tools/remote-build/test_runner.py --source-sha '
                            +receipt['source_commit']+' --rustc-commit '+receipt['toolchain']['rustc_commit']))
@@ -610,8 +774,42 @@ def main(argv=None):
                                   **({'transport':transport} if transport else {}))
                 receipt['binary_sha256']=digest
                 receipt['artifact']=str(artifact)
+            if args.just_recipe == 'freeze-linux-perl':
+                receipt['candidate_retrieval']=retrieve_perl_candidate(
+                    transport,ssh,args.worktree_id,evidence,receipt['source_commit'],
+                    args.just_arg[1],receipt['fleet_source_bundle_sha256'],
+                    source/'tools/release/oracle-lock.json')
+            if component:
+                descriptor_path=source/'tools/release/oracle-linux-perl-identity.json'
+                descriptor=json.loads(descriptor_path.read_text())
+                expected={'schema':1,'kind':'linux_perl_component_proof',
+                          'status':'COMPONENT_ONLY_PASS','run_id':args.worktree_id,
+                          'source_head':receipt['source_commit'],
+                          'source_tree':subprocess.check_output(
+                              ['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip(),
+                          'bundle_sha256':receipt['fleet_source_bundle_sha256'],
+                          'descriptor_sha256':_sha256_file(descriptor_path),
+                          'lock_sha256':_sha256_file(source/'tools/release/oracle-lock.json'),
+                          'envelope_sha256':envelope_sha256,
+                          'archive_sha256':descriptor['archive_sha256'],
+                          'archive_bytes':descriptor['archive_bytes'],
+                          'tree_sha256':descriptor['tree_sha256'],
+                          'exe_sha256':descriptor['exe_sha256'],
+                          'zip_sha256':descriptor['zip_sha256'],
+                          'prefix':descriptor['prefix'],'config_prefix':descriptor['prefix'],
+                          'zip_version':'1.68','cold':'installed','warm':'reused'}
+                receipt['component_proof']=retrieve_component_proof(transport,ssh,args.worktree_id,evidence,expected)
+                receipt['stage']='cleanup'
+                save()
+                cleanup(strict=True)
+                # The ordinary cleanup removes the source project but retains
+                # the target containing the verified component proof.
+                receipt['remote_source']='removed'
+                receipt['remote_retained']=True  # The proof-bearing target remains.
+                receipt['remote_paths']={'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                receipt['recipe_state']='DIRECT_SUCCESS_TARGET_RETAINED'
             receipt['verified']=True
-            receipt['stage']='complete_retained'
+            receipt['stage']='complete_target_retained' if component else 'complete_retained'
             save()
             print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
             return 0

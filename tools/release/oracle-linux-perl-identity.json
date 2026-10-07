@@ -1,0 +1,21 @@
+{
+  "archive_bytes": 17249397,
+  "archive_sha256": "3acff118859126c3e7a91a44368cd76dd6718d3d3151f975f6afadcf07899a10",
+  "archive_zip_source_sha256": "984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650",
+  "exe_sha256": "dffefac9c7e7638ffb79e7cd15fd989e73d98eb69516359edbc7bc16f63ca2fc",
+  "kind": "oxidex_approved_linux_perl_installation",
+  "lock_sha256": "7f763e0caa9c8d01bb7b8762b0405e3f7bf36bd5f780673d973cb6bf58a9904a",
+  "perl_source_sha256": "a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e",
+  "platform": "linux-x86_64",
+  "prefix": "/target/ops/toolchains/perl-5.38.2/prefix",
+  "producer": {
+    "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "image": "sha256:bee1e499f05944ae6728f3298af1525a55d2bf1d3063047e36a3b1330491a3f5",
+    "receipt_sha256": "64e46c2b7a43d0482e9e2e9e1aa2a6075e3045b32c38853474c60efc59614a71",
+    "source_head": "78a44bea8381c2b64f832578b66dc8051ea197b0"
+  },
+  "schema": 1,
+  "tree_sha256": "cb860a898709abff63885a22020aabaf1777cc34b5eb146a851b030e18e5b2c4",
+  "zip_relative_path": "lib/site_perl/5.38.2/Archive/Zip.pm",
+  "zip_sha256": "2025ab80c717e8b4cbdc393ee36aaf3c18edf53e4105f6626ef08c8e563a3db9"
+}

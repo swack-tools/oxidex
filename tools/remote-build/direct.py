@@ -17,6 +17,7 @@ task=parser.add_mutually_exclusive_group()
 task.add_argument('--profile',choices=['debug','release','test'])
 task.add_argument('--just-recipe')
 parser.add_argument('--just-arg',action='append',default=[])
+parser.add_argument('--approved-linux-perl-envelope',type=Path)
 parser.add_argument('--evidence-dir',type=Path)
 parser.add_argument('--artifact-dir',type=Path)
 options=parser.parse_args()
@@ -27,6 +28,10 @@ if not options.profile and not options.just_recipe:
 source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
 if options.just_arg and not options.just_recipe:
     parser.error('--just-arg requires --just-recipe')
+if bool(options.approved_linux_perl_envelope) != (options.just_recipe == 'prove-linux-perl-component'):
+    parser.error('approved Linux Perl envelope belongs only to component proof')
+if options.approved_linux_perl_envelope and options.just_arg:
+    parser.error('component proof does not take public Just arguments')
 os.environ.update(configured_remote_env(source))
 def setting(name):
     value=os.environ.get(name)
@@ -48,7 +53,9 @@ if os.environ.get('OXIDEX_REMOTE_INSTANCE_ID'):
     args += ['--instance-id', os.environ['OXIDEX_REMOTE_INSTANCE_ID']]
 args += (['--profile',options.profile] if options.profile else
          ['--just-recipe',options.just_recipe]
-         +['--just-arg='+value for value in options.just_arg])
+         +['--just-arg='+value for value in options.just_arg]
+         +(['--approved-linux-perl-envelope='+str(options.approved_linux_perl_envelope)]
+           if options.approved_linux_perl_envelope else []))
 if options.evidence_dir:
     args += ['--evidence-dir',str(options.evidence_dir)]
 if options.artifact_dir:

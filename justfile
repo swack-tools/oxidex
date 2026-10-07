@@ -1839,3 +1839,41 @@ fleet-doctor host:
 # Both paths must be new/real directories below OXIDEX_OPS_DIR as appropriate.
 qualify-remote output reference provisioning:
     python3 tools/remote-build/qualification.py --output '{{output}}' --reference '{{reference}}' --provisioning-reference '{{provisioning}}'
+
+# Produce an unapproved Linux Perl candidate in a fresh ordinary Spot project.
+freeze-linux-perl-remote:
+    python3 tools/release/freeze_linux_perl.py launch
+
+freeze-linux-perl head tree:
+    python3 tools/remote-build/route.py freeze-linux-perl {{quote(head)}} {{quote(tree)}}
+
+_freeze-linux-perl-worker head tree:
+    python3 tools/remote-build/route.py --require-local-context freeze-linux-perl
+    python3 tools/release/freeze_linux_perl.py worker --source-head '{{head}}' --source-tree '{{tree}}'
+
+# Actual approved Linux Perl cold/warm component proof on a fresh signed Spot project.
+prove-linux-perl-component-remote envelope:
+    python3 tools/remote-build/route.py prove-linux-perl-component {{quote(envelope)}}
+
+prove-linux-perl-component run_id:
+    python3 tools/remote-build/route.py prove-linux-perl-component {{quote(run_id)}}
+
+_prove-linux-perl-component-worker run_id:
+    python3 tools/remote-build/route.py --require-local-context prove-linux-perl-component
+    python3 tools/release/prove_linux_perl_component.py {{quote(run_id)}}
+
+# Linux Perl guards and locked-oracle integration controls on signed Spot source.
+verify-linux-perl-remote:
+    python3 tools/remote-build/route.py verify-linux-perl
+
+verify-linux-perl:
+    python3 tools/remote-build/route.py verify-linux-perl
+
+_verify-linux-perl-worker:
+    python3 tools/remote-build/route.py --require-local-context verify-linux-perl
+    python3 -m unittest tools.release.test_bootstrap_oracle tools.release.test_approved_linux_perl tools.release.test_freeze_linux_perl tools.release.test_prove_linux_perl_component
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_qualification*.py'
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_generic_recipe.py'
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_route.py'
+    cd tools/exiftool-tables && python3 -m unittest discover -p 'test_qualification_bootstrap_boundary.py'
+    cd tools/exiftool-tables && python3 -m unittest test_version_transition_qualification.PlatformPerlIdentityTests

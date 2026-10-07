@@ -473,6 +473,148 @@ class RouteTests(unittest.TestCase):
             route.main(['--require-local-context', 'fleet-test'])
             self.assertEqual(events, ['verified CI checkout'])
 
+    def test_perl_producer_uses_signed_builder_route_without_oracle_bootstrap(self):
+        head='a'*40;tree='b'*40
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout') as prepare, \
+             patch.object(route,'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(route.os,'execvp') as execute:
+            route.main(['freeze-linux-perl',head,tree])
+        prepare.assert_called_once()
+        target.assert_called_once()
+        oracle.assert_not_called()
+        execute.assert_called_once_with('just',['just','_freeze-linux-perl-worker',head,tree])
+
+    def test_component_route_uses_signed_builder_without_oracle_or_public_path(self):
+        envelope='/approved/data/approved-linux-perl.json'
+        with patch.object(route,'local_worker_context',return_value=False), \
+             patch.object(os,'execv') as launch:
+            route.main(['prove-linux-perl-component',envelope])
+        self.assertEqual(launch.call_args.args[1][-3:],
+                         ['--just-recipe','prove-linux-perl-component',
+                          '--approved-linux-perl-envelope='+envelope])
+        with patch.object(route,'local_worker_context',return_value=False):
+            with self.assertRaisesRegex(SystemExit,'absolute envelope'):
+                route.main(['prove-linux-perl-component','relative.json'])
+        run_id='component-'+'a'*32
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout') as prepare, \
+             patch.object(route,'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_generic_recipe_oracle') as generic, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as fleet, \
+             patch.object(route.os,'execvp') as worker:
+            route.main(['prove-linux-perl-component',run_id])
+        prepare.assert_called_once()
+        target.assert_called_once()
+        generic.assert_not_called()
+        fleet.assert_not_called()
+        worker.assert_called_once_with('just',['just','_prove-linux-perl-component-worker',run_id])
+        with patch.object(route,'local_worker_context',return_value=True):
+            with self.assertRaisesRegex(SystemExit,'private run ID'):
+                route.main(['prove-linux-perl-component',envelope])
+        if shutil.which('just'):
+            repository=Path(__file__).resolve().parents[3]
+            public=subprocess.run(['just','--dry-run','prove-linux-perl-component-remote',envelope],
+                                  cwd=repository,capture_output=True,text=True,check=True)
+            self.assertIn('route.py prove-linux-perl-component',public.stderr)
+            private=subprocess.run(['just','--dry-run','_prove-linux-perl-component-worker',run_id],
+                                   cwd=repository,capture_output=True,text=True,check=True)
+            self.assertIn('--require-local-context prove-linux-perl-component',private.stderr)
+            self.assertIn('prove_linux_perl_component.py',private.stderr)
+
+    def test_linux_perl_full_suite_prepares_locked_oracle_before_worker(self):
+        events = []
+        def prepared():
+            self.assertTrue(all(key not in os.environ for key in
+                                ('PERL5LIB', 'PERLLIB', 'PERL5OPT')))
+            events.append('oracle')
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout',side_effect=lambda: events.append('signed')), \
+             patch.object(route,'select_signed_builder_target',side_effect=lambda: events.append('target')), \
+             patch.dict(os.environ, {'PERL5LIB':'/untrusted/lib', 'PERLLIB':'/untrusted/lib',
+                                      'PERL5OPT':'-MHostile'}), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=prepared), \
+             patch('test_runner.prepare_fleet_recipe_oracle',side_effect=AssertionError('fleet wrapper changed canonical cache')), \
+             patch.object(route.os,'execvp',side_effect=lambda *_: events.append('worker')) as execute:
+            route.main(['verify-linux-perl'])
+        self.assertEqual(events, ['signed', 'target', 'oracle', 'worker'])
+        execute.assert_called_once_with('just',['just','_verify-linux-perl-worker'])
+
+    def test_linux_perl_generic_preparation_preserves_canonical_cache_environment(self):
+        import test_runner
+        with tempfile.TemporaryDirectory() as directory:
+            cargo = Path(directory) / 'cargo'
+            lock = test_runner.ROOT / 'tools/release/oracle-lock.json'
+            pin = (test_runner.ROOT / '.exiftool-version').read_text().strip()
+            cache = test_runner.oracle_cache_root(lock, cargo)
+            manifest = Path(directory) / 'manifest.json'
+            manifest.write_text(json.dumps({
+                'lock_sha256': test_runner.file_sha(lock),
+                'artifacts': {
+                    'perl_executable': {'sha256': 'a' * 64},
+                    'exiftool_tree': {'sha256': 'b' * 64},
+                },
+                'probes': {'docx': 'DOCX'},
+            }))
+            def load(root):
+                self.assertEqual(root, cache)
+                self.assertEqual(os.environ['OXIDEX_OPS_DIR'], str(cache))
+                self.assertEqual(os.environ['EXIFTOOL_CACHE_DIR'],
+                                 str(cache / 'cache/exiftool' / pin))
+                self.assertEqual(os.environ['EXIFTOOL_PERL'],
+                                 str(cache / 'toolchains/perl-5.38.2/prefix/bin/perl5.38.2'))
+                self.assertEqual(os.environ['OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES'], '1')
+                self.assertNotIn('EXIFTOOL', os.environ)
+                self.assertNotIn('OXIDEX_ALLOW_EXIFTOOL_SKEW', os.environ)
+                return object()
+            with patch.dict(os.environ, {
+                'CARGO_HOME': str(cargo), 'OXIDEX_OPS_DIR': '/target/ops',
+                'EXIFTOOL_CACHE_DIR': '/target/cargo/fleet-oracle-receipts/hostile',
+                'EXIFTOOL': '/untrusted/oracle', 'OXIDEX_ALLOW_EXIFTOOL_SKEW': '1',
+            }), patch.object(test_runner, 'load_oracle_bootstrap', side_effect=load), \
+                 patch.object(test_runner, 'provision_cached_oracle',
+                              return_value=(cache, manifest)) as provision:
+                self.assertEqual(test_runner.prepare_generic_recipe_oracle(), manifest)
+                provision.assert_called_once()
+                self.assertEqual(provision.call_args.args[1:], (lock, cargo))
+                self.assertEqual(os.environ['EXIFTOOL_CACHE_DIR'],
+                                 str(cache / 'cache/exiftool' / pin))
+
+    def test_linux_perl_public_and_private_just_commands_are_guarded(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        public = subprocess.run(['just','--dry-run','verify-linux-perl-remote'],
+                                cwd=repository,capture_output=True,text=True,check=True)
+        self.assertEqual(public.stderr.splitlines(),
+                         ['python3 tools/remote-build/route.py verify-linux-perl'])
+        worker_entry = subprocess.run(['just','--dry-run','verify-linux-perl'],
+                                      cwd=repository,capture_output=True,text=True,check=True)
+        self.assertEqual(worker_entry.stderr.splitlines(),
+                         ['python3 tools/remote-build/route.py verify-linux-perl'])
+        private = subprocess.run(['just','--dry-run','_verify-linux-perl-worker'],
+                                 cwd=repository,capture_output=True,text=True,check=True)
+        lines = private.stderr.splitlines()
+        self.assertEqual(lines[0],
+                         'python3 tools/remote-build/route.py --require-local-context verify-linux-perl')
+        self.assertEqual(len(lines),7)
+        self.assertIn('test_bootstrap_oracle',lines[1])
+        self.assertIn('test_approved_linux_perl',lines[1])
+        self.assertIn('test_freeze_linux_perl',lines[1])
+        self.assertIn('test_prove_linux_perl_component',lines[1])
+        self.assertIn("test_qualification*.py",lines[2])
+        self.assertIn("test_generic_recipe.py",lines[3])
+        self.assertIn("test_route.py",lines[4])
+        self.assertIn("test_qualification_bootstrap_boundary.py",lines[5])
+        self.assertIn("test_version_transition_qualification.PlatformPerlIdentityTests",lines[6])
+
     def test_actions_fleet_checkout_accepts_full_and_shallow_merge_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

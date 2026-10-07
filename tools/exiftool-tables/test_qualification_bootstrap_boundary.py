@@ -74,6 +74,17 @@ else { print "v5.38.2"; }
         self.original = self.manifest.read_bytes()
         self.corpus_manifest = b.corpus_path(self.root).parent / 'combined-samples.manifest'
         self.corpus_original = self.corpus_manifest.read_bytes()
+        # Supply a synthetic signed approval while retaining production hash
+        # and verifier code. The real descriptor remains absent in source.
+        from tools.release import approved_linux_perl as approval
+        self.stack.enter_context(patch.object(approval, 'QUALIFICATION_ROOT', self.root))
+        self.stack.enter_context(patch.object(approval, 'PREFIX', b.perl_prefix(self.root)))
+        approved_tree = {'prefix': str(b.perl_prefix(self.root)),
+                         'tree_sha256': b.sha256_tree(b.perl_prefix(self.root)),
+                         'exe_sha256': b.sha256_file(self.perl),
+                         'zip_sha256': b.sha256_file(b.archive_zip_library_path(self.root)),
+                         'zip_relative_path': str(b.archive_zip_library_path(self.root).relative_to(b.perl_prefix(self.root)))}
+        self.stack.enter_context(patch.object(approval, 'load', return_value=(approved_tree, b'synthetic archive')))
         # Load the real verifier above, then route Task19's dynamic import to it.
         self.stack.enter_context(patch('importlib.util.spec_from_file_location', return_value=SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None))))
         self.stack.enter_context(patch('importlib.util.module_from_spec', return_value=b))
