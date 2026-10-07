@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 from pathlib import Path
 import re
 import socket
@@ -49,6 +50,7 @@ RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 EXPECTED_PERL_VERSION = "v5.38.2"
 EXPECTED_PERL_SHA256 = "e78cfd5a061c7e0f4ee7d0cc40a8878186d9bd321f930609ad5bdaec78410959"
 SIGNING_PROBE_TIMEOUT_SECONDS = 15
+PERL_PROBE_TIMEOUT_SECONDS = 20
 FIXED_SOURCE_COMMITS = {
     "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
     "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
@@ -529,18 +531,65 @@ def _materialize_read_union(union: Mapping[str, Any], before: Mapping[str, Any],
             "sidecar": {"path": str(sidecar_path), "sha256": _sha_file(sidecar_path)}}
 
 
+def _perl_probe(argv: list[str], *, cwd: Path | None = None) -> str:
+    """Run a bootstrap probe with the same startup isolation as rehearsal."""
+    environment = dict(os.environ)
+    for name in ("PERL5LIB", "PERLLIB", "PERL5OPT", "PERL_MM_OPT", "PERL_MB_OPT", "PERL_LOCAL_LIB_ROOT"):
+        environment.pop(name, None)
+    try:
+        probe = executor._tracked_run(
+            argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, start_new_session=True, close_fds=False,
+            timeout=PERL_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise Refused(f"Task19 Perl bootstrap probe timed out: {Path(argv[0]).name}") from error
+    except OSError as error:
+        raise Refused(f"Task19 Perl bootstrap probe failed or cleanup is unproven: {error}") from error
+    if probe.returncode != 0:
+        detail = probe.stderr.strip() or probe.stdout.strip() or "command failed"
+        raise Refused(f"Task19 Perl bootstrap probe {Path(argv[0]).name}: {detail[:300]}")
+    return probe.stdout.strip()
+
+
+def _verified_linux_perl_sha(ops_root: Path, perl: Path) -> str:
+    """Bind Linux Perl to the locked archives, install tree and capability probes."""
+    import importlib.util
+    bootstrap_path = REPOSITORY_ROOT / "tools/release/bootstrap_oracle.py"
+    spec = importlib.util.spec_from_file_location("oxidex_task19_bootstrap_oracle", bootstrap_path)
+    if spec is None or spec.loader is None:
+        raise Refused("cannot load the locked Linux Perl bootstrap verifier")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    try:
+        manifest = bootstrap.verify(
+            ops_root, (REPOSITORY_ROOT / ".exiftool-version").read_text().strip(),
+            bootstrap.manifest_path(ops_root), runner=_perl_probe)
+        identity = json.loads(manifest.read_text(encoding="utf-8"))["artifacts"]["perl_executable"]
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        raise Refused(f"locked Linux Perl bootstrap verification failed: {exc}") from exc
+    if (not isinstance(identity, dict) or identity.get("kind") != "file"
+            or identity.get("path") != str(perl)):
+        raise Refused("Linux Perl executable path or type differs from the locked bootstrap identity")
+    digest = identity.get("sha256")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise Refused("Linux Perl executable digest is missing from the locked bootstrap identity")
+    return digest
+
+
 def _perl(ops_root: Path) -> Path:
     perl = ops_root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
     if perl.is_symlink() or not perl.is_file() or not os.access(perl, os.X_OK):
         raise Refused("pinned Perl 5.38.2 executable is absent")
-    if _sha_file(perl) != EXPECTED_PERL_SHA256:
-        raise Refused("pinned Perl 5.38.2 executable hash differs from the Task19 contract")
-    environment = dict(os.environ)
-    for name in ("PERL5LIB", "PERLLIB", "PERL5OPT", "PERL_MM_OPT", "PERL_MB_OPT", "PERL_LOCAL_LIB_ROOT"):
-        environment.pop(name, None)
-    probe = subprocess.run([str(perl), "-e", "print $^V"], capture_output=True, text=True,
-                           timeout=20, env=environment)
-    if probe.returncode != 0 or probe.stdout.strip() != EXPECTED_PERL_VERSION:
+    observed_sha = _sha_file(perl)
+    if sys.platform == "darwin":
+        if observed_sha != EXPECTED_PERL_SHA256:
+            raise Refused("pinned Perl 5.38.2 executable hash differs from the Task19 contract")
+    elif sys.platform == "linux" and platform.machine() == "x86_64":
+        if observed_sha != _verified_linux_perl_sha(ops_root, perl):
+            raise Refused("Linux Perl executable differs from the locked bootstrap identity")
+    else:
+        raise Refused("Task19 Perl is supported only on Darwin or Linux x86_64 hosts")
+    if _perl_probe([str(perl), "-e", "print $^V"]) != EXPECTED_PERL_VERSION:
         raise Refused("pinned Perl executable does not report exact v5.38.2")
     return perl.resolve()
 
@@ -1716,13 +1765,13 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     frozen_unions = {row["id"]: _freeze_read_union(frozen_inputs[row["id"]]["before"],
                                                     frozen_inputs[row["id"]]["after"])
                      for row in rows}
-    perl = _perl(ops_paths.ops_root())
     results: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
     final_path = output_root / run_id / "qualification-result.json"
     with TransitionLease(lease=lease_path, run_id=run_id, owner_receipt=owner_receipt,
                          heartbeat_receipt=heartbeat_receipt, expiry_receipt=expiry_receipt,
                          release_receipt=release_receipt) as host_lease:
+        perl = _perl(ops_paths.ops_root())
         # The signed measurement clone does not inherit repository-local SSH
         # verification configuration. Probe before costly stages, but under the
         # lease so an unproven signing child retains the host boundary.

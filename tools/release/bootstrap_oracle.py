@@ -1287,12 +1287,28 @@ def materialize(
     return authenticate_artifacts(root, named)
 
 
-def verify(root: Path, pin: str, manifest: Path | None) -> Path:
+def verify(root: Path, pin: str, manifest: Path | None, *,
+           runner: Callable[..., str] | None = None) -> Path:
+    # Qualification supplies its owned, bounded process runner. Provisioning
+    # retains its existing runner; neither path mutates the parent environment.
+    run_probe = runner if runner is not None else run
     durable = resolve_durable_root(root)
     validate_lock(LOCK)
     assert_no_legacy_nested_corpus(durable)
     if pin != VERSION:
         raise Refused(f"ExifTool pin must be {VERSION}, got {pin}")
+    output = manifest_path(durable)
+    existing = None
+    if manifest is not None:
+        requested = require_descendant(manifest, durable)
+        if requested != output:
+            raise Refused(f"manifest path must be {output}, not {requested}")
+        if not requested.is_file():
+            raise Refused(f"provisioned manifest is missing: {requested}")
+        # Authenticate before executing installed code or refreshing either
+        # the corpus manifest or the storage manifest. No drift is reblessed.
+        existing = json.loads(requested.read_text(encoding="utf-8"))
+        validate_locked_manifest(existing, durable)
     perl = require_descendant(perl_path(durable), durable)
     exiftool = require_descendant(exiftool_path(durable), durable)
     corpus = require_descendant(corpus_path(durable), durable)
@@ -1302,14 +1318,14 @@ def verify(root: Path, pin: str, manifest: Path | None) -> Path:
             raise Refused(f"durable artifact is missing: {path}")
     _verify_corpus_tree(corpus)
     sources = _verify_archive_sources(durable)
-    tag_object = run(["git", "rev-parse", "HEAD"], cwd=exiftool.parent)
+    tag_object = run_probe(["git", "rev-parse", "HEAD"], cwd=exiftool.parent)
     if tag_object != LOCK["exiftool"]["tag_object"]:
         raise Refused(f"wrong ExifTool tag object: {tag_object}")
     values = (
-        run([str(perl), "-e", "print $^V"]),
-        run([str(perl), "-MArchive::Zip", "-e", "print $Archive::Zip::VERSION"]),
-        run([str(perl), "-I", str(exiftool.parent / "lib"), str(exiftool), "-ver"]),
-        run(
+        run_probe([str(perl), "-e", "print $^V"]),
+        run_probe([str(perl), "-MArchive::Zip", "-e", "print $Archive::Zip::VERSION"]),
+        run_probe([str(perl), "-I", str(exiftool.parent / "lib"), str(exiftool), "-ver"]),
+        run_probe(
             [
                 str(perl),
                 "-I",
@@ -1327,10 +1343,13 @@ def verify(root: Path, pin: str, manifest: Path | None) -> Path:
         sum(item.is_file() for item in corpus.rglob("*")),
     )
     validate_versions(*values)
-    configured_prefix = run(
+    configured_prefix = run_probe(
         [str(perl), "-MConfig", "-e", "print $Config{prefix}"]
     )
     validate_perl_prefix(perl_prefix(durable), configured_prefix)
+    if existing is not None:
+        # A probe must not change the authenticated installation either.
+        validate_locked_manifest(existing, durable)
     corpus_manifest = _write_corpus_manifest(durable)
     named: dict[str, Path] = {
         f"{name}_source": path for name, path in sources.items()
@@ -1366,15 +1385,6 @@ def verify(root: Path, pin: str, manifest: Path | None) -> Path:
             "corpus_files": values[4],
         },
     }
-    output = manifest_path(durable)
-    if manifest is not None:
-        requested = require_descendant(manifest, durable)
-        if requested != output:
-            raise Refused(f"manifest path must be {output}, not {requested}")
-        if requested.exists():
-            validate_locked_manifest(
-                json.loads(requested.read_text(encoding="utf-8")), durable
-            )
     atomic_json(output, payload)
     return output
 
