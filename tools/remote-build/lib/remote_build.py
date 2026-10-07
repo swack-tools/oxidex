@@ -800,9 +800,16 @@ def main(argv=None):
                           'zip_version':'1.68','cold':'installed','warm':'reused'}
                 receipt['component_proof']=retrieve_component_proof(transport,ssh,args.worktree_id,evidence,expected)
                 receipt['stage']='cleanup'
+                save()
                 cleanup(strict=True)
+                # The ordinary cleanup removes the source project but retains
+                # the target containing the verified component proof.
+                receipt['remote_source']='removed'
+                receipt['remote_retained']=True  # The proof-bearing target remains.
+                receipt['remote_paths']={'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
+                receipt['recipe_state']='DIRECT_SUCCESS_TARGET_RETAINED'
             receipt['verified']=True
-            receipt['stage']='complete_retained'
+            receipt['stage']='complete_target_retained' if component else 'complete_retained'
             save()
             print(json.dumps({k:v for k,v in receipt.items() if k!='snapshot'},indent=2))
             return 0

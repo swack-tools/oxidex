@@ -199,7 +199,8 @@ class GenericRecipeTests(unittest.TestCase):
             self.assertIn('candidate-receipt.json',transfers[0])
 
     def exercise(self, code, recipe="test-package", source_status="", producer_tree='a'*40,
-                 retrieval_fail=False, component_failure=False):
+                 retrieval_fail=False, component_failure=False,
+                 cleanup_failure=False, cleanup_observations=None):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external_directory:
             root=Path(directory);commands=[]
             signer=root/'maintainer.allowed_signers'
@@ -226,6 +227,12 @@ class GenericRecipeTests(unittest.TestCase):
                                  for name,path in (extra_files or {}).items()]}
             def run(command, **kwargs):
                 commands.append(command)
+                if ' cleanup' in ' '.join(command):
+                    if cleanup_observations is not None:
+                        cleanup_observations.append(json.loads(
+                            (root/'evidence/remote-build.json').read_text()))
+                    if cleanup_failure:
+                        raise remote_build.subprocess.CalledProcessError(1, command)
                 if 'bundle' in command and 'create' in command:
                     Path(command[-2]).write_bytes(b'synthetic signed bundle')
                 if 'stdout' in kwargs and hasattr(kwargs['stdout'],'write'):
@@ -287,6 +294,9 @@ class GenericRecipeTests(unittest.TestCase):
                 elif component_failure and recipe=='prove-linux-perl-component':
                     with self.assertRaisesRegex(RuntimeError,'component proof transfer loss'):
                         remote_build.main(argv)
+                elif cleanup_failure and recipe=='prove-linux-perl-component':
+                    with self.assertRaises(remote_build.subprocess.CalledProcessError):
+                        remote_build.main(argv)
                 else:
                     self.assertEqual(remote_build.main(argv),0)
                     if recipe=='freeze-linux-perl':
@@ -297,7 +307,9 @@ class GenericRecipeTests(unittest.TestCase):
             return receipt,commands,root,extras_seen,signed_heads
 
     def test_component_packet_binds_one_envelope_and_cleans_only_after_proof(self):
-        receipt, commands, _, extras, heads = self.exercise(0,'prove-linux-perl-component')
+        at_cleanup=[]
+        receipt, commands, _, extras, heads = self.exercise(
+            0,'prove-linux-perl-component',cleanup_observations=at_cleanup)
         self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
         self.assertEqual(heads,['a'*40])
         self.assertEqual(set(extras), {'repository.bundle','maintainer.allowed_signers',
@@ -306,9 +318,36 @@ class GenericRecipeTests(unittest.TestCase):
                          receipt['component_envelope_sha256'])
         self.assertEqual(receipt['component_proof']['status'],'COMPONENT_ONLY_PASS')
         self.assertEqual(receipt['remote_cleanup'],'complete')
+        self.assertEqual(len(at_cleanup),1)
+        self.assertEqual(at_cleanup[0]['stage'],'cleanup')
+        self.assertEqual(at_cleanup[0]['component_proof']['status'],'COMPONENT_ONLY_PASS')
+        self.assertIn('source',at_cleanup[0]['remote_paths'])
+        self.assertTrue(receipt['verified'])
+        self.assertEqual(receipt['stage'],'complete_target_retained')
+        self.assertEqual(receipt['recipe_state'],'DIRECT_SUCCESS_TARGET_RETAINED')
+        self.assertTrue(receipt['remote_retained'])
+        self.assertEqual(receipt['remote_source'],'removed')
+        self.assertEqual(receipt['remote_paths'],{
+            'target':'/mnt/runner-data/remote-build/targets/'+receipt['run_id']})
         self.assertEqual(sum(' just prove-linux-perl-component ' in ' '.join(c)
                              for c in commands),1)
         self.assertEqual(sum(' cleanup' in ' '.join(c) for c in commands),1)
+
+    def test_component_cleanup_failure_keeps_uncertain_paths_and_no_verified_claim(self):
+        at_cleanup=[]
+        receipt, commands, _, _, _ = self.exercise(
+            0,'prove-linux-perl-component',cleanup_failure=True,
+            cleanup_observations=at_cleanup)
+        self.assertEqual(len(at_cleanup),1)
+        self.assertEqual(at_cleanup[0]['component_proof']['status'],'COMPONENT_ONLY_PASS')
+        self.assertEqual(receipt['stage'],'cleanup')
+        self.assertEqual(receipt['remote_cleanup'],'failed')
+        self.assertTrue(receipt['remote_retained'])
+        self.assertIn('source',receipt['remote_paths'])
+        self.assertIn('target',receipt['remote_paths'])
+        self.assertNotIn('remote_source',receipt)
+        self.assertFalse(receipt.get('verified',False))
+        self.assertEqual(sum(' cleanup' in ' '.join(command) for command in commands),1)
 
     def test_component_proof_transfer_failure_retains_remote_project_without_cleanup(self):
         receipt, commands, _, extras, _ = self.exercise(
