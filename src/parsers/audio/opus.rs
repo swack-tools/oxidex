@@ -308,9 +308,18 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert_eq!(metadata.get("Opus:OpusVersion").unwrap().as_integer(), Some(1));
-        assert_eq!(metadata.get("Opus:AudioChannels").unwrap().as_integer(), Some(2));
-        assert_eq!(metadata.get("Opus:OutputGain").unwrap().as_float(), Some(1.0));
+        assert_eq!(
+            metadata.get("Opus:OpusVersion").unwrap().as_integer(),
+            Some(1)
+        );
+        assert_eq!(
+            metadata.get("Opus:AudioChannels").unwrap().as_integer(),
+            Some(2)
+        );
+        assert_eq!(
+            metadata.get("Opus:OutputGain").unwrap().as_float(),
+            Some(1.0)
+        );
     }
 
     #[test]

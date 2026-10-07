@@ -719,7 +719,13 @@ impl MakerNoteParser for NikonParser {
         }
         if !ctx.payload().starts_with(b"Nikon\0") {
             return self.parse_headerless_with_context(
-                ctx, byte_order, model, tags, value_forms, None, None,
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                None,
+                None,
             );
         }
         // `Nikon::PreviewIFD`'s 0x201 `PreviewImageStart` is `IsOffset`
@@ -789,7 +795,13 @@ impl MakerNoteParser for NikonParser {
         };
         if !ctx.payload().starts_with(b"Nikon\0") {
             return self.parse_headerless_with_context(
-                ctx, byte_order, model, tags, value_forms, file_type, None,
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                file_type,
+                None,
             );
         }
         let preview_ifd_base = ctx
@@ -838,7 +850,13 @@ impl MakerNoteParser for NikonParser {
         };
         if !ctx.payload().starts_with(b"Nikon\0") {
             return self.parse_headerless_with_context(
-                ctx, byte_order, model, tags, value_forms, file_type, Some(occurrences),
+                ctx,
+                byte_order,
+                model,
+                tags,
+                value_forms,
+                file_type,
+                Some(occurrences),
             );
         }
         let preview_ifd_base = ctx

@@ -62,7 +62,7 @@ const DURATION: u32 = 0x4489;
 
 // Tracks Elements
 const TRACK_ENTRY: u32 = 0xAE;
-const TRACK_TYPE: u32 = 0xD7;
+const TRACK_TYPE: u32 = 0x83;
 const CODEC_ID: u32 = 0x86;
 const VIDEO: u32 = 0xE0;
 const AUDIO: u32 = 0xE1;
@@ -285,6 +285,7 @@ fn parse_info(
     metadata: &mut MetadataMap,
 ) -> Result<()> {
     let mut timecode_scale = 1_000_000u64; // Default: 1ms
+    let mut duration = None;
 
     while offset < end_offset {
         match parse_element_header(reader, offset) {
@@ -299,16 +300,7 @@ fn parse_info(
                     }
                     DURATION => {
                         if let Ok(value) = read_float(reader, data_offset, elem_size as usize) {
-                            let duration_secs = (value * timecode_scale as f64) / 1_000_000_000.0;
-                            let total_secs = duration_secs.round() as u64;
-                            let hours = total_secs / 3600;
-                            let mins = (total_secs % 3600) / 60;
-                            let secs = total_secs % 60;
-                            let formatted = format!("{}:{:02}:{:02}", hours, mins, secs);
-                            metadata.insert(
-                                "WEBM:Duration".to_string(),
-                                TagValue::new_string(formatted),
-                            );
+                            duration = Some(value);
                         }
                     }
                     _ => {}
@@ -318,6 +310,18 @@ fn parse_info(
             }
             Err(_) => break,
         }
+    }
+
+    // Duration may precede TimecodeScale in Info. Apply the final scale only
+    // after the complete directory has been inspected.
+    if let Some(value) = duration {
+        let duration_secs = (value * timecode_scale as f64) / 1_000_000_000.0;
+        let total_secs = duration_secs.round() as u64;
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        let secs = total_secs % 60;
+        let formatted = format!("{}:{:02}:{:02}", hours, mins, secs);
+        metadata.insert("WEBM:Duration".to_string(), TagValue::new_string(formatted));
     }
 
     Ok(())
@@ -725,14 +729,25 @@ mod tests {
         element(&[0x1A, 0x45, 0xDF, 0xA3], &payload)
     }
 
-    fn info_and_tracks() -> Vec<u8> {
-        let duration = element(&[0x44, 0x89], &2f32.to_be_bytes());
-        let mut payload = element(&[0x15, 0x49, 0xA9, 0x66], &duration);
-        let mut track = element(&[0xD7], &[1]);
+    fn info_and_tracks(duration_first: bool) -> (Vec<u8>, usize) {
+        let duration = element(&[0x44, 0x89], &1000f32.to_be_bytes());
+        let scale = element(&[0x2A, 0xD7, 0xB1], &2_000_000u32.to_be_bytes());
+        let mut info = Vec::new();
+        if duration_first {
+            info.extend_from_slice(&duration);
+            info.extend_from_slice(&scale);
+        } else {
+            info.extend_from_slice(&scale);
+            info.extend_from_slice(&duration);
+        }
+        let mut payload = element(&[0x15, 0x49, 0xA9, 0x66], &info);
+        let info_len = payload.len();
+        let mut track = element(&[0xD7], &[2]); // TrackNumber, independent of TrackType
+        track.extend(element(&[0x83], &[1])); // TrackType: video
         track.extend(element(&[0x86], b"V_VP9"));
         let track_entry = element(&[0xAE], &track);
         payload.extend(element(&[0x16, 0x54, 0xAE, 0x6B], &track_entry));
-        payload
+        (payload, info_len)
     }
 
     fn with_segment(payload: &[u8], encoded_size: u8) -> Vec<u8> {
@@ -744,23 +759,24 @@ mod tests {
 
     #[test]
     fn segment_children_are_read_inside_declared_or_unknown_size() {
-        let payload = info_and_tracks();
-        for size in [0x80 | payload.len() as u8, 0xFF] {
-            let data = with_segment(&payload, size);
-            let metadata = WebmParser
-                .parse(&TestReader::from_slice(&data))
-                .expect("valid WebM Segment");
-            assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
-            assert_eq!(metadata.get_string("WEBM:Duration"), Some("0:00:02"));
-            assert_eq!(metadata.get_string("WEBM:VideoCodec"), Some("VP9"));
+        for duration_first in [true, false] {
+            let (payload, _) = info_and_tracks(duration_first);
+            for size in [0x80 | payload.len() as u8, 0xFF] {
+                let data = with_segment(&payload, size);
+                let metadata = WebmParser
+                    .parse(&TestReader::from_slice(&data))
+                    .expect("valid WebM Segment");
+                assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
+                assert_eq!(metadata.get_string("WEBM:Duration"), Some("0:00:02"));
+                assert_eq!(metadata.get_string("WEBM:VideoCodec"), Some("VP9"));
+                assert!(metadata.get("WEBM:AudioCodec").is_none());
+            }
         }
     }
 
     #[test]
     fn segment_does_not_read_children_past_declared_or_truncated_end() {
-        let payload = info_and_tracks();
-        let duration = element(&[0x44, 0x89], &2f32.to_be_bytes());
-        let info_len = element(&[0x15, 0x49, 0xA9, 0x66], &duration).len();
+        let (payload, info_len) = info_and_tracks(true);
         for data in [
             with_segment(&payload, 0x80 | info_len as u8),
             with_segment(&payload[..payload.len() - 1], 0x80 | payload.len() as u8),
