@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import re
+import resource
 import secrets
 import subprocess
 import sys
@@ -24,6 +25,8 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl'})
+MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
+MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
 def pinned_toolchain(source):
@@ -202,21 +205,44 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_checked_candidate(transport, remote: str, local: Path, digest: str) -> None:
-    """Persist exact remote bytes; preserve the remote project on any failure."""
+def _download_checked_candidate(transport, remote: str, local: Path, digest: str,
+                                max_bytes: int, expected_size: int | None = None) -> None:
+    """Persist bounded exact remote bytes; preserve failure evidence and project."""
     import tempfile
-    if not re.fullmatch(r'[0-9a-f]{64}', digest) or local.exists() or local.is_symlink():
-        raise RuntimeError('Perl candidate destination or digest is invalid')
+    if (not re.fullmatch(r'[0-9a-f]{64}', digest) or local.exists() or local.is_symlink()
+            or type(max_bytes) is not int or max_bytes <= 0
+            or (expected_size is not None and
+                (type(expected_size) is not int or not 0 < expected_size <= max_bytes))):
+        raise RuntimeError('Perl candidate destination, digest, or bound is invalid')
     descriptor,name=tempfile.mkstemp(prefix='.perl-candidate-',dir=local.parent)
     os.close(descriptor)
     temporary=Path(name)
     try:
-        subprocess.run(transport.scp(temporary,remote,download=True),check=True)
+        try:
+            # The limit is inherited by scp and its children, closing the
+            # remote-stat-to-transfer race before local evidence is exhausted.
+            subprocess.run(transport.scp(temporary,remote,download=True),check=True,
+                           preexec_fn=lambda: resource.setrlimit(
+                               resource.RLIMIT_FSIZE, (max_bytes, max_bytes)))
+        except subprocess.CalledProcessError as exc:
+            if temporary.stat().st_size >= max_bytes:
+                raise RuntimeError('Perl candidate download bound exceeded') from exc
+            raise
+        size=temporary.stat().st_size
+        if size > max_bytes:
+            raise RuntimeError('Perl candidate download bound exceeded')
+        if expected_size is not None and size != expected_size:
+            raise RuntimeError('Downloaded Perl candidate size differs from receipt')
         if _sha256_file(temporary)!=digest:
             raise RuntimeError('Downloaded Perl candidate checksum mismatch')
         temporary.replace(local)
-    finally:
-        temporary.unlink(missing_ok=True)
+    except Exception:
+        # Keep failure bytes for diagnosis, including errors from the child.
+        if temporary.exists():
+            with temporary.open('r+b') as stream:
+                stream.truncate(max_bytes)
+            temporary.rename(temporary.with_name(temporary.name + '.failed'))
+        raise
 
 
 def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
@@ -231,7 +257,8 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
     receipt_remote=remote_root+'/candidate-receipt.json'
     receipt_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(receipt_remote)),text=True).split()[0]
     receipt_path=local/'candidate-receipt.json'
-    _download_checked_candidate(transport,receipt_remote,receipt_path,receipt_digest)
+    _download_checked_candidate(transport,receipt_remote,receipt_path,receipt_digest,
+                                MAX_CANDIDATE_RECEIPT_BYTES)
     candidate=json.loads(receipt_path.read_text())
     archive_remote=remote_root+'/perl-5.38.2-prefix.tar.gz'
     if (candidate.get('schema_version')!=1 or candidate.get('kind')!='linux_perl_unapproved_candidate'
@@ -245,13 +272,16 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
             or candidate.get('status')!='candidate_only_requires_independent_review'
             or candidate.get('replay_tree_sha256')!=candidate.get('perl_tree_sha256')
             or not re.fullmatch(r'[0-9a-f]{64}',str(candidate.get('archive_sha256','')))
-            or type(candidate.get('archive_bytes')) is not int or candidate['archive_bytes']<=0):
+            or type(candidate.get('archive_bytes')) is not int
+            or not 0<candidate['archive_bytes']<=MAX_CANDIDATE_ARCHIVE_BYTES):
         raise RuntimeError('Perl candidate receipt does not bind selected source and archive')
     remote_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(archive_remote)),text=True).split()[0]
     if remote_digest!=candidate['archive_sha256']:
         raise RuntimeError('Remote Perl archive differs from candidate receipt')
     archive_path=local/'perl-5.38.2-prefix.tar.gz'
-    _download_checked_candidate(transport,archive_remote,archive_path,remote_digest)
+    _download_checked_candidate(transport,archive_remote,archive_path,remote_digest,
+                                candidate['archive_bytes'],
+                                expected_size=candidate['archive_bytes'])
     if archive_path.stat().st_size!=candidate['archive_bytes']:
         raise RuntimeError('Downloaded Perl archive size differs from candidate receipt')
     return {'receipt':str(receipt_path),'receipt_sha256':receipt_digest,

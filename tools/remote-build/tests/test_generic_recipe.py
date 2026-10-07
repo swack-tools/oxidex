@@ -10,6 +10,7 @@ from unittest.mock import patch
 import os
 import shutil
 import subprocess
+import sys
 
 from lib import remote_build
 import route
@@ -26,6 +27,43 @@ class GenericRecipeTests(unittest.TestCase):
                          hashlib.sha256(b'synthetic signed bundle').hexdigest())
         self.assertTrue(any('bundle' in command and 'create' in command
                             for command in commands))
+
+    def test_candidate_receipt_download_caps_real_child_during_transfer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / 'candidate-receipt.json'
+            excess = b'x' * (64 * 1024 + 1)
+            transport = SimpleNamespace(scp=lambda destination, remote, download=False: [
+                sys.executable, '-c',
+                'import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b"x" * (64 * 1024 + 1))',
+                str(destination),
+            ])
+            with self.assertRaisesRegex(RuntimeError, 'bound'):
+                remote_build._download_checked_candidate(
+                    transport, '/target/perl-candidate-export/candidate-receipt.json',
+                    local, hashlib.sha256(excess).hexdigest(),
+                    remote_build.MAX_CANDIDATE_RECEIPT_BYTES)
+            self.assertFalse(local.exists())
+            failures = list(Path(directory).glob('.perl-candidate-*.failed'))
+            self.assertEqual(len(failures), 1)
+            self.assertLessEqual(failures[0].stat().st_size, 64 * 1024)
+
+    def test_candidate_archive_download_caps_real_child_during_transfer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / 'perl-5.38.2-prefix.tar.gz'
+            excess = b'x' * 4097
+            transport = SimpleNamespace(scp=lambda destination, remote, download=False: [
+                sys.executable, '-c',
+                'import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b"x" * 4097)',
+                str(destination),
+            ])
+            with self.assertRaisesRegex(RuntimeError, 'bound'):
+                remote_build._download_checked_candidate(
+                    transport, '/target/perl-candidate-export/perl-5.38.2-prefix.tar.gz',
+                    local, hashlib.sha256(excess).hexdigest(), 4096, expected_size=4096)
+            self.assertFalse(local.exists())
+            failures = list(Path(directory).glob('.perl-candidate-*.failed'))
+            self.assertEqual(len(failures), 1)
+            self.assertLessEqual(failures[0].stat().st_size, 4096)
 
     def test_perl_candidate_retrieval_checks_both_durable_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -74,6 +112,20 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=run):
                 with self.assertRaisesRegex(RuntimeError,'differs from candidate receipt'):
                     remote_build.retrieve_perl_candidate(transport,ssh,'run2',retry,head,tree,'d'*64,lock)
+            candidate['archive_sha256']=hashlib.sha256(archive.read_bytes()).hexdigest()
+            candidate['archive_bytes']=remote_build.MAX_CANDIDATE_ARCHIVE_BYTES + 1
+            receipt.write_text(json.dumps(candidate))
+            oversized=evidence/'oversized';oversized.mkdir()
+            transfers=[]
+            def bounded_run(command,**kwargs):
+                transfers.append(command[1])
+                return run(command,**kwargs)
+            with patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build.subprocess,'run',side_effect=bounded_run):
+                with self.assertRaisesRegex(RuntimeError,'receipt does not bind'):
+                    remote_build.retrieve_perl_candidate(transport,ssh,'run3',oversized,head,tree,'d'*64,lock)
+            self.assertEqual(len(transfers),1)
+            self.assertIn('candidate-receipt.json',transfers[0])
 
     def exercise(self, code, recipe="test-package", source_status="", producer_tree='a'*40,
                  retrieval_fail=False):

@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -71,6 +72,24 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
     def load(self):
         return approved.load(oracle.LOCK_PATH, descriptor=self.descriptor,
                              envelope=self.envelope)
+
+    def test_prefix_metadata_refuses_writable_or_foreign_owner_before_tree_hash(self):
+        self.prefix.chmod(0o777)
+        with mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree read")):
+            with self.assertRaisesRegex(approved.Refused, "prefix.*mode"):
+                approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+        for mode in (0o700, 0o755):
+            self.prefix.chmod(mode)
+            approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+        self.root.chmod(0o777)
+        with mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree read")):
+            with self.assertRaisesRegex(approved.Refused, "prefix.*mode"):
+                approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+        self.root.chmod(0o700)
+        with mock.patch.object(approved.os, "geteuid", return_value=os.geteuid() + 1):
+            with mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree read")):
+                with self.assertRaisesRegex(approved.Refused, "owner"):
+                    approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
 
     def test_baseline_and_joint_mutations_refuse_before_any_probe(self):
         identity = self.load()

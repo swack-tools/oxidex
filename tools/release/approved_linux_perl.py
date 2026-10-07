@@ -5,6 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
@@ -111,8 +112,24 @@ def load(lock_path: Path, *, descriptor: Path = DESCRIPTOR,
 
 
 def check_tree(approved: dict, candidate: Path, sha256_tree) -> None:
-    if candidate.is_symlink() or not candidate.is_dir():
-        raise Refused(f"approved Linux Perl tree is absent or unsafe: {candidate}")
+    try:
+        relative = candidate.relative_to(QUALIFICATION_ROOT)
+    except ValueError as exc:
+        raise Refused("approved Linux Perl prefix is outside qualification root") from exc
+    current = QUALIFICATION_ROOT
+    for component in (None, *relative.parts):
+        if component is not None:
+            current /= component
+        try:
+            info = current.lstat()
+        except OSError as exc:
+            raise Refused(f"approved Linux Perl prefix is absent: {current}") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise Refused(f"approved Linux Perl prefix is not a directory: {current}")
+        if info.st_uid != os.geteuid():
+            raise Refused(f"approved Linux Perl prefix has foreign owner: {current}")
+        if stat.S_IMODE(info.st_mode) not in (0o700, 0o755):
+            raise Refused(f"approved Linux Perl prefix has unsafe mode: {current}")
     if sha256_tree(candidate) != approved["tree_sha256"]:
         raise Refused("approved Linux Perl whole-tree hash mismatch")
     perl = candidate / "bin/perl5.38.2"
