@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import route
+import ignored_suite
 
 
 class RouteTests(unittest.TestCase):
@@ -334,12 +335,30 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(len(git('rev-list', '--parents', '-n', '1', 'HEAD').split()), 3)
             ci_env = {'GITHUB_SERVER_URL': 'https://github.com',
                       'GITHUB_REPOSITORY': 'swack-tools/oxidex',
-                      'GITHUB_WORKSPACE': str(source), 'GITHUB_SHA': merge_head}
+                      'GITHUB_WORKSPACE': str(source), 'GITHUB_SHA': merge_head,
+                      'CI': 'true', 'GITHUB_ACTIONS': 'true',
+                      'RUNNER_ENVIRONMENT': 'self-hosted', 'RUNNER_OS': 'Linux',
+                      'RUNNER_NAME': 'spot-runner', 'GITHUB_RUN_ID': '123',
+                      'CARGO_TARGET_DIR': str(source / 'target')}
             old_cwd = Path.cwd()
             try:
                 os.chdir(source)
                 with patch.dict(os.environ, ci_env):
                     route.verify_ci_fleet_checkout()
+                    with patch.object(route.sys, 'platform', 'linux'), \
+                         patch.object(route, 'trusted_marker',
+                                      side_effect=lambda path: path == route.RUNNER_MARKER), \
+                         patch.object(ignored_suite, 'ROOT', source):
+                        self.assertEqual(route.main(['--require-local-context', 'test-ignored']), 0)
+                        self.assertEqual(ignored_suite.admitted_context(),
+                                         ('actions-scratch', source / 'target'))
+                        (source / 'justfile').chmod(0o755)
+                        with self.assertRaisesRegex(RuntimeError, 'not clean|differs from selected HEAD'):
+                            ignored_suite.admitted_context()
+                        (source / 'justfile').chmod(0o644)
+                        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'other/repo'}):
+                            with self.assertRaisesRegex(RuntimeError, 'expected Actions repository'):
+                                ignored_suite.admitted_context()
                     with patch.dict(os.environ, {'GITHUB_WORKSPACE': str(root)}):
                         with self.assertRaisesRegex(RuntimeError, 'canonical Actions workspace'):
                             route.verify_ci_fleet_checkout()
@@ -358,6 +377,12 @@ class RouteTests(unittest.TestCase):
                     self.assertEqual(git('status', '--porcelain'), '')
                     with self.assertRaisesRegex(RuntimeError, 'differs from selected HEAD: justfile'):
                         route.verify_ci_fleet_checkout()
+                    with patch.object(route.sys, 'platform', 'linux'), \
+                         patch.object(route, 'trusted_marker',
+                                      side_effect=lambda path: path == route.RUNNER_MARKER), \
+                         patch.object(ignored_suite, 'ROOT', source):
+                        with self.assertRaisesRegex(RuntimeError, 'differs from selected HEAD: justfile'):
+                            ignored_suite.admitted_context()
                 shallow = root / 'shallow'
                 subprocess.run(['git', 'clone', '-q', '--depth=1', source.as_uri(), str(shallow)], check=True)
                 os.chdir(shallow)

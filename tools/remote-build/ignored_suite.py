@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import ignored_fixture_probe as inputs
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGET = Path('/target')
+BUILDER_TARGET = Path('/target')
 EXECUTABLE_COMMAND = ['cargo', 'test', '--release', '--workspace', '--all-features', '--locked',
                       '--no-fail-fast', '--lib', '--bins', '--tests', '--message-format=json',
                       '--', '--include-ignored']
@@ -179,10 +179,30 @@ def validate_driver_manifests(scalar: dict, raw: dict) -> dict:
             'historical_scalar_reference': 1530, 'historical_raw_reference': 15}
 
 
+def admitted_context() -> tuple[str, Path]:
+    """Recheck the exact builder or Actions source before using an owned target."""
+    import route
+    if not route.local_worker_context() or Path.cwd() != ROOT:
+        raise RuntimeError('ignored suite requires a guarded checkout root')
+    if ROOT == route.FLEET_CHECKOUT and route.trusted_marker(route.BUILDER_MARKER):
+        if not route.verified_fleet_checkout():
+            raise RuntimeError('ignored suite requires the clean signed builder checkout')
+        return 'signed-builder', BUILDER_TARGET
+    route.verify_ci_fleet_checkout()
+    configured = os.environ.get('CARGO_TARGET_DIR')
+    target = Path(configured) if configured else ROOT / 'target'
+    if (not target.is_absolute() or target == ROOT or target == route.FLEET_SOURCE
+            or route.FLEET_SOURCE in target.parents or target.is_symlink()
+            or target.resolve() != target
+            or (ROOT in target.parents and ROOT / 'target' != target
+                and ROOT / 'target' not in target.parents)):
+        raise RuntimeError('ignored suite requires a canonical owned Cargo target')
+    os.environ.setdefault('CARGO_TARGET_DIR', str(target))
+    return 'actions-scratch', target
+
+
 def main() -> int:
-    from route import verified_fleet_checkout
-    if ROOT != TARGET / 'checkout' or not verified_fleet_checkout():
-        raise SystemExit('ignored suite requires the clean signed builder checkout')
+    component, target = admitted_context()
     source_identity = clean_identity(ROOT)
     pin = (ROOT / '.exiftool-version').read_text().strip()
     if pin != '13.59' or 'EXIFTOOL_CACHE_DIR' not in os.environ or 'EXIFTOOL_PERL' not in os.environ:
@@ -191,18 +211,19 @@ def main() -> int:
     perl = Path(os.environ['EXIFTOOL_PERL'])
     if not (oracle_root / 'exiftool').is_file() or not perl.is_file():
         raise SystemExit('pinned ignored-suite oracle files are unavailable')
-    round_dir = TARGET / 'ignored-suite' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(4))
+    round_dir = target / 'ignored-suite' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(4))
     round_dir.mkdir(parents=True)
     receipt_path = round_dir / 'receipt.json'
     report = {'schema': 1, 'status': 'FAILED', 'source_head': source_identity[0],
-              'source_tree': source_identity[1], 'oracle_pin': pin, 'round': str(round_dir)}
+              'source_tree': source_identity[1], 'oracle_pin': pin, 'round': str(round_dir),
+              'component': component, 'target': str(target)}
     def save():
         write_receipt_atomic(receipt_path, report)
     save()
     staged = []
     try:
         manifest = json.loads(inputs.MANIFEST.read_text())
-        _, input_receipt = inputs.run(manifest, TARGET)
+        _, input_receipt = inputs.run(manifest, target)
         report['inputs'] = input_receipt
         save()
         if input_receipt['status'] != 'PASS':

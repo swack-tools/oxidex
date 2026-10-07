@@ -1,15 +1,45 @@
 """Small source controls for owned ignored fixture staging."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import ignored_suite as suite
+import route
 
 
 class IgnoredSuiteControls(unittest.TestCase):
+    def test_builder_and_actions_contexts_keep_distinct_owned_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            actions_env = {'CARGO_TARGET_DIR': str(workspace / 'target')}
+            with patch.object(suite, 'ROOT', route.FLEET_CHECKOUT), \
+                 patch.object(route.Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=True), \
+                 patch.object(route, 'verified_fleet_checkout', return_value=True) as signed, \
+                 patch.object(route, 'verify_ci_fleet_checkout') as ci:
+                self.assertEqual(suite.admitted_context(), ('signed-builder', Path('/target')))
+                signed.assert_called_once()
+                ci.assert_not_called()
+            with patch.object(suite, 'ROOT', workspace), \
+                 patch.object(route.Path, 'cwd', return_value=workspace), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'verify_ci_fleet_checkout') as ci, \
+                 patch.dict(os.environ, actions_env):
+                self.assertEqual(suite.admitted_context(), ('actions-scratch', workspace / 'target'))
+                ci.assert_called_once()
+                for bad in (str(workspace / 'other'), str(workspace), 'relative/target', '/src/target'):
+                    with self.subTest(target=bad), patch.dict(os.environ, {'CARGO_TARGET_DIR': bad}):
+                        with self.assertRaisesRegex(RuntimeError, 'canonical owned Cargo target'):
+                            suite.admitted_context()
+                with patch.object(route, 'verify_ci_fleet_checkout', side_effect=RuntimeError('wrong repo')):
+                    with self.assertRaisesRegex(RuntimeError, 'wrong repo'):
+                        suite.admitted_context()
+
     def fixture_plan(self, root):
         repo = root / 'checkout'
         repo.mkdir()
