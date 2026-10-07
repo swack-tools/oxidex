@@ -510,18 +510,24 @@ class RouteTests(unittest.TestCase):
                                 cwd=repository,capture_output=True,text=True,check=True)
         self.assertEqual(public.stderr.splitlines(),
                          ['python3 tools/remote-build/route.py verify-linux-perl'])
+        worker_entry = subprocess.run(['just','--dry-run','verify-linux-perl'],
+                                      cwd=repository,capture_output=True,text=True,check=True)
+        self.assertEqual(worker_entry.stderr.splitlines(),
+                         ['python3 tools/remote-build/route.py verify-linux-perl'])
         private = subprocess.run(['just','--dry-run','_verify-linux-perl-worker'],
                                  cwd=repository,capture_output=True,text=True,check=True)
         lines = private.stderr.splitlines()
         self.assertEqual(lines[0],
                          'python3 tools/remote-build/route.py --require-local-context verify-linux-perl')
-        self.assertEqual(len(lines),5)
+        self.assertEqual(len(lines),7)
         self.assertIn('test_bootstrap_oracle',lines[1])
         self.assertIn('test_approved_linux_perl',lines[1])
         self.assertIn('test_freeze_linux_perl',lines[1])
         self.assertIn("test_qualification*.py",lines[2])
         self.assertIn("test_generic_recipe.py",lines[3])
         self.assertIn("test_route.py",lines[4])
+        self.assertIn("test_qualification_bootstrap_boundary.py",lines[5])
+        self.assertIn("test_version_transition_qualification.PlatformPerlIdentityTests",lines[6])
 
     def test_actions_fleet_checkout_accepts_full_and_shallow_merge_history(self):
         with tempfile.TemporaryDirectory() as directory:

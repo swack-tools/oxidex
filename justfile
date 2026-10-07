@@ -1855,9 +1855,14 @@ _freeze-linux-perl-worker head tree:
 verify-linux-perl-remote:
     python3 tools/remote-build/route.py verify-linux-perl
 
+verify-linux-perl:
+    python3 tools/remote-build/route.py verify-linux-perl
+
 _verify-linux-perl-worker:
     python3 tools/remote-build/route.py --require-local-context verify-linux-perl
     python3 -m unittest tools.release.test_bootstrap_oracle tools.release.test_approved_linux_perl tools.release.test_freeze_linux_perl
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_qualification*.py'
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_generic_recipe.py'
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_route.py'
+    cd tools/exiftool-tables && python3 -m unittest discover -p 'test_qualification_bootstrap_boundary.py'
+    cd tools/exiftool-tables && python3 -m unittest test_version_transition_qualification.PlatformPerlIdentityTests
