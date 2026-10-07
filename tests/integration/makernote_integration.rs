@@ -63,6 +63,10 @@ fn test_nikon_makernote_extraction() {
         !nikon_tags.is_empty(),
         "Should extract Nikon MakerNote tags"
     );
+    // ExifTool 13.59 reports these from the authentic Nikon E775 headerless
+    // MakerNote in t/images/Nikon.jpg, including a value outside its IFD.
+    assert_eq!(metadata.get_string("Nikon:MakerNoteVersion"), Some("1.00"));
+    assert_eq!(metadata.get_string("Nikon:Quality"), Some("Fine"));
 }
 
 #[test]
@@ -90,7 +94,9 @@ fn test_jpeg_without_makernote() {
         .expect("Failed to write temp file");
     let temp_path = temp_file.path();
 
-    let _metadata = read_metadata(temp_path).expect("Should parse JPEG without MakerNote");
+    let metadata = read_metadata(temp_path).expect("Should parse JPEG without MakerNote");
+
+    assert!(metadata.iter().all(|(key, _)| !key.starts_with("Nikon:")));
 
     // Should succeed without crashing - if we get here, the test passed
 }

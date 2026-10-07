@@ -56,14 +56,20 @@ fn test_opus_metadata_parity_with_exiftool() {
     let oxidex_metadata = parse_opus_metadata(&reader).expect("Failed to parse Opus file");
 
     // Compare key tags
-    let tags_to_compare = ["Opus:OpusVersion", "Opus:Channels"];
+    let tags_to_compare = [
+        "Opus:OpusVersion",
+        "Opus:AudioChannels",
+        "Opus:SampleRate",
+        "Opus:OutputGain",
+    ];
 
     let mut compared = 0;
     for tag in &tags_to_compare {
         let exiftool_value = &exiftool_json[0][tag];
-        if exiftool_value.is_null() {
-            continue; // Skip tags not present in test file
-        }
+        assert!(
+            !exiftool_value.is_null(),
+            "required native Opus tag absent from authentic fixture: {tag}"
+        );
 
         let oxidex_value = oxidex_metadata.get(tag);
 
