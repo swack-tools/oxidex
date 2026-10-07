@@ -22,7 +22,7 @@ SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored'})
+FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored', 'freeze-linux-perl'})
 
 
 def pinned_toolchain(source):
@@ -191,6 +191,70 @@ def download_artifact(instance, zone, project, binary, artifact, digest, transpo
         temporary.replace(artifact)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _sha256_file(path: Path) -> str:
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_checked_candidate(transport, remote: str, local: Path, digest: str) -> None:
+    """Persist exact remote bytes; preserve the remote project on any failure."""
+    import tempfile
+    if not re.fullmatch(r'[0-9a-f]{64}', digest) or local.exists() or local.is_symlink():
+        raise RuntimeError('Perl candidate destination or digest is invalid')
+    descriptor,name=tempfile.mkstemp(prefix='.perl-candidate-',dir=local.parent)
+    os.close(descriptor)
+    temporary=Path(name)
+    try:
+        subprocess.run(transport.scp(temporary,remote,download=True),check=True)
+        if _sha256_file(temporary)!=digest:
+            raise RuntimeError('Downloaded Perl candidate checksum mismatch')
+        temporary.replace(local)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
+                            head: str, tree: str, bundle_sha256: str,
+                            lock_path: Path) -> dict:
+    """Download receipt and tar from the one retained project before PASS."""
+    if transport is None:
+        raise RuntimeError('Perl candidate requires authenticated direct transport')
+    remote_root=f'/mnt/runner-data/remote-build/targets/{run_id}/ops/evidence/linux-perl-independent-identity'
+    local=evidence/'linux-perl-candidate'
+    local.mkdir(mode=0o700,exist_ok=False)
+    receipt_remote=remote_root+'/candidate-receipt.json'
+    receipt_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(receipt_remote)),text=True).split()[0]
+    receipt_path=local/'candidate-receipt.json'
+    _download_checked_candidate(transport,receipt_remote,receipt_path,receipt_digest)
+    candidate=json.loads(receipt_path.read_text())
+    archive_remote=remote_root+'/perl-5.38.2-prefix.tar.gz'
+    if (candidate.get('schema_version')!=1 or candidate.get('kind')!='linux_perl_unapproved_candidate'
+            or candidate.get('source_head')!=head or candidate.get('source_tree')!=tree
+            or candidate.get('source_clean_context')!='remote_verified_signed_fleet_checkout'
+            or candidate.get('source_bundle_sha256')!=bundle_sha256
+            or candidate.get('config_prefix')!='/target/ops/toolchains/perl-5.38.2/prefix'
+            or candidate.get('archive_path')!='/target/ops/evidence/linux-perl-independent-identity/perl-5.38.2-prefix.tar.gz'
+            or candidate.get('lock_sha256')!=_sha256_file(lock_path)
+            or candidate.get('status')!='candidate_only_requires_independent_review'
+            or candidate.get('replay_tree_sha256')!=candidate.get('perl_tree_sha256')
+            or not re.fullmatch(r'[0-9a-f]{64}',str(candidate.get('archive_sha256','')))
+            or type(candidate.get('archive_bytes')) is not int or candidate['archive_bytes']<=0):
+        raise RuntimeError('Perl candidate receipt does not bind selected source and archive')
+    remote_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(archive_remote)),text=True).split()[0]
+    if remote_digest!=candidate['archive_sha256']:
+        raise RuntimeError('Remote Perl archive differs from candidate receipt')
+    archive_path=local/'perl-5.38.2-prefix.tar.gz'
+    _download_checked_candidate(transport,archive_remote,archive_path,remote_digest)
+    if archive_path.stat().st_size!=candidate['archive_bytes']:
+        raise RuntimeError('Downloaded Perl archive size differs from candidate receipt')
+    return {'receipt':str(receipt_path),'receipt_sha256':receipt_digest,
+            'archive':str(archive_path),'archive_sha256':remote_digest,
+            'status':'unapproved_candidate_retrieved'}
 
 
 def eligible_snapshot_paths(source: Path) -> list[str]:
@@ -460,6 +524,10 @@ def main(argv=None):
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        if args.just_recipe == 'freeze-linux-perl':
+            source_tree=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
+            if args.just_arg != [receipt['source_commit'], source_tree]:
+                raise RuntimeError('Perl producer arguments differ from selected signed HEAD/tree')
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
         if args.profile == 'test':
@@ -610,6 +678,11 @@ def main(argv=None):
                                   **({'transport':transport} if transport else {}))
                 receipt['binary_sha256']=digest
                 receipt['artifact']=str(artifact)
+            if args.just_recipe == 'freeze-linux-perl':
+                receipt['candidate_retrieval']=retrieve_perl_candidate(
+                    transport,ssh,args.worktree_id,evidence,receipt['source_commit'],
+                    args.just_arg[1],receipt['fleet_source_bundle_sha256'],
+                    source/'tools/release/oracle-lock.json')
             receipt['verified']=True
             receipt['stage']='complete_retained'
             save()

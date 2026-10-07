@@ -29,6 +29,8 @@ OPS = Path("/target/ops")
 MAX_MEMBERS = 100_000
 MAX_BYTES = 2 * 1024**3
 MAX_LINK_HOPS = 40
+MAX_PAX_HEADER_BYTES = 1024 * 1024
+MAX_TAR_METADATA_BYTES = 8 * 1024 * 1024
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -56,7 +58,7 @@ def launch() -> None:
         raise Refused("producer HEAD is not the verified signed maintainer commit")
     subprocess.run([
         sys.executable, str(ROOT / "tools/remote-build/build.py"),
-        "--just-recipe", "freeze-linux-perl-worker",
+        "--just-recipe", "freeze-linux-perl",
         "--just-arg=" + head, "--just-arg=" + tree,
         "--max-attempts", "1",
     ], check=True)
@@ -190,12 +192,65 @@ def freeze_tree(source: Path, archive: Path) -> None:
         raise
 
 
+def _preflight_tar_headers(archive: Path) -> None:
+    """Bound PAX allocation before tarfile sees a decompressed header."""
+    def block(stream) -> bytes:
+        value = stream.read(512)
+        if len(value) != 512:
+            raise Refused("truncated frozen tar header")
+        return value
+
+    def skip(stream, size: int) -> None:
+        padded = ((size + 511) // 512) * 512
+        while padded:
+            chunk = stream.read(min(padded, 64 * 1024))
+            if not chunk:
+                raise Refused("truncated frozen tar body")
+            padded -= len(chunk)
+
+    count = metadata = contents = 0
+    with gzip.open(archive, "rb") as stream:
+        while True:
+            header = block(stream)
+            if header == bytes(512):
+                if block(stream) != bytes(512):
+                    raise Refused("ambiguous frozen tar end marker")
+                return
+            count += 1
+            if count > MAX_MEMBERS * 2:
+                raise Refused("frozen tar exceeds bounded header count")
+            raw_size = header[124:136].strip(b" \x00")
+            if not raw_size or any(value not in b"01234567" for value in raw_size):
+                raise Refused("unsupported frozen tar size encoding")
+            size = int(raw_size, 8)
+            kind = header[156:157]
+            if kind in (b"x", b"g", b"L", b"K"):
+                if kind != b"x":
+                    raise Refused("unsupported frozen tar extension header")
+                if size > MAX_PAX_HEADER_BYTES:
+                    raise Refused("PAX header exceeds bounded size")
+                metadata += size
+                if metadata > MAX_TAR_METADATA_BYTES:
+                    raise Refused("PAX metadata exceeds bounded total")
+            elif kind in (b"0", b"\x00"):
+                contents += size
+                if contents > MAX_BYTES:
+                    raise Refused("frozen tar contents exceed bounded size")
+            elif kind in (b"5", b"2"):
+                if size:
+                    raise Refused("non-file frozen tar member carries a body")
+            else:
+                raise Refused("unsupported frozen tar member type")
+            skip(stream, size)
+
+
 def inspect_archive(archive: Path) -> list[tarfile.TarInfo]:
     """Reject unsafe/ambiguous tar input before any member is extracted."""
     if archive.is_symlink() or not archive.is_file():
         raise Refused("frozen archive is not a regular file")
     if archive.stat().st_size > MAX_BYTES:
         raise Refused("frozen archive exceeds bounded limits")
+    _preflight_tar_headers(archive)
     members: list[tarfile.TarInfo] = []
     seen: dict[str, tarfile.TarInfo] = {}
     links: dict[str, str | None] = {}
@@ -287,12 +342,19 @@ def worker(head: str, tree: str) -> None:
         raise Refused("invalid source identity arguments")
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
         raise Refused("producer requires Linux x86_64")
-    if Path.cwd() != Path("/src"):
-        raise Refused("producer requires mounted /src")
+    if Path.cwd() != Path("/target/checkout"):
+        raise Refused("producer requires signed fleet checkout")
     if OPS.exists() or OPS.is_symlink():
         raise Refused("producer requires fresh owned /target/ops")
     if not Path("/target").is_dir() or Path("/target").is_symlink():
         raise Refused("producer requires owned /target mount")
+    sys.path.insert(0, str(ROOT / "tools/remote-build"))
+    from route import verified_fleet_checkout
+    if not verified_fleet_checkout():
+        raise Refused("producer source differs from signed fleet checkout")
+    if (_git("rev-parse", "HEAD") != head or _git("rev-parse", "HEAD^{tree}") != tree
+            or Path("/src/fleet-source-head").read_text().strip() != head):
+        raise Refused("producer head/tree differs from signed source packet")
     os.environ["OXIDEX_OPS_DIR"] = str(OPS)
     oracle = _load_oracle()
     oracle.validate_lock(oracle.LOCK)
@@ -333,7 +395,8 @@ def worker(head: str, tree: str) -> None:
         "kind": "linux_perl_unapproved_candidate",
         "source_head": head,
         "source_tree": tree,
-        "source_clean_context": "asserted_by_public_launcher; verify remote-build.json source_status independently",
+        "source_clean_context": "remote_verified_signed_fleet_checkout",
+        "source_bundle_sha256": oracle.sha256_file(Path("/src/repository.bundle")),
         "config_prefix": str(prefix),
         "lock_sha256": oracle.sha256_file(oracle.LOCK_PATH),
         "locked_archives": {name: {"path": str(path), "sha256": oracle.sha256_file(path),

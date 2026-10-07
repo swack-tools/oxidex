@@ -28,7 +28,7 @@ class FreezePerlTests(unittest.TestCase):
                 freeze, "_load_oracle", side_effect=AssertionError("oracle imported")
             ), mock.patch.object(freeze.platform, "system", return_value="Linux"), mock.patch.object(
                 freeze.platform, "machine", return_value="x86_64"
-            ), mock.patch.object(freeze.Path, "cwd", return_value=Path("/src")):
+            ), mock.patch.object(freeze.Path, "cwd", return_value=Path("/target/checkout")):
                 with self.assertRaisesRegex(freeze.Refused, "fresh owned"):
                     freeze.worker("a" * 40, "b" * 40)
 
@@ -155,6 +155,23 @@ class FreezePerlTests(unittest.TestCase):
                 tarfile.TarFile, "getmembers", side_effect=AssertionError("eager member load")
             ):
                 with self.assertRaisesRegex(freeze.Refused, "member count"):
+                    freeze.inspect_archive(archive)
+
+    def test_oversized_pax_header_refused_before_tarfile_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "pax.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                item = tarfile.TarInfo("pax")
+                item.type = tarfile.XHDTYPE
+                item.size = 32
+                tar.addfile(item, io.BytesIO(b"x" * 32))
+                regular = tarfile.TarInfo("ordinary")
+                regular.size = 1
+                tar.addfile(regular, io.BytesIO(b"y"))
+            with mock.patch.object(freeze, "MAX_PAX_HEADER_BYTES", 16), mock.patch.object(
+                tarfile, "open", side_effect=AssertionError("tarfile parsed metadata")
+            ):
+                with self.assertRaisesRegex(freeze.Refused, "PAX"):
                     freeze.inspect_archive(archive)
 
 
