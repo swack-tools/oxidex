@@ -1783,7 +1783,10 @@ verify-runtime-ownership:
 # drift, intent/ledger). Needs a FRESH release binary for the ledger tests --
 # a stale one reports MISSING for formats the tip parses (measured: 11
 # phantom-missing SWF tags from a one-day-old binary).
-fleet-test: build-bin-release
+fleet-test:
+    python3 tools/remote-build/route.py fleet-test
+
+_fleet-test-worker: _build-bin-release-worker
     python3 tools/remote-build/route.py --require-local-context fleet-test
     cd tools/fleet && python3 -m unittest discover -s tests -v
 
@@ -1795,7 +1798,10 @@ fleet-test: build-bin-release
 # Runs both unconditionally so a maintainer sees both outcomes in one
 # invocation, then fails (non-zero exit) if either run failed -- a
 # server-only regression cannot hide behind a green bare run.
-fleet-tests-both: build-bin-release
+fleet-tests-both:
+    python3 tools/remote-build/route.py fleet-tests-both
+
+_fleet-tests-both-worker: _build-bin-release-worker
     #!/usr/bin/env bash
     python3 tools/remote-build/route.py --require-local-context fleet-tests-both || exit $?
     set -uo pipefail

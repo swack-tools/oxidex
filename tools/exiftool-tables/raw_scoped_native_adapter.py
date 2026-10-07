@@ -278,6 +278,7 @@ def prepare(args) -> int:
     manifest = {"schema": 1, "mode": "pinned-native-real-fixture-raw-scoped",
                 "repo_head": head, "repo_tree": tree,
                 "instrument_sha256": digest(Path(__file__)),
+                "preparer_sha256": digest(PREPARER),
                 "helper_sha256": {str(repo / "tools/exiftool-tables" / name): digest(repo / "tools/exiftool-tables" / name)
                                   for name in ("native_write_matrix.py", "generated_tiff_write_matrix.py")},
                 "source_sha256": {str(script): digest(script), **fixture_hashes},
@@ -291,6 +292,13 @@ def prepare(args) -> int:
     return 0
 
 
+def verify_instrument_provenance(manifest: dict) -> None:
+    if manifest.get("instrument_sha256") != digest(Path(__file__)):
+        raise RuntimeError("RAW preparation adapter changed since preparation")
+    if manifest.get("preparer_sha256") != digest(PREPARER):
+        raise RuntimeError("RAW native preparer changed since preparation")
+
+
 def score(args) -> int:
     manifest_path = args.manifest.resolve()
     manifest = json.loads(manifest_path.read_text())
@@ -298,8 +306,7 @@ def score(args) -> int:
     if repository_identity(repo) != (manifest["repo_head"], manifest["repo_tree"]):
         raise RuntimeError("candidate source identity changed since preparation")
     native, compare_carrier = load_helpers(repo)
-    if manifest["instrument_sha256"] != digest(PREPARER):
-        raise RuntimeError("original preparation instrument changed since preparation")
+    verify_instrument_provenance(manifest)
     for path, expected in {**manifest["source_sha256"], **manifest["helper_sha256"],
                            manifest["requests"]: manifest["requests_sha256"]}.items():
         if digest(Path(path)) != expected:

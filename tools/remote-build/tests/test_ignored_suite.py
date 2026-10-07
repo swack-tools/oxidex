@@ -122,3 +122,67 @@ class IgnoredSuiteControls(unittest.TestCase):
             binary.unlink()
             with self.assertRaisesRegex(RuntimeError, 'one exact'):
                 suite.release_lib_artifact(log)
+
+    def test_partial_staging_receipt_tracks_every_owned_copy_and_retained_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, manifest_file, manifest, receipt = self.fixture_plan(Path(directory))
+            Path(receipt['inputs'][3]['path']).unlink()
+            staged, snapshots = [], []
+            with patch.object(suite.inputs, 'MANIFEST', manifest_file), \
+                 self.assertRaisesRegex(ValueError, 'missing or nonregular'):
+                suite.stage_inputs(repo, receipt, manifest, staged,
+                                   on_copy=lambda: snapshots.append([dict(row) for row in staged]))
+            self.assertEqual([len(rows) for rows in snapshots], [1, 2])
+            self.assertEqual(len(staged), 2)
+            altered = Path(staged[0]['path'])
+            altered.write_bytes(b'changed')
+            retained = suite.retained_owned_inputs(staged)
+            self.assertEqual(len(retained), 2)
+            self.assertEqual(retained[0]['path'], str(altered))
+            self.assertNotEqual(retained[0]['actual_sha256'], retained[0]['sha256'])
+            self.assertEqual(retained[1]['actual_sha256'], retained[1]['sha256'])
+            with self.assertRaisesRegex(RuntimeError, 'retaining input'):
+                suite.remove_owned_inputs(staged)
+            self.assertTrue(all(Path(row['path']).exists() for row in staged))
+
+    def test_raw_adapter_and_native_preparer_hashes_are_separately_bound(self):
+        import sys
+        sys.path.insert(0, str(suite.ROOT / 'tools/exiftool-tables'))
+        import raw_scoped_native_adapter as raw
+        manifest = {'instrument_sha256': raw.digest(Path(raw.__file__)),
+                    'preparer_sha256': raw.digest(raw.PREPARER)}
+        raw.verify_instrument_provenance(manifest)
+        with self.assertRaisesRegex(RuntimeError, 'adapter changed'):
+            raw.verify_instrument_provenance({**manifest, 'instrument_sha256': '0' * 64})
+        with self.assertRaisesRegex(RuntimeError, 'preparer changed'):
+            raw.verify_instrument_provenance({**manifest, 'preparer_sha256': '0' * 64})
+
+    def test_interrupted_receipt_replace_keeps_last_valid_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / 'receipt.json'
+            suite.write_receipt_atomic(receipt, {'staged_inputs': [{'id': 'first'}]})
+            before = receipt.read_bytes()
+            with patch.object(suite.os, 'replace', side_effect=OSError('interrupted publish')):
+                with self.assertRaisesRegex(OSError, 'interrupted publish'):
+                    suite.write_receipt_atomic(receipt, {'staged_inputs': [{'id': 'first'}, {'id': 'second'}]})
+            self.assertEqual(receipt.read_bytes(), before)
+            self.assertEqual(list(Path(directory).glob('*.tmp')), [])
+
+    def test_retained_audit_records_unreadable_file_and_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / 'first', root / 'second'
+            first.write_bytes(b'first')
+            second.write_bytes(b'second')
+            staged = [{'id': 'one', 'path': str(first), 'sha256': 'a' * 64},
+                      {'id': 'two', 'path': str(second), 'sha256': 'b' * 64}]
+            actual_digest = suite.digest
+            def probe(path):
+                if path == first:
+                    raise OSError('unreadable')
+                return actual_digest(path)
+            with patch.object(suite, 'digest', side_effect=probe):
+                retained = suite.retained_owned_inputs(staged)
+            self.assertEqual(len(retained), 2)
+            self.assertIn('unreadable', retained[0]['read_error'])
+            self.assertEqual(retained[1]['actual_sha256'], actual_digest(second))

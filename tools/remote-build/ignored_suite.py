@@ -33,7 +33,8 @@ def clean_identity(repo: Path) -> tuple[str, str]:
                  for arg in ('HEAD', 'HEAD^{tree}'))
 
 
-def stage_inputs(repo: Path, receipt: dict, manifest: dict, staged: list[dict] | None = None) -> list[dict]:
+def stage_inputs(repo: Path, receipt: dict, manifest: dict, staged: list[dict] | None = None,
+                 on_copy=None) -> list[dict]:
     """Copy only authenticated, absent fixture targets into the owned checkout."""
     if receipt.get('status') != 'PASS' or len(receipt.get('inputs', [])) != 25:
         raise RuntimeError('all 25 ignored inputs must pass pinned native probing')
@@ -72,6 +73,8 @@ def stage_inputs(repo: Path, receipt: dict, manifest: dict, staged: list[dict] |
             target.unlink(missing_ok=True)
             raise
         staged.append({'id': row['id'], 'path': str(target), 'sha256': row['sha256']})
+        if on_copy is not None:
+            on_copy()
     if len(staged) != 24:
         raise RuntimeError('expected 24 owned staged fixtures and one checked-in fixture')
     return staged
@@ -84,6 +87,33 @@ def remove_owned_inputs(staged: list[dict]) -> None:
             raise RuntimeError(f'owned ignored fixture changed; retaining input for investigation: {path}')
     for row in staged:
         Path(row['path']).unlink()
+
+
+def retained_owned_inputs(staged: list[dict]) -> list[dict]:
+    retained = []
+    for row in staged:
+        path = Path(row['path'])
+        item = {**row, 'exists': path.exists() or path.is_symlink(),
+                'is_symlink': path.is_symlink(), 'actual_sha256': None}
+        if path.is_file() and not path.is_symlink():
+            try:
+                item['actual_sha256'] = digest(path)
+            except OSError as error:
+                item['read_error'] = f'{type(error).__name__}: {error}'
+        retained.append(item)
+    return retained
+
+
+def write_receipt_atomic(path: Path, report: dict) -> None:
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(8) + '.tmp')
+    try:
+        with temporary.open('x', encoding='utf-8') as stream:
+            stream.write(json.dumps(report, indent=2, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def run_logged(command: list[str], log: Path, *, env: dict | None = None) -> int:
@@ -167,7 +197,7 @@ def main() -> int:
     report = {'schema': 1, 'status': 'FAILED', 'source_head': source_identity[0],
               'source_tree': source_identity[1], 'oracle_pin': pin, 'round': str(round_dir)}
     def save():
-        receipt_path.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+        write_receipt_atomic(receipt_path, report)
     save()
     staged = []
     try:
@@ -213,9 +243,9 @@ def main() -> int:
                    OXIDEX_SCALAR_WRITE_RESULTS=scalar_manifest['results'],
                    OXIDEX_RAW_EDIT_REQUESTS=raw_manifest['requests'],
                    OXIDEX_RAW_EDIT_RESULTS=raw_manifest['results'])
-        stage_inputs(ROOT, input_receipt, manifest, staged)
         report['staged_inputs'] = staged
         save()
+        stage_inputs(ROOT, input_receipt, manifest, staged, on_copy=save)
         command = EXECUTABLE_COMMAND
         report['executable_command'] = command
         report['executable_exit_code'] = run_logged(command, round_dir / 'executable.log', env=env)
@@ -254,6 +284,7 @@ def main() -> int:
                     raise RuntimeError('checkout changed after fixture cleanup')
             except Exception as error:
                 report['cleanup_error'] = f'{type(error).__name__}: {error}'
+                report['retained_inputs'] = retained_owned_inputs(staged)
                 report['status'] = 'FAILED'
         save()
     print(f'IGNORED_SUITE_RECEIPT {receipt_path} status={report["status"]}', flush=True)

@@ -168,3 +168,51 @@ class RouteTests(unittest.TestCase):
             for argv in (['-bad'],['build','bad\narg'],['build','']):
                 with self.assertRaises(SystemExit):route.main(argv)
             launch.assert_not_called()
+
+class FleetBuilderCallFlowControls(unittest.TestCase):
+    def test_public_builder_moves_to_signed_checkout_before_private_guard(self):
+        state = {'cwd': route.FLEET_SOURCE}
+        events = []
+        def prepare():
+            self.assertEqual(state['cwd'], route.FLEET_SOURCE)
+            state['cwd'] = route.FLEET_CHECKOUT
+            events.append('signed-checkout')
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route.Path, 'cwd', side_effect=lambda: state['cwd']), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=prepare), \
+             patch.object(route, 'verified_fleet_checkout', return_value=True), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=AssertionError('CI guard on builder')) as ci, \
+             patch('test_runner.prepare_fleet_recipe_oracle', create=True, side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('private-recipe')):
+            route.main(['fleet-test'])
+            self.assertEqual(state['cwd'], route.FLEET_CHECKOUT)
+            route.main(['--require-local-context', 'fleet-test'])
+        ci.assert_not_called()
+        self.assertEqual(events, ['signed-checkout', 'oracle', 'private-recipe'])
+
+    def test_direct_private_fleet_guard_from_unsigned_source_is_refused(self):
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route.Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=RuntimeError('not CI')) as ci:
+            with self.assertRaisesRegex(RuntimeError, 'not CI'):
+                route.main(['--require-local-context', 'fleet-test'])
+        ci.assert_called_once()
+
+    def test_public_fleet_just_recipes_enter_signed_route_before_private_guard(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        for recipe in ('fleet-test', 'fleet-tests-both'):
+            with self.subTest(recipe=recipe):
+                public = subprocess.run(['just', '--dry-run', recipe], cwd=repository,
+                                        capture_output=True, text=True, check=True)
+                self.assertEqual(public.stderr.splitlines(),
+                                 [f'python3 tools/remote-build/route.py {recipe}'])
+                private = subprocess.run(['just', '--dry-run', '_' + recipe + '-worker'], cwd=repository,
+                                         capture_output=True, text=True, check=True)
+                self.assertIn(f'python3 tools/remote-build/route.py --require-local-context {recipe}',
+                              private.stderr)
+                self.assertIn('cargo build --bin oxidex --release', private.stderr)
+                self.assertNotIn('route.py build-bin-release', private.stderr)
