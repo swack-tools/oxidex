@@ -19,6 +19,7 @@ BUILDER_TARGET = Path('/target')
 EXECUTABLE_COMMAND = ['cargo', 'test', '--release', '--workspace', '--all-features', '--locked',
                       '--no-fail-fast', '--lib', '--bins', '--tests', '--message-format=json',
                       '--', '--include-ignored']
+LIBRARY_BUILD_COMMAND = [*EXECUTABLE_COMMAND[:-2], '--no-run']
 DOC_COMMAND = ['cargo', 'test', '--doc', '--workspace', '--all-features', '--locked']
 
 
@@ -145,12 +146,22 @@ def release_lib_artifact(log: Path) -> Path:
     return paths[0]
 
 
-def lib_test_binary(round_dir: Path, env: dict) -> Path:
-    command = ['cargo', 'test', '--release', '--lib', '--all-features', '--locked', '--no-run', '--message-format=json']
-    log = round_dir / 'library-build.jsonl'
-    if run_logged(command, log, env=env):
-        raise RuntimeError('release library-test build failed')
-    return release_lib_artifact(log)
+def suite_environment(oracle_root: Path) -> dict:
+    if not oracle_root.is_dir() or any(not (oracle_root / name).is_file() for name in (
+            'exiftool', 'lib/Image/ExifTool/Real.pm', 'lib/Image/ExifTool/Canon.pm')):
+        raise RuntimeError('pinned ignored-suite ExifTool source directory is unavailable')
+    return dict(os.environ, CARGO_PROFILE_RELEASE_PANIC='unwind',
+                OXIDEX_PINNED_EXIFTOOL=str(oracle_root),
+                OXIDEX_REQUIRE_EXIFTOOL_ORACLE='1',
+                OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES='1')
+
+
+def verify_full_suite_artifact(log: Path, binary: Path, report: dict, save) -> None:
+    full_binary = release_lib_artifact(log)
+    report['full_suite_library_artifact'] = {'path': str(full_binary), 'sha256': digest(full_binary)}
+    save()
+    if full_binary != binary or report['full_suite_library_artifact']['sha256'] != report['library_binary']['sha256']:
+        raise RuntimeError('full-suite Cargo artifact differs from scored library driver binary')
 
 
 def validate_driver_manifests(scalar: dict, raw: dict) -> dict:
@@ -216,8 +227,9 @@ def main() -> int:
         raise SystemExit('pinned ignored-suite oracle environment is unavailable')
     oracle_root = Path(os.environ['EXIFTOOL_CACHE_DIR']) / 'exiftool'
     perl = Path(os.environ['EXIFTOOL_PERL'])
-    if not (oracle_root / 'exiftool').is_file() or not perl.is_file():
+    if not perl.is_file():
         raise SystemExit('pinned ignored-suite oracle files are unavailable')
+    env = suite_environment(oracle_root)
     round_dir = target / 'ignored-suite' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + secrets.token_hex(4))
     round_dir.mkdir(parents=True)
     receipt_path = round_dir / 'receipt.json'
@@ -235,10 +247,15 @@ def main() -> int:
         save()
         if input_receipt['status'] != 'PASS':
             raise RuntimeError('ignored input probe failed')
-        env = dict(os.environ, CARGO_PROFILE_RELEASE_PANIC='unwind',
-                   OXIDEX_PINNED_EXIFTOOL=str(oracle_root / 'exiftool'),
-                   OXIDEX_REQUIRE_EXIFTOOL_ORACLE='1', OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES='1')
-        binary = lib_test_binary(round_dir, env)
+        report['library_build_command'] = LIBRARY_BUILD_COMMAND
+        report['library_build_log'] = str(round_dir / 'library-build.jsonl')
+        save()
+        report['library_build_exit_code'] = run_logged(LIBRARY_BUILD_COMMAND,
+                                                       round_dir / 'library-build.jsonl', env=env)
+        save()
+        if report['library_build_exit_code']:
+            raise RuntimeError('full-workspace release library-test build failed')
+        binary = release_lib_artifact(round_dir / 'library-build.jsonl')
         report['library_binary'] = {'path': str(binary), 'sha256': digest(binary)}
         save()
         tools = ROOT / 'tools/exiftool-tables'
@@ -276,12 +293,11 @@ def main() -> int:
         stage_inputs(ROOT, input_receipt, manifest, staged, on_copy=save)
         command = EXECUTABLE_COMMAND
         report['executable_command'] = command
-        report['executable_exit_code'] = run_logged(command, round_dir / 'executable.log', env=env)
-        full_binary = release_lib_artifact(round_dir / 'executable.log')
-        if full_binary != binary or digest(full_binary) != report['library_binary']['sha256']:
-            raise RuntimeError('full-suite Cargo artifact differs from scored library driver binary')
-        report['full_suite_library_artifact'] = {'path': str(full_binary), 'sha256': digest(full_binary)}
+        report['executable_log'] = str(round_dir / 'executable.log')
         save()
+        report['executable_exit_code'] = run_logged(command, round_dir / 'executable.log', env=env)
+        save()
+        verify_full_suite_artifact(round_dir / 'executable.log', binary, report, save)
         remove_owned_inputs(staged)
         staged = []
         if clean_identity(ROOT) != source_identity:

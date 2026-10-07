@@ -175,8 +175,28 @@ class IgnoredSuiteControls(unittest.TestCase):
                          ['cargo', 'test', '--release', '--workspace', '--all-features', '--locked',
                           '--no-fail-fast', '--lib', '--bins', '--tests', '--message-format=json',
                           '--', '--include-ignored'])
+        self.assertEqual(suite.LIBRARY_BUILD_COMMAND,
+                         ['cargo', 'test', '--release', '--workspace', '--all-features', '--locked',
+                          '--no-fail-fast', '--lib', '--bins', '--tests', '--message-format=json',
+                          '--no-run'])
         self.assertEqual(suite.DOC_COMMAND,
                          ['cargo', 'test', '--doc', '--workspace', '--all-features', '--locked'])
+
+    def test_ignored_suite_env_requires_pinned_source_directory_not_script(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'exiftool'
+            (source / 'lib/Image/ExifTool').mkdir(parents=True)
+            for name in ('exiftool', 'lib/Image/ExifTool/Real.pm',
+                         'lib/Image/ExifTool/Canon.pm'):
+                (source / name).write_text(name)
+            env = suite.suite_environment(source)
+            self.assertEqual(env['OXIDEX_PINNED_EXIFTOOL'], str(source))
+            self.assertEqual(env['CARGO_PROFILE_RELEASE_PANIC'], 'unwind')
+            with self.assertRaisesRegex(RuntimeError, 'source directory'):
+                suite.suite_environment(source / 'exiftool')
+            (source / 'lib/Image/ExifTool/Canon.pm').unlink()
+            with self.assertRaisesRegex(RuntimeError, 'source directory'):
+                suite.suite_environment(source)
 
     def test_driver_population_requires_fresh_nonempty_requests(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -225,6 +245,33 @@ class IgnoredSuiteControls(unittest.TestCase):
             binary.unlink()
             with self.assertRaisesRegex(RuntimeError, 'one exact'):
                 suite.release_lib_artifact(log)
+
+    def test_artifact_mismatch_keeps_executable_status_and_both_hashes_in_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prebuilt, executed = root / 'prebuilt', root / 'executed'
+            prebuilt.write_bytes(b'prebuilt lib')
+            executed.write_bytes(b'different workspace lib')
+            log = root / 'executable.log'
+            record = {'reason': 'compiler-artifact', 'target': {'name': 'oxidex', 'kind': ['lib']},
+                      'profile': {'test': True}, 'executable': str(executed)}
+            log.write_text(json.dumps(record) + '\n')
+            report = {'library_binary': {'path': str(prebuilt), 'sha256': suite.digest(prebuilt)},
+                      'executable_log': str(log), 'executable_exit_code': 101}
+            snapshots = []
+            with self.assertRaisesRegex(RuntimeError, 'differs from scored'):
+                suite.verify_full_suite_artifact(log, prebuilt, report,
+                                                 lambda: snapshots.append(dict(report)))
+            self.assertEqual(snapshots[-1]['executable_exit_code'], 101)
+            self.assertEqual(snapshots[-1]['full_suite_library_artifact']['sha256'],
+                             suite.digest(executed))
+            self.assertNotEqual(snapshots[-1]['library_binary']['sha256'],
+                                snapshots[-1]['full_suite_library_artifact']['sha256'])
+            record['executable'] = str(prebuilt)
+            log.write_text(json.dumps(record) + '\n')
+            suite.verify_full_suite_artifact(log, prebuilt, report, lambda: None)
+            self.assertEqual(report['full_suite_library_artifact']['sha256'],
+                             report['library_binary']['sha256'])
 
     def test_partial_staging_receipt_tracks_every_owned_copy_and_retained_hash(self):
         with tempfile.TemporaryDirectory() as directory:
