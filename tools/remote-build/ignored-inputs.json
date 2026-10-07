@@ -196,7 +196,9 @@
       "kind": "media",
       "required_tags": [
         "Opus:OpusVersion",
-        "Opus:AudioChannels"
+        "Opus:AudioChannels",
+        "Opus:SampleRate",
+        "Opus:OutputGain"
       ],
       "sha256": "21dad35dfc1dc0529a9c9a01b6243f6d6e1dcef91026a812291be71aefa62f53",
       "source": {

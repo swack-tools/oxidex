@@ -388,6 +388,16 @@ class IgnoredFixtureProbeTests(unittest.TestCase):
         self.assertIn('"Opus:AudioChannels"', opus)
         self.assertNotIn('"Vorbis:Channels"', ogg)
 
+    def test_opus_admission_covers_all_parity_consumer_fields(self):
+        manifest = json.loads(probe.MANIFEST.read_text())
+        row = next(row for row in manifest['inputs'] if row['id'] == 'media-opus')
+        required = {'Opus:OpusVersion', 'Opus:AudioChannels',
+                    'Opus:SampleRate', 'Opus:OutputGain'}
+        self.assertEqual(set(row['required_tags']), required)
+        consumer = (probe.ROOT / 'tests/integration/opus_integration_tests.rs').read_text()
+        for field in required:
+            self.assertIn('"' + field + '"', consumer)
+
     def test_native_media_zero_fields_and_raw_identity_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
