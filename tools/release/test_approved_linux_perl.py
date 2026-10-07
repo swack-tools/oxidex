@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -13,6 +14,15 @@ from tools.release import bootstrap_oracle as oracle
 
 
 class ApprovedLinuxPerlTests(unittest.TestCase):
+    def foreign_owner(self, target):
+        original = Path.lstat
+        def lstat(path):
+            info = original(path)
+            if Path(path) == target:
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=os.geteuid() + 1)
+            return info
+        return mock.patch.object(Path, "lstat", lstat)
+
     def setUp(self):
         evidence = Path.home() / "oxidex-ops/evidence/recovery/linux-perl-approved-identity-tests"
         evidence.mkdir(parents=True, exist_ok=True)
@@ -90,6 +100,41 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
             with mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree read")):
                 with self.assertRaisesRegex(approved.Refused, "owner"):
                     approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_foreign_owned_descendants_refuse_before_tree_hash_or_probe(self):
+        symlink = self.prefix / "lib/outside-link"
+        symlink.symlink_to(self.root)
+        for target in (self.perl, self.core_module, self.zip_module, symlink):
+            with self.subTest(target=target), self.foreign_owner(target), \
+                 mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+                 mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")):
+                with self.assertRaisesRegex(approved.UnverifiableMetadata, "foreign owner"):
+                    approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_descendant_walk_is_bounded_before_hash(self):
+        with mock.patch.object(approved, "MAX_TREE_ENTRIES", 1), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")):
+            with self.assertRaisesRegex(approved.UnverifiableMetadata, "entry bound"):
+                approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
+
+    def test_foreign_owned_staging_descendant_preserves_verified_recovery(self):
+        staging = self.prefix.with_name(".prefix.staging-999999999-foreign")
+        self.prefix.rename(staging)
+        sidecar = oracle.write_staging_intent(
+            staging, self.prefix, 999999999, "verified", self.approval["tree_sha256"])
+        before = sidecar.read_bytes()
+        foreign = staging / "bin/perl5.38.2"
+        with self.foreign_owner(foreign), \
+             mock.patch.object(oracle, "_process_is_live", return_value=False), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")), \
+             mock.patch.object(oracle.shutil, "rmtree", side_effect=AssertionError("delete ran")), \
+             mock.patch.object(oracle, "_append_staging_journal", side_effect=AssertionError("journal mutated")):
+            with self.assertRaisesRegex(oracle.UnverifiableMetadata, "foreign owner"):
+                oracle._materialize_perl(self.root, None, None, (self.approval, self.archive))
+        self.assertTrue(staging.is_dir())
+        self.assertFalse(self.prefix.exists())
+        self.assertEqual(sidecar.read_bytes(), before)
 
     def test_unsafe_verified_staging_refuses_recovery_without_touching_evidence(self):
         staging = self.prefix.with_name(".prefix.staging-999999999-proof")

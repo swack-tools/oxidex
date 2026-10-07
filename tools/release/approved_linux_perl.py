@@ -16,6 +16,7 @@ ENVELOPE = Path("/src/reference/approved-linux-perl.json")
 QUALIFICATION_ROOT = Path("/target/ops")
 PREFIX = QUALIFICATION_ROOT / "toolchains/perl-5.38.2/prefix"
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+MAX_TREE_ENTRIES = 100_000
 MAX_ENVELOPE_BYTES = 4 * ((MAX_ARCHIVE_BYTES + 2) // 3) + 4096
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -134,6 +135,28 @@ def check_metadata(candidate: Path) -> None:
             raise UnverifiableMetadata(f"approved Linux Perl prefix has foreign owner: {current}")
         if stat.S_IMODE(info.st_mode) not in (0o700, 0o755):
             raise UnverifiableMetadata(f"approved Linux Perl prefix has unsafe mode: {current}")
+
+    # The content digest does not bind UIDs. Check every retained entry before
+    # reading its bytes or executing the approved Perl, without following links.
+    pending = [candidate]
+    count = 0
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    count += 1
+                    if count > MAX_TREE_ENTRIES:
+                        raise UnverifiableMetadata("approved Linux Perl tree exceeds entry bound")
+                    path = Path(entry.path)
+                    info = path.lstat()
+                    if info.st_uid != os.geteuid():
+                        raise UnverifiableMetadata(f"approved Linux Perl tree has foreign owner: {path}")
+                    if stat.S_ISDIR(info.st_mode):
+                        pending.append(path)
+        except OSError as exc:
+            raise UnverifiableMetadata(
+                f"approved Linux Perl tree metadata is unreadable: {directory}") from exc
 
 
 def check_tree(approved: dict, candidate: Path, sha256_tree) -> None:
