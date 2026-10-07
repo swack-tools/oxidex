@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import ignored_suite as suite
 import route
@@ -59,12 +60,84 @@ class IgnoredSuiteControls(unittest.TestCase):
             rows.append({'id': identity, 'target': target, 'source': {'kind': kind},
                          'sha256': hashlib.sha256(value).hexdigest(), 'bytes': len(value)})
             evidence.append({'id': identity, 'target': target, 'path': str(source),
-                             'status': 'PASS', 'native': {'compared_count': 2}})
+                             'status': 'PASS', 'native': {'compared_count': 2},
+                             'verified': suite.inputs.verify_file(source, rows[-1])})
         manifest = {'inputs': rows}
         manifest_file = root / 'manifest.json'
         manifest_file.write_text(json.dumps(manifest))
         receipt = {'status': 'PASS', 'manifest_sha256': suite.digest(manifest_file), 'inputs': evidence}
         return repo, manifest_file, manifest, receipt
+
+    def zip_member_plan(self, root):
+        repo, manifest_file, manifest, receipt = self.fixture_plan(root)
+        row = manifest['inputs'][1]
+        archive = root / 'cache' / 'fixture-1.zip'
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            bundle.writestr('notepad++.exe', b'MZ-authentic-extracted-member')
+        row.pop('sha256')
+        row.pop('bytes')
+        row.update(target='tests/samples/pe/notepad++.exe',
+                   source={'kind': 'zip_member', 'url': 'https://example.invalid/npp.zip',
+                           'member': 'notepad++.exe'},
+                   archive_sha256=suite.digest(archive), archive_bytes=archive.stat().st_size,
+                   max_bytes=1024, max_member_bytes=100)
+        extracted, verified = suite.inputs.materialize(row, root / 'cache')
+        receipt['inputs'][1].update(target=row['target'], path=str(extracted), verified=verified)
+        manifest_file.write_text(json.dumps(manifest))
+        receipt['manifest_sha256'] = suite.digest(manifest_file)
+        return repo, manifest_file, manifest, receipt
+
+    def test_zip_member_without_extracted_manifest_hash_uses_probe_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, manifest_file, manifest, receipt = self.zip_member_plan(Path(directory))
+            with patch.object(suite.inputs, 'MANIFEST', manifest_file):
+                staged = suite.stage_inputs(repo, receipt, manifest)
+            member = next(row for row in staged if row['id'] == 'fixture-1')
+            self.assertEqual(member['sha256'], receipt['inputs'][1]['verified']['sha256'])
+            self.assertEqual(member['state'], 'verified')
+            suite.remove_owned_inputs(staged)
+            self.assertFalse(Path(member['path']).exists())
+
+    def test_zip_member_forged_receipt_and_partial_copy_fail_closed_with_custody(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, manifest_file, manifest, receipt = self.zip_member_plan(Path(directory))
+            receipt['inputs'][1]['verified']['sha256'] = '0' * 64
+            with patch.object(suite.inputs, 'MANIFEST', manifest_file), \
+                 self.assertRaisesRegex(RuntimeError, 'receipt differs from verified bytes'):
+                suite.stage_inputs(repo, receipt, manifest)
+            self.assertFalse((repo / manifest['inputs'][1]['target']).exists())
+            receipt['inputs'][1]['verified'] = suite.inputs.verify_file(
+                Path(receipt['inputs'][1]['path']), manifest['inputs'][1])
+            staged, snapshots = [], []
+            def partial_copy(_src, dst):
+                dst.write(b'partial')
+                raise OSError('copy interrupted')
+            with patch.object(suite.inputs, 'MANIFEST', manifest_file), \
+                 patch.object(suite.shutil, 'copyfileobj', side_effect=partial_copy), \
+                 self.assertRaisesRegex(OSError, 'copy interrupted'):
+                suite.stage_inputs(repo, receipt, manifest, staged,
+                                   on_copy=lambda: snapshots.append([dict(row) for row in staged]))
+            self.assertEqual(len(staged), 1)
+            self.assertEqual(snapshots, [[staged[0]]])
+            self.assertEqual(staged[0]['state'], 'copying')
+            self.assertEqual(staged[0]['sha256'], receipt['inputs'][1]['verified']['sha256'])
+            self.assertTrue(Path(staged[0]['path']).exists())
+            self.assertNotEqual(suite.retained_owned_inputs(staged)[0]['actual_sha256'], staged[0]['sha256'])
+            with self.assertRaisesRegex(RuntimeError, 'retaining input'):
+                suite.remove_owned_inputs(staged)
+
+    def test_receipt_callback_failure_keeps_newly_created_file_in_custody(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo, manifest_file, manifest, receipt = self.zip_member_plan(Path(directory))
+            staged = []
+            with patch.object(suite.inputs, 'MANIFEST', manifest_file), \
+                 self.assertRaisesRegex(OSError, 'receipt interrupted'):
+                suite.stage_inputs(repo, receipt, manifest, staged,
+                                   on_copy=lambda: (_ for _ in ()).throw(OSError('receipt interrupted')))
+            self.assertEqual(len(staged), 1)
+            self.assertEqual(staged[0]['state'], 'copying')
+            self.assertTrue(Path(staged[0]['path']).is_file())
+            self.assertEqual(suite.retained_owned_inputs(staged)[0]['actual_sha256'], suite.digest(Path(staged[0]['path'])))
 
     def test_stage_all_25_and_remove_only_24_owned_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -162,7 +235,7 @@ class IgnoredSuiteControls(unittest.TestCase):
                  self.assertRaisesRegex(ValueError, 'missing or nonregular'):
                 suite.stage_inputs(repo, receipt, manifest, staged,
                                    on_copy=lambda: snapshots.append([dict(row) for row in staged]))
-            self.assertEqual([len(rows) for rows in snapshots], [1, 2])
+            self.assertEqual([len(rows) for rows in snapshots], [1, 1, 2, 2])
             self.assertEqual(len(staged), 2)
             altered = Path(staged[0]['path'])
             altered.write_bytes(b'changed')

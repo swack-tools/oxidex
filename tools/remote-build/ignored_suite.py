@@ -52,11 +52,13 @@ def stage_inputs(repo: Path, receipt: dict, manifest: dict, staged: list[dict] |
         relative = inputs.relative_path(row['target'])
         target = repo / relative
         if row['source']['kind'] == 'repo':
-            if not target.is_file() or target.is_symlink() or digest(target) != row['sha256']:
-                raise RuntimeError(f'checked-in ignored input differs: {row["id"]}')
+            if evidence.get('verified') != inputs.verify_file(target, row):
+                raise RuntimeError(f'checked-in ignored input receipt differs: {row["id"]}')
             continue
         source = Path(evidence['path'])
-        inputs.verify_file(source, row)
+        verified = inputs.verify_file(source, row)
+        if evidence.get('verified') != verified:
+            raise RuntimeError(f'ignored input receipt differs from verified bytes: {row["id"]}')
         if target.exists() or target.is_symlink():
             raise RuntimeError(f'ignored target already exists: {relative}')
         parent = target.parent
@@ -65,14 +67,19 @@ def stage_inputs(repo: Path, receipt: dict, manifest: dict, staged: list[dict] |
                 raise RuntimeError(f'ignored fixture parent is a symlink: {parent}')
             parent = parent.parent
         target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with source.open('rb') as src, target.open('xb') as dst:
+        with source.open('rb') as src, target.open('xb') as dst:
+            owned = {'id': row['id'], 'path': str(target),
+                     'sha256': verified['sha256'], 'state': 'copying'}
+            staged.append(owned)
+            if on_copy is not None:
+                on_copy()
+            try:
                 shutil.copyfileobj(src, dst)
-            inputs.verify_file(target, row)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
-        staged.append({'id': row['id'], 'path': str(target), 'sha256': row['sha256']})
+            finally:
+                dst.flush()
+        if inputs.verify_file(target, row) != verified:
+            raise RuntimeError(f'owned ignored copy differs from verified input: {row["id"]}')
+        owned['state'] = 'verified'
         if on_copy is not None:
             on_copy()
     if len(staged) != 24:
