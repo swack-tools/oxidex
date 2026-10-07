@@ -89,7 +89,7 @@ impl FormatParser for WebmParser {
                 return Err(ExifToolError::parse_error("File too small to be WebM"));
             }
 
-            let header = reader.read(0, 4)?;
+            let header = read_exact(reader, 0, 4)?;
             if header != EBML_SIGNATURE {
                 return Err(ExifToolError::parse_error(format!(
                     "Invalid WebM/EBML signature: expected {:?}, found {:?}",
@@ -557,9 +557,24 @@ fn parse_element_header(reader: &dyn FileReader, offset: u64) -> Result<(u32, u6
     Ok((element_id, element_size, id_size + size_len))
 }
 
+/// FileReader promises exact-length slices, but reject a short slice here as
+/// malformed input so EBML fields cannot panic or become partial tag values.
+fn read_exact<'a>(reader: &'a dyn FileReader, offset: u64, length: usize) -> Result<&'a [u8]> {
+    let bytes = reader.read(offset, length)?;
+    if bytes.len() != length {
+        return Err(ExifToolError::parse_error(format!(
+            "Short WebM read at offset {}: expected {} bytes, got {}",
+            offset,
+            length,
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
 /// Read EBML variable-length integer (for element IDs)
 fn read_vint_id(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
-    let first_byte = reader.read(offset, 1)?[0];
+    let first_byte = read_exact(reader, offset, 1)?[0];
     let num_bytes = if first_byte & 0x80 != 0 {
         1
     } else if first_byte & 0x40 != 0 {
@@ -572,7 +587,7 @@ fn read_vint_id(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
         return Err(ExifToolError::parse_error("Invalid VINT ID"));
     };
 
-    let bytes = reader.read(offset, num_bytes)?;
+    let bytes = read_exact(reader, offset, num_bytes)?;
     let mut value = bytes[0] as u32;
     for byte in bytes.iter().take(num_bytes).skip(1) {
         value = (value << 8) | *byte as u32;
@@ -582,7 +597,7 @@ fn read_vint_id(reader: &dyn FileReader, offset: u64) -> Result<(u32, u64)> {
 
 /// Read EBML variable-length integer (for sizes)
 fn read_vint(reader: &dyn FileReader, offset: u64) -> Result<(u64, u64)> {
-    let first_byte = reader.read(offset, 1)?[0];
+    let first_byte = read_exact(reader, offset, 1)?[0];
     let (num_bytes, mask) = if first_byte & 0x80 != 0 {
         (1, 0x7F)
     } else if first_byte & 0x40 != 0 {
@@ -603,7 +618,7 @@ fn read_vint(reader: &dyn FileReader, offset: u64) -> Result<(u64, u64)> {
         return Err(ExifToolError::parse_error("Invalid VINT size"));
     };
 
-    let bytes = reader.read(offset, num_bytes)?;
+    let bytes = read_exact(reader, offset, num_bytes)?;
     let mut value = (bytes[0] & mask) as u64;
     for byte in bytes.iter().take(num_bytes).skip(1) {
         value = (value << 8) | *byte as u64;
@@ -617,7 +632,7 @@ fn read_uint(reader: &dyn FileReader, offset: u64, size: usize) -> Result<u64> {
         return Err(ExifToolError::parse_error("Invalid uint size"));
     }
 
-    let bytes = reader.read(offset, size)?;
+    let bytes = read_exact(reader, offset, size)?;
     let er = EndianReader::big_endian(bytes);
 
     let value = match size {
@@ -661,14 +676,14 @@ fn read_uint(reader: &dyn FileReader, offset: u64, size: usize) -> Result<u64> {
 fn read_float(reader: &dyn FileReader, offset: u64, size: usize) -> Result<f64> {
     match size {
         4 => {
-            let bytes = reader.read(offset, 4)?;
+            let bytes = read_exact(reader, offset, 4)?;
             let er = EndianReader::big_endian(bytes);
             er.f32_at(0)
                 .map(|v| v as f64)
                 .ok_or_else(|| ExifToolError::parse_error("Failed to read float32"))
         }
         8 => {
-            let bytes = reader.read(offset, 8)?;
+            let bytes = read_exact(reader, offset, 8)?;
             let er = EndianReader::big_endian(bytes);
             er.f64_at(0)
                 .ok_or_else(|| ExifToolError::parse_error("Failed to read float64"))
@@ -682,7 +697,7 @@ fn read_string(reader: &dyn FileReader, offset: u64, size: usize) -> Result<Stri
     if size == 0 {
         return Ok(String::new());
     }
-    let bytes = reader.read(offset, size)?;
+    let bytes = read_exact(reader, offset, size)?;
     String::from_utf8(bytes.to_vec())
         .map_err(|e| ExifToolError::parse_error(format!("Invalid UTF-8: {}", e)))
 }
@@ -798,6 +813,25 @@ mod tests {
             .expect("EBML header is complete");
         assert_eq!(metadata.get_string("Matroska:DocType"), Some("webm"));
         assert!(metadata.get("WEBM:Duration").is_none());
+    }
+
+    #[test]
+    fn ebml_read_helpers_reject_zero_and_partial_slices() {
+        let empty = TestReader::from_slice(&[]);
+        assert!(read_vint_id(&empty, 0).is_err());
+        assert!(read_vint(&empty, 0).is_err());
+
+        // The leading byte selects a wider field, but the reader only has a
+        // prefix. Neither helper may interpret that prefix as a full field.
+        let partial_id = TestReader::from_slice(&[0x1A, 0x45]);
+        assert!(read_vint_id(&partial_id, 0).is_err());
+        let partial_size = TestReader::from_slice(&[0x40]);
+        assert!(read_vint(&partial_size, 0).is_err());
+
+        let partial_values = TestReader::from_slice(&[0x40, 0x00, 0x00]);
+        assert!(read_uint(&partial_values, 0, 4).is_err());
+        assert!(read_float(&partial_values, 0, 4).is_err());
+        assert!(read_string(&partial_values, 0, 4).is_err());
     }
 
     #[test]
