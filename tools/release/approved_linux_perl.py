@@ -24,6 +24,10 @@ class Refused(RuntimeError):
     """Qualification has no independently approved Perl installation."""
 
 
+class UnverifiableMetadata(Refused):
+    """The installation cannot be read safely; its contents are not judged."""
+
+
 def sha(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -111,11 +115,11 @@ def load(lock_path: Path, *, descriptor: Path = DESCRIPTOR,
     return approved, archive
 
 
-def check_tree(approved: dict, candidate: Path, sha256_tree) -> None:
+def check_metadata(candidate: Path) -> None:
     try:
         relative = candidate.relative_to(QUALIFICATION_ROOT)
     except ValueError as exc:
-        raise Refused("approved Linux Perl prefix is outside qualification root") from exc
+        raise UnverifiableMetadata("approved Linux Perl prefix is outside qualification root") from exc
     current = QUALIFICATION_ROOT
     for component in (None, *relative.parts):
         if component is not None:
@@ -123,13 +127,17 @@ def check_tree(approved: dict, candidate: Path, sha256_tree) -> None:
         try:
             info = current.lstat()
         except OSError as exc:
-            raise Refused(f"approved Linux Perl prefix is absent: {current}") from exc
+            raise UnverifiableMetadata(f"approved Linux Perl prefix is absent: {current}") from exc
         if not stat.S_ISDIR(info.st_mode):
-            raise Refused(f"approved Linux Perl prefix is not a directory: {current}")
+            raise UnverifiableMetadata(f"approved Linux Perl prefix is not a directory: {current}")
         if info.st_uid != os.geteuid():
-            raise Refused(f"approved Linux Perl prefix has foreign owner: {current}")
+            raise UnverifiableMetadata(f"approved Linux Perl prefix has foreign owner: {current}")
         if stat.S_IMODE(info.st_mode) not in (0o700, 0o755):
-            raise Refused(f"approved Linux Perl prefix has unsafe mode: {current}")
+            raise UnverifiableMetadata(f"approved Linux Perl prefix has unsafe mode: {current}")
+
+
+def check_tree(approved: dict, candidate: Path, sha256_tree) -> None:
+    check_metadata(candidate)
     if sha256_tree(candidate) != approved["tree_sha256"]:
         raise Refused("approved Linux Perl whole-tree hash mismatch")
     perl = candidate / "bin/perl5.38.2"

@@ -91,6 +91,61 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
                 with self.assertRaisesRegex(approved.Refused, "owner"):
                     approved.check_tree(self.approval, self.prefix, oracle.sha256_tree)
 
+    def test_unsafe_verified_staging_refuses_recovery_without_touching_evidence(self):
+        staging = self.prefix.with_name(".prefix.staging-999999999-proof")
+        self.prefix.rename(staging)
+        sidecar = oracle.write_staging_intent(
+            staging, self.prefix, 999999999, "verified", self.approval["tree_sha256"])
+        before = sidecar.read_bytes()
+        staging.chmod(0o777)
+        with mock.patch.object(oracle, "_process_is_live", return_value=False), \
+             mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")), \
+             mock.patch.object(oracle.shutil, "rmtree", side_effect=AssertionError("delete ran")), \
+             mock.patch.object(oracle, "_append_staging_journal", side_effect=AssertionError("journal mutated")):
+            with self.assertRaisesRegex(oracle.UnverifiableMetadata, "unsafe mode"):
+                oracle._materialize_perl(self.root, None, None, (self.approval, self.archive))
+        self.assertTrue(staging.is_dir())
+        self.assertFalse(self.prefix.exists())
+        self.assertEqual(sidecar.read_bytes(), before)
+
+    def test_unsafe_new_staging_refuses_caught_error_cleanup_without_hash(self):
+        # The normal fixture prefix is absent for a cold installation.
+        import shutil
+        shutil.rmtree(self.prefix)
+        def populate(staging):
+            staging.chmod(0o777)
+            raise oracle.Refused("injected populate failure")
+        def verify(candidate):
+            oracle._verify_perl_tree(self.root, candidate, (self.approval, self.archive))
+        with mock.patch.object(oracle, "sha256_tree", side_effect=AssertionError("tree hash ran")), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")), \
+             mock.patch.object(oracle.shutil, "rmtree", side_effect=AssertionError("delete ran")), \
+             mock.patch.object(oracle, "_append_staging_journal", side_effect=AssertionError("journal mutated")):
+            with self.assertRaisesRegex(oracle.UnverifiableMetadata, "unsafe mode"):
+                oracle.install_immutable_tree(
+                    self.root, self.prefix, populate, verify,
+                    preflight_candidate=oracle._preflight_perl_metadata)
+        staged = list(self.prefix.parent.glob(".prefix.staging-*-*"))
+        staged = [path for path in staged if path.is_dir()]
+        self.assertEqual(len(staged), 1)
+        sidecar = oracle.staging_intent_path(staged[0])
+        self.assertEqual(json.loads(sidecar.read_text())["lifecycle"], "materializing")
+        self.assertFalse(self.prefix.exists())
+
+    def test_safe_metadata_with_corrupt_content_still_cleans_dead_staging(self):
+        staging = self.prefix.with_name(".prefix.staging-999999999-corrupt")
+        self.prefix.rename(staging)
+        oracle.write_staging_intent(staging, self.prefix, 999999999, "materializing")
+        (staging / "lib/Config.pm").write_bytes(b"corrupt contents")
+        def verify(candidate):
+            oracle._verify_perl_tree(self.root, candidate, (self.approval, self.archive))
+        with mock.patch.object(oracle, "_process_is_live", return_value=False), \
+             mock.patch.object(oracle, "run", side_effect=AssertionError("probe ran")):
+            self.assertIsNone(oracle._recover_abandoned_staging(self.root, self.prefix, verify))
+        self.assertFalse(staging.exists())
+        self.assertFalse(oracle.staging_intent_path(staging).exists())
+
     def test_baseline_and_joint_mutations_refuse_before_any_probe(self):
         identity = self.load()
         approved.check_tree(identity[0], self.prefix, oracle.sha256_tree)

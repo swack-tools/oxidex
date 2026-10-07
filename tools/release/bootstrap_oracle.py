@@ -41,6 +41,10 @@ class Refused(RuntimeError):
     """The requested operation failed a release-safety precondition."""
 
 
+class UnverifiableMetadata(Refused):
+    """Unsafe ownership or directory metadata leaves candidate bytes unjudged."""
+
+
 def resolve_durable_root(root: Path) -> Path:
     reject_symlink_components(root)
     value = root.expanduser().resolve()
@@ -548,6 +552,10 @@ def _recover_abandoned_staging(
             continue
         try:
             verify_candidate(staging)
+        except UnverifiableMetadata:
+            # Unsafe metadata does not prove corrupt content. Preserve both
+            # the tree and its ownership sidecar for explicit repair.
+            raise
         except Refused:
             # This is the sole automatic-delete case: current locked
             # verification positively proves that a dead, owned candidate is
@@ -611,6 +619,7 @@ def install_immutable_tree(
     verify_candidate: Callable[[Path], None],
     *,
     after_verify: Callable[[Path], None] | None = None,
+    preflight_candidate: Callable[[Path], None] | None = None,
 ) -> str:
     """Install a verified tree once; canonical paths are never replaced.
 
@@ -690,6 +699,10 @@ def install_immutable_tree(
     finally:
         if staging.exists():
             with _staging_lifecycle_lock(durable, destination):
+                # Before even hashing for caught-error cleanup, require the
+                # same metadata safety as normal candidate verification.
+                if preflight_candidate is not None:
+                    preflight_candidate(staging)
                 try:
                     state = _read_staging_intent(staging, destination, durable)
                     verified = (
@@ -706,6 +719,8 @@ def install_immutable_tree(
                 else:
                     try:
                         verify_candidate(staging)
+                    except UnverifiableMetadata:
+                        raise
                     except Refused:
                         _append_staging_journal(destination, {
                             "event": "removed-unverified-staging-after-caught-error",
@@ -804,8 +819,17 @@ def assert_approved_perl(root: Path, approval: tuple[dict, bytes],
         raise Refused("approved Linux Perl installation is missing")
     try:
         approved_linux_perl.check_tree(approval[0], candidate, sha256_tree)
+    except approved_linux_perl.UnverifiableMetadata as exc:
+        raise UnverifiableMetadata(str(exc)) from exc
     except approved_linux_perl.Refused as exc:
         raise Refused(str(exc)) from exc
+
+
+def _preflight_perl_metadata(candidate: Path) -> None:
+    try:
+        approved_linux_perl.check_metadata(candidate)
+    except approved_linux_perl.UnverifiableMetadata as exc:
+        raise UnverifiableMetadata(str(exc)) from exc
 
 
 def _verify_perl_tree(root: Path, candidate: Path,
@@ -813,6 +837,8 @@ def _verify_perl_tree(root: Path, candidate: Path,
     if approved_perl is not None:
         try:
             approved_linux_perl.check_tree(approved_perl[0], candidate, sha256_tree)
+        except approved_linux_perl.UnverifiableMetadata as exc:
+            raise UnverifiableMetadata(str(exc)) from exc
         except approved_linux_perl.Refused as exc:
             raise Refused(str(exc)) from exc
     perl = candidate / "bin/perl5.38.2"
@@ -887,6 +913,7 @@ def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path,
     install_immutable_tree(
         root, prefix, populate,
         lambda candidate: _verify_perl_tree(root, candidate, approved_perl),
+        preflight_candidate=_preflight_perl_metadata if approved_perl is not None else None,
     )
 
 
