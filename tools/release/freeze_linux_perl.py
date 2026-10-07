@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OPS = Path("/target/ops")
 MAX_MEMBERS = 100_000
 MAX_BYTES = 2 * 1024**3
+MAX_LINK_HOPS = 40
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -83,26 +84,74 @@ def _safe_link(name: PurePosixPath, target: str) -> None:
             parts.append(part)
 
 
+def _validate_link_graph(entries: dict[str, str | None]) -> None:
+    """Resolve every link through the complete tree, including link/../ chains."""
+    available = {""}
+    for name in entries:
+        available.add(name)
+        available.update(str(parent) for parent in PurePosixPath(name).parents if str(parent) != ".")
+    for name, target in entries.items():
+        if target is None:
+            continue
+        pending = name.split("/")
+        resolved: list[str] = []
+        hops = 0
+        while pending:
+            part = pending.pop(0)
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if not resolved:
+                    raise Refused(f"symlink escapes Perl tree: {name}")
+                resolved.pop()
+                continue
+            resolved.append(part)
+            current = "/".join(resolved)
+            link = entries.get(current)
+            if link is not None:
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise Refused(f"symlink cycle or excessive chain: {name}")
+                resolved.pop()
+                pending = link.split("/") + pending
+        if "/".join(resolved) not in available:
+            raise Refused(f"dangling symlink in Perl tree: {name}")
+
+
 def _members(source: Path) -> list[tuple[Path, str, os.stat_result]]:
     if source.is_symlink() or not source.is_dir():
         raise Refused("Perl prefix must be a real directory")
     result = []
+    links: dict[str, str | None] = {}
     total = 0
+    canonical = source.resolve(strict=True)
     for path in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix()):
         name = path.relative_to(source).as_posix()
         relative = _safe_name(name)
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode):
-            _safe_link(relative, os.readlink(path))
+            target = os.readlink(path)
+            _safe_link(relative, target)
+            try:
+                resolved = path.resolve(strict=True)
+            except (OSError, RuntimeError) as exc:
+                raise Refused(f"dangling or cyclic Perl tree symlink: {name}") from exc
+            if not resolved.is_relative_to(canonical):
+                raise Refused(f"symlink escapes Perl tree: {name}")
+            links[name] = target
         elif stat.S_ISREG(info.st_mode):
             total += info.st_size
+            links[name] = None
         elif not stat.S_ISDIR(info.st_mode):
             raise Refused(f"unsupported Perl tree object: {name}")
+        else:
+            links[name] = None
         result.append((path, name, info))
         if len(result) > MAX_MEMBERS or total > MAX_BYTES:
             raise Refused("Perl tree exceeds bounded archive limits")
     if not result:
         raise Refused("Perl prefix is empty")
+    _validate_link_graph(links)
     return result
 
 
@@ -147,27 +196,35 @@ def inspect_archive(archive: Path) -> list[tarfile.TarInfo]:
         raise Refused("frozen archive is not a regular file")
     if archive.stat().st_size > MAX_BYTES:
         raise Refused("frozen archive exceeds bounded limits")
-    with tarfile.open(archive, "r:gz") as tar:
-        members = tar.getmembers()
-    if not members or len(members) > MAX_MEMBERS:
-        raise Refused("frozen archive has invalid member count")
+    members: list[tarfile.TarInfo] = []
     seen: dict[str, tarfile.TarInfo] = {}
+    links: dict[str, str | None] = {}
     total = 0
-    for member in members:
-        name = _safe_name(member.name)
-        if member.name in seen:
-            raise Refused(f"duplicate tar member: {member.name}")
-        if member.isdir():
-            pass
-        elif member.issym():
-            _safe_link(name, member.linkname)
-        elif member.isfile():
-            total += member.size
-        else:
-            raise Refused(f"unsupported tar member type: {member.name}")
-        if member.mode & ~0o777 or member.mode & 0o6000 or total > MAX_BYTES:
-            raise Refused(f"unsafe tar member mode or size: {member.name}")
-        seen[member.name] = member
+    with tarfile.open(archive, "r|gz") as tar:
+        for member in tar:
+            if len(members) >= MAX_MEMBERS:
+                raise Refused("frozen archive exceeds bounded member count")
+            name = _safe_name(member.name)
+            if member.name in seen:
+                raise Refused(f"duplicate tar member: {member.name}")
+            if member.isdir():
+                links[member.name] = None
+            elif member.issym():
+                _safe_link(name, member.linkname)
+                links[member.name] = member.linkname
+            elif member.isfile():
+                if member.size < 0:
+                    raise Refused(f"negative tar member size: {member.name}")
+                total += member.size
+                links[member.name] = None
+            else:
+                raise Refused(f"unsupported tar member type: {member.name}")
+            if member.mode & ~0o777 or member.mode & 0o6000 or total > MAX_BYTES:
+                raise Refused(f"unsafe tar member mode or size: {member.name}")
+            seen[member.name] = member
+            members.append(member)
+    if not members:
+        raise Refused("frozen archive is empty")
     for name, member in seen.items():
         for parent in PurePosixPath(name).parents:
             if str(parent) == ".":
@@ -175,6 +232,7 @@ def inspect_archive(archive: Path) -> list[tarfile.TarInfo]:
             prior = seen.get(str(parent))
             if prior is not None and not prior.isdir():
                 raise Refused(f"tar member has non-directory ancestor: {name}")
+    _validate_link_graph(links)
     return members
 
 

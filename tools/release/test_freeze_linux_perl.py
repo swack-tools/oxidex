@@ -101,6 +101,62 @@ class FreezePerlTests(unittest.TestCase):
                 freeze.freeze_tree(source, archive)
             self.assertFalse(archive.exists())
 
+    def test_chained_symlink_escape_refused_in_source_and_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "source"
+            (source / "d").mkdir(parents=True)
+            (source / "x").mkdir()
+            (base / "outside").write_bytes(b"external bytes")
+            (source / "d/a").symlink_to("../x")
+            (source / "d/link").symlink_to("a/../../outside")
+            self.assertEqual((source / "d/link").resolve(), (base / "outside").resolve())
+            with self.assertRaises(freeze.Refused):
+                freeze.freeze_tree(source, base / "candidate.tar.gz")
+            self.assertFalse((base / "candidate.tar.gz").exists())
+
+            archive = base / "untrusted.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name in ("d", "x"):
+                    item = tarfile.TarInfo(name)
+                    item.type = tarfile.DIRTYPE
+                    tar.addfile(item)
+                for name, link in (("d/a", "../x"), ("d/link", "a/../../outside")):
+                    item = tarfile.TarInfo(name)
+                    item.type = tarfile.SYMTYPE
+                    item.linkname = link
+                    tar.addfile(item)
+            with self.assertRaises(freeze.Refused):
+                freeze.extract_frozen(archive, base / "replay")
+            self.assertFalse((base / "replay").exists())
+
+    def test_dangling_and_cycle_links_refused(self) -> None:
+        for links in ((('a', 'missing'),), (('a', 'b'), ('b', 'a'))):
+            with self.subTest(links=links), tempfile.TemporaryDirectory() as directory:
+                archive = Path(directory) / "bad.tar.gz"
+                with tarfile.open(archive, "w:gz") as tar:
+                    for name, link in links:
+                        item = tarfile.TarInfo(name)
+                        item.type = tarfile.SYMTYPE
+                        item.linkname = link
+                        tar.addfile(item)
+                with self.assertRaises(freeze.Refused):
+                    freeze.inspect_archive(archive)
+
+    def test_member_limit_refuses_during_iteration_without_getmembers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "many.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name in ("a", "b", "c"):
+                    item = tarfile.TarInfo(name)
+                    item.size = 1
+                    tar.addfile(item, io.BytesIO(b"x"))
+            with mock.patch.object(freeze, "MAX_MEMBERS", 2), mock.patch.object(
+                tarfile.TarFile, "getmembers", side_effect=AssertionError("eager member load")
+            ):
+                with self.assertRaisesRegex(freeze.Refused, "member count"):
+                    freeze.inspect_archive(archive)
+
 
 if __name__ == "__main__":
     unittest.main()
