@@ -83,6 +83,59 @@ class GenericRecipeTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertLessEqual(failures[0].stat().st_size, 4096)
 
+    def test_component_envelope_refuses_absent_symlink_and_oversize_before_remote(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve()
+            valid=root/'approved.json';valid.write_text('{}')
+            link=root/'linked.json';link.symlink_to(valid)
+            oversized=root/'oversized.json'
+            with oversized.open('wb') as output:
+                output.truncate(remote_build.approved_linux_perl.MAX_ENVELOPE_BYTES + 1)
+            base=['--source',str(root),'--instance','builder-vm','--zone','z',
+                  '--instance-id','2','--worktree-id','checkout',
+                  '--evidence-dir',str(root/'evidence'),
+                  '--just-recipe','prove-linux-perl-component']
+            with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
+                 patch.object(remote_build.ssh_transport,'identity',return_value=('uploader','key')), \
+                 patch.object(remote_build.subprocess,'run') as run, \
+                 patch.object(remote_build.subprocess,'check_output') as output:
+                for candidate, message in ((root/'absent.json','regular file'),
+                                           (link,'regular file'),
+                                           (oversized,'transport bound')):
+                    with self.subTest(candidate=candidate), self.assertRaisesRegex(RuntimeError,message):
+                        remote_build.main(base+['--approved-linux-perl-envelope='+str(candidate)])
+                run.assert_not_called();output.assert_not_called()
+
+    def test_component_proof_refuses_mismatched_cold_phase_without_publishing_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence=Path(directory)
+            expected={'schema':1,'kind':'linux_perl_component_proof',
+                      'status':'COMPONENT_ONLY_PASS','run_id':'component-'+'a'*32,
+                      'cold':'installed','warm':'reused','source_head':'b'*40}
+            observed={**expected,'cold':'reused','prefix_mode':0o700,'prefix_uid':1000}
+            body=json.dumps(observed).encode()
+            digest=hashlib.sha256(body).hexdigest()
+            transport=SimpleNamespace(scp=lambda local,remote,download=False:
+                                      ['synthetic-scp',remote,str(local)])
+            def receive(_transport,_remote,local,_digest,_limit):
+                local.write_bytes(body)
+            with patch.object(remote_build.subprocess,'check_output',return_value=digest+'  proof\n'), \
+                 patch.object(remote_build,'_download_checked_candidate',side_effect=receive) as download:
+                with self.assertRaisesRegex(RuntimeError,'does not bind'):
+                    remote_build.retrieve_component_proof(transport,lambda command:[command],
+                                                           expected['run_id'],evidence,expected)
+            self.assertEqual(download.call_args.args[-1],64*1024)
+            self.assertEqual(json.loads((evidence/'linux-perl-component-proof.json').read_text())['cold'],
+                             'reused')
+            observed['cold']='installed'
+            body=json.dumps(observed).encode()
+            next_evidence=evidence/'next';next_evidence.mkdir()
+            with patch.object(remote_build.subprocess,'check_output',return_value=hashlib.sha256(body).hexdigest()+'  proof\n'), \
+                 patch.object(remote_build,'_download_checked_candidate',side_effect=receive):
+                accepted=remote_build.retrieve_component_proof(transport,lambda command:[command],
+                                                               expected['run_id'],next_evidence,expected)
+            self.assertEqual(accepted['status'],'COMPONENT_ONLY_PASS')
+
     def test_perl_candidate_retrieval_checks_both_durable_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
@@ -146,11 +199,20 @@ class GenericRecipeTests(unittest.TestCase):
             self.assertIn('candidate-receipt.json',transfers[0])
 
     def exercise(self, code, recipe="test-package", source_status="", producer_tree='a'*40,
-                 retrieval_fail=False):
-        with tempfile.TemporaryDirectory() as directory:
+                 retrieval_fail=False, component_failure=False):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external_directory:
             root=Path(directory);commands=[]
             signer=root/'maintainer.allowed_signers'
             signer.write_text('fixture signer')
+            envelope=Path(external_directory).resolve()/'approved-linux-perl.json'
+            if recipe=='prove-linux-perl-component':
+                envelope.write_text('{"synthetic":true}')
+                release=root/'tools/release';release.mkdir(parents=True)
+                (release/'oracle-lock.json').write_text('{}')
+                (release/'oracle-linux-perl-identity.json').write_text(json.dumps({
+                    'archive_sha256':'c'*64,'archive_bytes':13,'tree_sha256':'d'*64,
+                    'exe_sha256':'e'*64,'zip_sha256':'f'*64,
+                    'prefix':'/target/ops/toolchains/perl-5.38.2/prefix'}))
             extras_seen=[]
             signed_heads=[]
             def snapshot(source,archive,extra_files=None,*,signed_head=None):
@@ -159,7 +221,8 @@ class GenericRecipeTests(unittest.TestCase):
                 extras_seen.extend((extra_files or {}).keys())
                 return {'archive_sha256':'0'*64,
                         'files':[{'path':name,
-                                  'sha256':remote_build.hashlib.sha256(path.read_bytes()).hexdigest()}
+                                  'sha256':remote_build.hashlib.sha256(path.read_bytes()).hexdigest(),
+                                  'bytes':path.stat().st_size}
                                  for name,path in (extra_files or {}).items()]}
             def run(command, **kwargs):
                 commands.append(command)
@@ -172,6 +235,8 @@ class GenericRecipeTests(unittest.TestCase):
                                       scp=lambda local,remote,download=False:['scp',str(local),remote])
             def output(command, **kwargs):
                 if 'sha256sum' in ' '.join(command):
+                    if 'approved-linux-perl.json' in ' '.join(command):
+                        return remote_build.hashlib.sha256(envelope.read_bytes()).hexdigest()+'  packet\n'
                     return 'b'*64+'  /target/debug/oxidex\n'
                 if 'config' in command and 'gpg.ssh.allowedSignersFile' in command:
                     return str(signer)+'\n'
@@ -191,6 +256,9 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build,'retrieve_perl_candidate',
                               side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
                               return_value={'status':'unapproved_candidate_retrieved'}) as retrieve, \
+                 patch.object(remote_build,'retrieve_component_proof',
+                              side_effect=RuntimeError('synthetic component proof transfer loss') if component_failure else None,
+                              return_value={'status':'COMPONENT_ONLY_PASS'}) as component_proof, \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
@@ -202,6 +270,8 @@ class GenericRecipeTests(unittest.TestCase):
                     argv += ['--just-arg=package with spaces']
                 if recipe=='freeze-linux-perl':
                     argv += ['--just-arg='+'a'*40,'--just-arg='+producer_tree]
+                if recipe=='prove-linux-perl-component':
+                    argv += ['--approved-linux-perl-envelope='+str(envelope.resolve())]
                 if code:
                     with self.assertRaisesRegex(RuntimeError,'recipe failed'):
                         remote_build.main(argv)
@@ -214,12 +284,40 @@ class GenericRecipeTests(unittest.TestCase):
                 elif retrieval_fail and recipe=='freeze-linux-perl':
                     with self.assertRaisesRegex(RuntimeError,'synthetic transfer loss'):
                         remote_build.main(argv)
+                elif component_failure and recipe=='prove-linux-perl-component':
+                    with self.assertRaisesRegex(RuntimeError,'component proof transfer loss'):
+                        remote_build.main(argv)
                 else:
                     self.assertEqual(remote_build.main(argv),0)
                     if recipe=='freeze-linux-perl':
                         retrieve.assert_called_once()
+                    if recipe=='prove-linux-perl-component':
+                        component_proof.assert_called_once()
             receipt=json.loads((root/'evidence/remote-build.json').read_text())
             return receipt,commands,root,extras_seen,signed_heads
+
+    def test_component_packet_binds_one_envelope_and_cleans_only_after_proof(self):
+        receipt, commands, _, extras, heads = self.exercise(0,'prove-linux-perl-component')
+        self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
+        self.assertEqual(heads,['a'*40])
+        self.assertEqual(set(extras), {'repository.bundle','maintainer.allowed_signers',
+                                       'fleet-source-head','approved-linux-perl.json'})
+        self.assertEqual(receipt['component_remote_envelope_sha256'],
+                         receipt['component_envelope_sha256'])
+        self.assertEqual(receipt['component_proof']['status'],'COMPONENT_ONLY_PASS')
+        self.assertEqual(receipt['remote_cleanup'],'complete')
+        self.assertEqual(sum(' just prove-linux-perl-component ' in ' '.join(c)
+                             for c in commands),1)
+        self.assertEqual(sum(' cleanup' in ' '.join(c) for c in commands),1)
+
+    def test_component_proof_transfer_failure_retains_remote_project_without_cleanup(self):
+        receipt, commands, _, extras, _ = self.exercise(
+            0,'prove-linux-perl-component',component_failure=True)
+        self.assertIn('approved-linux-perl.json',extras)
+        self.assertTrue(receipt['remote_retained'])
+        self.assertEqual(receipt['stage'],'verify')
+        self.assertFalse(receipt.get('verified',False))
+        self.assertFalse(any(' cleanup' in ' '.join(command) for command in commands))
 
     def test_success_runs_exact_recipe_without_fetch_or_cleanup_and_retains_targets(self):
         receipt,commands,_,_,_=self.exercise(0)

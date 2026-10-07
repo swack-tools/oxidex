@@ -190,9 +190,12 @@ class ApprovedLinuxPerlTests(unittest.TestCase):
                     return "1.68"
                 raise AssertionError("unexpected command")
             with mock.patch.object(oracle, "run", side_effect=fake_run) as probe:
-                oracle._materialize_perl(destination, Path("unused"), Path("unused"), identity)
+                self.assertEqual(oracle._materialize_perl(
+                    destination, Path("unused"), Path("unused"), identity), "installed")
+                self.assertEqual(oracle._materialize_perl(
+                    destination, Path("unused"), Path("unused"), identity), "reused")
                 self.assertEqual(oracle.sha256_tree(expected), self.approval["tree_sha256"])
-                self.assertEqual(probe.call_count, 4)
+                self.assertEqual(probe.call_count, 6)
 
     def test_missing_approval_wrong_prefix_lock_and_envelope_refuse(self):
         with self.assertRaisesRegex(approved.Refused, "missing"):

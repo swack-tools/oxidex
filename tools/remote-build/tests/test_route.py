@@ -488,6 +488,45 @@ class RouteTests(unittest.TestCase):
         oracle.assert_not_called()
         execute.assert_called_once_with('just',['just','_freeze-linux-perl-worker',head,tree])
 
+    def test_component_route_uses_signed_builder_without_oracle_or_public_path(self):
+        envelope='/approved/data/approved-linux-perl.json'
+        with patch.object(route,'local_worker_context',return_value=False), \
+             patch.object(os,'execv') as launch:
+            route.main(['prove-linux-perl-component',envelope])
+        self.assertEqual(launch.call_args.args[1][-3:],
+                         ['--just-recipe','prove-linux-perl-component',
+                          '--approved-linux-perl-envelope='+envelope])
+        with patch.object(route,'local_worker_context',return_value=False):
+            with self.assertRaisesRegex(SystemExit,'absolute envelope'):
+                route.main(['prove-linux-perl-component','relative.json'])
+        run_id='component-'+'a'*32
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout') as prepare, \
+             patch.object(route,'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_generic_recipe_oracle') as generic, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as fleet, \
+             patch.object(route.os,'execvp') as worker:
+            route.main(['prove-linux-perl-component',run_id])
+        prepare.assert_called_once()
+        target.assert_called_once()
+        generic.assert_not_called()
+        fleet.assert_not_called()
+        worker.assert_called_once_with('just',['just','_prove-linux-perl-component-worker',run_id])
+        with patch.object(route,'local_worker_context',return_value=True):
+            with self.assertRaisesRegex(SystemExit,'private run ID'):
+                route.main(['prove-linux-perl-component',envelope])
+        if shutil.which('just'):
+            repository=Path(__file__).resolve().parents[3]
+            public=subprocess.run(['just','--dry-run','prove-linux-perl-component-remote',envelope],
+                                  cwd=repository,capture_output=True,text=True,check=True)
+            self.assertIn('route.py prove-linux-perl-component',public.stderr)
+            private=subprocess.run(['just','--dry-run','_prove-linux-perl-component-worker',run_id],
+                                   cwd=repository,capture_output=True,text=True,check=True)
+            self.assertIn('--require-local-context prove-linux-perl-component',private.stderr)
+            self.assertIn('prove_linux_perl_component.py',private.stderr)
+
     def test_linux_perl_full_suite_prepares_locked_oracle_before_worker(self):
         events = []
         def prepared():

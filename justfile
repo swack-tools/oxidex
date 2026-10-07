@@ -1851,6 +1851,17 @@ _freeze-linux-perl-worker head tree:
     python3 tools/remote-build/route.py --require-local-context freeze-linux-perl
     python3 tools/release/freeze_linux_perl.py worker --source-head '{{head}}' --source-tree '{{tree}}'
 
+# Actual approved Linux Perl cold/warm component proof on a fresh signed Spot project.
+prove-linux-perl-component-remote envelope:
+    python3 tools/remote-build/route.py prove-linux-perl-component {{quote(envelope)}}
+
+prove-linux-perl-component run_id:
+    python3 tools/remote-build/route.py prove-linux-perl-component {{quote(run_id)}}
+
+_prove-linux-perl-component-worker run_id:
+    python3 tools/remote-build/route.py --require-local-context prove-linux-perl-component
+    python3 tools/release/prove_linux_perl_component.py {{quote(run_id)}}
+
 # Linux Perl guards and locked-oracle integration controls on signed Spot source.
 verify-linux-perl-remote:
     python3 tools/remote-build/route.py verify-linux-perl

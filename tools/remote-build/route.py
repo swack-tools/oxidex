@@ -225,9 +225,14 @@ def main(argv):
     if not argv or not RECIPE.fullmatch(argv[0]):
         raise SystemExit('Invalid remote recipe name')
     recipe, *args = argv
+    component = recipe == 'prove-linux-perl-component'
     if any(not value or len(value) > 4096 or any(ch in value for ch in '\x00\n\r') for value in args):
         raise SystemExit('Invalid recipe argument')
-    if local_worker_context():
+    worker_context = local_worker_context()
+    if component and ((worker_context and (len(args) != 1 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,30}-[0-9a-f]{32}', args[0])))
+                      or (not worker_context and (len(args) != 1 or not Path(args[0]).is_absolute()))):
+        raise SystemExit('Component proof requires one private run ID or one absolute envelope path')
+    if worker_context:
         if recipe in FLEET_RECIPES:
             signed_builder = False
             if Path.cwd() == FLEET_SOURCE and trusted_marker(BUILDER_MARKER):
@@ -247,7 +252,7 @@ def main(argv):
                 os.environ.pop(key, None)
             from test_runner import prepare_generic_recipe_oracle
             prepare_generic_recipe_oracle()
-        elif recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl'):
+        elif recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl', 'prove-linux-perl-component'):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
@@ -256,8 +261,11 @@ def main(argv):
         os.execvp('just', ['just', '_' + recipe + '-worker', *args])
         return 0  # execvp does not return outside synthetic controls
     command = [sys.executable, str(HERE/'build.py'), '--just-recipe', recipe]
-    for value in args:
-        command.append('--just-arg=' + value)
+    if component:
+        command.append('--approved-linux-perl-envelope=' + args[0])
+    else:
+        for value in args:
+            command.append('--just-arg=' + value)
     os.execv(sys.executable, command)
 
 

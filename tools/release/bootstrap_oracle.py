@@ -853,7 +853,7 @@ def _verify_perl_tree(root: Path, candidate: Path,
 
 
 def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path,
-                      approved_perl: tuple[dict, bytes] | None = None) -> None:
+                      approved_perl: tuple[dict, bytes] | None = None) -> str | None:
     """Build Perl and Archive::Zip in one immutable staging tree."""
     prefix = perl_prefix(root)
 
@@ -910,11 +910,12 @@ def _materialize_perl(root: Path, perl_archive: Path, zip_archive: Path,
 
     if approved_perl is not None:
         assert_approved_perl(root, approved_perl, allow_absent=True)
-    install_immutable_tree(
+    disposition = install_immutable_tree(
         root, prefix, populate,
         lambda candidate: _verify_perl_tree(root, candidate, approved_perl),
         preflight_candidate=_preflight_perl_metadata if approved_perl is not None else None,
     )
+    return disposition if approved_perl is not None else None
 
 
 def _materialize_exiftool(
