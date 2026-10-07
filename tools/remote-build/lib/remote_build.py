@@ -209,11 +209,12 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_checked_candidate(transport, remote: str, local: Path, digest: str,
+def _download_checked_candidate(transport, remote: str, local: Path, digest: str | None,
                                 max_bytes: int, expected_size: int | None = None) -> None:
     """Persist bounded exact remote bytes; preserve failure evidence and project."""
     import tempfile
-    if (not re.fullmatch(r'[0-9a-f]{64}', digest) or local.exists() or local.is_symlink()
+    if ((digest is not None and not re.fullmatch(r'[0-9a-f]{64}', digest))
+            or local.exists() or local.is_symlink()
             or type(max_bytes) is not int or max_bytes <= 0
             or (expected_size is not None and
                 (type(expected_size) is not int or not 0 < expected_size <= max_bytes))):
@@ -237,7 +238,7 @@ def _download_checked_candidate(transport, remote: str, local: Path, digest: str
             raise RuntimeError('Perl candidate download bound exceeded')
         if expected_size is not None and size != expected_size:
             raise RuntimeError('Downloaded Perl candidate size differs from receipt')
-        if _sha256_file(temporary)!=digest:
+        if digest is not None and _sha256_file(temporary)!=digest:
             raise RuntimeError('Downloaded Perl candidate checksum mismatch')
         temporary.replace(local)
     except Exception:
@@ -260,10 +261,10 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
     local=evidence/'linux-perl-candidate'
     local.mkdir(mode=0o700,exist_ok=False)
     receipt_remote=remote_root+'/candidate-receipt.json'
-    receipt_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(receipt_remote)),text=True).split()[0]
     receipt_path=local/'candidate-receipt.json'
-    _download_checked_candidate(transport,receipt_remote,receipt_path,receipt_digest,
+    _download_checked_candidate(transport,receipt_remote,receipt_path,None,
                                 MAX_CANDIDATE_RECEIPT_BYTES)
+    receipt_digest=_sha256_file(receipt_path)
     candidate=json.loads(receipt_path.read_text())
     archive_remote=remote_root+'/perl-5.38.2-prefix.tar.gz'
     if (candidate.get('schema_version')!=1 or candidate.get('kind')!='linux_perl_unapproved_candidate'
@@ -280,17 +281,14 @@ def retrieve_perl_candidate(transport, ssh, run_id: str, evidence: Path,
             or type(candidate.get('archive_bytes')) is not int
             or not 0<candidate['archive_bytes']<=MAX_CANDIDATE_ARCHIVE_BYTES):
         raise RuntimeError('Perl candidate receipt does not bind selected source and archive')
-    remote_digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(archive_remote)),text=True).split()[0]
-    if remote_digest!=candidate['archive_sha256']:
-        raise RuntimeError('Remote Perl archive differs from candidate receipt')
     archive_path=local/'perl-5.38.2-prefix.tar.gz'
-    _download_checked_candidate(transport,archive_remote,archive_path,remote_digest,
+    _download_checked_candidate(transport,archive_remote,archive_path,candidate['archive_sha256'],
                                 candidate['archive_bytes'],
                                 expected_size=candidate['archive_bytes'])
     if archive_path.stat().st_size!=candidate['archive_bytes']:
         raise RuntimeError('Downloaded Perl archive size differs from candidate receipt')
     return {'receipt':str(receipt_path),'receipt_sha256':receipt_digest,
-            'archive':str(archive_path),'archive_sha256':remote_digest,
+            'archive':str(archive_path),'archive_sha256':candidate['archive_sha256'],
             'status':'unapproved_candidate_retrieved'}
 
 
@@ -300,9 +298,9 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
     if transport is None:
         raise RuntimeError('Component proof requires authenticated direct transport')
     remote=f'/mnt/runner-data/remote-build/targets/{run_id}/linux-perl-component-proof.json'
-    digest=subprocess.check_output(ssh('sha256sum '+shlex.quote(remote)),text=True).split()[0]
     local=evidence/'linux-perl-component-proof.json'
-    _download_checked_candidate(transport,remote,local,digest,MAX_CANDIDATE_RECEIPT_BYTES)
+    _download_checked_candidate(transport,remote,local,None,MAX_CANDIDATE_RECEIPT_BYTES)
+    digest=_sha256_file(local)
     proof=json.loads(local.read_text())
     if (not isinstance(proof,dict) or set(proof)!=set(expected)|{'prefix_mode','prefix_uid'}
             or any(proof.get(name)!=value for name,value in expected.items())

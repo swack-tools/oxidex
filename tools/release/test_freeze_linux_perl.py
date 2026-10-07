@@ -23,6 +23,28 @@ spec.loader.exec_module(freeze)
 
 
 class FreezePerlTests(unittest.TestCase):
+    def test_source_member_limit_refuses_before_eager_enumeration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            for name in ("c", "a", "b"):
+                (source / name).write_bytes(b"x")
+            with mock.patch.object(freeze, "MAX_MEMBERS", 2), mock.patch.object(
+                Path, "rglob", side_effect=AssertionError("eager tree enumeration")
+            ):
+                with self.assertRaisesRegex(freeze.Refused, "bounded archive limits"):
+                    freeze._members(source)
+
+    def test_source_members_remain_sorted_without_following_symlinked_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            (source / "b").mkdir(parents=True)
+            (source / "b/z").write_bytes(b"z")
+            (source / "a").mkdir()
+            (source / "a/link").symlink_to("../b")
+            self.assertEqual([name for _, name, _ in freeze._members(source)],
+                             ["a", "a/link", "b", "b/z"])
+
     def test_hostile_perl_environment_is_removed_before_oracle_load(self) -> None:
         hostile = {key: "hostile" for key in freeze.PERL_ENV_KEYS}
         with mock.patch.dict(os.environ, {**hostile, "PRODUCER_KEEP": "yes"}):

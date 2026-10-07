@@ -131,34 +131,44 @@ def _members(source: Path) -> list[tuple[Path, str, os.stat_result]]:
     links: dict[str, str | None] = {}
     total = 0
     canonical = source.resolve(strict=True)
-    for path in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix()):
-        name = path.relative_to(source).as_posix()
-        relative = _safe_name(name)
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            target = os.readlink(path)
-            _safe_link(relative, target)
-            try:
-                resolved = path.resolve(strict=True)
-            except (OSError, RuntimeError) as exc:
-                raise Refused(f"dangling or cyclic Perl tree symlink: {name}") from exc
-            if not resolved.is_relative_to(canonical):
-                raise Refused(f"symlink escapes Perl tree: {name}")
-            links[name] = target
-        elif stat.S_ISREG(info.st_mode):
-            total += info.st_size
-            links[name] = None
-        elif not stat.S_ISDIR(info.st_mode):
-            raise Refused(f"unsupported Perl tree object: {name}")
-        else:
-            links[name] = None
-        result.append((path, name, info))
-        if len(result) > MAX_MEMBERS or total > MAX_BYTES:
-            raise Refused("Perl tree exceeds bounded archive limits")
+    pending = [source]
+    while pending:
+        directory = pending.pop()
+        # Limit collection before sorting. scandir closes each directory even
+        # when an entry is rejected, and symlinked directories are not walked.
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if len(result) >= MAX_MEMBERS:
+                    raise Refused("Perl tree exceeds bounded archive limits")
+                path = Path(entry.path)
+                name = path.relative_to(source).as_posix()
+                relative = _safe_name(name)
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    target = os.readlink(path)
+                    _safe_link(relative, target)
+                    try:
+                        resolved = path.resolve(strict=True)
+                    except (OSError, RuntimeError) as exc:
+                        raise Refused(f"dangling or cyclic Perl tree symlink: {name}") from exc
+                    if not resolved.is_relative_to(canonical):
+                        raise Refused(f"symlink escapes Perl tree: {name}")
+                    links[name] = target
+                elif stat.S_ISREG(info.st_mode):
+                    total += info.st_size
+                    links[name] = None
+                elif stat.S_ISDIR(info.st_mode):
+                    links[name] = None
+                    pending.append(path)
+                else:
+                    raise Refused(f"unsupported Perl tree object: {name}")
+                result.append((path, name, info))
+                if total > MAX_BYTES:
+                    raise Refused("Perl tree exceeds bounded archive limits")
     if not result:
         raise Refused("Perl prefix is empty")
     _validate_link_graph(links)
-    return result
+    return sorted(result, key=lambda row: row[1])
 
 
 def freeze_tree(source: Path, archive: Path) -> None:
