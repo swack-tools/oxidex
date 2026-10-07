@@ -31,6 +31,13 @@ def run(source=SOURCE, output=OUTPUT):
     subprocess.run(['node', 'docs/scripts/check-base-links.mjs',
                     str(output / 'dist'), '/'], check=True)
     manifest = json.loads((output / 'snapshot-manifest.json').read_text())
+    declared_digest = manifest.get('dist_sha256')
+    if not isinstance(declared_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', declared_digest):
+        raise RuntimeError('Docs site snapshot has no valid dist_sha256')
+    actual_digest = subprocess.check_output(
+        ['bash', 'tools/docs/dist-sha256.sh', str(output / 'dist')], text=True).strip()
+    if actual_digest != declared_digest:
+        raise RuntimeError('Docs site snapshot dist_sha256 differs from retained dist')
     if (manifest.get('candidate_sha') != head or manifest.get('source_head_sha') != head
             or manifest.get('tree_hash') != tree or manifest.get('source_kind') != 'commit'
             or manifest.get('base_path') != '/'

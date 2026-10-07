@@ -186,10 +186,7 @@ if [ "$BUILD_ONLY" = 1 ]; then
   fi
   mkdir -p "$OUTPUT/dist"
   cp -R "$DIST/." "$OUTPUT/dist/"
-  DIST_SHA256=$(
-    cd "$OUTPUT/dist"
-    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}'
-  )
+  DIST_SHA256=$(bash "$REPO/tools/docs/dist-sha256.sh" "$OUTPUT/dist")
   node - "$OUTPUT/snapshot-manifest.json" "$CANDIDATE_SHA" "$SHA" "$SOURCE_KIND" "$SOURCE_IDENTITY" \
     "$SNAPSHOT_TREE_HASH" "$DIST_SHA256" "$OUTPUT/dist" "${DOCS_BASE:-/}" <<'NODE'
 const fs = require('node:fs');
