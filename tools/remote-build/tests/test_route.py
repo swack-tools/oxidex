@@ -488,6 +488,41 @@ class RouteTests(unittest.TestCase):
         oracle.assert_not_called()
         execute.assert_called_once_with('just',['just','_freeze-linux-perl-worker',head,tree])
 
+    def test_linux_perl_synthetic_suite_uses_signed_route_without_oracle_bootstrap(self):
+        with patch.object(route,'local_worker_context',return_value=True), \
+             patch.object(route.Path,'cwd',return_value=route.FLEET_SOURCE), \
+             patch.object(route,'trusted_marker',return_value=True), \
+             patch.object(route,'prepare_fleet_checkout') as prepare, \
+             patch.object(route,'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(route.os,'execvp') as execute:
+            route.main(['verify-linux-perl'])
+        prepare.assert_called_once()
+        target.assert_called_once()
+        oracle.assert_not_called()
+        execute.assert_called_once_with('just',['just','_verify-linux-perl-worker'])
+
+    def test_linux_perl_public_and_private_just_commands_are_guarded(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        public = subprocess.run(['just','--dry-run','verify-linux-perl-remote'],
+                                cwd=repository,capture_output=True,text=True,check=True)
+        self.assertEqual(public.stderr.splitlines(),
+                         ['python3 tools/remote-build/route.py verify-linux-perl'])
+        private = subprocess.run(['just','--dry-run','_verify-linux-perl-worker'],
+                                 cwd=repository,capture_output=True,text=True,check=True)
+        lines = private.stderr.splitlines()
+        self.assertEqual(lines[0],
+                         'python3 tools/remote-build/route.py --require-local-context verify-linux-perl')
+        self.assertEqual(len(lines),5)
+        self.assertIn('test_bootstrap_oracle',lines[1])
+        self.assertIn('test_approved_linux_perl',lines[1])
+        self.assertIn('test_freeze_linux_perl',lines[1])
+        self.assertIn("test_qualification*.py",lines[2])
+        self.assertIn("test_generic_recipe.py",lines[3])
+        self.assertIn("test_route.py",lines[4])
+
     def test_actions_fleet_checkout_accepts_full_and_shallow_merge_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
