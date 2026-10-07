@@ -158,23 +158,39 @@ class DocsSiteWorkerTests(unittest.TestCase):
                                                 env=env, text=True).strip()
             self.assertEqual(cache, str(home / 'npm-cache'))
 
-    def test_real_bash_startup_and_node_preload_cannot_restore_site_url(self):
+    def test_real_bash_startup_cannot_restore_site_url(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             startup = root / 'startup.sh'
             startup.write_text('export DOCS_STABLE_URL=https://attacker.invalid/\n')
-            preload = root / 'preload.js'
-            preload.write_text('process.env.DOCS_STABLE_URL="https://node-attacker.invalid/";\n')
-            with patch.dict(os.environ, {'BASH_ENV': str(startup),
-                                      'NODE_OPTIONS': '--require=' + str(preload)}):
+            with patch.dict(os.environ, {'BASH_ENV': str(startup)}):
                 child = docs_site_worker.build_environment(root / 'home')
                 bash_value = subprocess.check_output(
                     ['bash', '-c', 'printf "%s" "${DOCS_STABLE_URL:-}"'],
                     env=child, text=True)
+            self.assertEqual(bash_value, '')
+
+    def test_real_node_preload_cannot_restore_site_url_when_node_available(self):
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('Node is absent on this runner; dedicated website runtime must run this control')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            preload = root / 'preload.js'
+            preload.write_text('process.env.DOCS_STABLE_URL="https://node-attacker.invalid/";\n')
+            with patch.dict(os.environ, {'NODE_OPTIONS': '--require=' + str(preload)}):
+                child = docs_site_worker.build_environment(root / 'home')
                 node_value = subprocess.check_output(
-                    [shutil.which('node'), '-e', 'process.stdout.write(process.env.DOCS_STABLE_URL||"")'],
+                    [node, '-e', 'process.stdout.write(process.env.DOCS_STABLE_URL||"")'],
                     env=child, text=True)
-            self.assertEqual((bash_value, node_value), ('', ''))
+            self.assertEqual(node_value, '')
+
+    def test_node_absence_skips_only_node_control_before_exec(self):
+        with patch.object(shutil, 'which', return_value=None), \
+             patch.object(subprocess, 'check_output') as command:
+            with self.assertRaisesRegex(unittest.SkipTest, 'Node is absent on this runner'):
+                self.test_real_node_preload_cannot_restore_site_url_when_node_available()
+            command.assert_not_called()
 
     def test_git_replacement_does_not_change_archived_head(self):
         with tempfile.TemporaryDirectory() as directory:
