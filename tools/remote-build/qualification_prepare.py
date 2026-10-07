@@ -23,6 +23,10 @@ import version_transition_qualification as qualification  # noqa: E402
 PAIRS = ("13.59", "11.78-12.64")
 RELEASES = {"13.59": ("13.59",), "11.78-12.64": ("11.78", "12.64")}
 HEX = re.compile(r"[0-9a-f]{64}\Z")
+WRITE_COHORT = "tests/fixtures/jpeg/tag_matrix_base.jpg"
+WRITE_COHORT_SHA256 = "9109ff5542f71c6c247e0ac372280cf81d00004d5fe319d195a0659f69dab8a6"
+WRITE_COHORT_BYTES = 771
+WRITE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
 
 
 def sha(path: Path) -> str:
@@ -106,6 +110,37 @@ def rebind_manifest(reference: Path, destination: Path, source: Path, kind: str)
             "count": len(rebound["fixtures"])}
 
 
+def canonical_write_carrier(output: Path) -> dict:
+    """Copy the exact committed Task19 JPEG into this new qualification output."""
+    committed = subprocess.check_output(["git", "-C", str(ROOT), "show", f"HEAD:{WRITE_COHORT}"])
+    checkout = ROOT / WRITE_COHORT
+    if (len(committed) != WRITE_COHORT_BYTES
+            or hashlib.sha256(committed).hexdigest() != WRITE_COHORT_SHA256
+            or checkout.is_symlink() or not checkout.is_file()
+            or checkout.read_bytes() != committed):
+        raise ValueError("candidate committed canonical write fixture differs from Task19 contract")
+    destination = output / "write-cohort" / "tag_matrix_base.jpg"
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("canonical write fixture output already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(committed)
+    if sha(destination) != WRITE_COHORT_SHA256 or destination.stat().st_size != WRITE_COHORT_BYTES:
+        raise ValueError("canonical write fixture copy differs from committed Task19 cohort")
+    return {"path": str(destination), "sha256": WRITE_COHORT_SHA256, "bytes": WRITE_COHORT_BYTES}
+
+
+def rebind_write_manifest(reference: Path, destination: Path, source: Path, canonical: dict) -> dict:
+    document = json.loads(reference.read_text())
+    if (not isinstance(document, dict) or set(document) != {"schema", "kind", "fixtures"}
+            or document["schema"] != 1 or document["kind"] != WRITE_KIND
+            or not isinstance(document["fixtures"], list) or len(document["fixtures"]) != 1):
+        raise ValueError(f"reference write manifest must select exactly one carrier: {reference}")
+    # Retain the approved source-selection check; only the write carrier changes.
+    rebind_carrier(document["fixtures"][0], source)
+    write_json(destination, {**document, "fixtures": [canonical]})
+    return {"reference_sha256": sha(reference), "generated_sha256": sha(destination), "count": 1}
+
+
 def rebind_cases(reference: Path, destination: Path, source: Path, approved_read: Path) -> dict:
     cases = json.loads(reference.read_text())
     if not isinstance(cases, list) or not cases:
@@ -170,6 +205,8 @@ def prepare(reference: Path, output: Path, expected_head: str) -> dict:
     qualification._read_policy_input(policy, {row["id"] for row in matrix["rows"]})
     evidence = {"schema": 1, "kind": "oxidex_remote_qualification_preparation", "head": expected_head,
                 "pin": pin, "policy_reference_sha256": sha(policy_ref), "policy_sha256": sha(policy), "pairs": {}}
+    canonical = canonical_write_carrier(output)
+    evidence["write_cohort"] = canonical
     for pair in PAIRS:
         source_ref = reference / "provisioned" / pair
         bundle = output / "provisioned" / pair
@@ -221,8 +258,7 @@ def prepare(reference: Path, output: Path, expected_head: str) -> dict:
             pair_proof["releases"][release] = {
                 "read": rebind_manifest(source_ref / read_name, bundle / read_name, source,
                                         "oxidex_version_rehearsal_fixture_manifest"),
-                "write": rebind_manifest(source_ref / write_name, bundle / write_name, source,
-                                         "oxidex_version_rehearsal_write_fixture_manifest"),
+                "write": rebind_write_manifest(source_ref / write_name, bundle / write_name, source, canonical),
                 "cases": rebind_cases(source_ref / cases_name, bundle / cases_name, source,
                                       source_ref / read_name)}
         evidence["pairs"][pair] = pair_proof
@@ -246,6 +282,13 @@ def verify_prepared(reference: Path, output: Path, expected_head: str) -> dict:
             or (output / "read-policy-input.json").read_bytes()
                != (reference / "read-policy-input.json").read_bytes()):
         raise ValueError("prepared candidate or standalone floor policy changed")
+    canonical = {"path": str(output / "write-cohort" / "tag_matrix_base.jpg"),
+                 "sha256": WRITE_COHORT_SHA256, "bytes": WRITE_COHORT_BYTES}
+    if (proof.get("write_cohort") != canonical or not Path(canonical["path"]).is_file()
+            or Path(canonical["path"]).is_symlink()
+            or sha(Path(canonical["path"])) != WRITE_COHORT_SHA256
+            or Path(canonical["path"]).stat().st_size != WRITE_COHORT_BYTES):
+        raise ValueError("prepared canonical write cohort changed")
     for pair in PAIRS:
         pair_proof = proof["pairs"][pair]
         bundle = output / "provisioned" / pair
@@ -269,4 +312,7 @@ def verify_prepared(reference: Path, output: Path, expected_head: str) -> dict:
             current = logical_selection(json.loads((bundle / f"read-fixtures{suffix}.json").read_text()))
             if original != current:
                 raise ValueError(f"{pair} {release} ordered approved read selection changed")
+            write = json.loads((bundle / f"write-fixtures{suffix}.json").read_text())
+            if write != {"schema": 1, "kind": WRITE_KIND, "fixtures": [canonical]}:
+                raise ValueError(f"{pair} {release} canonical write binding changed")
     return proof
