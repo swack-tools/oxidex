@@ -202,10 +202,13 @@ def main(argv):
             name = argv[1] if len(argv) == 2 else 'heavy recipe'
             raise SystemExit(f'Refusing local {name}: remote input/output mapping is required')
         builder_checkout = Path.cwd() == FLEET_CHECKOUT and trusted_marker(BUILDER_MARKER)
+        # A private Just prerequisite runs in its own process. Selecting a
+        # target here would not reach the following Cargo command, so require
+        # the public route (or an explicit correctly bound environment) first.
+        if builder_checkout and os.environ.get('CARGO_TARGET_DIR') != str(FLEET_CARGO_TARGET):
+            raise SystemExit('Refusing signed fleet worker without its separate Cargo target')
         if len(argv) == 2 and argv[1] in FLEET_RECIPES and not builder_checkout:
             verify_ci_fleet_checkout()
-        if len(argv) == 2 and argv[1] in FLEET_RECIPES and builder_checkout:
-            select_signed_builder_target()
         marker = BUILDER_MARKER if (Path.cwd() in (FLEET_SOURCE, FLEET_CHECKOUT)
                                     and trusted_marker(BUILDER_MARKER)) else RUNNER_MARKER
         print(f'REMOTE_RECIPE_CONTEXT: root-owned 0444 marker {marker}',flush=True)

@@ -305,6 +305,29 @@ class RouteTests(unittest.TestCase):
             route.main(['test'])
         self.assertEqual(seen, [('oracle', '/target'), ('worker', '/target')])
 
+    def test_private_signed_workers_refuse_unbound_target_before_prerequisite_build(self):
+        with patch.object(route.sys, 'platform', 'linux'), \
+             patch.object(route.Path, 'cwd', return_value=route.FLEET_CHECKOUT), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'verified_fleet_checkout', return_value=True), \
+             patch.object(route, 'verify_ci_fleet_checkout') as ci:
+            for recipe in (None, 'fleet-test', 'fleet-tests-both', 'test-ignored'):
+                args = ['--require-local-context', *([recipe] if recipe else [])]
+                with self.subTest(recipe=recipe), patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
+                     self.assertRaisesRegex(SystemExit, 'separate Cargo target'):
+                    route.main(args)
+            with patch.dict(os.environ, {'CARGO_TARGET_DIR': str(route.FLEET_CARGO_TARGET)}):
+                self.assertEqual(route.main(['--require-local-context']), 0)
+                self.assertEqual(route.main(['--require-local-context', 'test-ignored']), 0)
+            ci.assert_not_called()
+        if shutil.which('just') is not None:
+            repo = Path(__file__).resolve().parents[3]
+            for recipe in ('_fleet-test-worker', '_fleet-tests-both-worker', '_test-ignored-worker'):
+                rendered = subprocess.run(['just', '--dry-run', recipe], cwd=repo,
+                                          capture_output=True, text=True, check=True)
+                self.assertEqual(rendered.stderr.splitlines()[0],
+                                 'python3 tools/remote-build/route.py --require-local-context')
+
     def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):
         events = []
         with patch.object(route, 'local_worker_context', return_value=True), \
