@@ -11,7 +11,7 @@ import tomllib
 ROOT = Path('/opt/runner-rust')
 PIN_FILE = Path('rust-toolchain.toml')
 TOOLS = ('rustc', 'cargo', 'rustfmt', 'clippy-driver')
-# rustup installs these PATH entry points as hardlinks to its own proxy binary.
+# rustup installs these PATH entry points as links to its own proxy binary.
 PROXIES = ('rustc', 'cargo', 'rustfmt', 'clippy-driver',
            'rustdoc', 'cargo-fmt', 'cargo-clippy')
 
@@ -46,7 +46,16 @@ def _trusted_proxies(root: Path) -> None:
             info = path.lstat()
         except FileNotFoundError as exc:
             raise RuntimeError(f'Missing preinstalled Rust proxy: {path}') from exc
-        if (path.is_symlink() or path.resolve(strict=True) != path
+        if stat.S_ISLNK(info.st_mode):
+            # Stock rustup uses direct relative links; the target is the fixed,
+            # separately checked regular executable in this sealed directory.
+            if info.st_uid != 0 or os.readlink(path) != 'rustup':
+                raise RuntimeError(f'Untrusted preinstalled Rust proxy: {path}')
+            target = path.stat()
+            if (path.resolve(strict=True) != binary / 'rustup'
+                    or (target.st_dev, target.st_ino) != (rustup.st_dev, rustup.st_ino)):
+                raise RuntimeError(f'Untrusted preinstalled Rust proxy: {path}')
+        elif (path.resolve(strict=True) != path
                 or not stat.S_ISREG(info.st_mode) or info.st_uid != 0
                 or info.st_mode & 0o022 or not info.st_mode & stat.S_IXOTH
                 or (info.st_dev, info.st_ino) != (rustup.st_dev, rustup.st_ino)):

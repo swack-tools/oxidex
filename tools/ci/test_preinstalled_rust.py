@@ -129,7 +129,20 @@ else: print(name + ' 1.99.0')
                         with self.assertRaisesRegex(RuntimeError, 'proxy'):
                             selected.probe(source, image)
                         os.link(rustup, path)
+                for name in selected.PROXIES:
+                    path = proxy_dir / name
+                    path.unlink()
+                    path.symlink_to('rustup')
+                self.assertTrue(selected.probe(source, image))  # Stock rustup internal symlinks.
+                for name in selected.PROXIES:
+                    path = proxy_dir / name
+                    path.unlink()
+                    os.link(rustup, path)
                 victim = proxy_dir / 'rustc'
+                victim.unlink()
+                victim.symlink_to('./rustup')
+                with self.assertRaisesRegex(RuntimeError, 'proxy'):
+                    selected.probe(source, image)  # Only the exact direct link is accepted.
                 victim.unlink()
                 victim.write_bytes(rustup.read_bytes())
                 victim.chmod(0o755)
