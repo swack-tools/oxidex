@@ -73,7 +73,7 @@ def source_git_env():
     _trusted_source_tool('/usr/bin/git')
     ssh_verifier = _trusted_source_tool('/usr/bin/ssh-keygen')
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    env.update(PATH='/usr/bin:/bin', HOME='/nonexistent',
+    env.update(PATH='/usr/bin:/bin', HOME='/nonexistent', XDG_CONFIG_HOME='/nonexistent',
                GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1',
                GIT_ALLOW_PROTOCOL='', GIT_CONFIG_NOSYSTEM='1',
                GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
@@ -82,6 +82,79 @@ def source_git_env():
                GIT_CONFIG_VALUE_1='ssh', GIT_CONFIG_KEY_2='gpg.ssh.program',
                GIT_CONFIG_VALUE_2=ssh_verifier)
     return env
+
+
+MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
+
+
+def _caller_excludes() -> tuple[bytes, ...]:
+    """Read caller-wide ignore patterns as data, never as source Git config."""
+    if any(key in os.environ for key in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS')):
+        raise RuntimeError('Caller Git command-scope exclusions cannot be isolated')
+    env = source_git_env()
+    home = os.environ.get('HOME')
+    if not home or not Path(home).is_absolute():
+        raise RuntimeError('Caller home unavailable for global Git exclusions')
+    env['HOME'] = home
+    for key in ('XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'):
+        if key in os.environ:
+            env[key] = os.environ[key]
+        else:
+            env.pop(key, None)
+    env.pop('GIT_CONFIG_NOSYSTEM', None)
+    env['GIT_CONFIG_COUNT'] = '0'
+    for suffix in ('KEY_0', 'VALUE_0', 'KEY_1', 'VALUE_1', 'KEY_2', 'VALUE_2'):
+        env.pop('GIT_CONFIG_' + suffix, None)
+    paths = []
+    for scope in ('--global', '--system'):
+        for query in (['--name-only', '--get-regexp', '^include'],
+                      ['--path', '--get-all', 'core.excludesFile']):
+            result = subprocess.run(['/usr/bin/git', 'config', scope, '--no-includes', '--null', *query],
+                                    env=env, capture_output=True, timeout=5)
+            if result.returncode not in (0, 1) or len(result.stdout) > 65536:
+                raise RuntimeError('Caller Git exclusion configuration is unavailable')
+            if query[0] == '--name-only' and result.returncode == 0:
+                raise RuntimeError('Included global Git exclusions require explicit review')
+            if query[0] == '--path' and result.returncode == 0:
+                paths.extend((Path(os.fsdecode(row)), True)
+                             for row in result.stdout.split(b'\0') if row)
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    if xdg is not None and not Path(xdg).is_absolute():
+        raise RuntimeError('Caller XDG configuration path is not absolute')
+    paths.append(((Path(xdg) if xdg else Path(home) / '.config') / 'git' / 'ignore', False))
+    if len(paths) > 32:
+        raise RuntimeError('Caller Git exclusion sources exceed fixed bound')
+    patterns = []
+    total = 0
+    for path, required in dict.fromkeys(paths):
+        if not path.is_absolute():
+            raise RuntimeError('Caller Git exclusion path is not absolute')
+        try:
+            before = path.lstat()
+        except FileNotFoundError:
+            if not required:
+                continue  # Git's default per-user ignore file is optional.
+            raise RuntimeError('Configured global Git exclusion file is missing')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            opened = os.fstat(fd)
+            raw = os.read(fd, MAX_CALLER_EXCLUDES_BYTES + 1)
+            after = os.fstat(fd)
+            named = path.lstat()
+            identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                    or opened.st_size > MAX_CALLER_EXCLUDES_BYTES
+                    or len(raw) != opened.st_size or b'\0' in raw
+                    or identity(before) != identity(opened)
+                    or identity(opened) != identity(after) or identity(after) != identity(named)
+                    or total + len(raw) > MAX_CALLER_EXCLUDES_BYTES):
+                raise RuntimeError('Caller Git exclusions changed or exceeded fixed bound')
+            if raw:
+                patterns.append(raw)
+                total += len(raw)
+        finally:
+            os.close(fd)
+    return tuple(patterns)
 
 
 def pinned_toolchain(source):
@@ -550,9 +623,23 @@ def source_clean_status(source: Path, head: str) -> str:
 
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
-    names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
-                                     '--cached','--others','--exclude-standard'],
-                                    env=source_git_env()).decode().split('\0')
+    command = ['git','-C',str(source),'ls-files','-z',
+               '--cached','--others','--exclude-standard']
+    patterns = _caller_excludes()
+    env = source_git_env()
+    # Preserve the repository's own exclusions. Test each caller-wide policy
+    # independently: a later !pattern must not re-include a file excluded by
+    # an earlier policy or by the repository policy.
+    names = set(subprocess.check_output(command, env=env).decode().split('\0'))
+    for raw in patterns:
+        # An anonymous descriptor gives Git only pattern data, never caller
+        # global executable configuration.
+        with tempfile.TemporaryFile() as excludes:
+            excludes.write(raw);excludes.flush();excludes.seek(0)
+            listed = subprocess.check_output(
+                [*command, '--exclude-from=/dev/fd/'+str(excludes.fileno())],
+                env=env, pass_fds=(excludes.fileno(),))
+            names.intersection_update(listed.decode().split('\0'))
     eligible=[]
     for name in names:
         parts=Path(name).parts

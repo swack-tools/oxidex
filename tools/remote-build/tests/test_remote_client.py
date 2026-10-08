@@ -9,6 +9,73 @@ SOURCE_HEAD = 'a' * 40
 
 
 class ClientTests(unittest.TestCase):
+    def test_ordinary_snapshot_preserves_global_ignore_without_executing_global_config(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            (source/'credentials.json').write_text('{"token":"private"}\n')
+            (source/'public.txt').write_text('public\n')
+            excludes=root/'global-ignore';excludes.write_text('credentials.json\n')
+            marker=root/'helper-ran';helper=root/'helper'
+            helper.write_text('#!/bin/sh\n/usr/bin/touch '+str(marker)+'\n')
+            helper.chmod(0o755)
+            global_config=root/'.gitconfig'
+            global_config.write_text('[core]\n\texcludesFile = '+str(excludes)+
+                                     '\n\tfsmonitor = '+str(helper)+
+                                     '\n[gpg "ssh"]\n\tprogram = '+str(helper)+'\n')
+            default=root/'config/git/ignore';default.parent.mkdir(parents=True)
+            default.write_text('!credentials.json\n')
+            local_allow=root/'local-allow';local_allow.write_text('!credentials.json\n')
+            subprocess.run(['/usr/bin/git','-C',str(source),'config','--local',
+                            'core.excludesFile',str(local_allow)],check=True)
+            environment={'HOME':str(root),'XDG_CONFIG_HOME':str(root/'config'),
+                         'GIT_CONFIG_GLOBAL':str(global_config)}
+            archive=root/'packet.tar.gz'
+            with patch.dict(os.environ,environment):
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),['public.txt'])
+                receipt=remote_build.make_snapshot(source,archive)
+            self.assertEqual([row['path'] for row in receipt['files']],['public.txt'])
+            with tarfile.open(archive,'r:gz') as packet:
+                self.assertEqual(packet.getnames(),['public.txt'])
+            self.assertFalse(marker.exists())
+            global_config.write_text(global_config.read_text()+
+                                     '[includeIf "gitdir:~/source/"]\n\tpath = ./other-config\n')
+            with patch.dict(os.environ,environment):
+                with self.assertRaisesRegex(RuntimeError,'Included global Git exclusions'):
+                    remote_build.eligible_snapshot_paths(source)
+
+    def test_ordinary_snapshot_uses_default_user_ignore_and_refuses_unreadable_policy(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            (source/'credentials.json').write_text('private\n')
+            (source/'public.txt').write_text('public\n')
+            default=root/'.config/git/ignore';default.parent.mkdir(parents=True)
+            default.write_text('credentials.json\n')
+            environment={k:v for k,v in os.environ.items()
+                         if k not in ('XDG_CONFIG_HOME','GIT_CONFIG_GLOBAL','GIT_CONFIG_SYSTEM')}
+            environment['HOME']=str(root)
+            with patch.dict(os.environ,environment,clear=True):
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),['public.txt'])
+                default.unlink()
+                explicit=root/'explicit-ignore';explicit.write_text('credentials.json\n')
+                config=root/'.gitconfig'
+                config.write_text('[core]\n\texcludesFile = '+str(explicit)+'\n')
+                explicit.unlink()
+                with self.assertRaisesRegex(RuntimeError,'exclusion file is missing'):
+                    remote_build.eligible_snapshot_paths(source)
+                with patch.dict(os.environ,{'GIT_CONFIG_COUNT':'1',
+                                            'GIT_CONFIG_KEY_0':'core.excludesFile',
+                                            'GIT_CONFIG_VALUE_0':str(default)}):
+                    with self.assertRaisesRegex(RuntimeError,'cannot be isolated'):
+                        remote_build.eligible_snapshot_paths(source)
+
     def test_busy_explicit_builder_records_refusal_before_source_upload(self):
         import json
         from lib import remote_build
