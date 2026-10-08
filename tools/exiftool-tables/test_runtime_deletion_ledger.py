@@ -42,7 +42,8 @@ class Task18DeletionGateControls(unittest.TestCase):
         fetch = job.index('Fetch pinned Task18 generated-owner baseline')
         control = job.index('python3 tools/exiftool-tables/runtime_deletion_ledger.py no-new-manual --root .')
         self.assertLess(fetch, control)
-        self.assertIn('git fetch --no-tags --depth=1 origin "$TASK18_BASELINE_COMMIT"', job[:control])
+        self.assertIn('fetch-depth: 0', job[:control])
+        self.assertIn('git fetch --no-tags origin "$TASK18_BASELINE_COMMIT"', job[:control])
         self.assertNotIn('runtime_deletion_ledger.py verify --root .', job)
 
     def test_exact_five_historical_changes_and_49_keep_are_structurally_valid(self) -> None:
@@ -106,6 +107,18 @@ class Task18DeletionGateControls(unittest.TestCase):
         transferred = field("IFD0/0x9c9b", "residual",
                             "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
                             disposition="hand-kept")
+        with self.assertRaisesRegex(gate.Refused, "new manual owner"):
+            gate.no_new_manual([transferred], root=ROOT)
+
+    def test_post_integration_generated_owner_cannot_be_erased_before_transfer(self) -> None:
+        generated = gate.generated_baseline(ROOT)
+        self.assertEqual(len(generated), 569)
+        self.assertIn(("Kodak", "Main", "0x0014"), generated)
+        inventory = json.loads((ROOT / "tools/exiftool-tables/runtime_ownership.json").read_text())
+        original = next(row for row in inventory["rows"] if row["module"] == "Kodak"
+                        and row["table"] == "Main" and row["field"]["value"] == "0x0014")
+        transferred = copy.deepcopy(original)
+        transferred.update(owner="residual", symbol="src/core/tiff_helpers.rs::MANUAL_KODAK_TIME")
         with self.assertRaisesRegex(gate.Refused, "new manual owner"):
             gate.no_new_manual([transferred], root=ROOT)
 
@@ -268,6 +281,35 @@ class CandidateHistoryIdentityControls(unittest.TestCase):
                                         git(root, 'update-index', clear, '--', name)
                                     (root / name).write_text('committed\n')
                     self.assertEqual(gate.verify_history(root), head)
+
+    def test_core_filemode_false_cannot_hide_executable_change(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="task18-mode-") as directory:
+            root = Path(directory).resolve()
+            env = gate._git_env()
+            def git(*args: str) -> str:
+                return subprocess.check_output(["/usr/bin/git", "-C", str(root), *args],
+                                               env=env, text=True, stderr=subprocess.PIPE).strip()
+            git("init", "-q")
+            git("config", "user.name", "Task18 Test")
+            git("config", "user.email", "task18@example.invalid")
+            script = root / "script.sh"
+            script.write_text("#!/bin/sh\nexit 0\n")
+            script.chmod(0o644)
+            git("add", "script.sh")
+            git("commit", "-qm", "source")
+            head = git("rev-parse", "HEAD")
+            source_hash = gate.clean_snapshot.source_tree_sha256(root)
+            git("config", "core.filemode", "false")
+            script.chmod(0o755)
+            self.assertEqual(git("status", "--porcelain=v1", "--untracked-files=all"), "")
+            self.assertEqual(git("write-tree"), git("rev-parse", "HEAD^{tree}"))
+            self.assertEqual(gate.clean_snapshot.source_tree_sha256(root), source_hash)
+            with patch.object(gate, "INTEGRATION_COMMIT", head):
+                with self.assertRaisesRegex(gate.Refused, "tracked mode"):
+                    gate.verify_history(root)
+            script.chmod(0o644)
+            with patch.object(gate, "INTEGRATION_COMMIT", head):
+                self.assertEqual(gate.verify_history(root), head)
 
     def test_replace_ref_cannot_supply_candidate_ancestry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="task18-replace-") as directory:
@@ -463,6 +505,30 @@ class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
                                  binary_path=binary_file, controller_key=trusted,
                                  test_only_attribution_bridge=lambda _attr, fields: fields == [source_field])["status"],
                                  "PASS_TEST_PACKET_BINDINGS")
+                structural = gate.HISTORICAL["D3"][0]
+                self.assertIn(structural, gate.RETAINED_STRUCTURAL)
+                structural_candidate = dict(candidate, old_symbol=structural)
+                structural_appendix = sign("structural-appendix", {
+                    "schema": "runtime-deletion-appendix/v1", "task": "18",
+                    "approval": "prospective-approved", "candidate_commit": head,
+                    "integration_sha": integration, "merge_sha": integration,
+                    "source_sha256": source, "binary_sha256": binary,
+                    "candidates": [structural_candidate]})
+                structural_manifest = sign("structural-manifest", {
+                    "schema": "runtime-deletion-manifest/v1", "task": "18",
+                    "appendix_sha256": structural_appendix["sha256"], "candidate_commit": head,
+                    "source_sha256": source, "binary_sha256": binary,
+                    "integration_sha": integration, "merge_sha": integration,
+                    "receipts": {structural: {kind: binding["sha256"] for kind, binding in receipts.items()}}})
+                structural_entry = dict(entry, old_symbol=structural,
+                    controller_reconciliation_manifest_sha256=structural_manifest["sha256"])
+                structural_packet = {"schema": "runtime-deletion-packet/v1",
+                                     "appendix": structural_appendix,
+                                     "manifest": structural_manifest, "entries": [structural_entry]}
+                with self.assertRaisesRegex(gate.Refused, "structural/live public owner"):
+                    gate.evaluate_prospective(structural_packet, root=ROOT, ops_root=ops,
+                                             binary_path=binary_file, controller_key=trusted,
+                                             test_only_attribution_bridge=lambda _attr, _fields: True)
                 changed = copy.deepcopy(packet)
                 changed["entries"][0]["receipt_bindings"]["oracle"]["sha256"] = "sha256:" + "0" * 64
                 with self.assertRaisesRegex(gate.Refused, "digest"):

@@ -30,10 +30,6 @@ LEDGER = Path("docs/reference/generated-runtime-deletion-ledger.json")
 INTEGRATION_COMMIT = "4f653243d33cf053107f4f19b8bd449329de611b"
 GENERATED_BASELINE_BLOB = "a8af250fee51d8f12b93c6935b6f05b41e77cc67"
 GENERATED_BASELINE_SHA256 = "d77ab9d6c74110280edf3069596b4345c718c82b2569445ffd4aa0f82293612c"
-# The generated owner set at the already-recorded Task18 integration point.
-# Candidate inventory changes cannot remove this independent reference.
-GENERATED_BASELINE_BLOB = "a8af250fee51d8f12b93c6935b6f05b41e77cc67"
-GENERATED_BASELINE_SHA256 = "d77ab9d6c74110280edf3069596b4345c718c82b2569445ffd4aa0f82293612c"
 HISTORICAL = {
     "D1": ("src/core/exif_dir_engine.rs::DirEngineRows::drain", "test-only-alias-removal", "13ce49071830ca2b76cfcdfdececb537a21e3e9a"),
     "D2": ("src/core/tiff_helpers.rs::EXIF_IFD_SILENCE_EDGES", "constant-inline", "0ddcbb1b9cb7c67aa12d55059649e16bc7e4eb53"),
@@ -56,9 +52,30 @@ SYMBOL = re.compile(r"(?:src/[A-Za-z0-9_./-]+\.rs)::[A-Za-z_][A-Za-z0-9_:.-]*\Z"
 # A packet cannot appoint its own authority. No Task18 controller signing
 # key has been approved; tests inject an independently generated test key.
 PRODUCTION_CONTROLLER_KEY: bytes | None = None
-STRUCTURAL = {"process_keyed_directory", "process_serial_directory", "ifd0_walk",
-              "take_ifd0", "finish_ifd0", "keep_hand_on_decline", "process_exif",
-              "process_binary_data", "execute"}
+# Preserve the prior broad basename refusal while binding the current
+# retained traversal inventory to exact source symbols. D3's merged IFD1
+# branch must never become eligible just because it was absent from that list.
+STRUCTURAL_NAMES = frozenset({"process_keyed_directory", "process_serial_directory", "ifd0_walk",
+    "take_ifd0", "finish_ifd0", "keep_hand_on_decline", "process_exif",
+    "process_binary_data", "execute"})
+RETAINED_STRUCTURAL = frozenset({
+    "src/exiftool_tables/keyed_engine.rs::process_keyed_directory",
+    "src/exiftool_tables/serial_engine.rs::process_serial_directory",
+    "src/exiftool_tables/ifd_engine.rs::process_exif",
+    "src/exiftool_tables/engine.rs::process_binary_data",
+    "src/exiftool_tables/pipeline.rs::execute",
+    "src/core/metadata.rs::execute",
+    "src/core/exif_dir_engine.rs::DirEngineRows::route_entry",
+    "src/core/exif_dir_engine.rs::DirEngineRows::finish",
+    "src/core/exif_dir_engine.rs::DirEngineRows::take_ifd0",
+    "src/core/exif_dir_engine.rs::DirEngineRows::finish_ifd0",
+    "src/core/exif_dir_engine.rs::DirEngineRows::keep_hand_on_decline",
+    "src/core/exif_dir_engine.rs::ifd0_walk",
+    "src/core/exif_dir_engine.rs::ifd0_walk_with_session",
+    "src/core/tiff_helpers.rs::parse_ifd1_with_session",
+    "src/core/tiff_helpers.rs::process_exif_directory_walk",
+    "src/core/jpeg_helpers.rs::process_exif_segments_with_options",
+})
 
 
 class Refused(ValueError):
@@ -125,6 +142,28 @@ def generated_baseline(root: Path) -> set[tuple[str, str, str]]:
                  for row in baseline["rows"] if row["owner"] == "generated"}
     if len(generated) != 563 or ("Exif", "Main", "0x9c9b") not in generated:
         raise Refused("pinned generated ownership baseline incomplete")
+    # A later committed generated owner must remain in the no-manual set even
+    # when the candidate removes its own generated row. Read every inventory
+    # change reachable from the candidate, not merely the current inventory.
+    head = git(root, "rev-parse", "HEAD")
+    if (git(root, "rev-parse", "--is-shallow-repository") != "false"
+            or not _is_ancestor(root, INTEGRATION_COMMIT, head)):
+        raise Refused("complete Task18 candidate ancestry is required for generated ownership")
+    commits = git(root, "rev-list", "--full-history", f"{INTEGRATION_COMMIT}..{head}",
+                  "--", "tools/exiftool-tables/runtime_ownership.json").splitlines()
+    seen_blobs = {GENERATED_BASELINE_BLOB}
+    for commit in commits:
+        blob = git(root, "rev-parse", f"{commit}:tools/exiftool-tables/runtime_ownership.json")
+        if blob in seen_blobs:
+            continue
+        seen_blobs.add(blob)
+        inventory = _strict_json(git_bytes(root, "cat-file", "blob", blob))
+        if (not isinstance(inventory, dict) or inventory.get("schema") != 1
+                or not isinstance(inventory.get("rows"), list)):
+            raise Refused("committed generated ownership inventory is malformed")
+        ownership.verify_rows(inventory["rows"])
+        generated.update((row["module"], row["table"], row["field"]["value"].split("/")[-1])
+                         for row in inventory["rows"] if row["owner"] == "generated")
     return generated
 
 
@@ -184,6 +223,34 @@ def _is_ancestor(root: Path, ancestor: str, head: str) -> bool:
                           env=_git_env()).returncode == 0
 
 
+def _verify_tracked_modes(root: Path, head: str) -> None:
+    """Bind actual checkout type/execute bits to committed tree, not core.filemode."""
+    tree = git_bytes(root, "ls-tree", "-r", "-z", head)
+    for record in filter(None, tree.split(b"\0")):
+        try:
+            metadata, raw_name = record.split(b"\t", 1)
+            mode, kind, _object_id = metadata.decode("ascii").split()
+            name = os.fsdecode(raw_name)
+        except (ValueError, UnicodeError) as exc:
+            raise Refused("candidate committed tree is malformed") from exc
+        relative = Path(name)
+        if not name or relative.is_absolute() or ".." in relative.parts:
+            raise Refused("candidate committed path is invalid")
+        if mode == "160000" and kind == "commit":
+            continue  # Submodule dirt is still handled by the existing status gate.
+        try:
+            info = (root / relative).lstat()
+        except OSError as exc:
+            raise Refused("candidate tracked file is missing") from exc
+        if ((mode == "100644" and kind == "blob" and stat.S_ISREG(info.st_mode)
+             and not info.st_mode & 0o111)
+                or (mode == "100755" and kind == "blob" and stat.S_ISREG(info.st_mode)
+                    and bool(info.st_mode & 0o111))
+                or (mode == "120000" and kind == "blob" and stat.S_ISLNK(info.st_mode))):
+            continue
+        raise Refused(f"candidate tracked mode differs from committed tree: {name}")
+
+
 def verify_history(root: Path) -> str:
     # Local core.worktree can make Git inspect a clean sibling while the
     # ownership and ledger readers still consume `root` directly.
@@ -201,6 +268,7 @@ def verify_history(root: Path) -> str:
     head = git(root, "rev-parse", "HEAD")
     if git(root, "write-tree") != git(root, "rev-parse", "HEAD^{tree}"):
         raise Refused("deletion gate index differs from committed tree")
+    _verify_tracked_modes(root, head)
     # The five development commits were squash-merged as PR #940. They are
     # evidence references, not ancestors of the integration branch.
     if not _is_ancestor(root, INTEGRATION_COMMIT, head):
@@ -385,7 +453,8 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
         if not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol) or symbol in seen or symbol not in approved:
             raise Refused("unlisted, duplicate, or nonliteral symbol")
         seen.add(symbol)
-        if symbol.rsplit("::", 1)[-1] in STRUCTURAL:
+        if (symbol in RETAINED_STRUCTURAL or symbol == HISTORICAL["D3"][0]
+                or symbol.rsplit("::", 1)[-1] in STRUCTURAL_NAMES):
             raise Refused("structural/live public owner is nondeletable")
         if (not isinstance(fields, list) or not fields or not all(isinstance(field, str) for field in fields)
                 or len(set(fields)) != len(fields) or any(field not in by_field for field in fields)

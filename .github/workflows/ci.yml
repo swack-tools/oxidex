@@ -896,12 +896,14 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Task18 compares every committed generated-owner inventory since integration.
       - name: Fetch pinned Task18 generated-owner baseline
         run: |
           set -euo pipefail
           export GIT_NO_REPLACE_OBJECTS=1
           TASK18_BASELINE_COMMIT=4f653243d33cf053107f4f19b8bd449329de611b
-          git fetch --no-tags --depth=1 origin "$TASK18_BASELINE_COMMIT"
+          git fetch --no-tags origin "$TASK18_BASELINE_COMMIT"
           test "$(git rev-parse "${TASK18_BASELINE_COMMIT}:tools/exiftool-tables/runtime_ownership.json")" = a8af250fee51d8f12b93c6935b6f05b41e77cc67
       - name: Check Task18 no-new-manual ownership
         run: |
