@@ -386,6 +386,18 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertTrue(any('bundle' in command and 'create' in command
                             and command[-1] == 'HEAD' for command in commands))
 
+    def test_qualification_python_receipt_binds_signed_source_and_remote_log(self):
+        receipt, commands, _, extras, heads = self.exercise(0, recipe='test-qualification')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertEqual(receipt['just_recipe'], 'test-qualification')
+        self.assertEqual(receipt['source_commit'], 'a' * 40)
+        self.assertEqual(len(receipt['recipe_log_sha256']), 64)
+        self.assertTrue(any('just test-qualification' in ' '.join(command)
+                            for command in commands))
+
     def test_ordinary_test_keeps_snapshot_mode_and_actual_head_context(self):
         for status in ('', ' M justfile\n'):
             with self.subTest(status=status):
