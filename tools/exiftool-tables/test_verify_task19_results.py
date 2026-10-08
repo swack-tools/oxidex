@@ -24,6 +24,148 @@ import verify_task19_results as adapter
 
 
 class Task19AdapterControls(unittest.TestCase):
+    def test_rehashed_write_selection_requires_canonical_matrix(self) -> None:
+        import json
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            output_root = root / "output"
+            output_root.mkdir()
+            target_root = root / "targets"
+            target_root.mkdir()
+            with patch.dict(os.environ, {"OXIDEX_OPS_DIR": str(root)}):
+                selected = adapter.canonical_row(
+                    {"run_id": "trial", "rows": [{"id": adapter.ROWS[0]}]},
+                    output_root / "trial/qualification-result.json", target_root)
+            fixture = selected["fixtures"]["before"]
+            manifest = Path(fixture["write_manifest"])
+            manifest.parent.mkdir(parents=True)
+            jpeg = output_root / "write-cohort/tag_matrix_base.jpg"
+            jpeg.parent.mkdir()
+            shutil.copyfile(adapter.ROOT / adapter.WRITE_COHORT, jpeg)
+            def write_manifest(path, carrier):
+                path.write_text(json.dumps({"schema": 1,
+                    "kind": "oxidex_version_rehearsal_write_fixture_manifest",
+                    "fixtures": [{"path": str(carrier), "sha256": adapter.sha(carrier),
+                                  "bytes": carrier.stat().st_size}]}))
+            write_manifest(manifest, jpeg)
+            Path(fixture["native_cases"]).write_text('[{"name":"case"}]')
+            release = "13.59"
+            config = {
+                "target_directories": {release: str(Path(selected["target_directory"]) / "before")},
+                "verified_input_bundle": selected["immutable_source_identities"]["before"]["input_bundle"],
+                "write_fixture_manifests": {release: str(manifest)},
+                "write_fixture_bindings": {release: adapter.executor._write_fixture_binding(str(manifest))},
+                "native_cases": {release: [{"name": "case"}]},
+            }
+            committed = {"read_union": {"original_manifests": {
+                "before": {"path": fixture["read_manifest"]}}}}
+            run_dir = Path(selected["durable_output_directory"]) / "before"
+            adapter.require_canonical_side(config, selected, "before", release, run_dir, committed)
+            alternate = manifest.parent / "other-write.json"
+            other_jpeg = manifest.parent / "other.jpg"
+            other_jpeg.write_bytes(b"\xff\xd8other")
+            write_manifest(alternate, other_jpeg)
+            # Rehashing the selected manifest and binding at the correct path
+            # cannot substitute a different JPEG for the committed cohort.
+            write_manifest(manifest, other_jpeg)
+            config["write_fixture_bindings"][release] = adapter.executor._write_fixture_binding(str(manifest))
+            with self.assertRaisesRegex(adapter.qualification.Refused, "canonical cohort"):
+                adapter.require_canonical_side(config, selected, "before", release, run_dir, committed)
+            write_manifest(manifest, jpeg)
+            config["write_fixture_manifests"][release] = str(alternate)
+            config["write_fixture_bindings"][release] = adapter.executor._write_fixture_binding(str(alternate))
+            with self.assertRaisesRegex(adapter.qualification.Refused, "canonical matrix"):
+                adapter.require_canonical_side(config, selected, "before", release, run_dir, committed)
+
+    def test_foreign_native_library_is_refused(self) -> None:
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            source, foreign = root / "selected", root / "foreign"
+            (source / "lib").mkdir(parents=True)
+            (foreign / "lib").mkdir(parents=True)
+            adapter.require_native_library(source, source / "lib")
+            with self.assertRaisesRegex(adapter.qualification.Refused, "must belong"):
+                adapter.require_native_library(source, foreign / "lib")
+
+    def test_generated_delta_requires_authenticated_stage_inventories(self) -> None:
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            checkout = Path(directory).resolve()
+            generated = checkout / "generated/a"
+            generated.parent.mkdir()
+            generated.write_bytes(b"a")
+            original = [{"path": "generated/a", "sha256": adapter.sha(generated), "bytes": 1}]
+            fabricated = [{"path": "generated/b", "sha256": "b" * 64, "bytes": 1}]
+            entry = {"generated_artifacts": fabricated}
+            reports = [{"generated_artifacts": fabricated} for _ in range(3)]
+            artifact = adapter.executor.artifacts.Artifact("tiny", 1, "control", "generated/a")
+            with patch.object(adapter.executor.artifacts, "inventory", return_value=[artifact]):
+                with self.assertRaisesRegex(adapter.qualification.Refused, "generated artifact"):
+                    adapter.require_artifact_side(entry, *reports, checkout, "side")
+                accepted = {"generated_artifacts": original}
+                adapter.require_artifact_side(accepted, accepted, accepted, accepted, checkout, "side")
+        for policy, before, after in (
+            ("identical", original, fabricated),
+            ("manifest-delta", original, original),
+            ("manifest-delta-with-removals", original, fabricated),
+        ):
+            row = {"id": "control", "before": {"generated_artifacts": before},
+                   "after": {"generated_artifacts": after},
+                   "artifact_delta": {"policy": policy}}
+            with self.subTest(policy=policy), self.assertRaises(adapter.qualification.Refused):
+                adapter.require_artifact_delta(row, {"artifact_manifest": {"comparison": policy}})
+        row = {"id": "forward", "before": {"generated_artifacts": original},
+               "after": {"generated_artifacts": fabricated},
+               "artifact_delta": {"policy": "manifest-delta", "added": ["generated/b"],
+                                  "removed": ["generated/a"], "changed": []}}
+        adapter.require_artifact_delta(row, {"artifact_manifest": {"comparison": "manifest-delta"}})
+
+    def test_rehashed_lease_receipts_require_shared_lock(self) -> None:
+        import json
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            run = root / "trial"
+            run.mkdir()
+            lock = root / "transition.host.lock"
+            lock.write_text("lock")
+            for name in ("lease-owner.json", "lease-expiry.json", "lease-release.json"):
+                (run / name).write_text(json.dumps({"lock_path": str(lock), "lock_realpath": str(lock)}))
+            (run / "lease-heartbeat.jsonl").write_text(json.dumps({"lock_path": str(lock)}) + "\n")
+            (run / "handoff.jsonl").write_text(json.dumps({"lease": str(lock)}) + "\n")
+            final = run / "qualification-result.json"
+            self.assertEqual(adapter.require_canonical_lease(final), lock)
+            foreign = root / "foreign.lock"
+            foreign.write_text("lock")
+            for name in ("lease-owner.json", "lease-expiry.json", "lease-release.json"):
+                (run / name).write_text(json.dumps({"lock_path": str(foreign), "lock_realpath": str(foreign)}))
+            (run / "lease-heartbeat.jsonl").write_text(json.dumps({"lock_path": str(foreign)}) + "\n")
+            (run / "handoff.jsonl").write_text(json.dumps({"lease": str(foreign)}) + "\n")
+            with self.assertRaisesRegex(adapter.qualification.Refused, "canonical transition host lock"):
+                adapter.require_canonical_lease(final)
+
+    def test_ancestor_rename_and_symlink_cannot_publish_success(self) -> None:
+        import json
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            ancestor = root / "output"
+            ancestor.mkdir()
+            moved = root / "moved"
+            output = ancestor / "receipt.json"
+            original_open = os.open
+            changed = False
+            def swap_before_create(path, flags, *args, **kwargs):
+                nonlocal changed
+                if path == output.name and kwargs.get("dir_fd") is not None and not changed:
+                    ancestor.rename(moved)
+                    ancestor.symlink_to(moved, target_is_directory=True)
+                    changed = True
+                return original_open(path, flags, *args, **kwargs)
+            with patch.object(adapter.os, "open", side_effect=swap_before_create):
+                with self.assertRaises(adapter.qualification.Refused):
+                    adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertTrue(changed)
+            self.assertEqual(json.loads((moved / "receipt.json").read_text())["status"],
+                             "publication_failed")
+
     def test_all_tool_hashes_must_be_explicit_and_unique(self) -> None:
         items = [f"{name}={'a' * 64}" for name in adapter.TOOL_FILES]
         self.assertEqual(len(adapter.tool_expectations(items)), len(adapter.TOOL_FILES))
@@ -44,7 +186,7 @@ class Task19AdapterControls(unittest.TestCase):
             with self.assertRaisesRegex(adapter.qualification.Refused, "not durable"):
                 adapter._durable_executable_roots()
         with TemporaryDirectory(dir=Path.home()) as directory:
-            root = Path(directory).resolve()
+            root = Path(directory).resolve().resolve()
             target = root / "configured-target"
             target.mkdir()
             binary = target / "oxidex"
@@ -65,7 +207,7 @@ class Task19AdapterControls(unittest.TestCase):
             candidates.append(("mac-default", None, Path("/private")))
         for label, parent, broad_root in candidates:
             with self.subTest(label=label), TemporaryDirectory(dir=parent) as directory:
-                target = Path(directory).resolve() / "target"
+                target = Path(directory).resolve().resolve() / "target"
                 target.mkdir()
                 binary = target / "oxidex"
                 binary.write_bytes(b"fixture binary")
@@ -79,7 +221,7 @@ class Task19AdapterControls(unittest.TestCase):
                             adapter._rooted_executable(binary, parent_root, "OxiDex binary")
         # A normal configured root and the exact approved-Perl layout remain valid.
         with TemporaryDirectory(dir=Path.home()) as directory:
-            root = Path(directory).resolve()
+            root = Path(directory).resolve().resolve()
             target = root / "targets" / "row"
             target.mkdir(parents=True)
             binary = target / "oxidex"
@@ -131,21 +273,21 @@ class Task19AdapterControls(unittest.TestCase):
     def test_final_marker_identity_binds_loaded_bytes_and_rejects_swap(self) -> None:
         import json
         with TemporaryDirectory() as directory:
-            marker = Path(directory) / "qualification-result.json"
+            marker = Path(directory).resolve() / "qualification-result.json"
             original = {"schema": 1, "run_id": "original"}
             marker.write_text(json.dumps(original))
             with adapter.pin_marker(marker) as pinned:
                 binding, original_bytes = pinned.binding, pinned.data
                 self.assertEqual(json.loads(original_bytes), original)
                 adapter.require_marker_unchanged(marker, binding, pinned)
-                replacement = Path(directory) / "replacement.json"
+                replacement = Path(directory).resolve() / "replacement.json"
                 replacement.write_text(json.dumps({"schema": 1, "run_id": "replacement"}))
                 replacement.replace(marker)
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
                     adapter.require_marker_unchanged(marker, binding, pinned)
                 # Keep the original descriptor open across *both* replacements.
                 # The filesystem cannot recycle its inode for identical bytes.
-                same = Path(directory) / "same.json"
+                same = Path(directory).resolve() / "same.json"
                 same.write_bytes(original_bytes)
                 same.replace(marker)
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
@@ -156,7 +298,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_marker_pin_read_failure_closes_owned_descriptor(self) -> None:
         with TemporaryDirectory() as directory:
-            marker = Path(directory) / "qualification-result.json"
+            marker = Path(directory).resolve() / "qualification-result.json"
             marker.write_bytes(b'{}')
             opened = []
             original_open = adapter.os.open
@@ -175,7 +317,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_fifo_final_marker_refuses_without_waiting_for_writer(self) -> None:
         with TemporaryDirectory() as directory:
-            fifo = Path(directory) / "qualification-result.json"
+            fifo = Path(directory).resolve() / "qualification-result.json"
             os.mkfifo(fifo)
             with self.assertRaisesRegex(adapter.qualification.Refused, "regular file"):
                 adapter.marker_snapshot(fifo)
@@ -185,7 +327,7 @@ class Task19AdapterControls(unittest.TestCase):
         with TemporaryDirectory() as directory:
             paths = []
             for name in ("same", "forward", "reverse"):
-                parent = Path(directory) / name
+                parent = Path(directory).resolve() / name
                 parent.mkdir()
                 marker = parent / "qualification-result.json"
                 marker.write_text(json.dumps({"schema": 1}))
@@ -213,23 +355,23 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_output_cannot_physically_overlap_owned_source(self) -> None:
         with TemporaryDirectory() as directory:
-            source = Path(directory) / "source"
+            source = Path(directory).resolve() / "source"
             source.mkdir()
-            alias = Path(directory) / "alias"
+            alias = Path(directory).resolve() / "alias"
             alias.symlink_to(source, target_is_directory=True)
             with patch.object(adapter, "ROOT", source):
                 for output in (source / "receipt.json", alias / "receipt.json"):
                     with self.subTest(output=output), self.assertRaisesRegex(
                             adapter.qualification.Refused, "overlaps"):
                         adapter.refuse_source_output_overlap(output)
-                adapter.refuse_source_output_overlap(Path(directory) / "evidence" / "receipt.json")
+                adapter.refuse_source_output_overlap(Path(directory).resolve() / "evidence" / "receipt.json")
                 # The real case alias exists only on case-insensitive volumes.
                 case_alias = source.with_name(source.name.upper())
                 if case_alias.exists() and os.path.samefile(case_alias, source):
                     with self.assertRaisesRegex(adapter.qualification.Refused, "overlaps"):
                         adapter.refuse_source_output_overlap(case_alias / "receipt.json")
                 # A synthetic inode alias exercises the identity check on Linux.
-                bind_alias = Path(directory) / "bind-alias"
+                bind_alias = Path(directory).resolve() / "bind-alias"
                 bind_alias.mkdir()
                 original_samefile = os.path.samefile
                 with patch.object(adapter.os.path, "samefile", side_effect=lambda left, right:
@@ -239,7 +381,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_cli_rejects_source_output_before_replay_or_write(self) -> None:
         with TemporaryDirectory() as directory:
-            repo = Path(directory)
+            repo = Path(directory).resolve()
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
             subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
             subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
@@ -273,7 +415,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_durable_result_path_refuses_temporary_evidence(self) -> None:
         with TemporaryDirectory() as directory:
-            marker = Path(directory) / "qualification-result.json"
+            marker = Path(directory).resolve() / "qualification-result.json"
             marker.write_text("{}")
             with self.assertRaisesRegex(adapter.qualification.Refused, "durable"):
                 adapter.qualification._evidence_location(marker, "Task19 committed result")
@@ -282,14 +424,14 @@ class Task19AdapterControls(unittest.TestCase):
         with TemporaryDirectory() as directory:
             roots = []
             for label in ("same", "forward", "reverse"):
-                run = Path(directory) / label
+                run = Path(directory).resolve() / label
                 run.mkdir()
                 marker = run / "qualification-result.json"
                 marker.write_text('{}')
                 roots.append(marker)
             earlier = roots[0].parent / "execution-status.json"
             earlier.write_text('{"state":"complete"}')
-            policy = Path(directory) / "policy.json"
+            policy = Path(directory).resolve() / "policy.json"
             policy.write_text('{}')
             value = {"rows": {}, "read_policy_input": {"path": str(policy)}}
             with patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path):
@@ -307,7 +449,7 @@ class Task19AdapterControls(unittest.TestCase):
         ops_root = shared.ops_paths.ops_root()
         ops_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(dir=ops_root, prefix="task19-tree-control-") as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             capture = shared.catalog_stage.capture_tag_catalog(
                 catalog_fixture.FixtureGet(catalog_fixture.complete_responses()),
                 "2026-09-13T00:00:00Z")
@@ -441,7 +583,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_no_replace_publication_and_failed_durability_retract(self) -> None:
         with TemporaryDirectory() as directory:
-            output = Path(directory) / "receipt.json"
+            output = Path(directory).resolve() / "receipt.json"
             output.write_text('{"owner":"foreign"}\n')
             with self.assertRaisesRegex(adapter.qualification.Refused, "already exists"):
                 adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
@@ -467,7 +609,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_publication_marker_recheck_invalidates_owned_success(self) -> None:
         with TemporaryDirectory() as directory:
-            output = Path(directory) / "receipt.json"
+            output = Path(directory).resolve() / "receipt.json"
             calls = 0
             def changed_marker():
                 nonlocal calls
@@ -483,8 +625,8 @@ class Task19AdapterControls(unittest.TestCase):
     def test_final_output_mode_and_link_custody_refuse(self) -> None:
         with TemporaryDirectory() as directory:
             for fault in ("mode", "link"):
-                output = Path(directory) / f"{fault}.json"
-                retained = Path(directory) / f"{fault}-retained.json"
+                output = Path(directory).resolve() / f"{fault}.json"
+                retained = Path(directory).resolve() / f"{fault}-retained.json"
                 calls = 0
                 def alter_on_final_validation():
                     nonlocal calls
@@ -508,7 +650,7 @@ class Task19AdapterControls(unittest.TestCase):
             for window in ("final-validation", "input-close", "primary-close"):
                 for change in ("overwrite", "truncate", "extend"):
                     with self.subTest(window=window, change=change):
-                        output = Path(directory) / f"{window}-{change}.json"
+                        output = Path(directory).resolve() / f"{window}-{change}.json"
                         original_close = os.close
                         validation_calls = 0
                         changed = False
@@ -559,7 +701,7 @@ class Task19AdapterControls(unittest.TestCase):
         import json
         shared = adapter.qualification
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             read_file = root / "read.bin"
             read_file.write_bytes(b"read")
             write_file = root / "write.jpg"
@@ -615,7 +757,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_publication_invalidation_failure_preserves_outcome_unknown(self) -> None:
         with TemporaryDirectory() as directory:
-            output = Path(directory) / "receipt.json"
+            output = Path(directory).resolve() / "receipt.json"
             original_truncate = os.ftruncate
             calls = 0
             def fail_invalidation(descriptor, length):
@@ -634,7 +776,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_close_only_failure_invalidates_owned_inode(self) -> None:
         with TemporaryDirectory() as directory:
-            output = Path(directory) / "receipt.json"
+            output = Path(directory).resolve() / "receipt.json"
             original_close = os.close
             calls = 0
             def fail_first_close(descriptor):
@@ -651,7 +793,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
-            repo = Path(directory) / "repo"
+            repo = Path(directory).resolve() / "repo"
             repo.mkdir()
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
             subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
@@ -677,7 +819,7 @@ class Task19AdapterControls(unittest.TestCase):
                     adapter.source_snapshot(head, tree, bound)
                 todo.write_text("Next pin: not selected\n")
                 self.assertEqual(adapter.source_snapshot(head, tree, bound), clean)
-                wrapper_dir = Path(directory) / "hostile-path"
+                wrapper_dir = Path(directory).resolve() / "hostile-path"
                 wrapper_dir.mkdir()
                 wrapper = wrapper_dir / "git"
                 invoked = wrapper_dir / "invoked"
@@ -792,7 +934,7 @@ class Task19AdapterControls(unittest.TestCase):
         # adapter itself still traverses all six sides, inventories and publishes.
         import json
         with TemporaryDirectory(dir=Path.home()) as directory:
-            root = Path(directory).resolve()
+            root = Path(directory).resolve().resolve()
             target_root = root / "targets"
             target_root.mkdir()
             source_root = root / "sources"
@@ -883,9 +1025,11 @@ class Task19AdapterControls(unittest.TestCase):
                     binaries[(row_name, side)] = {"path": str(binary), "sha256": adapter.sha(binary)}
                     side_run = run / row_name / side
                     (side_run / "inputs").mkdir(parents=True)
-                    (side_run / "execution-status.json").write_text('{}')
+                    (side_run / "execution-status.json").write_text(json.dumps({
+                        "host_lock": str(root / "transition.host.lock")}))
                     (side_run / "inputs" / "config.json").write_text(json.dumps({
                         "verified_input_bundle": str(bundle),
+                        "host_lock": str(root / "transition.host.lock"),
                         "target_directories": {release: str(target)}}))
                     sides[side] = {"release": release, "source_identity": sources[release],
                                    "instrument": {"source_commit": expected_head,
@@ -896,10 +1040,12 @@ class Task19AdapterControls(unittest.TestCase):
                                    "release_tests": {"passed": 1},
                                    "read_report_sha256": "1" * 64,
                                    "write_report_sha256": "2" * 64,
+                                   "generated_artifacts": [],
                                    "execution_journal_sha256": "3" * 64}
                 marker = run / "qualification-result.json"
                 marker.write_text(json.dumps({"rows": [{"id": row_name, **sides,
-                    "read_payload_floors": {}, "read_policy_pair": {}}],
+                    "read_payload_floors": {}, "read_policy_pair": {},
+                    "artifact_delta": {"policy": "synthetic"}}],
                     "caller": {"head": expected_head, "index_tree": expected_tree,
                                "pin_version": "13.59", "status": "clean"},
                     "matrix": {"sha256": matrix_sha},
@@ -916,9 +1062,11 @@ class Task19AdapterControls(unittest.TestCase):
             real_source_resolver = adapter.qualification.resolve_source_identity
             def source_check(identity, selected_bundle):
                 checks.append("source")
-                return real_source_resolver(identity, selected_bundle)
+                return real_source_resolver({"expected_release": identity["expected_release"]},
+                                            selected_bundle)
             def report_for(_run, _journal, _release, stage):
-                return {"state": "passed"} if stage == "test" else {"build_environment": {}}
+                return {"state": "passed"} if stage == "test" else {
+                    "build_environment": {}, "generated_artifacts": []}
             import importlib.util
             bootstrap_script = adapter.qualification.REPOSITORY_ROOT / "tools/release/bootstrap_oracle.py"
             spec = importlib.util.spec_from_file_location("oxidex_adapter_tiny_corpus", bootstrap_script)
@@ -951,6 +1099,14 @@ class Task19AdapterControls(unittest.TestCase):
                     patch.object(adapter, "require_imported_source_paths"),
                     patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: Path(path).resolve()),
                     patch.object(adapter.qualification, "load_matrix", return_value={"rows": [{"id": row} for row in adapter.ROWS]}),
+                    patch.object(adapter, "canonical_row", side_effect=lambda result, *_args: {
+                        "id": "synthetic", "immutable_source_identities": {
+                            side: {"expected_release": result["rows"][0][side]["release"]}
+                            for side in adapter.qualification.SIDES}}),
+                    patch.object(adapter, "require_canonical_lease", return_value=root / "transition.host.lock"),
+                    patch.object(adapter, "require_canonical_side"),
+                    patch.object(adapter.qualification, "_compare_sides", return_value={"policy": "synthetic"}),
+                    patch.object(adapter.executor, "_require_generated_artifacts", return_value=[]),
                     patch.object(adapter.qualification, "load_committed_result", side_effect=lambda path: json.loads(path.read_text())),
                     patch.object(adapter.qualification, "_report_for", side_effect=report_for),
                     patch.object(adapter.qualification, "_build_environment_receipt", side_effect=build_check),
@@ -1188,7 +1344,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_stale_policy_and_matrix_refuse_before_receipt_replay(self) -> None:
         with TemporaryDirectory() as directory:
-            absent = Path(directory) / 'absent' / 'qualification-result.json'
+            absent = Path(directory).resolve() / 'absent' / 'qualification-result.json'
             binaries = {(row, side): {"path": f"/target/{row}/{side}", "sha256": 'b' * 64}
                         for row in adapter.ROWS for side in adapter.qualification.SIDES}
             tools = {name: adapter.sha(adapter.ROOT / name) for name in adapter.TOOL_FILES}
@@ -1204,7 +1360,7 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_missing_committed_final_cannot_pass(self) -> None:
         with TemporaryDirectory() as directory:
-            paths = tuple(Path(directory) / name / 'qualification-result.json'
+            paths = tuple(Path(directory).resolve() / name / 'qualification-result.json'
                           for name in ('same', 'forward', 'reverse'))
             binaries = {(row, side): {"path": f"/target/{row}/{side}", "sha256": 'b' * 64}
                         for row in adapter.ROWS for side in adapter.qualification.SIDES}

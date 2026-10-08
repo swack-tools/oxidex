@@ -22,6 +22,9 @@ stage_adapter = qualification.stage_adapter
 ROOT = Path(__file__).resolve().parents[2]
 MAX_MARKER_BYTES = 16 * 1024 * 1024
 POLICY_SHA256 = "a354c24dfbadae4c1b243b26b706f303bc25326b5dfd255e751f9fadd472dac5"
+WRITE_COHORT = "tests/fixtures/jpeg/tag_matrix_base.jpg"
+WRITE_COHORT_SHA256 = "9109ff5542f71c6c247e0ac372280cf81d00004d5fe319d195a0659f69dab8a6"
+WRITE_COHORT_BYTES = 771
 TOOL_FILES = (
     "tools/exiftool-tables/version_transition_qualification.py",
     "tools/exiftool-tables/version_transition_read_policy.py",
@@ -361,6 +364,104 @@ def refuse_source_output_overlap(output: Path) -> None:
             refuse("Task19 replay output overlaps the frozen source checkout")
 
 
+def canonical_row(result: dict[str, object], final_path: Path,
+                  target_root: Path) -> dict[str, object]:
+    """Reconstruct the execution selections from the checked matrix."""
+    run_id = result["run_id"]
+    output_root = final_path.parent.parent
+    matrix = qualification.materialize_matrix(
+        qualification.load_matrix(qualification.CANONICAL_MATRIX, "13.59"),
+        output_root=output_root, target_root=target_root, run_id=run_id)
+    row = result["rows"][0]
+    selected = next((item for item in matrix["rows"] if item["id"] == row["id"]), None)
+    if selected is None:
+        refuse("committed row is absent from canonical matrix")
+    if (selected["durable_output_directory"] != str(final_path.parent / row["id"])
+            or final_path.parent != output_root / run_id):
+        refuse("committed row is outside its canonical output")
+    return selected
+
+
+def require_canonical_side(config: dict[str, object], row: dict[str, object],
+                           side: str, release: str, run_dir: Path,
+                           committed: dict[str, object]) -> None:
+    """Bind rehashed side inputs to the selected execution contract."""
+    fixtures = row["fixtures"][side]
+    expected_target = str(Path(row["target_directory"]) / side)
+    expected_bundle = row["immutable_source_identities"][side]["input_bundle"]
+    expected_write = fixtures["write_manifest"]
+    expected_read = fixtures["read_manifest"]
+    expected_cases = qualification._read_array(Path(fixtures["native_cases"]), "canonical native cases")
+    carrier = Path(row["durable_output_directory"]).parents[1] / "write-cohort/tag_matrix_base.jpg"
+    expected_carrier = {"path": str(carrier), "sha256": WRITE_COHORT_SHA256,
+                        "bytes": WRITE_COHORT_BYTES}
+    write_binding = executor._write_fixture_binding(expected_write)
+    if (sha(ROOT / WRITE_COHORT) != WRITE_COHORT_SHA256
+            or (ROOT / WRITE_COHORT).stat().st_size != WRITE_COHORT_BYTES
+            or write_binding["fixtures"] != [expected_carrier]):
+        refuse(f"{row['id']} {side} write carrier differs from committed canonical cohort")
+    if (run_dir != Path(row["durable_output_directory"]) / side
+            or config.get("target_directories", {}).get(release) != expected_target
+            or config.get("verified_input_bundle") != expected_bundle
+            or config.get("write_fixture_manifests", {}).get(release) != expected_write
+            or config.get("write_fixture_bindings", {}).get(release) != write_binding
+            or config.get("native_cases", {}).get(release) != expected_cases
+            or committed.get("read_union", {}).get("original_manifests", {}).get(side, {}).get("path")
+            != expected_read):
+        refuse(f"{row['id']} {side} selections differ from canonical matrix")
+
+
+def require_canonical_lease(final_path: Path) -> Path:
+    """Every operational record must name the shared physical lease."""
+    root = final_path.parent
+    lease = root.parent / "transition.host.lock"
+    if lease.is_symlink() or not lease.is_file() or lease.resolve() != lease:
+        refuse("canonical transition host lock is unavailable")
+    expected = str(lease)
+    for name in ("lease-owner.json", "lease-expiry.json", "lease-release.json"):
+        record = qualification._read_object(root / name, name)
+        if record.get("lock_path") != expected or record.get("lock_realpath") != expected:
+            refuse(f"{name} differs from canonical transition host lock")
+    for name, field in (("lease-heartbeat.jsonl", "lock_path"),
+                        ("handoff.jsonl", "lease")):
+        for line in (root / name).read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            if record.get(field) != expected:
+                refuse(f"{name} differs from canonical transition host lock")
+    return lease
+
+
+def require_native_library(source: Path, lib: Path) -> None:
+    if (not source.is_absolute() or not lib.is_absolute()
+            or source.resolve() != source or lib.resolve() != lib
+            or not lib.is_relative_to(source)):
+        refuse("selected native library must belong to selected native source")
+
+
+def require_artifact_side(entry: dict[str, object], generate: dict[str, object],
+                          build: dict[str, object], read: dict[str, object],
+                          checkout: Path, label: str) -> None:
+    artifacts = entry.get("generated_artifacts")
+    try:
+        observed = executor._require_generated_artifacts(generate, checkout)
+    except (executor.Refused, OSError, ValueError) as exc:
+        raise qualification.Refused(f"{label} generated artifact inventory refused: {exc}") from exc
+    if (artifacts != generate.get("generated_artifacts")
+            or artifacts != build.get("generated_artifacts")
+            or artifacts != read.get("generated_artifacts")
+            or observed != artifacts):
+        refuse(f"{label} generated artifacts differ from authenticated stages")
+
+
+def require_artifact_delta(row: dict[str, object], selected: dict[str, object]) -> None:
+    try:
+        delta = qualification._compare_sides(selected, row["before"], row["after"])
+    except (qualification.Refused, KeyError, TypeError, ValueError) as exc:
+        raise qualification.Refused(f"{row['id']} generated artifact transition refused: {exc}") from exc
+    if row.get("artifact_delta") != delta:
+        refuse(f"{row['id']} generated artifact delta differs from canonical comparison")
+
+
 def replay_committed_write(row: dict[str, object], side: str, root: Path,
                            expected_head: str) -> dict[str, object]:
     """Replay the actual write stage and source-derived native scalar matrix."""
@@ -378,6 +479,7 @@ def replay_committed_write(row: dict[str, object], side: str, root: Path,
     identity = entry["instrument"]["native_identity"]
     source, lib, perl = (Path(identity["source"]["path"]), Path(identity["lib"]["path"]),
                          identity["perl"]["path"])
+    require_native_library(source, lib)
     native = (source, lib, source / "exiftool")
     try:
         checked = executor._stage_result(
@@ -480,6 +582,8 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
         if result != loaded_bytes:
             refuse("replayed result differs from the loaded final marker bytes")
         require_marker_unchanged(path, marker)
+        selected_row = canonical_row(result, path, target_root)
+        canonical_lease = require_canonical_lease(path)
         markers[path] = marker
         rows = result["rows"]
         if len(rows) != 1 or rows[0]["id"] != required_row:
@@ -514,6 +618,10 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             run_dir = path.parent / row["id"] / side
             journal = qualification._read_object(run_dir / "execution-status.json", "execution journal")
             config = qualification._read_object(run_dir / "inputs" / "config.json", "execution config")
+            require_canonical_side(config, selected_row, side, release, run_dir, row)
+            if (config.get("host_lock") != str(canonical_lease)
+                    or journal.get("host_lock") != str(canonical_lease)):
+                refuse(f"{row['id']} {side} did not use canonical transition host lock")
             _rooted_directory(Path(config["target_directories"][release]), target_root,
                               "committed Cargo target")
             _rooted_executable(Path(expected["path"]), Path(config["target_directories"][release]),
@@ -523,6 +631,9 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
                 refuse("committed Perl differs from approved durable executable")
             checkout = run_dir / "checkouts" / executor._safe_name(release)
             build = qualification._report_for(run_dir, journal, release, "build")
+            generate = qualification._report_for(run_dir, journal, release, "generate")
+            read = qualification._report_for(run_dir, journal, release, "read")
+            require_artifact_side(entry, generate, build, read, checkout, f"{row['id']} {side}")
             build_environment = qualification._build_environment_receipt(build, release, checkout)
             release_tests = qualification._release_test_receipt(run_dir, journal, release)
             fixture_dependencies = qualification.replay_fixture_dependencies(
@@ -535,7 +646,7 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             if not isinstance(bundle, str):
                 refuse("committed side lacks verified source input bundle")
             source_identity = qualification.resolve_source_identity(
-                {"expected_release": release},
+                selected_row["immutable_source_identities"][side],
                 qualification._evidence_location(Path(bundle), "verified source input bundle"))
             source_fields = ("release", "tag_object", "peeled_commit", "source_directory",
                              "source_tree_sha256", "materialization_sha256")
@@ -558,6 +669,7 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
                            "write_report_sha256": entry["write_report_sha256"],
                            "execution_journal_sha256": entry["execution_journal_sha256"],
                            "committed_write": write_proof}
+        require_artifact_delta(row, selected_row)
         require_marker_unchanged(path, marker)
         accepted[row["id"]] = {
             "result": {"path": str(path.resolve()), **marker},
@@ -716,6 +828,60 @@ def _write_owned_state(descriptor: int, payload: bytes) -> None:
     os.fsync(descriptor)
 
 
+@contextmanager
+def pinned_output_parent(output: Path):
+    """Walk from the filesystem root using retained, non-following directory FDs."""
+    if (not output.is_absolute() or ".." in output.parts or output.name in ("", ".", "..")
+            or not hasattr(os, "O_NOFOLLOW")):
+        refuse("Task19 output requires an absolute no-follow parent chain")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    names: list[str] = []
+    changed: list[Path] = []
+    current = Path("/")
+    try:
+        descriptors.append(os.open(current, flags))
+        for name in output.parent.parts[1:]:
+            parent_fd = descriptors[-1]
+            child_path = current / name
+            try:
+                child_fd = os.open(name, flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+                child_fd = os.open(name, flags, dir_fd=parent_fd)
+                changed.append(current)
+            descriptors.append(child_fd)
+            names.append(name)
+            current = child_path
+
+        def check_chain() -> None:
+            try:
+                root = os.stat("/", follow_symlinks=False)
+                held = os.fstat(descriptors[0])
+                if (root.st_dev, root.st_ino) != (held.st_dev, held.st_ino):
+                    refuse("Task19 output root changed during publication")
+                for index, name in enumerate(names, 1):
+                    link = os.stat(name, dir_fd=descriptors[index - 1], follow_symlinks=False)
+                    held = os.fstat(descriptors[index])
+                    if (not stat.S_ISDIR(link.st_mode)
+                            or (link.st_dev, link.st_ino) != (held.st_dev, held.st_ino)):
+                        refuse("Task19 output parent lost physical custody")
+            except OSError as exc:
+                raise qualification.OutcomeUnknown("Task19 output parent custody cannot be established") from exc
+
+        def sync_chain() -> None:
+            for descriptor in reversed(descriptors):
+                os.fsync(descriptor)
+
+        check_chain()
+        yield descriptors[-1], check_chain, sync_chain, [output.parent, *changed]
+    except FileExistsError as exc:
+        raise qualification.Refused("Task19 output parent changed during creation") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def publish_receipt_no_replace(output: Path, value: dict[str, object],
                                validate_inputs=None, close_inputs=None) -> None:
     """Own output recovery through both validation gates and input custody closure.
@@ -724,86 +890,89 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
     close. Any earlier failure invalidates the owned inode through its duplicate.
     An uncertain close is never retried; no pathname is removed or overwritten.
     """
-    changed = qualification._make_parent(output)
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
     pending = b'{"status":"publication_pending","promotion":"forbidden"}\n'
     failed = b'{"status":"publication_failed","promotion":"forbidden"}\n'
-    try:
-        descriptor = os.open(output, os.O_RDWR | os.O_CREAT | os.O_EXCL |
-                             getattr(os, "O_NOFOLLOW", 0), 0o600)
-    except FileExistsError as exc:
-        raise qualification.Refused("Task19 replay output already exists") from exc
-    recovery = None
-    try:
-        recovery = os.dup(descriptor)
-        owned = os.fstat(descriptor)
-        def check_output_custody() -> None:
-            try:
-                current = output.lstat()
-                retained = os.fstat(recovery)
-            except FileNotFoundError as exc:
-                raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
-            except OSError as exc:
-                raise qualification.OutcomeUnknown("Task19 output custody cannot be established") from exc
-            if ((current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino)
-                    or (retained.st_dev, retained.st_ino) != (owned.st_dev, owned.st_ino)):
-                raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
-            if (not stat.S_ISREG(current.st_mode) or not stat.S_ISREG(retained.st_mode)
-                    or current.st_nlink != 1 or retained.st_nlink != 1
-                    or stat.S_IMODE(current.st_mode) != 0o600
-                    or stat.S_IMODE(retained.st_mode) != 0o600
-                    or current.st_uid != owned.st_uid):
-                refuse("Task19 output lost regular, private, single-link custody")
-        _write_owned_state(descriptor, pending)
-        if validate_inputs is not None:
-            validate_inputs()
-        _write_owned_state(descriptor, payload)
-        for directory in dict.fromkeys(changed):
-            qualification._fsync_directory(directory)
-        check_output_custody()
-        if validate_inputs is not None:
-            validate_inputs()
-        if close_inputs is not None:
-            close_inputs()
-        closing = descriptor
-        descriptor = None  # close(2) may have closed it even when it raises.
+    with pinned_output_parent(output) as (parent_fd, check_parent, sync_parent_chain, changed):
         try:
-            os.close(closing)
-        except OSError as exc:
-            raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
-        check_output_custody()
+            check_parent()
+            descriptor = os.open(output.name, os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                                 os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+        except FileExistsError as exc:
+            raise qualification.Refused("Task19 replay output already exists") from exc
+        recovery = None
         try:
-            final_bytes = os.pread(recovery, len(payload) + 1, 0)
-        except OSError as exc:
-            raise qualification.OutcomeUnknown("Task19 output bytes cannot be established") from exc
-        if final_bytes != payload:
-            refuse("Task19 output bytes changed during publication")
-        check_output_custody()
-    except BaseException:
-        # Recovery remains open even if the primary descriptor's close failed.
-        # Every callback/cleanup failure must invalidate success. No pathname
-        # is used or removed, including when a foreign inode replaced it.
-        if recovery is not None:
-            try:
-                _write_owned_state(recovery, failed)
-            except BaseException as exc:
-                raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
-        raise
-    finally:
-        if descriptor is not None:
+            recovery = os.dup(descriptor)
+            owned = os.fstat(descriptor)
+            def check_output_custody() -> None:
+                try:
+                    check_parent()
+                    current = os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False)
+                    retained = os.fstat(recovery)
+                except FileNotFoundError as exc:
+                    raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
+                except OSError as exc:
+                    raise qualification.OutcomeUnknown("Task19 output custody cannot be established") from exc
+                if ((current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino)
+                        or (retained.st_dev, retained.st_ino) != (owned.st_dev, owned.st_ino)):
+                    raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+                if (not stat.S_ISREG(current.st_mode) or not stat.S_ISREG(retained.st_mode)
+                        or current.st_nlink != 1 or retained.st_nlink != 1
+                        or stat.S_IMODE(current.st_mode) != 0o600
+                        or stat.S_IMODE(retained.st_mode) != 0o600
+                        or current.st_uid != owned.st_uid):
+                    refuse("Task19 output lost regular, private, single-link custody")
+            _write_owned_state(descriptor, pending)
+            if validate_inputs is not None:
+                validate_inputs()
+            _write_owned_state(descriptor, payload)
+            for directory in dict.fromkeys(changed):
+                qualification._fsync_directory(directory)
+            sync_parent_chain()
+            check_output_custody()
+            if validate_inputs is not None:
+                validate_inputs()
+            if close_inputs is not None:
+                close_inputs()
             closing = descriptor
-            descriptor = None
+            descriptor = None  # close(2) may have closed it even when it raises.
             try:
                 os.close(closing)
-            except OSError:
-                pass
-        if recovery is not None:
-            # This duplicate has no userspace buffer and all writes were fsynced.
-            # Its close cannot change durable receipt bytes.
+            except OSError as exc:
+                raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
+            check_output_custody()
             try:
-                os.close(recovery)
-            except OSError:
-                pass
+                final_bytes = os.pread(recovery, len(payload) + 1, 0)
+            except OSError as exc:
+                raise qualification.OutcomeUnknown("Task19 output bytes cannot be established") from exc
+            if final_bytes != payload:
+                refuse("Task19 output bytes changed during publication")
+            check_output_custody()
+        except BaseException:
+            # Recovery remains open even if the primary descriptor's close failed.
+            # Every callback/cleanup failure must invalidate success. No pathname
+            # is used or removed, including when a foreign inode replaced it.
+            if recovery is not None:
+                try:
+                    _write_owned_state(recovery, failed)
+                except BaseException as exc:
+                    raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
+            raise
+        finally:
+            if descriptor is not None:
+                closing = descriptor
+                descriptor = None
+                try:
+                    os.close(closing)
+                except OSError:
+                    pass
+            if recovery is not None:
+                # This duplicate has no userspace buffer and all writes were fsynced.
+                # Its close cannot change durable receipt bytes.
+                try:
+                    os.close(recovery)
+                except OSError:
+                    pass
 
 
 def main(argv: list[str] | None = None) -> int:
