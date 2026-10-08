@@ -7,6 +7,7 @@ import shlex
 import re
 import resource
 import secrets
+import stat
 import subprocess
 import sys
 import tarfile
@@ -46,9 +47,30 @@ MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
+def _trusted_source_tool(path):
+    """Only the system-owned Git and SSH verifier may process unadmitted source."""
+    executable = Path(path)
+    for component in (Path('/'), Path('/usr'), Path('/usr/bin'), executable):
+        info = component.lstat()
+        expected = stat.S_ISREG if component == executable else stat.S_ISDIR
+        if not expected(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f'Untrusted source admission tool: {path}')
+    return str(executable)
+
+
 def source_git_env():
-    """Read signed source identity and bytes without Git replacement refs."""
-    return dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+    """Read unadmitted source with fixed system tools and inert Git config."""
+    _trusted_source_tool('/usr/bin/git')
+    ssh_verifier = _trusted_source_tool('/usr/bin/ssh-keygen')
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update(PATH='/usr/bin:/bin', HOME='/nonexistent',
+               GIT_NO_REPLACE_OBJECTS='1', GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
+               GIT_CONFIG_COUNT='3', GIT_CONFIG_KEY_0='core.fsmonitor',
+               GIT_CONFIG_VALUE_0='false', GIT_CONFIG_KEY_1='gpg.format',
+               GIT_CONFIG_VALUE_1='ssh', GIT_CONFIG_KEY_2='gpg.ssh.program',
+               GIT_CONFIG_VALUE_2=ssh_verifier)
+    return env
 
 
 def pinned_toolchain(source):
@@ -82,6 +104,7 @@ def _canonical_signer_path(signer_path):
 
 
 def verify_signed_source(source, head, signer_path=None):
+    env = source_git_env()  # Validate fixed Git and SSH verifier before key inspection.
     if signer_path is not None:
         signer_path = _canonical_signer_path(signer_path)
         from qualification_source import _trusted_key
@@ -91,13 +114,13 @@ def verify_signed_source(source, head, signer_path=None):
         command += ['-c','gpg.format=ssh', '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
     identity = subprocess.check_output(
         [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
-        text=True, env=source_git_env()).strip().split('|')
+        text=True, env=env).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
-    subprocess.run([*command,'verify-commit',head], check=True, env=source_git_env(),
+    subprocess.run([*command,'verify-commit',head], check=True, env=env,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,

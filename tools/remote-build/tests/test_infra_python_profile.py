@@ -15,6 +15,60 @@ import qualification_source
 
 
 class InfraPythonProfileTests(unittest.TestCase):
+    def test_attacker_git_executable_config_does_not_run_during_source_admission(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            source = root / 'source'
+            source.mkdir()
+            key = root / 'key'
+            subprocess.run(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+            public = ' '.join((root / 'key.pub').read_text().split()[:2])
+            fingerprint = subprocess.check_output(['/usr/bin/ssh-keygen', '-lf', str(key) + '.pub'], text=True).split()[1]
+            signers = root / 'signers'
+            signers.write_text(qualification_source.PRINCIPAL + ' ' + public + '\n')
+            def git(*args, env=None):
+                return subprocess.check_output(['/usr/bin/git', '-C', str(source), *args],
+                                               text=True, env=env).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'swackhamer')
+            git('config', 'user.email', qualification_source.PRINCIPAL)
+            git('config', 'gpg.format', 'ssh')
+            git('config', 'user.signingkey', str(key))
+            git('config', 'gpg.ssh.allowedSignersFile', str(signers))
+            (source / 'payload').write_text('signed\n')
+            git('add', 'payload')
+            git('commit', '-q', '-S', '-m', 'Signed source')
+            head = git('rev-parse', 'HEAD')
+            fsmonitor = root / 'fsmonitor.sh'
+            fsmonitor_marker = root / 'fsmonitor-ran'
+            fsmonitor.write_text(f'#!/bin/sh\ntouch {fsmonitor_marker}\n')
+            fsmonitor.chmod(0o755)
+            verifier = root / 'verifier.sh'
+            verifier_marker = root / 'verifier-ran'
+            verifier.write_text(f'#!/bin/sh\ntouch {verifier_marker}\nexec /usr/bin/ssh-keygen "$@"\n')
+            verifier.chmod(0o755)
+            git('config', 'core.fsmonitor', str(fsmonitor))
+            git('config', 'gpg.ssh.program', str(verifier))
+            fakebin = root / 'fakebin'
+            fakebin.mkdir()
+            path_markers = []
+            for name in ('git', 'ssh-keygen'):
+                marker = root / f'path-{name}-ran'
+                path_markers.append(marker)
+                wrapper = fakebin / name
+                wrapper.write_text(f'#!/bin/sh\n/usr/bin/touch {marker}\nexec /usr/bin/{name} "$@"\n')
+                wrapper.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': str(fakebin) + ':/usr/bin:/bin'}), \
+                 patch.object(qualification_source, 'KEY', public), \
+                 patch.object(qualification_source, 'FINGERPRINT', fingerprint):
+                self.assertEqual(git('status', '--porcelain', '--untracked-files=all',
+                                     env=remote_build.source_git_env()), '')
+                remote_build.verify_signed_source(source, head, signers)
+            self.assertFalse(fsmonitor_marker.exists(), 'repository fsmonitor executed')
+            self.assertFalse(verifier_marker.exists(), 'repository SSH verifier executed')
+            self.assertTrue(all(not marker.exists() for marker in path_markers),
+                            'ambient PATH supplied source admission tools')
+
     def test_relative_allowed_signers_cannot_switch_keys_between_caller_and_git(self):
         if shutil.which('ssh-keygen') is None:
             self.skipTest('ssh-keygen unavailable')
@@ -113,7 +167,7 @@ class InfraPythonProfileTests(unittest.TestCase):
                     ssh=lambda command: ['ssh', command],
                     scp=lambda local, remote, download=False: ['scp', str(local), remote])
                 def fake_run(command, **kwargs):
-                    if command[0] in ('git', 'ssh-keygen'):
+                    if command[0] in ('git', '/usr/bin/ssh-keygen'):
                         return actual_run(command, **kwargs)
                     remote_commands.append(command)
                     if 'stdout' in kwargs and hasattr(kwargs['stdout'], 'write'):

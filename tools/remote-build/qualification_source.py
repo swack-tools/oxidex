@@ -108,7 +108,7 @@ def _trusted_key(signers: Path) -> None:
     lines = signers.read_text().splitlines()
     if len(lines) != 1 or lines[0].split()[:3] != [PRINCIPAL, *KEY.split()]:
         raise ValueError("qualification signer is not the approved maintainer key")
-    observed = subprocess.check_output(["ssh-keygen", "-lf", str(signers)], text=True)
+    observed = subprocess.check_output(["/usr/bin/ssh-keygen", "-lf", str(signers)], text=True)
     if len(observed.split()) < 2 or observed.split()[1] != FINGERPRINT:
         raise ValueError("qualification maintainer key fingerprint differs")
 
