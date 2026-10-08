@@ -85,6 +85,10 @@ def tool_expectations(items: list[str]) -> dict[str, str]:
 
 
 def _rooted_directory(path: Path, root: Path, label: str) -> Path:
+    try:
+        qualification.ops_paths.durable_root(path, label)
+    except ValueError as exc:
+        raise qualification.Refused(str(exc)) from exc
     if (not path.is_absolute() or path == root or not path.is_relative_to(root)
             or path.is_symlink() or path.resolve() != path or not path.is_dir()):
         refuse(f"{label} is not a canonical directory beneath configured durable root {root}: {path}")
@@ -92,6 +96,10 @@ def _rooted_directory(path: Path, root: Path, label: str) -> Path:
 
 
 def _rooted_executable(path: Path, root: Path, label: str) -> Path:
+    try:
+        qualification.ops_paths.durable_root(path, label)
+    except ValueError as exc:
+        raise qualification.Refused(str(exc)) from exc
     if (not path.is_absolute() or path == root or not path.is_relative_to(root)
             or path.is_symlink() or path.resolve() != path or not path.is_file()):
         refuse(f"{label} is not a canonical file beneath configured durable root {root}: {path}")

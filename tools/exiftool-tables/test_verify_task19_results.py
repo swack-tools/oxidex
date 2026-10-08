@@ -43,7 +43,7 @@ class Task19AdapterControls(unittest.TestCase):
         with patch.dict(os.environ, {"OXIDEX_TARGET_ROOT": "/tmp/task19-target"}):
             with self.assertRaisesRegex(adapter.qualification.Refused, "not durable"):
                 adapter._durable_executable_roots()
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory(dir=Path.home()) as directory:
             root = Path(directory).resolve()
             target = root / "configured-target"
             target.mkdir()
@@ -56,6 +56,44 @@ class Task19AdapterControls(unittest.TestCase):
             for candidate in (link, root / "outside", Path("/tmp/foreign-oxidex")):
                 with self.subTest(candidate=candidate), self.assertRaises(adapter.qualification.Refused):
                     adapter._rooted_executable(candidate, target, "binary")
+
+    def test_durable_ancestor_cannot_admit_temporary_descendant(self) -> None:
+        # Both paths are checked with the real ops_paths policy, not a mocked
+        # root resolver. /var/tmp is the Linux analogue of macOS's default T.
+        candidates = [("var-tmp", "/var/tmp", Path("/var").resolve())]
+        if sys.platform == "darwin":
+            candidates.append(("mac-default", None, Path("/private")))
+        for label, parent, broad_root in candidates:
+            with self.subTest(label=label), TemporaryDirectory(dir=parent) as directory:
+                target = Path(directory).resolve() / "target"
+                target.mkdir()
+                binary = target / "oxidex"
+                binary.write_bytes(b"fixture binary")
+                with patch.dict(os.environ, {"OXIDEX_TARGET_ROOT": str(broad_root)}):
+                    configured, _, _ = adapter._durable_executable_roots()
+                    self.assertEqual(configured, broad_root)
+                    with self.assertRaisesRegex(adapter.qualification.Refused, "durable, not temporary"):
+                        adapter._rooted_directory(target, configured, "committed Cargo target")
+                    for parent_root in (configured, target):
+                        with self.assertRaisesRegex(adapter.qualification.Refused, "durable, not temporary"):
+                            adapter._rooted_executable(binary, parent_root, "OxiDex binary")
+        # A normal configured root and the exact approved-Perl layout remain valid.
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            target = root / "targets" / "row"
+            target.mkdir(parents=True)
+            binary = target / "oxidex"
+            binary.write_bytes(b"binary")
+            perl = root / "ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
+            perl.write_bytes(b"perl")
+            with patch.dict(os.environ, {"OXIDEX_TARGET_ROOT": str(root / "targets"),
+                                         "OXIDEX_OPS_DIR": str(root / "ops")}):
+                configured, ops, approved = adapter._durable_executable_roots()
+                self.assertEqual(approved, perl)
+                self.assertEqual(adapter._rooted_directory(target, configured, "target"), target)
+                self.assertEqual(adapter._rooted_executable(binary, target, "binary"), binary)
+                self.assertEqual(adapter._rooted_executable(approved, ops, "Perl"), perl)
 
     def test_next_pin_markdown_selection_and_ambiguity(self) -> None:
         labels = ("Next pin", "Intended next pin", "Intended ExifTool pin",
@@ -753,7 +791,7 @@ class Task19AdapterControls(unittest.TestCase):
         # Shared validators and the runtime loader are heavy seams here; the
         # adapter itself still traverses all six sides, inventories and publishes.
         import json
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory(dir=Path.home()) as directory:
             root = Path(directory).resolve()
             target_root = root / "targets"
             target_root.mkdir()
