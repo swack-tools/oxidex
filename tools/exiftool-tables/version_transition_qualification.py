@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import stat
 import sys
 import tempfile
 import threading
@@ -367,6 +368,40 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
     if (not isinstance(source_directory, str) or not isinstance(tree, dict)
             or not isinstance(tree.get("tree_sha256"), str)):
         raise Refused("materialized source identity is incomplete")
+    # Emit the files the shared resolver actually consumed. A publisher cannot
+    # reconstruct this closure from a run directory: provisioned bundles and
+    # content-addressed archives normally live beside it.
+    dependencies = []
+    for name, document in zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True):
+        path = _evidence_location(bundle / f"{name}.json", f"{name} input")
+        if _read_object(path, f"{name} input") != document:
+            raise Refused(f"{name} input changed during source resolution")
+        dependencies.append(_source_dependency(path, f"{name} input", 16 * 1024 * 1024))
+    locations_path = _evidence_location(bundle / "locations.json", "verified input locations")
+    if _read_object(locations_path, "verified input locations") != locations:
+        raise Refused("verified input locations changed during source resolution")
+    dependencies.append(_source_dependency(locations_path, "verified input locations", 16 * 1024 * 1024))
+    for selected in resolution["selected_releases"]:
+        archive = selected["archive"]
+        path = _evidence_location(
+            catalog_stage._archive_cache_path(archive_cache, archive["cache_key"]),
+            "selected source archive")
+        binding = _source_dependency(path, "selected source archive", catalog_stage.MAX_ARCHIVE_BYTES)
+        if binding["sha256"] != archive["sha256"] or binding["bytes"] != archive["bytes"]:
+            raise Refused("selected source archive changed during resolution")
+        dependencies.append(binding)
+    materialized_trees = []
+    for selected in materialization["selected_releases"]:
+        source = _evidence_location(source_root / selected["source_directory"],
+                                    "selected materialized source")
+        if (source != source_root / selected["source_directory"]
+                or source.parent != source_root or source.is_symlink() or not source.is_dir()):
+            raise Refused("selected materialized source directory changed during resolution")
+        tree_identity = catalog_stage._tree_identity(source)
+        if tree_identity != selected["tree"]:
+            raise Refused("selected materialized source tree changed during resolution")
+        materialized_trees.append({"path": str(source),
+                                   "tree_sha256": tree_identity["tree_sha256"]})
     return {
         "release": release,
         "tag_object": plan_side.get("tag_object"),
@@ -378,7 +413,23 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
         "archive_cache": str(archive_cache),
         "source_root": str(source_root),
         "documents": dict(zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True)),
+        "dependencies": dependencies,
+        "materialized_trees": materialized_trees,
     }
+
+
+def _source_dependency(path: Path, label: str, limit: int) -> dict[str, Any]:
+    """Bind one canonical durable regular input with a bounded byte count."""
+    path = _evidence_location(path, label)
+    observed = path.lstat()
+    if not stat.S_ISREG(observed.st_mode) or observed.st_size < 1 or observed.st_size > limit:
+        raise Refused(f"{label} must be a bounded regular file")
+    digest = _sha_file(path)
+    after = path.lstat()
+    if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+            observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns):
+        raise Refused(f"{label} changed while binding")
+    return {"path": str(path), "sha256": digest, "bytes": observed.st_size}
 
 
 def _file_binding(file_path: Path, label: str) -> dict[str, Any]:
@@ -406,6 +457,55 @@ def _native_fixture_bindings(cases: list[Any]) -> list[dict[str, Any]]:
     if not bindings:
         raise Refused("at least one native case fixture is required")
     return bindings
+
+
+def replay_fixture_dependencies(row: Mapping[str, Any], side: str, run_dir: Path,
+                                release: str, release_tests: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Resolve external files consulted by the committed fixture validators."""
+    config = _read_object(run_dir / "inputs" / "config.json", "execution config")
+    bindings = []
+    try:
+        for name, kind, jpeg_only in (
+                ("read", "oxidex_version_rehearsal_fixture_manifest", False),
+                ("write", executor._WRITE_FIXTURE_KIND, True)):
+            path = config[f"{name}_fixture_manifests"][release]
+            current = executor._fixture_binding(path, kind=kind, jpeg_only=jpeg_only)
+            saved = config.get(f"{name}_fixture_bindings")
+            if saved is not None and current != saved[release]:
+                raise Refused(f"{name} fixture dependency differs from committed config")
+            bindings.append(current)
+        originals = row["read_union"]["original_manifests"]
+        for name in SIDES:
+            current = executor._fixture_binding(
+                originals[name]["path"], kind="oxidex_version_rehearsal_fixture_manifest",
+                jpeg_only=False)
+            if current != originals[name]:
+                raise Refused("original read fixture dependency changed")
+            bindings.append(current)
+        cases = config["native_cases"][release]
+        bindings.extend(_native_fixture_bindings(cases))
+        corpus = release_tests["fixture_corpus"]
+        authority = _fixture_corpus_authority()
+        if any(corpus.get(key) != authority[key] for key in (
+                "ops_root", "bootstrap_pin", "corpus", "corpus_tree_sha256", "manifest")):
+            raise Refused("release test fixture authority changed")
+        import importlib.util
+        script = REPOSITORY_ROOT / "tools" / "release" / "bootstrap_oracle.py"
+        spec = importlib.util.spec_from_file_location("oxidex_replay_bootstrap_oracle", script)
+        if spec is None or spec.loader is None:
+            raise Refused("oracle bootstrap cannot be loaded")
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        storage = _evidence_location(Path(bootstrap.manifest_path(ops_paths.ops_root())),
+                                     "oracle storage manifest")
+        paths = [Path(binding["path"]) for binding in bindings]
+        paths.extend(Path(fixture["path"]) for binding in bindings
+                     for fixture in binding.get("fixtures", []))
+        paths.extend((Path(authority["manifest"]["path"]), storage))
+        return [_source_dependency(path, "verified fixture dependency", 128 * 1024 * 1024)
+                for path in sorted(set(paths))]
+    except (KeyError, TypeError, executor.Refused) as exc:
+        raise Refused(f"committed fixture dependency closure is incomplete: {exc}") from exc
 
 
 def _freeze_side_inputs(row: Mapping[str, Any], side: str) -> dict[str, Any]:
@@ -783,6 +883,27 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
             "fixture_corpus": corpus, "compiler": compiler}
 
 
+def _corpus_directory_proof(bootstrap: Any, corpus: Path, manifest: Path,
+                            expected_tree: str) -> dict[str, Any]:
+    """Measure actual corpus members with the bootstrap's mode-aware tree hash."""
+    if corpus.is_symlink() or not corpus.is_dir():
+        raise Refused("combined corpus directory is unavailable or linked")
+    try:
+        before = corpus.lstat()
+        actual_tree = bootstrap.sha256_tree(corpus)
+        count = stage_adapter._corpus_manifest_entries(corpus, manifest)
+        after_tree = bootstrap.sha256_tree(corpus)
+        after = corpus.lstat()
+    except (OSError, ValueError, stage_adapter.Refused) as exc:
+        raise Refused("combined corpus directory cannot be verified") from exc
+    if (actual_tree != expected_tree or after_tree != expected_tree
+            or (before.st_dev, before.st_ino, before.st_mode, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_mode, after.st_mtime_ns)):
+        raise Refused("combined corpus directory differs from the bootstrap lock")
+    return {"path": str(corpus), "tree_sha256": actual_tree,
+            "file_count": count, "mode": stat.S_IMODE(after.st_mode)}
+
+
 def _fixture_corpus_authority() -> dict[str, Any]:
     """This host's bootstrap-verified combined corpus, read independently of any receipt."""
     import importlib.util
@@ -802,10 +923,11 @@ def _fixture_corpus_authority() -> dict[str, Any]:
     if (artifacts_.get("corpus_manifest") != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
             or artifacts_.get("corpus_tree") != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
         raise Refused("this host's combined corpus manifest is not bootstrap-verified")
-    count = sum(1 for line in manifest.read_text(encoding="utf-8").splitlines() if line)
+    proof = _corpus_directory_proof(bootstrap, corpus, manifest, tree_sha)
     return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "corpus": str(corpus),
-            "corpus_tree_sha256": tree_sha,
-            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count}}
+            "corpus_tree_sha256": tree_sha, "directory_proof": proof,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha,
+                         "file_count": proof["file_count"]}}
 
 
 def _release_test_corpus(suite: Mapping[str, Any], release: str) -> dict[str, Any]:

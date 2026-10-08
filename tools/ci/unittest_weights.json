@@ -1,11 +1,12 @@
 {
  "note": "Module keys are whole-module seconds; full test ids (>=30s) override their share. Refresh: python3 tools/ci/unittest_weights_from_run.py <run-id> [<run-id> ...]",
- "source": "GitHub Actions runs 35679495666 at fc37c65e666b, 35646847038 at 817b086f9abe, 35609063000 at 36dcbec91aff (ubuntu-latest shards): per-test wall seconds between consecutive unittest -v results, mean over the runs containing each test; 2026-09-28 local buildless timing for ten new modules in historical-publication-weights-timing*.log and historical-publication-quicktime-timing-restored.log; 2026-10-03 local buildless timing for test_runtime_lens_types: 4 tests in 0.041s, rounded to minimum 0.1s (historical-lens-independent-11-78/new-module-timing.json); 2026-10-03 local buildless timing for test_plus_media_matrix_versions: 2 tests in 0.091s, rounded to minimum 0.1s (20261003-plus-media-source-compat/new-module-timing.json); 2026-10-07 dedicated Linux Spot whole-module timing for test_qualification_bootstrap_boundary at signed 3965e587233c0e47035d0a74a6c0e3eadecc21d2: 12 tests in 3.32056406s, weight 3.3s (linux-qualification-perl-boundary-timing-r1/runs/20261007T003940164192Z-43a73842/result.json and unittest.log, SHA-256 a7ce61248b941348af0d9d482bf9604e4a069de9ee7a806a34149db5db761ca3)",
+ "source": "GitHub Actions runs 35679495666 at fc37c65e666b, 35646847038 at 817b086f9abe, 35609063000 at 36dcbec91aff (ubuntu-latest shards): per-test wall seconds between consecutive unittest -v results, mean over the runs containing each test; 2026-09-28 local buildless timing for ten new modules in historical-publication-weights-timing*.log and historical-publication-quicktime-timing-restored.log; 2026-10-03 local buildless timing for test_runtime_lens_types: 4 tests in 0.041s, rounded to minimum 0.1s (historical-lens-independent-11-78/new-module-timing.json); 2026-10-03 local buildless timing for test_plus_media_matrix_versions: 2 tests in 0.091s, rounded to minimum 0.1s (20261003-plus-media-source-compat/new-module-timing.json); 2026-10-07 dedicated Linux Spot whole-module timing for test_qualification_bootstrap_boundary at signed 3965e587233c0e47035d0a74a6c0e3eadecc21d2: 12 tests in 3.32056406s, weight 3.3s (linux-qualification-perl-boundary-timing-r1/runs/20261007T003940164192Z-43a73842/result.json and unittest.log, SHA-256 a7ce61248b941348af0d9d482bf9604e4a069de9ee7a806a34149db5db761ca3); 2026-10-08 green GitHub Actions run 37700844910 attempt 1 at 6e2bf02c635099d4c2cc0dc0ca25134af59bf956 (ubuntu-latest tools 1-8/8 jobs 113065457087,113065457044,113065457175,113065457144,113065457075,113065457051,113065457097,113065457156): five previously unweighted modules from unittest-v wall seconds; test_verify_task19_results absent from this older run",
  "seconds": {
   "test_af_points": 18.2,
   "test_af_points_relative_semantics": 0.1,
   "test_artifacts": 6.8,
   "test_audit_hydrated_layouts": 0.1,
+  "test_bare_name_breadth": 0.1,
   "test_canon_code_refs": 0.1,
   "test_catalog_corpus_reads": 0.1,
   "test_catalog_garmin_fit": 30.0,
@@ -175,15 +176,19 @@
   "test_verify_word_rows": 10.7,
   "test_version_rehearsal": 0.1,
   "test_version_rehearsal_catalog": 0.1,
+  "test_version_rehearsal_clean_snapshot": 9.4,
   "test_version_rehearsal_executor": 9.6,
   "test_version_rehearsal_native_oracle": 1.6,
+  "test_version_rehearsal_raw_maps": 0.6,
   "test_version_rehearsal_stage_adapter": 9.0,
   "test_version_transition_qualification": 5.0,
+  "test_version_transition_read_policy": 0.1,
   "test_word_directory": 4.7,
   "test_write_coverage_catalog": 0.1,
   "test_write_descriptors": 0.2,
   "test_write_readback_evidence": 0.1,
   "test_writevalue_recipes": 15.5,
-  "test_xmp_namespace_specs": 0.6
+  "test_xmp_namespace_specs": 0.6,
+  "test_xmp_priority_specs": 0.7
  }
 }

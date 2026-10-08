@@ -30,7 +30,7 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
                            'prove-linux-perl-component', 'docs-site-build',
-                           'test-remote-build'})
+                           'test-remote-build', 'test-qualification'})
 INFRA_PYTHON_PROFILE = 'infra-python-v1'
 INFRA_PYTHON_RECIPE = 'infra-python-tests'
 INFRA_PYTHON_ORIGINS = frozenset({
@@ -43,6 +43,7 @@ INFRA_PYTHON_REQUIRED = frozenset({
     'src/lib/qualification_trust/control_engine.py',
     'tests/test_builder_c9_proof_repairs.py',
 })
+
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 

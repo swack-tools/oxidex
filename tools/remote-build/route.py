@@ -230,6 +230,8 @@ def main(argv):
     if not argv or not RECIPE.fullmatch(argv[0]):
         raise SystemExit('Invalid remote recipe name')
     recipe, *args = argv
+    if recipe == 'test-qualification' and args:
+        raise SystemExit('Qualification Python route takes no arguments')
     component = recipe == 'prove-linux-perl-component'
     if any(not value or len(value) > 4096 or any(ch in value for ch in '\x00\n\r') for value in args):
         raise SystemExit('Invalid recipe argument')
@@ -260,7 +262,7 @@ def main(argv):
         elif (recipe in FLEET_RECIPES
               and recipe not in ('test-ignored', 'freeze-linux-perl',
                                  'prove-linux-perl-component', 'docs-site-build',
-                                 'test-remote-build')):
+                                 'test-remote-build', 'test-qualification')):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
