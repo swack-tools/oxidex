@@ -64,7 +64,7 @@ upgrading. The previous stable release is
 ## Quick example
 
 ```bash
-# Everything ExifTool would print for this file
+# Read the metadata OxiDex can extract from this file
 oxidex photo.jpg
 
 # Selected tags
