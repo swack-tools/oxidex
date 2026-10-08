@@ -410,6 +410,22 @@ def occurrence_sequence(candidate: dict, *, normalize_access_date: bool) -> list
     return rows
 
 
+def validate_raw_occurrences(process: dict, oracle: dict, candidate: dict, mode: str) -> None:
+    """Bind the retained typed ledger to the already authenticated raw stdout."""
+    raw = occurrence_sequence(candidate, normalize_access_date=False)
+    normalized = occurrence_sequence(candidate, normalize_access_date=True)
+    if (process.get("candidate_occurrences_raw") != raw
+            or process.get("candidate_occurrences") != normalized
+            or process.get("raw_occurrences_sha256") != canonical_sha256(raw)
+            or process.get("normalized_occurrences_sha256") != canonical_sha256(normalized)
+            or process.get("normalization_count") != sum(
+                left["value"] != right["value"] for left, right in zip(raw, normalized))
+            or process.get("oracle_normalization_count") != sum(
+                oracle[key] != value for key, value in
+                normalize_access_date_output(oracle, oracle=True).items())):
+        raise ReceiptError(f"run {mode} raw typed occurrence ledger does not replay")
+
+
 def normalize_access_date_output(document: dict, *, oracle: bool) -> dict:
     """Normalize only the volatile logical System:FileAccessDate value."""
     access_key = "File:System:FileAccessDate" if oracle else "System:FileAccessDate"
@@ -863,6 +879,7 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                 # capture_process. Replay must use that same key order: the
                 # comparator's duplicate pairing is order-sensitive.
                 sides[side] = retained
+            validate_raw_occurrences(process, sides["oracle"], sides["candidate"], mode)
             relative = child["relative_path"]
             if relative in scored_path_set:
                 per_file[relative] = project_file(

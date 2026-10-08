@@ -1219,6 +1219,85 @@ fn canonraw_keyed_route_has_one_real_attributed_occurrence() {
     assert_eq!(normal["CanonRaw:OwnerName"], silenced["CanonRaw:OwnerName"]);
 }
 
+/// Build a one-field IFD0 carrier with an exact numeric Exif::Main source id.
+/// The test uses the public reader and CLI, so a hand-built walker cannot
+/// stand in for the runtime owner/fallback route.
+fn task18_xp_carrier(id: u16, bytes: &[u8]) -> Vec<u8> {
+    let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&id.to_le_bytes());
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    if bytes.len() <= 4 {
+        tiff.extend_from_slice(bytes);
+        tiff.resize(tiff.len() + 4 - bytes.len(), 0);
+    } else {
+        tiff.extend_from_slice(&26u32.to_le_bytes());
+    }
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    if bytes.len() > 4 {
+        tiff.extend_from_slice(bytes);
+    }
+    let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+    jpeg.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
+    jpeg.extend_from_slice(b"Exif\0\0");
+    jpeg.extend_from_slice(&tiff);
+    jpeg.extend_from_slice(&[0xff, 0xd9]);
+    jpeg
+}
+
+/// These synthetic carriers prove the five B2 literal IDs reach the public
+/// runtime path. They do not replace the pinned corpus carriers or Task8 v3
+/// raw receipt required by the deletion verifier.
+#[test]
+fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
+    use std::process::Command;
+    for (id, name) in [
+        (0x9c9b, "XPTitle"), (0x9c9c, "XPComment"),
+        (0x9c9d, "XPAuthor"), (0x9c9e, "XPKeywords"),
+        (0x9c9f, "XPSubject"),
+    ] {
+        let normal = tempfile::NamedTempFile::new().expect("carrier file");
+        std::fs::write(normal.path(), task18_xp_carrier(id, b"H\0i\0\0\0"))
+            .expect("write exact XP carrier");
+        let key = format!("IFD0:{name}");
+        let metadata = read_metadata(normal.path()).expect("public XP read");
+        let rows: Vec<_> = metadata.project_occurrences(ValueChannel::PrintConv)
+            .filter(|(field, _, _)| *field == key).collect();
+        assert_eq!(rows.len(), 1, "{id:#06x} {key} provenance");
+        let (_, occurrence, value) = &rows[0];
+        assert_eq!(occurrence.id, TagId::Numeric(id));
+        assert_eq!(occurrence.origin.module, Some("Exif"));
+        assert_eq!(occurrence.origin.table, Some("Main"));
+        assert_eq!(value.as_string(), Some("Hi"));
+        let read = |path: &std::path::Path, off: bool| -> serde_json::Map<String, Value> {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+            command.args(["-j", "-G1", "-a"]);
+            if off { command.env("OXIDEX_GENSHARE_SILENCE", "engine"); }
+            else { command.env_remove("OXIDEX_GENSHARE_SILENCE"); }
+            let output = command.arg(path).output().expect("public XP CLI read");
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let document: Value = serde_json::from_slice(&output.stdout).expect("typed CLI JSON");
+            document[0].as_object().expect("one carrier document").clone()
+        };
+        let on = read(normal.path(), false);
+        let off = read(normal.path(), true);
+        assert_eq!(on.get(&key), Some(&Value::String("Hi".into())), "{id:#06x}");
+        assert!(!off.contains_key(&key), "{id:#06x} generated-off must lose exact key");
+
+        // A surrogate makes the generated conversion decline. The retained
+        // hand fallback must survive both mode settings, with the same typed
+        // public value; this is a separate branch from the normal carrier.
+        let declined = tempfile::NamedTempFile::new().expect("decline carrier");
+        std::fs::write(declined.path(), task18_xp_carrier(id, &[0x3c, 0xd8, 0x8c, 0xdf, 0, 0]))
+            .expect("write decline carrier");
+        let fallback_on = read(declined.path(), false);
+        let fallback_off = read(declined.path(), true);
+        assert_eq!(fallback_on.get(&key), fallback_off.get(&key), "{id:#06x} fallback changed");
+        assert!(fallback_on.contains_key(&key), "{id:#06x} fallback absent");
+    }
+}
+
 #[test]
 fn route_controls_report_metadata_beyond_file_identity() {
     for (file, group, walker_tag) in ROUTES {

@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 import runtime_deletion_ledger as gate
+import runtime_field_projection as field_projection
 
 ROOT = HERE.parents[1]
 
@@ -231,6 +232,62 @@ class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
                         gate.evaluate_prospective(altered, root=ROOT, ops_root=ops,
                                                  binary_path=binary_file, controller_key=trusted,
                                                  test_only_attribution_bridge=lambda _attr, _fields: True)
+
+
+class LiteralFieldProjectionControls(unittest.TestCase):
+    def test_raw_child_replay_requires_exact_field_value_and_nonzero_loss(self) -> None:
+        source = json.loads((HERE / "conv_exif_main_ledger.json").read_text())
+        definition = next(item for item in source["generated"] if item["id"] == "0x9c9b")
+        row = field("0x9c9b", "generated", "src/exiftool_tables/conv/exif_main.rs::decode")
+        row["source_sha256"] = definition["source_sha256"]
+        stable = gate.ownership.StableFieldId.from_row(row).text()
+        with tempfile.TemporaryDirectory(prefix="task18-field-") as directory:
+            root = Path(directory)
+            def child(mode: str, oracle: dict, candidate: dict) -> dict:
+                place = root / mode
+                place.mkdir()
+                records = {}
+                for side, value in (("oracle", oracle), ("candidate", candidate)):
+                    output = place / f"{side}.stdout"
+                    output.write_text(json.dumps([value]))
+                    records[side] = {"stdout": {"path": str(output)}}
+                process = place / "process.json"
+                process.write_text(json.dumps(records))
+                return {"relative_path": "XP.jpg", "process": {"path": str(process)}}
+            on = {"IFD0:XPTitle": "Hi"}
+            oracle = {"EXIF:XPTitle": "Hi"}
+            receipt = {"selection": {"ordered_paths": ["XP.jpg"]}, "runs": {
+                "control-empty": {"children": [child("on", oracle, on)]},
+                "engine": {"children": [child("off", oracle, {})]}}}
+            occurrence = field_projection.attribute.occurrence_sequence(on, normalize_access_date=False)
+            spec = {"source_field": stable, "stable_field_id": stable, "owner": row["symbol"],
+                    "carrier": "XP.jpg", "token": "engine", "oracle_key": "EXIF:XPTitle",
+                    "candidate_key": "IFD0:XPTitle", "fallback_carrier": None,
+                    "on": occurrence, "off": [], "fallback_on": [], "fallback_off": []}
+            self.assertEqual(field_projection.project(receipt, [spec], [stable], [row])[0]["on_count"], 1)
+            residual = field("IFD0/0x9c9b", "residual",
+                             "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
+                             disposition="fallback-on-decline")
+            with self.assertRaisesRegex(field_projection.BlockedAttribution, "fallback"):
+                field_projection.project(receipt, [spec], [stable], [row, residual])
+            receipt["selection"]["ordered_paths"].append("Declined.jpg")
+            for mode, label in (("control-empty", "fallback-on"), ("engine", "fallback-off")):
+                item = child(label, oracle, on)
+                item["relative_path"] = "Declined.jpg"
+                receipt["runs"][mode]["children"].append(item)
+            spec["fallback_carrier"] = "Declined.jpg"
+            spec["fallback_on"] = occurrence
+            spec["fallback_off"] = occurrence
+            self.assertEqual(field_projection.project(receipt, [spec], [stable], [row, residual])[0]["fallback_count"], 1)
+            changed = copy.deepcopy(spec)
+            changed["on"][0]["value"] = "invented"
+            with self.assertRaisesRegex(field_projection.BlockedAttribution, "typed ordered"):
+                field_projection.project(receipt, [changed], [stable], [row, residual])
+            unchanged = child("unchanged", oracle, on)
+            receipt["runs"]["engine"]["children"][0] = unchanged
+            spec["off"] = occurrence
+            with self.assertRaisesRegex(field_projection.BlockedAttribution, "UNEXERCISED"):
+                field_projection.project(receipt, [spec], [stable], [row, residual])
 
 
 if __name__ == "__main__":

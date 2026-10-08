@@ -278,7 +278,7 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
     approved = {candidate["old_symbol"]: candidate for candidate in candidates}
     if len(approved) != len(candidates) or len(packet["entries"]) != len(candidates):
         raise Refused("appendix and ledger are not one finite set")
-    seen, expected_receipts = set(), {}
+    seen, seen_fields, expected_receipts = set(), set(), {}
     for entry in packet["entries"]:
         expected_keys = {"old_symbol", "source_fields", "new_owner", "candidate_source_sha256", "candidate_binary_sha256", "receipt_task", "receipt_integration_sha", "receipt_merge_sha", "controller_reconciliation_manifest_sha256", "generated_on", "generated_off", "receipt_bindings", "deletion_commit"}
         if not isinstance(entry, dict) or set(entry) != expected_keys:
@@ -290,8 +290,10 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
         if symbol.rsplit("::", 1)[-1] in STRUCTURAL:
             raise Refused("structural/live public owner is nondeletable")
         if (not isinstance(fields, list) or not fields or not all(isinstance(field, str) for field in fields)
-                or len(set(fields)) != len(fields) or any(field not in by_field for field in fields)):
+                or len(set(fields)) != len(fields) or any(field not in by_field for field in fields)
+                or seen_fields.intersection(fields)):
             raise Refused("source fields absent or mismatched with ownership")
+        seen_fields.update(fields)
         if not isinstance(owner, str) or not owner or any(
                 row["owner"] != ("generated" if owner == "generated" else "residual")
                 or (owner != "generated" and row["symbol"] != owner)
@@ -340,11 +342,23 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
             except (task8_validator.ReceiptError, OSError, ValueError) as exc:
                 raise Refused("BLOCKED_ATTRIBUTION: Task8 v3 replay failed") from exc
             if (retained.get("source", {}).get("commit") != head
+                    or retained.get("source", {}).get("tree") != git(root, "rev-parse", "HEAD^{tree}")
+                    or retained.get("source", {}).get("clean") is not True
                     or retained.get("build", {}).get("binary", {}).get("sha256") != binary.removeprefix("sha256:")):
                 raise Refused("BLOCKED_ATTRIBUTION: Task8 source/binary differs")
-            # v3 is an aggregate census; it has no authenticated direct mapping
-            # from an arbitrary literal source field to the named old symbol.
-            raise Refused("BLOCKED_ATTRIBUTION: no reviewed per-field Task8 bridge")
+            from runtime_field_projection import BlockedAttribution, project
+            try:
+                project(retained, attr.get("field_projections"), fields, rows)
+            except (BlockedAttribution, task8_validator.ReceiptError, OSError,
+                    KeyError, TypeError, ValueError) as exc:
+                raise Refused(f"BLOCKED_ATTRIBUTION: {exc}") from exc
+            try:
+                task8_validator.validate_main(["--receipt", str(receipt_path),
+                                                "--require-success", "--recheck-live-inputs"])
+                if _signed(task8, ops_root, controller_key) != retained:
+                    raise Refused("BLOCKED_ATTRIBUTION: Task8 receipt changed during projection")
+            except (task8_validator.ReceiptError, OSError, ValueError) as exc:
+                raise Refused("BLOCKED_ATTRIBUTION: Task8 raw artifacts changed during projection") from exc
         reach = evidence["zero_reachability"]
         fixture_pattern = r"sha256:[0-9a-f]{64}"
         if not all(isinstance(document.get("fixture_sha256"), str)
@@ -359,6 +373,10 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
         expected_receipts[symbol] = {kind: binding["sha256"] for kind, binding in bindings.items()}
     if seen != set(approved) or manifest.get("receipts") != expected_receipts:
         raise Refused("controller manifest receipt set incomplete")
+    if test_only_attribution_bridge is None:
+        # Signed summaries bind identities but do not replay the capable
+        # oracle invocation or resolve Rust/AST and dynamic call edges.
+        raise Refused("BLOCKED_RAW_PROOF: oracle capability and zero-reachability raw replay absent")
     if (verify_history(root) != head or "sha256:" + clean_snapshot.source_tree_sha256(root) != source
             or _sha(binary_path.read_bytes()) != binary):
         raise Refused("candidate source or binary changed during receipt replay")

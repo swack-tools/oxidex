@@ -51,6 +51,24 @@ class TokenContractTests(unittest.TestCase):
 
 
 class ParsingAndProjectionTests(unittest.TestCase):
+    def test_retained_raw_occurrence_ledger_cannot_replace_child_stdout(self):
+        oracle = {"EXIF:XPTitle": "Hi"}
+        candidate = {"IFD0:XPTitle": "Hi"}
+        rows = attribute.occurrence_sequence(candidate, normalize_access_date=False)
+        record = {
+            "candidate_occurrences_raw": rows,
+            "candidate_occurrences": rows,
+            "raw_occurrences_sha256": attribute.canonical_sha256(rows),
+            "normalized_occurrences_sha256": attribute.canonical_sha256(rows),
+            "normalization_count": 0, "oracle_normalization_count": 0,
+        }
+        attribute.validate_raw_occurrences(record, oracle, candidate, "engine")
+        forged = copy.deepcopy(record)
+        forged["candidate_occurrences_raw"][0]["value"] = "other"
+        forged["raw_occurrences_sha256"] = attribute.canonical_sha256(forged["candidate_occurrences_raw"])
+        with self.assertRaisesRegex(attribute.ReceiptError, "raw typed occurrence"):
+            attribute.validate_raw_occurrences(forged, oracle, candidate, "engine")
+
     def test_duplicate_json_keys_fail_closed(self):
         with self.assertRaisesRegex(attribute.ReceiptError, "duplicate JSON key"):
             attribute.parse_json_output(b'[{"ICC:Header":1,"ICC:Header":2}]', "candidate")
