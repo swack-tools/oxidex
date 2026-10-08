@@ -91,12 +91,33 @@ class Task18DeletionGateControls(unittest.TestCase):
             gate.no_new_manual([first, second])
 
 
+class DurableEvidencePathControls(unittest.TestCase):
+    def test_temporary_and_root_evidence_roots_refuse(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="task18-path-") as directory:
+            file = Path(directory) / "receipt.json"
+            file.write_text("{}")
+            for root in (Path("/"), Path("/tmp"), Path("/private/tmp"), Path(directory)):
+                with self.subTest(root=root), self.assertRaisesRegex(gate.Refused, "durable"):
+                    gate._file(str(file), root)
+
+    def test_symlink_ancestor_refuses_even_inside_evidence_root(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="task18-path-") as directory:
+            root = Path(directory)
+            real = root / "real"
+            real.mkdir()
+            file = real / "receipt.json"
+            file.write_text("{}")
+            (root / "alias").symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(gate.Refused, "symlink"):
+                gate._file(str(root / "alias" / file.name), root, test_only_temporary_evidence=True)
+
+
 class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
     def test_signed_packet_acceptance_and_mutations(self) -> None:
         if not shutil.which("ssh-keygen"):
             self.skipTest("ssh-keygen unavailable")
         with tempfile.TemporaryDirectory(prefix="task18-packet-") as directory:
-            ops = Path(directory)
+            ops = Path(directory).resolve()
             key = ops / "test-only-controller"
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
                            check=True, capture_output=True)
@@ -180,12 +201,36 @@ class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
                     gate.evaluate_prospective(changed, root=ROOT, ops_root=ops,
                                              binary_path=binary_file, controller_key=trusted,
                                              test_only_attribution_bridge=lambda _attr, _fields: True)
-                with self.assertRaisesRegex(gate.Refused, "BLOCKED_ATTRIBUTION"):
-                    gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
-                                             binary_path=binary_file, controller_key=trusted)
+                # Test-only custody seam: exercise the subsequent attribution
+                # refusal without treating this temporary root as production.
+                with patch.object(gate.ops_paths, "durable_root", return_value=ops):
+                    with self.assertRaisesRegex(gate.Refused, "BLOCKED_ATTRIBUTION"):
+                        gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
+                                                 binary_path=binary_file, controller_key=trusted)
                 with self.assertRaisesRegex(gate.Refused, "BLOCKED_AUTHORITY"):
                     gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
                                              binary_path=binary_file, controller_key=None)
+                for index, invalid_fixture in enumerate((None, "not-a-sha", "sha256:" + "x" * 64)):
+                    altered = copy.deepcopy(packet)
+                    oracle_document = json.loads(Path(receipts["oracle"]["path"]).read_text())
+                    reach_document = json.loads(Path(receipts["zero_reachability"]["path"]).read_text())
+                    if invalid_fixture is None:
+                        oracle_document.pop("fixture_sha256")
+                        reach_document.pop("fixture_sha256")
+                    else:
+                        oracle_document["fixture_sha256"] = invalid_fixture
+                        reach_document["fixture_sha256"] = invalid_fixture
+                    altered["entries"][0]["receipt_bindings"]["oracle"] = sign(f"oracle-invalid-{index}", oracle_document)
+                    altered["entries"][0]["receipt_bindings"]["zero_reachability"] = sign(f"reach-invalid-{index}", reach_document)
+                    manifest_document = json.loads(Path(manifest["path"]).read_text())
+                    manifest_document["receipts"][symbol] = {
+                        kind: binding["sha256"] for kind, binding in altered["entries"][0]["receipt_bindings"].items()}
+                    altered["manifest"] = sign(f"manifest-invalid-{index}", manifest_document)
+                    altered["entries"][0]["controller_reconciliation_manifest_sha256"] = altered["manifest"]["sha256"]
+                    with self.subTest(invalid_fixture=invalid_fixture), self.assertRaisesRegex(gate.Refused, "fixture"):
+                        gate.evaluate_prospective(altered, root=ROOT, ops_root=ops,
+                                                 binary_path=binary_file, controller_key=trusted,
+                                                 test_only_attribution_bridge=lambda _attr, _fields: True)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,10 @@ from typing import Callable
 import runtime_ownership as ownership
 import version_rehearsal_clean_snapshot as clean_snapshot
 
+# Direct script invocation starts with tools/exiftool-tables on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts import ops_paths
+
 LEDGER = Path("docs/reference/generated-runtime-deletion-ledger.json")
 INTEGRATION_COMMIT = "4f653243d33cf053107f4f19b8bd449329de611b"
 HISTORICAL = {
@@ -151,23 +155,49 @@ def _sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def _file(path: object, ops_root: Path) -> Path:
+def _no_symlink_ancestors(path: Path) -> None:
+    cursor = Path(path.anchor)
+    for component in path.parts[1:]:
+        cursor /= component
+        if cursor.is_symlink():
+            raise Refused(f"evidence path has symlink ancestor: {cursor}")
+
+
+def _ops_root(ops_root: Path, *, test_only_temporary_evidence: bool = False) -> Path:
+    if not isinstance(ops_root, Path) or not ops_root.is_absolute():
+        raise Refused("durable ops root must be absolute")
+    try:
+        if test_only_temporary_evidence:
+            _no_symlink_ancestors(ops_root)
+            resolved = ops_root.resolve()
+        else:
+            resolved = ops_paths.durable_root(ops_root, "Task18 evidence root")
+    except ValueError as exc:
+        raise Refused(f"durable ops root invalid: {exc}") from exc
+    if not resolved.is_dir():
+        raise Refused("durable ops root is not a directory")
+    return resolved
+
+
+def _file(path: object, ops_root: Path, *, test_only_temporary_evidence: bool = False) -> Path:
+    root = _ops_root(ops_root, test_only_temporary_evidence=test_only_temporary_evidence)
     if not isinstance(path, str) or not Path(path).is_absolute():
         raise Refused("evidence path must be absolute")
     value = Path(path)
-    if (value.is_symlink() or not value.is_file() or
-            not value.resolve().is_relative_to(ops_root.resolve()) or value.stat().st_size > 8_000_000):
+    _no_symlink_ancestors(value)
+    if (not value.is_file() or not value.resolve().is_relative_to(root)
+            or value.stat().st_size > 8_000_000):
         raise Refused("evidence must be bounded regular file below durable ops root")
     return value
 
-
-def _signed(binding: object, ops_root: Path, key: bytes) -> dict:
+def _signed(binding: object, ops_root: Path, key: bytes, *,
+            test_only_temporary_evidence: bool = False) -> dict:
     if not isinstance(binding, dict) or set(binding) != {"path", "sha256", "signature_path"}:
         raise Refused("signed evidence binding incomplete")
     if not isinstance(binding["sha256"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", binding["sha256"]):
         raise Refused("signed evidence digest malformed")
-    raw = _file(binding["path"], ops_root).read_bytes()
-    sig = _file(binding["signature_path"], ops_root)
+    raw = _file(binding["path"], ops_root, test_only_temporary_evidence=test_only_temporary_evidence).read_bytes()
+    sig = _file(binding["signature_path"], ops_root, test_only_temporary_evidence=test_only_temporary_evidence)
     if _sha(raw) != binding["sha256"]:
         raise Refused("signed evidence bytes differ from digest")
     ssh = shutil.which("ssh-keygen")
@@ -210,15 +240,17 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
         raise Refused("prospective packet schema malformed")
     if not isinstance(packet["entries"], list) or not packet["entries"]:
         raise Refused("empty prospective packet cannot pass")
-    root, ops_root = root.resolve(), ops_root.resolve()
+    test_only_temporary_evidence = test_only_attribution_bridge is not None
+    ops_root = _ops_root(ops_root, test_only_temporary_evidence=test_only_temporary_evidence)
+    root = root.resolve()
     head = verify_history(root)
     source = "sha256:" + clean_snapshot.source_tree_sha256(root)
     if (not binary_path.is_absolute() or binary_path.is_symlink() or not binary_path.is_file()
             or binary_path.stat().st_size > 1_000_000_000):
         raise Refused("explicit release binary must be a bounded regular absolute file")
     binary = _sha(binary_path.read_bytes())
-    appendix = _signed(packet["appendix"], ops_root, controller_key)
-    manifest = _signed(packet["manifest"], ops_root, controller_key)
+    appendix = _signed(packet["appendix"], ops_root, controller_key, test_only_temporary_evidence=test_only_temporary_evidence)
+    manifest = _signed(packet["manifest"], ops_root, controller_key, test_only_temporary_evidence=test_only_temporary_evidence)
     integration, merge = appendix.get("integration_sha"), appendix.get("merge_sha")
     if (appendix.get("schema") != "runtime-deletion-appendix/v1" or appendix.get("task") != "18"
             or appendix.get("approval") != "prospective-approved"
@@ -278,7 +310,7 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
         kinds = {"oracle", "attribution", "zero_reachability", "oracle_capability"}
         if not isinstance(bindings, dict) or set(bindings) != kinds:
             raise Refused("required authenticated receipt missing")
-        evidence = {kind: _signed(binding, ops_root, controller_key) for kind, binding in bindings.items()}
+        evidence = {kind: _signed(binding, ops_root, controller_key, test_only_temporary_evidence=test_only_temporary_evidence) for kind, binding in bindings.items()}
         for kind, document in evidence.items():
             _identity(document, kind, entry, source, binary, integration, merge)
         cap = evidence["oracle_capability"]
@@ -314,6 +346,11 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
             # from an arbitrary literal source field to the named old symbol.
             raise Refused("BLOCKED_ATTRIBUTION: no reviewed per-field Task8 bridge")
         reach = evidence["zero_reachability"]
+        fixture_pattern = r"sha256:[0-9a-f]{64}"
+        if not all(isinstance(document.get("fixture_sha256"), str)
+                   and re.fullmatch(fixture_pattern, document["fixture_sha256"])
+                   for document in (oracle, reach)):
+            raise Refused("oracle and reachability fixture SHA-256 identities are required")
         if (reach.get("reachable") is not False or reach.get("remaining_callsites") != []
                 or reach.get("definition_checked") is not True
                 or reach.get("fixture_sha256") != oracle.get("fixture_sha256")
@@ -341,6 +378,7 @@ def main() -> int:
         if args.command == "prospective":
             if args.packet is None or args.binary is None or args.ops_root is None:
                 raise Refused("prospective evaluation requires --packet, --binary, and --ops-root")
+            _ops_root(args.ops_root)
             if PRODUCTION_CONTROLLER_KEY is None:
                 raise Refused("BLOCKED_AUTHORITY: no approved Task18 controller trust anchor")
             packet = json.loads(_file(str(args.packet), args.ops_root).read_bytes())
