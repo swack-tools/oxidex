@@ -28,6 +28,17 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertTrue(any('bundle' in command and 'create' in command
                             for command in commands))
 
+    def test_ci_standard_main_requires_signed_bundle_packet(self):
+        self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
+        receipt, commands, _, extras, heads = self.exercise(0, 'ci-standard')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['fleet_source_bundle_sha256'],
+                         hashlib.sha256(b'synthetic signed bundle').hexdigest())
+        self.assertTrue(any('bundle' in command and 'create' in command
+                            for command in commands))
+
     def test_candidate_receipt_download_caps_real_child_during_transfer(self):
         with tempfile.TemporaryDirectory() as directory:
             local = Path(directory) / 'candidate-receipt.json'
@@ -452,7 +463,7 @@ class GenericRecipeTests(unittest.TestCase):
         import qualification_source
         from qualification_bootstrap import verify_staged_checkout
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory)
+            root=Path(directory).resolve()
             source=root/'source';source.mkdir()
             key=root/'signing-key'
             subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True)
@@ -473,6 +484,10 @@ class GenericRecipeTests(unittest.TestCase):
                                'tools/release/bootstrap_oracle.py':'# signed\n'}.items():
                 path=source/name;path.parent.mkdir(parents=True,exist_ok=True)
                 path.write_text(value)
+            cohort = Path(__file__).resolve().parents[3] / 'tests/fixtures/jpeg/tag_matrix_base.jpg'
+            carrier = source / 'tests/fixtures/jpeg/tag_matrix_base.jpg'
+            carrier.parent.mkdir(parents=True)
+            carrier.write_bytes(cohort.read_bytes())
             git('config','user.name','swackhamer')
             git('config','user.email',qualification_source.PRINCIPAL)
             git('config','gpg.format','ssh')
@@ -497,7 +512,54 @@ class GenericRecipeTests(unittest.TestCase):
                 with tarfile.open(archive,'r:gz') as stream:
                     self.assertEqual(stream.extractfile('justfile').read(),
                                      b'fleet-test:\n  echo signed\n')
-                self.assertEqual(snapshot['file_count'],8)
+                self.assertEqual(snapshot['file_count'],9)
+                import qualification_prepare
+                def local_only(command, **kwargs):
+                    if command[0] not in ('synthetic-ssh', 'synthetic-scp'):
+                        return original_run(command, **kwargs)
+                    if command[0] == 'synthetic-scp':
+                        shutil.copyfile(command[1], root / 'packet.tar.gz')
+                    output = kwargs.get('stdout')
+                    if output is not None:
+                        output.write('synthetic recipe result\n')
+                    return SimpleNamespace(returncode=0)
+                original_run = subprocess.run
+                transport = SimpleNamespace(instance_id='2', host='192.0.2.1',
+                    ssh=lambda command: ['synthetic-ssh', command],
+                    scp=lambda local, remote, download=False: ['synthetic-scp', str(local), remote])
+                evidence = root / 'ci-evidence'
+                with patch.dict(os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'fixture'}), \
+                     patch.object(remote_build.ssh_transport, 'identity', return_value=('uploader','key')), \
+                     patch.object(remote_build.ssh_transport, 'DirectTransport', return_value=transport), \
+                     patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed':True}), \
+                     patch.object(remote_build, 'pinned_toolchain', return_value={'channel':'1.97.1'}), \
+                     patch.object(remote_build, 'verify_remote_toolchain'), \
+                     patch.object(remote_build.subprocess, 'run', side_effect=local_only):
+                    self.assertEqual(remote_build.main(['--source',str(source),'--instance','builder-vm',
+                        '--zone','fixture','--instance-id','2','--worktree-id','fixture',
+                        '--evidence-dir',str(evidence),'--just-recipe','ci-standard']),0)
+                receipt=json.loads((evidence/'remote-build.json').read_text())
+                self.assertEqual(receipt['source_commit'],head)
+                self.assertEqual(receipt['snapshot']['file_count'],12)
+                staged=root/'staged';staged.mkdir()
+                with tarfile.open(root/'packet.tar.gz','r:gz') as stream:
+                    stream.extractall(staged,filter='data')
+                self.assertEqual((staged/'fleet-source-head').read_text().strip(),head)
+                self.assertEqual(hashlib.sha256((staged/'repository.bundle').read_bytes()).hexdigest(),
+                                 receipt['fleet_source_bundle_sha256'])
+                actual_cwd=Path.cwd()
+                try:
+                    os.chdir(staged)
+                    with patch.object(route,'FLEET_SOURCE',staged), \
+                         patch.object(route,'FLEET_CHECKOUT',root/'staged-checkout'), \
+                         patch.object(qualification_prepare,'ROOT',root/'staged-checkout'):
+                        route.prepare_fleet_checkout()
+                        row=qualification_prepare.canonical_write_carrier(root/'carrier-output')
+                        self.assertEqual(row['bytes'],771)
+                        self.assertEqual((root/'carrier-output/write-cohort/tag_matrix_base.jpg').read_bytes(),
+                                         cohort.read_bytes())
+                finally:
+                    os.chdir(actual_cwd)
                 git('update-index','--skip-worktree','justfile')
                 (source/'justfile').write_text('fleet-test:\n  echo unsigned\n')
                 self.assertEqual(git('status','--porcelain','--untracked-files=all'),'')
@@ -515,7 +577,7 @@ class GenericRecipeTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: justfile'):
                         remote_build.main(['--source',str(source),'--instance','builder-vm',
                             '--zone','fixture','--instance-id','2','--worktree-id','fixture',
-                            '--evidence-dir',str(root/'evidence'),'--just-recipe','fleet-test'])
+                            '--evidence-dir',str(root/'evidence'),'--just-recipe','ci-standard'])
                 self.assertEqual(json.loads((root/'evidence/remote-build.json').read_text())['stage'],
                                  'local_toolchain')
                 (source/'justfile').write_text('fleet-test:\n  echo signed\n')
@@ -532,3 +594,13 @@ class GenericRecipeTests(unittest.TestCase):
                 self.assertEqual(git('status','--porcelain','--untracked-files=all'),'')
                 with self.assertRaisesRegex(RuntimeError,'mode differs from signed HEAD: justfile'):
                     remote_build.make_snapshot(source,archive,signed_head=head)
+                (source/'justfile').chmod(0o644)
+                git('update-index','--no-skip-worktree','justfile')
+                git('commit','--allow-empty','--no-gpg-sign','-q','-m','Unsigned fixture')
+                unsigned=git('rev-parse','HEAD')
+                with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
+                    remote_build.verify_signed_source(source,unsigned)
+                # A local replace ref cannot substitute unsigned identity for the
+                # signed commit whose tree and bundle are packaged.
+                git('replace',head,unsigned)
+                remote_build.verify_signed_source(source,head)

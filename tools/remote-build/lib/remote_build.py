@@ -26,7 +26,7 @@ SSH_KEEPALIVE = ('--ssh-flag=-oServerAliveInterval=15',
                  '--ssh-flag=-oServerAliveCountMax=3')
 SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
-FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
+FLEET_RECIPES = frozenset({'ci-standard', 'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
                            'prove-linux-perl-component', 'verify-runtime-deletions'})
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
@@ -56,14 +56,15 @@ def pinned_toolchain(source):
 def verify_signed_source(source, head):
     identity = subprocess.check_output(
         ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
-        text=True).strip().split('|')
+        text=True, env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
     subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1'))
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
                         expected_toolchain, expected_oracle, *, require_pass=True, transport=None):

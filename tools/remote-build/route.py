@@ -246,7 +246,10 @@ def main(argv):
                 verify_ci_fleet_checkout()
             if signed_builder:
                 select_signed_builder_target()
-        if recipe == 'verify-linux-perl':
+        if recipe == 'ci-standard':
+            from test_runner import prepare_generic_recipe_oracle
+            prepare_generic_recipe_oracle()
+        elif recipe == 'verify-linux-perl':
             # Bootstrap integration tests require the canonical cache paths.
             for key in ('PERL5LIB', 'PERLLIB', 'PERL5OPT'):
                 os.environ.pop(key, None)
