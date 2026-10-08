@@ -5,7 +5,7 @@ These do not claim that synthetic results pass the production replay verifier.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import io
 from pathlib import Path
 import os
@@ -223,19 +223,21 @@ class Task19AdapterControls(unittest.TestCase):
                 adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertEqual(output.read_text(), '{"owner":"foreign"}\n')
             output.unlink()
-            original_link = os.link
-            def publish_foreign(source, destination, **kwargs):
-                Path(destination).write_text('{"owner":"racer"}\n')
-                return original_link(source, destination, **kwargs)
-            with patch.object(adapter.os, "link", side_effect=publish_foreign):
-                with self.assertRaisesRegex(adapter.qualification.Refused, "already exists"):
+            def publish_foreign(_directory):
+                foreign = output.with_name("foreign.json")
+                foreign.write_text('{"owner":"racer"}\n')
+                os.replace(foreign, output)
+                raise OSError("simulated post-publication fsync failure")
+            with patch.object(adapter.qualification, "_fsync_directory", side_effect=publish_foreign):
+                with self.assertRaises(OSError):
                     adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertEqual(output.read_text(), '{"owner":"racer"}\n')
             output.unlink()
-            with patch.object(adapter.qualification, "_fsync_directory", side_effect=[OSError("disk"), None]):
+            with patch.object(adapter.qualification, "_fsync_directory", side_effect=OSError("disk")):
                 with self.assertRaises(OSError):
                     adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
-            self.assertFalse(output.exists())
+            self.assertIn('publication_failed', output.read_text())
+            output.unlink()
             adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertIn('verified_read_only', output.read_text())
 
@@ -360,6 +362,123 @@ class Task19AdapterControls(unittest.TestCase):
                                                    fixture_module.COMMIT)
         finally:
             fixture.doCleanups()
+
+    def test_complete_six_side_plumbing_with_catalog_source_name(self) -> None:
+        # Shared validators and the runtime loader are heavy seams here; the
+        # adapter itself still traverses all six sides, inventories and publishes.
+        import json
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "sources"
+            commit = "a" * 40
+            sources = {}
+            natives = {}
+            perl = root / "perl"
+            perl.write_text("perl")
+            for release in ("13.59", "11.78", "12.64"):
+                source_name = adapter.qualification.catalog_stage._source_directory_name(release, commit)
+                native_source = source_root / source_name
+                native_lib = native_source / "lib" / "Image"
+                native_lib.mkdir(parents=True)
+                (native_lib / "ExifTool.pm").write_text("module")
+                sources[release] = {"release": release, "tag_object": "d" * 40,
+                                    "peeled_commit": commit, "source_directory": source_name,
+                                    "source_tree_sha256": "e" * 64, "materialization_sha256": "f" * 64}
+                natives[release] = {"source": {"path": str(native_source)},
+                                    "lib": {"path": str(native_source / "lib")},
+                                    "perl": {"path": str(perl)}}
+            policy = root / "policy.json"
+            policy.write_text('{}')
+            expected_head, expected_tree = "b" * 40, "c" * 40
+            matrix_sha = adapter.sha(adapter.qualification.CANONICAL_MATRIX)
+            tools = {name: adapter.sha(adapter.ROOT / name) for name in adapter.TOOL_FILES}
+            binaries = {}
+            markers = []
+            for row_name in adapter.ROWS:
+                run = root / row_name
+                run.mkdir()
+                sides = {}
+                releases = {"same-pin-13.59": ("13.59", "13.59"),
+                            "11.78-to-12.64": ("11.78", "12.64"),
+                            "12.64-to-11.78": ("12.64", "11.78")}[row_name]
+                for side, release in zip(adapter.qualification.SIDES, releases, strict=True):
+                    binary = root / f"{row_name}-{side}-oxidex"
+                    binary.write_text("binary")
+                    binaries[(row_name, side)] = {"path": str(binary), "sha256": adapter.sha(binary)}
+                    side_run = run / row_name / side
+                    (side_run / "inputs").mkdir(parents=True)
+                    (side_run / "execution-status.json").write_text('{}')
+                    (side_run / "inputs" / "config.json").write_text(json.dumps({
+                        "verified_input_bundle": str(root / "bundle")}))
+                    sides[side] = {"release": release, "source_identity": sources[release],
+                                   "instrument": {"source_commit": expected_head,
+                                                  "binary": binaries[(row_name, side)],
+                                                  "native_identity": natives[release],
+                                                  "read_fixture_manifest_sha256": "0" * 64},
+                                   "build_environment": {"toolchain": "checked"},
+                                   "release_tests": {"passed": 1},
+                                   "read_report_sha256": "1" * 64,
+                                   "write_report_sha256": "2" * 64,
+                                   "execution_journal_sha256": "3" * 64}
+                marker = run / "qualification-result.json"
+                marker.write_text(json.dumps({"rows": [{"id": row_name, **sides,
+                    "read_payload_floors": {}, "read_policy_pair": {}}],
+                    "caller": {"head": expected_head, "index_tree": expected_tree,
+                               "pin_version": "13.59", "status": "clean"},
+                    "matrix": {"sha256": matrix_sha},
+                    "read_policy_input": {"path": str(policy), "sha256": adapter.POLICY_SHA256},
+                    "run_id": row_name}))
+                markers.append(marker)
+            checks = []
+            def build_check(*_args):
+                checks.append("build")
+                return {"toolchain": "checked"}
+            def test_check(*_args):
+                checks.append("test")
+                return {"passed": 1}
+            def source_check(identity, _bundle):
+                checks.append("source")
+                return {**sources[identity["expected_release"]], "source_root": str(source_root)}
+            def report_for(_run, _journal, _release, stage):
+                return {"state": "passed"} if stage == "test" else {"build_environment": {}}
+            output = root / "verified.json"
+            argv = ["--same-pin-result", str(markers[0]), "--forward-result", str(markers[1]),
+                    "--reverse-result", str(markers[2]), "--expected-head", expected_head,
+                    "--expected-tree", expected_tree, "--expected-matrix-sha256", matrix_sha,
+                    "--expected-read-policy-sha256", adapter.POLICY_SHA256,
+                    "--next-pin", "not-selected", "--output", str(output)]
+            for name, digest in tools.items():
+                argv.extend(["--expected-tool", f"{name}={digest}"])
+            for (row_name, side), identity in binaries.items():
+                argv.extend(["--expected-binary", f"{row_name}:{side}:{identity['path']}:{identity['sha256']}"])
+            with patch.object(adapter, "source_snapshot", return_value={"head": expected_head}), \
+                 patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: Path(path).resolve()), \
+                 patch.object(adapter.qualification, "load_matrix", return_value={"rows": [{"id": row} for row in adapter.ROWS]}), \
+                 patch.object(adapter.qualification, "load_committed_result", side_effect=lambda path: json.loads(path.read_text())), \
+                 patch.object(adapter.qualification, "_report_for", side_effect=report_for), \
+                 patch.object(adapter.qualification, "_build_environment_receipt", side_effect=build_check), \
+                 patch.object(adapter.qualification, "_release_test_receipt", side_effect=test_check), \
+                 patch.object(adapter.executor, "_require_test_suite_proof"), \
+                 patch.object(adapter.qualification, "resolve_source_identity", side_effect=source_check), \
+                 patch.object(adapter, "replay_committed_write", return_value={
+                     "writer_binary": {"path": str(next(iter(binaries.values()))["path"]),
+                                       "sha256": "4" * 64}}), \
+                 redirect_stderr(io.StringIO()) as error, redirect_stdout(io.StringIO()):
+                self.assertEqual(adapter.main(argv), 0, error.getvalue())
+                forged = json.loads(markers[0].read_text())
+                forged["rows"][0]["before"]["instrument"]["native_identity"]["source"]["path"] = (
+                    natives["11.78"]["source"]["path"])
+                markers[0].write_text(json.dumps(forged))
+                bad_output = root / "forged.json"
+                bad_argv = list(argv)
+                bad_argv[bad_argv.index("--output") + 1] = str(bad_output)
+                self.assertEqual(adapter.main(bad_argv), 2)
+            self.assertFalse(bad_output.exists())
+            self.assertIn("native source differs", error.getvalue())
+            self.assertEqual(json.loads(output.read_text())["status"], "verified_read_only")
+            self.assertGreaterEqual(checks.count("build"), 12)
+            self.assertGreaterEqual(checks.count("test"), 12)
+            self.assertGreaterEqual(checks.count("source"), 12)
 
     def test_stale_policy_and_matrix_refuse_before_receipt_replay(self) -> None:
         with TemporaryDirectory() as directory:

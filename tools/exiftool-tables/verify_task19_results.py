@@ -412,6 +412,7 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             write_proof = replay_committed_write(row, side, path.parent, expected_head)
             binaries[side] = expected
             sides[side] = {"release": release, "source_identity": verified_source,
+                           "source_root": source_identity["source_root"],
                            "native_identity": instrument["native_identity"],
                            "read_fixture_manifest_sha256": instrument["read_fixture_manifest_sha256"],
                            "read_report_sha256": entry["read_report_sha256"],
@@ -451,8 +452,16 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
         for side in qualification.SIDES:
             proof = row["sides"][side]
             native = proof["native_identity"]
-            directories.add(qualification._evidence_location(
-                Path(proof["source_identity"]["source_directory"]), "verified native source"))
+            source_name = Path(proof["source_identity"]["source_directory"])
+            if source_name.is_absolute() or len(source_name.parts) != 1 or source_name.name in (".", ".."):
+                refuse("verified materialization source name is not a single relative directory")
+            source_root = qualification._evidence_location(
+                Path(proof["source_root"]), "verified source root")
+            native_source = qualification._evidence_location(
+                source_root / source_name, "verified native source")
+            if native_source != Path(native["source"]["path"]).resolve():
+                refuse("native source differs from verified materialization directory")
+            directories.add(native_source)
             files.add(Path(row["binaries"][side]["path"]))
             files.add(Path(proof["committed_write"]["writer_binary"]["path"]))
             files.add(Path(native["lib"]["path"]) / "Image" / "ExifTool.pm")
@@ -483,77 +492,48 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
     return captured
 
 
-def _retract_owned_output(output: Path, identity: os.stat_result) -> None:
-    """Never remove a foreign replacement after a publication failure."""
+def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
+    """Create exclusively, keep the owned descriptor, and invalidate on failure."""
+    changed = qualification._make_parent(output)
+    payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    pending = b'{"status":"publication_pending","promotion":"forbidden"}\n'
+    failed = b'{"status":"publication_failed","promotion":"forbidden"}\n'
     try:
-        current = output.lstat()
-    except FileNotFoundError:
-        return
-    if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
-        raise qualification.OutcomeUnknown("Task19 output was replaced during failed publication")
-    try:
-        output.unlink()
-    except OSError:
-        # If unlink itself fails, remove the authoritative status in place
-        # only while this invocation still owns the same regular inode.
+        descriptor = os.open(output, os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                             getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError as exc:
+        raise qualification.Refused("Task19 replay output already exists") from exc
+    with os.fdopen(descriptor, "r+b") as stream:
+        owned = os.fstat(stream.fileno())
         try:
-            descriptor = os.open(output, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
-            with os.fdopen(descriptor, "wb") as stream:
-                current = os.fstat(stream.fileno())
-                if (not stat.S_ISREG(current.st_mode)
-                        or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)):
-                    raise qualification.OutcomeUnknown("Task19 output ownership changed during retraction")
-                stream.write(b'{"status":"publication_failed","promotion":"forbidden"}\n')
+            stream.write(pending)
+            stream.flush()
+            os.fsync(stream.fileno())
+            stream.seek(0)
+            stream.write(payload)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+            for directory in dict.fromkeys(changed):
+                qualification._fsync_directory(directory)
+            try:
+                current = output.lstat()
+            except FileNotFoundError as exc:
+                raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
+            if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
+                raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+        except (OSError, qualification.Refused, qualification.OutcomeUnknown):
+            # A retained descriptor invalidates only this invocation's inode.
+            # Never unlink or open the destination pathname during cleanup.
+            try:
+                stream.seek(0)
+                stream.write(failed)
                 stream.truncate()
                 stream.flush()
                 os.fsync(stream.fileno())
-            qualification._fsync_directory(output.parent)
-        except OSError as exc:
-            raise qualification.OutcomeUnknown("Task19 output retraction outcome is uncertain") from exc
-    else:
-        try:
-            qualification._fsync_directory(output.parent)
-        except OSError as exc:
-            raise qualification.OutcomeUnknown("Task19 output was retracted but its directory durability is uncertain") from exc
-
-
-def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
-    """Publish a durable receipt without ever replacing an existing destination."""
-    changed = qualification._make_parent(output)
-    temporary = output.with_name(f".{output.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp")
-    identity = None
-    linked = False
-    try:
-        payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-            identity = os.fstat(stream.fileno())
-        try:
-            os.link(temporary, output, follow_symlinks=False)
-        except FileExistsError as exc:
-            raise qualification.Refused("Task19 replay output already exists") from exc
-        linked = True
-        current = temporary.lstat()
-        if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
-            refuse("Task19 temporary receipt changed before publication")
-        temporary.unlink()
-        for directory in dict.fromkeys(changed):
-            qualification._fsync_directory(directory)
-    except (OSError, qualification.Refused) as exc:
-        if linked and identity is not None:
-            _retract_owned_output(output, identity)
-        raise
-    finally:
-        try:
-            if identity is not None:
-                current = temporary.lstat()
-                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
-                    temporary.unlink()
-        except (FileNotFoundError, OSError):
-            pass
+            except OSError as exc:
+                raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
+            raise
 
 
 def main(argv: list[str] | None = None) -> int:
