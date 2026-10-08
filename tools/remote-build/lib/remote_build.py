@@ -28,7 +28,8 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
 FLEET_RECIPES = frozenset({'ci-standard', 'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
-                           'prove-linux-perl-component', 'verify-runtime-deletions'})
+                           'prove-linux-perl-component', 'verify-runtime-deletions',
+                           'docs-site-build', 'test-remote-build'})
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
@@ -714,6 +715,9 @@ def main(argv=None):
                                          'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
                 if args.just_recipe == 'docs-build':
                     receipt['rustdoc_path'] = receipt['remote_paths']['target'] + '/doc'
+                if args.just_recipe == 'docs-site-build':
+                    receipt['docs_site_snapshot_path'] = (
+                        receipt['remote_paths']['target'] + '/docs-site')
                 receipt['recipe_state']='RUNNING_OR_UNKNOWN'
                 receipt['remote_command']=remote
                 save()

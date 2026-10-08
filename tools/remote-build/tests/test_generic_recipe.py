@@ -386,6 +386,41 @@ class GenericRecipeTests(unittest.TestCase):
         self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
         self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
 
+    def test_remote_builder_tests_carry_signed_git_history(self):
+        receipt, commands, _, extras, heads = self.exercise(0, recipe='test-remote-build')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertEqual(receipt['fleet_source_bundle_sha256'],
+                         remote_build.hashlib.sha256(b'synthetic signed bundle').hexdigest())
+        self.assertTrue(any('bundle' in command and 'create' in command
+                            and command[-1] == 'HEAD' for command in commands))
+
+    def test_ordinary_test_keeps_snapshot_mode_and_actual_head_context(self):
+        for status in ('', ' M justfile\n'):
+            with self.subTest(status=status):
+                receipt, commands, _, extras, heads = self.exercise(
+                    0, recipe='test', source_status=status)
+                self.assertEqual(receipt['source_commit'], 'a' * 40)
+                self.assertEqual(receipt['source_status'], status)
+                self.assertEqual(heads, [None])
+                self.assertEqual(extras, [])
+                self.assertNotIn('fleet_source_bundle_sha256', receipt)
+                self.assertTrue(any(' just test' in ' '.join(command)
+                                    for command in commands))
+
+    def test_docs_site_build_uses_signed_packet_and_names_retained_snapshot(self):
+        receipt, commands, _, extras, heads = self.exercise(0, recipe='docs-site-build')
+        self.assertEqual(heads, ['a' * 40])
+        self.assertEqual(set(extras), {'repository.bundle', 'maintainer.allowed_signers',
+                                      'fleet-source-head'})
+        self.assertEqual(receipt['docs_site_snapshot_path'],
+                         receipt['remote_paths']['target'] + '/docs-site')
+        self.assertNotIn('rustdoc_path', receipt)
+        self.assertEqual(receipt['recipe_state'], 'DIRECT_SUCCESS_RETAINED')
+        self.assertFalse(any('cleanup' in ' '.join(command) for command in commands))
+
     def test_ssh_255_retains_unknown_and_never_retries_or_cleans(self):
         receipt,commands,_,_,_=self.exercise(255)
         self.assertEqual(receipt['recipe_state'],'UNKNOWN_RETAINED')
