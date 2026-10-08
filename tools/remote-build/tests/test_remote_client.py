@@ -987,9 +987,9 @@ class RemoteTestProfileTests(unittest.TestCase):
             with patch.object(ops_paths,'ops_root',return_value=Path(folder) / 'ops'), \
                  patch.object(remote_build,'configured_signer_path',return_value=signer), \
                  patch.object(qualification_source,'_trusted_key'):
-                with patch.object(remote_build.subprocess,'check_output',return_value=(
-                     'swackhamer|swackhamer@users.noreply.github.com|'
-                     'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
+                with patch.object(remote_build, '_bounded_source_git', return_value=(
+                     b'swackhamer|swackhamer@users.noreply.github.com|'
+                     b'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
                      patch.object(remote_build.subprocess,'run') as verify:
                     with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
                         remote_build.verify_signed_source(Path('/repo'),'a'*40)
@@ -997,11 +997,12 @@ class RemoteTestProfileTests(unittest.TestCase):
                 signed=('swackhamer|swackhamer@users.noreply.github.com|'
                         'swackhamer|swackhamer@users.noreply.github.com|G|'
                         'swackhamer@users.noreply.github.com\n')
-                with patch.object(remote_build.subprocess,'check_output',return_value=signed), \
+                with patch.object(remote_build, '_bounded_source_git', return_value=signed.encode()) as identity, \
                      patch.object(remote_build.subprocess,'run') as verify:
                     remote_build.verify_signed_source(Path('/repo'),'a'*40)
                     self.assertIn('verify-commit', verify.call_args.args[0])
-                    self.assertEqual(remote_build.subprocess.check_output.call_args.args[0][-1], 'a'*40)
+                    self.assertEqual(identity.call_args.args[1][-1], 'a'*40)
+                    self.assertEqual(identity.call_args.args[2], 512)
 
     def test_completed_test_retains_remote_proof_if_download_fails(self):
         from lib import remote_build

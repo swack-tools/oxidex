@@ -174,6 +174,16 @@ def _git_run(command, **kwargs):
     return result
 
 
+def _bounded_source_git(source, arguments, limit, *, env=None):
+    """Read a pre-admission Git scalar with a byte and wall-clock bound."""
+    _local_config_preflight(source)
+    raw = infra_repository_binding._bounded_command(
+        ['/usr/bin/git', '-C', str(source), *arguments],
+        source_git_env() if env is None else env, limit, GIT_ADMISSION_TIMEOUT)
+    _local_config_preflight(source)
+    return raw
+
+
 MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
 
 
@@ -349,10 +359,9 @@ MAX_SIGNER_BYTES = 8192
 
 
 def configured_signer_path(source):
-    _local_config_preflight(source)
-    value = _git_check_output(
-        ['git', '-C', str(source), 'config', '--path', '--get', 'gpg.ssh.allowedSignersFile'],
-        text=True, env=source_git_env()).strip()
+    value = _bounded_source_git(
+        source, ['config', '--path', '--get', 'gpg.ssh.allowedSignersFile'],
+        4096).decode('utf-8').strip()
     return _canonical_signer_path(value)
 
 
@@ -440,11 +449,12 @@ def _verify_signed_source_with_frozen_signer(source, head, signer_path, digest):
     assert_frozen_signer(signer_path, digest)
     from qualification_source import _trusted_key
     _trusted_key(signer_path)
-    command=['git','-C',str(source), '-c','gpg.format=ssh',
+    options=['-c','gpg.format=ssh',
              '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
-    identity = _git_check_output(
-        [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
-        text=True, env=env).strip().split('|')
+    command=['/usr/bin/git','-C',str(source), *options]
+    identity = _bounded_source_git(
+        source, [*options, 'log', '-1', '--format=%an|%ae|%cn|%ce|%G?|%GS', head],
+        512, env=env).decode('utf-8').strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
@@ -1319,9 +1329,9 @@ def main(argv=None):
             if receipt['source_status']:
                 raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
             if infra_python:
-                raw_origins=_git_check_output(
-                    ['git','-C',str(source),'config','--local','--get-all','remote.origin.url'],
-                    text=True,env=source_git_env()).splitlines()
+                raw_origins=_bounded_source_git(
+                    source, ['config', '--local', '--get-all', 'remote.origin.url'],
+                    1024).decode('utf-8').splitlines()
                 if len(raw_origins)!=1 or raw_origins[0] not in INFRA_PYTHON_ORIGINS:
                     raise RuntimeError('Infrastructure source raw origin is not the approved repository')
                 receipt['source_origin_configured']=raw_origins[0]
