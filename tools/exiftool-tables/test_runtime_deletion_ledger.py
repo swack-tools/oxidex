@@ -2,8 +2,10 @@
 """Small fail-closed controls for Task18's unapproved historical deletions."""
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
+import io
 import os
 import shutil
 import subprocess
@@ -97,6 +99,30 @@ class Task18DeletionGateControls(unittest.TestCase):
                             disposition="hand-kept")
         with self.assertRaisesRegex(gate.Refused, "new manual owner"):
             gate.no_new_manual([transferred], root=ROOT)
+
+    def test_no_new_manual_cli_reaches_pinned_baseline_and_refuses_transfer(self) -> None:
+        argv = ["runtime_deletion_ledger.py", "no-new-manual", "--root", str(ROOT)]
+        fallback = field("IFD0/0x9c9b", "residual",
+                         "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
+                         disposition="fallback-on-decline")
+        transferred = field("IFD0/0x9c9b", "residual",
+                            "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+                            disposition="hand-kept")
+        for rows, expected_status in (([fallback], 0), ([transferred], 2)):
+            with self.subTest(status=expected_status), \
+                 patch.object(gate.ownership, "load_rows", return_value=rows) as loaded, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(io.StringIO()) as output, \
+                 contextlib.redirect_stderr(io.StringIO()) as errors:
+                status = gate.main()
+            self.assertEqual(status, expected_status)
+            loaded.assert_called_once_with(ROOT.resolve(), None)
+            if expected_status == 0:
+                self.assertEqual(json.loads(output.getvalue())["status"], "PASS")
+                self.assertEqual(errors.getvalue(), "")
+            else:
+                self.assertIn("new manual owner", errors.getvalue())
+                self.assertEqual(output.getvalue(), "")
 
     def test_ownership_duplicate_is_not_a_deletion_waiver(self) -> None:
         first = field("0x1234", "generated", "src/exiftool_tables/conv/exif_main.rs::arm_1234")

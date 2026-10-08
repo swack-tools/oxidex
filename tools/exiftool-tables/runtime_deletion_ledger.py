@@ -492,7 +492,8 @@ def main() -> int:
                                                  controller_key=PRODUCTION_CONTROLLER_KEY), sort_keys=True))
             return 0
         if args.command == "no-new-manual":
-            rows = ownership.load_rows(args.root.resolve(), args.ops_root)
+            root = args.root.resolve()
+            rows = ownership.load_rows(root, args.ops_root)
             no_new_manual(rows, root=root)
             print(json.dumps({"status": "PASS", "control": "no-new-manual-knowledge", "rows": len(rows)}))
             return 0
