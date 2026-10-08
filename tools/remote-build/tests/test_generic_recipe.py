@@ -264,6 +264,7 @@ class GenericRecipeTests(unittest.TestCase):
                               side_effect=RuntimeError('synthetic component proof transfer loss') if component_failure else None,
                               return_value={'status':'COMPONENT_ONLY_PASS'}) as component_proof, \
                  patch.object(remote_build,'verify_remote_toolchain'), \
+                 patch.object(remote_build,'source_clean_status',return_value=source_status) as clean_status, \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'run',side_effect=run):
@@ -300,6 +301,7 @@ class GenericRecipeTests(unittest.TestCase):
                         retrieve.assert_called_once()
                     if recipe=='prove-linux-perl-component':
                         component_proof.assert_called_once()
+                clean_status.assert_called_with(root.resolve(), 'a'*40)
             receipt=json.loads((root/'evidence/remote-build.json').read_text())
             return receipt,commands,root,extras_seen,signed_heads
 
@@ -547,7 +549,7 @@ class GenericRecipeTests(unittest.TestCase):
                      patch.object(remote_build,'verify_builder_admission',
                                   return_value={'admission_passed':True}), \
                      patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}):
-                    with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: justfile'):
+                    with self.assertRaisesRegex(RuntimeError,'Signed remote recipe requires a clean exact-HEAD checkout'):
                         remote_build.main(['--source',str(source),'--instance','builder-vm',
                             '--zone','fixture','--instance-id','2','--worktree-id','fixture',
                             '--evidence-dir',str(root/'evidence'),'--just-recipe','fleet-test'])

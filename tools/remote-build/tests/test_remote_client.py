@@ -5,6 +5,8 @@ import tarfile
 from pathlib import Path
 from lib.remote_build import make_snapshot
 
+SOURCE_HEAD = 'a' * 40
+
 
 class ClientTests(unittest.TestCase):
     def test_busy_explicit_builder_records_refusal_before_source_upload(self):
@@ -155,7 +157,8 @@ class ClientTests(unittest.TestCase):
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
-                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'check_output',return_value=SOURCE_HEAD+'\n'), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}):
                 with self.assertRaisesRegex(RuntimeError,'header failed'):
@@ -211,7 +214,8 @@ class ClientTests(unittest.TestCase):
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
-                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'check_output',return_value=SOURCE_HEAD+'\n'), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=subprocess.CalledProcessError(1,'prepare')) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
                     remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
@@ -249,7 +253,8 @@ class ClientTests(unittest.TestCase):
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
-                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'check_output',return_value=SOURCE_HEAD+'\n'), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run, \
                  patch.object(remote_build,'verify_remote_toolchain',side_effect=RuntimeError('off pin')):
                 with self.assertRaisesRegex(RuntimeError,'off pin'):
@@ -282,7 +287,8 @@ class ClientTests(unittest.TestCase):
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
-                 patch.object(remote_build.subprocess,'check_output',return_value='commit\n'), \
+                 patch.object(remote_build.subprocess,'check_output',return_value=SOURCE_HEAD+'\n'), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=[SimpleNamespace(returncode=0),
                      SimpleNamespace(returncode=0),failed]):
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -376,7 +382,7 @@ class ClientTests(unittest.TestCase):
         def output(command, **kwargs):
             if command[0]=='gcloud':
                 return f'oxidex 2.0\n{digest}  /binary\n'
-            return 'commit\n'
+            return SOURCE_HEAD+'\n'
         def run(command, **kwargs):
             if ' cleanup &&' in ' '.join(command):
                 events.append('cleanup')
@@ -392,6 +398,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
                 self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
@@ -419,7 +426,7 @@ class ClientTests(unittest.TestCase):
         def output(command, **kwargs):
             if command[0]=='gcloud':
                 return f'oxidex 2.0\n{digest}  /binary\n'
-            return 'commit\n'
+            return SOURCE_HEAD+'\n'
         def run(command, **kwargs):
             if ' cleanup &&' in ' '.join(command):
                 raise subprocess.CalledProcessError(255,command)
@@ -435,6 +442,7 @@ class ClientTests(unittest.TestCase):
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build.secrets,'token_hex',side_effect=['a'*32,'b'*32]):
                 with self.assertRaises(subprocess.CalledProcessError):
@@ -520,6 +528,7 @@ class RemoteTestProfileTests(unittest.TestCase):
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1','rustc_commit':'f'*40}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=lambda command, **kwargs: '' if '--porcelain' in command else ('a'*64+'  proof\n' if any('sha256sum' in str(item) for item in command) else 'a'*40+'\n')), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
                  patch.object(remote_build,'verify_signed_source'), \
@@ -578,6 +587,7 @@ class RemoteTestProfileTests(unittest.TestCase):
                      'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
+                 patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'verify_signed_source'), \
