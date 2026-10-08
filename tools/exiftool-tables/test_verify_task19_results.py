@@ -318,7 +318,8 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
-            repo = Path(directory)
+            repo = Path(directory) / "repo"
+            repo.mkdir()
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
             subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
             subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
@@ -331,20 +332,35 @@ class Task19AdapterControls(unittest.TestCase):
             tree = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"], text=True).strip()
             with patch.object(adapter, "ROOT", repo), \
                  patch.object(adapter, "require_imported_source_paths"):
-                clean = adapter.source_snapshot(head, tree)
+                bound = adapter.bind_git()
+                clean = adapter.source_snapshot(head, tree, bound)
                 self.assertEqual(clean["head"], head)
                 pin.write_text("13.60\n")
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changes"):
-                    adapter.source_snapshot(head, tree)
+                    adapter.source_snapshot(head, tree, bound)
                 pin.write_text("13.59\n")
                 todo.write_text("Next pin: 13.60\n")
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changes"):
-                    adapter.source_snapshot(head, tree)
+                    adapter.source_snapshot(head, tree, bound)
                 todo.write_text("Next pin: not selected\n")
-                self.assertEqual(adapter.source_snapshot(head, tree), clean)
+                self.assertEqual(adapter.source_snapshot(head, tree, bound), clean)
+                wrapper_dir = Path(directory) / "hostile-path"
+                wrapper_dir.mkdir()
+                wrapper = wrapper_dir / "git"
+                invoked = wrapper_dir / "invoked"
+                wrapper.write_text(f"#!/bin/sh\nprintf used > {invoked}\nprintf forged\\n\n")
+                wrapper.chmod(0o755)
+                with patch.dict(os.environ, {"PATH": str(wrapper_dir) + os.pathsep + os.environ.get("PATH", "")}):
+                    self.assertEqual(adapter.source_snapshot(head, tree, bound), clean)
+                self.assertFalse(invoked.exists())
+                from dataclasses import replace
+                with self.assertRaisesRegex(adapter.qualification.Refused, "custody"):
+                    replace(bound, path=wrapper).revalidate()
+                with self.assertRaisesRegex(adapter.qualification.Refused, "custody"):
+                    replace(bound, sha256="0" * 64).revalidate()
                 subprocess.run(["git", "-C", str(repo), "update-index", "--skip-worktree", ".exiftool-version"], check=True)
                 with self.assertRaisesRegex(adapter.qualification.Refused, "hidden index flags"):
-                    adapter.source_snapshot(head, tree)
+                    adapter.source_snapshot(head, tree, bound)
                 subprocess.run(["git", "-C", str(repo), "update-index", "--no-skip-worktree", ".exiftool-version"], check=True)
 
     def test_committed_write_matrix_replay_from_synthetic_stage_fixture(self) -> None:
@@ -464,9 +480,23 @@ class Task19AdapterControls(unittest.TestCase):
                                     "perl": {"path": str(perl)}}
             policy = root / "policy.json"
             policy.write_text('{}')
-            expected_head, expected_tree = "b" * 40, "c" * 40
+            repo = root / "checkout"
+            repo.mkdir()
+            (repo / ".exiftool-version").write_text("13.59\n")
+            (repo / "TODO_RELEASE_BETA.md").write_text("Next pin: not selected\n")
+            for name in adapter.TOOL_FILES:
+                tool = repo / name
+                tool.parent.mkdir(parents=True, exist_ok=True)
+                tool.write_text(name)
+            system_git = str(adapter.bind_git().path)
+            subprocess.run([system_git, "-C", str(repo), "init", "-q"], check=True)
+            subprocess.run([system_git, "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run([system_git, "-C", str(repo), "-c", "user.name=fixture",
+                            "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+            expected_head = subprocess.check_output([system_git, "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            expected_tree = subprocess.check_output([system_git, "-C", str(repo), "rev-parse", "HEAD^{tree}"], text=True).strip()
             matrix_sha = adapter.sha(adapter.qualification.CANONICAL_MATRIX)
-            tools = {name: adapter.sha(adapter.ROOT / name) for name in adapter.TOOL_FILES}
+            tools = {name: adapter.sha(repo / name) for name in adapter.TOOL_FILES}
             binaries = {}
             markers = []
             for row_name in adapter.ROWS:
@@ -526,7 +556,8 @@ class Task19AdapterControls(unittest.TestCase):
                 argv.extend(["--expected-tool", f"{name}={digest}"])
             for (row_name, side), identity in binaries.items():
                 argv.extend(["--expected-binary", f"{row_name}:{side}:{identity['path']}:{identity['sha256']}"])
-            with patch.object(adapter, "source_snapshot", return_value={"head": expected_head}), \
+            with patch.object(adapter, "ROOT", repo), \
+                 patch.object(adapter, "require_imported_source_paths"), \
                  patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: Path(path).resolve()), \
                  patch.object(adapter.qualification, "load_matrix", return_value={"rows": [{"id": row} for row in adapter.ROWS]}), \
                  patch.object(adapter.qualification, "load_committed_result", side_effect=lambda path: json.loads(path.read_text())), \
@@ -540,6 +571,71 @@ class Task19AdapterControls(unittest.TestCase):
                                        "sha256": "4" * 64}}), \
                  redirect_stderr(io.StringIO()) as error, redirect_stdout(io.StringIO()):
                 self.assertEqual(adapter.main(argv), 0, error.getvalue())
+                self.assertEqual(json.loads(output.read_text())["git"]["path"], system_git)
+                self.assertEqual(adapter.source_snapshot(expected_head, expected_tree, adapter.bind_git())["head"], expected_head)
+                subordinate = root / adapter.ROWS[0] / adapter.ROWS[0] / "before" / "execution-status.json"
+                owned_source = repo / "TODO_RELEASE_BETA.md"
+                original_write = adapter._write_owned_state
+                original_sync = adapter.qualification._fsync_directory
+                original_close = os.close
+                marker_inodes = {p.stat().st_ino for p in markers}
+
+                # A marker close can report failure after the kernel closed it.
+                close_failed = False
+                close_written = False
+                def write_before_close(fd, payload):
+                    nonlocal close_written
+                    original_write(fd, payload)
+                    if b'verified_read_only' in payload:
+                        close_written = True
+                def close_after_success(fd):
+                    nonlocal close_failed
+                    is_marker = os.fstat(fd).st_ino in marker_inodes
+                    original_close(fd)
+                    if close_written and is_marker and not close_failed:
+                        close_failed = True
+                        raise OSError("injected marker close failure")
+                close_output = root / "marker-close.json"
+                close_argv = list(argv)
+                close_argv[close_argv.index("--output") + 1] = str(close_output)
+                with patch.object(adapter, "_write_owned_state", side_effect=write_before_close), \
+                     patch.object(adapter.os, "close", side_effect=close_after_success):
+                    self.assertEqual(adapter.main(close_argv), 2)
+                self.assertTrue(close_failed)
+                self.assertEqual(json.loads(close_output.read_text())["status"], "publication_failed")
+
+                for target_name, target in (("subordinate", subordinate), ("source", owned_source)):
+                    for window in ("write", "fsync"):
+                        original = target.read_bytes()
+                        changed = False
+                        wrote_success = False
+                        def mutate():
+                            nonlocal changed
+                            if not changed:
+                                target.write_bytes(original + b"changed")
+                                changed = True
+                        def write_then_mutate(fd, payload):
+                            nonlocal wrote_success
+                            original_write(fd, payload)
+                            if b'verified_read_only' in payload:
+                                wrote_success = True
+                                if window == "write":
+                                    mutate()
+                        def sync_then_mutate(directory):
+                            original_sync(directory)
+                            if wrote_success and window == "fsync":
+                                mutate()
+                        fault_output = root / f"{target_name}-{window}.json"
+                        fault_argv = list(argv)
+                        fault_argv[fault_argv.index("--output") + 1] = str(fault_output)
+                        try:
+                            with patch.object(adapter, "_write_owned_state", side_effect=write_then_mutate), \
+                                 patch.object(adapter.qualification, "_fsync_directory", side_effect=sync_then_mutate):
+                                self.assertEqual(adapter.main(fault_argv), 2)
+                            self.assertTrue(changed)
+                            self.assertEqual(json.loads(fault_output.read_text())["status"], "publication_failed")
+                        finally:
+                            target.write_bytes(original)
                 forged = json.loads(markers[0].read_text())
                 forged["rows"][0]["before"]["instrument"]["native_identity"]["source"]["path"] = (
                     natives["11.78"]["source"]["path"])

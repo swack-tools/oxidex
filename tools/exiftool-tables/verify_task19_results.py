@@ -32,6 +32,7 @@ TOOL_FILES = (
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 ROWS = ("same-pin-13.59", "11.78-to-12.64", "12.64-to-11.78")
+SYSTEM_GIT = Path("/usr/bin/git")
 # One explicit selection grammar preserves the original aliases and Markdown forms.
 NEXT_PIN_LABEL = re.compile(
     r"(?:next[- ]pin|intended next[- ]pin|intended ExifTool pin|ExifTool pin after current"
@@ -101,30 +102,76 @@ def binary_expectations(items: list[str]) -> dict[tuple[str, str], dict[str, str
 
 
 
-def _git(*arguments: str) -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(ROOT), *arguments], text=True, stderr=subprocess.PIPE,
-            timeout=30).strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise qualification.Refused("cannot inspect exact owned source") from exc
+@dataclass(frozen=True)
+class BoundGit:
+    path: Path
+    sha256: str
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+    def revalidate(self) -> None:
+        try:
+            current = self.path.lstat()
+            identity = (current.st_dev, current.st_ino, current.st_size,
+                        current.st_mtime_ns, current.st_ctime_ns)
+            if (not stat.S_ISREG(current.st_mode) or current.st_uid != 0
+                    or current.st_mode & 0o022
+                    or identity != (self.device, self.inode, self.size,
+                                    self.mtime_ns, self.ctime_ns)
+                    or sha(self.path) != self.sha256):
+                refuse("bound system Git executable changed or lost custody")
+        except OSError as exc:
+            raise qualification.Refused("bound system Git executable is unavailable") from exc
+
+    def evidence(self) -> dict[str, str | int]:
+        return {"path": str(self.path), "sha256": self.sha256,
+                "device": self.device, "inode": self.inode}
 
 
-def _git_blob(name: str) -> bytes:
+def bind_git() -> BoundGit:
+    """Trust only the root-owned system Git, independent of caller PATH."""
+    path = SYSTEM_GIT
     try:
-        return subprocess.check_output(
-            ["git", "-C", str(ROOT), "show", f"HEAD:{name}"],
+        observed = path.lstat()
+        if (not path.is_absolute() or not stat.S_ISREG(observed.st_mode)
+                or observed.st_uid != 0 or observed.st_mode & 0o022):
+            refuse("approved system Git executable is unavailable")
+        bound = BoundGit(path, sha(path), observed.st_dev, observed.st_ino,
+                         observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns)
+        bound.revalidate()
+        return bound
+    except OSError as exc:
+        raise qualification.Refused("approved system Git executable is unavailable") from exc
+
+
+def _git_bytes(git: BoundGit, *arguments: str) -> bytes:
+    git.revalidate()
+    try:
+        result = subprocess.check_output(
+            [str(git.path), "-C", str(ROOT), *arguments],
             stderr=subprocess.PIPE, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise qualification.Refused(f"cannot read committed {name}") from exc
+        raise qualification.Refused("cannot inspect exact owned source") from exc
+    git.revalidate()
+    return result
 
 
-def _tracked_source_bytes() -> None:
+def _git(git: BoundGit, *arguments: str) -> str:
+    return _git_bytes(git, *arguments).decode("utf-8").strip()
+
+
+def _git_blob(git: BoundGit, name: str) -> bytes:
+    return _git_bytes(git, "show", f"HEAD:{name}")
+
+
+def _tracked_source_bytes(git: BoundGit) -> None:
     """Reject hidden index flags and compare every tracked byte and mode to HEAD."""
     try:
-        listing = subprocess.check_output(
-            ["git", "-C", str(ROOT), "ls-files", "--stage", "-v", "-z"], timeout=30)
-        algorithm = _git("rev-parse", "--show-object-format")
+        listing = _git_bytes(git, "ls-files", "--stage", "-v", "-z")
+        algorithm = _git(git, "rev-parse", "--show-object-format")
         digest_type = {"sha1": hashlib.sha1, "sha256": hashlib.sha256}[algorithm]
         for record in filter(None, listing.split(b"\0")):
             metadata, relative = record.split(b"\t", 1)
@@ -161,23 +208,25 @@ def require_imported_source_paths() -> None:
         refuse("imported replay verifier differs from frozen source path")
 
 
-def source_snapshot(expected_head: str, expected_tree: str) -> dict[str, str]:
+def source_snapshot(expected_head: str, expected_tree: str, git: BoundGit) -> dict[str, str]:
     """Require actual clean bytes and index at the frozen signed source."""
-    if _git("status", "--porcelain=v1", "--untracked-files=all"):
+    git.revalidate()
+    if _git(git, "status", "--porcelain=v1", "--untracked-files=all"):
         refuse("adapter source has tracked or untracked changes")
-    head, tree, index = _git("rev-parse", "HEAD"), _git("rev-parse", "HEAD^{tree}"), _git("write-tree")
+    head, tree, index = _git(git, "rev-parse", "HEAD"), _git(git, "rev-parse", "HEAD^{tree}"), _git(git, "write-tree")
     if (head, tree, index) != (expected_head, expected_tree, expected_tree):
         refuse("adapter HEAD, tree, or index differs from frozen candidate")
-    _tracked_source_bytes()
+    _tracked_source_bytes(git)
     require_imported_source_paths()
     pin = ROOT / ".exiftool-version"
     todo = ROOT / "TODO_RELEASE_BETA.md"
     if pin.read_bytes() != b"13.59\n":
         refuse("actual caller pin is not 13.59")
-    if pin.read_bytes() != _git_blob(".exiftool-version"):
+    if pin.read_bytes() != _git_blob(git, ".exiftool-version"):
         refuse("actual caller pin differs from committed source")
-    if todo.read_bytes() != _git_blob("TODO_RELEASE_BETA.md"):
+    if todo.read_bytes() != _git_blob(git, "TODO_RELEASE_BETA.md"):
         refuse("actual TODO differs from committed source")
+    git.revalidate()
     return {"head": head, "tree": tree, "pin_sha256": sha(pin), "todo_sha256": sha(todo)}
 
 
@@ -543,8 +592,13 @@ def _write_owned_state(descriptor: int, payload: bytes) -> None:
 
 
 def publish_receipt_no_replace(output: Path, value: dict[str, object],
-                               validate_inputs=None) -> None:
-    """Create exclusively; retain an unbuffered recovery descriptor until settled."""
+                               validate_inputs=None, close_inputs=None) -> None:
+    """Own output recovery through both validation gates and input custody closure.
+
+    Success is returned only after retained inputs and the primary output FD
+    close. Any earlier failure invalidates the owned inode through its duplicate.
+    An uncertain close is never retried; no pathname is removed or overwritten.
+    """
     changed = qualification._make_parent(output)
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
     pending = b'{"status":"publication_pending","promotion":"forbidden"}\n'
@@ -572,24 +626,30 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
             raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
         if validate_inputs is not None:
             validate_inputs()
+        if close_inputs is not None:
+            close_inputs()
+        closing = descriptor
+        descriptor = None  # close(2) may have closed it even when it raises.
         try:
-            os.close(descriptor)
+            os.close(closing)
         except OSError as exc:
             raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
-        descriptor = None
-    except (OSError, qualification.Refused, qualification.OutcomeUnknown):
+    except BaseException:
         # Recovery remains open even if the primary descriptor's close failed.
-        # No pathname is used or removed during invalidation.
+        # Every callback/cleanup failure must invalidate success. No pathname
+        # is used or removed, including when a foreign inode replaced it.
         if recovery is not None:
             try:
                 _write_owned_state(recovery, failed)
-            except OSError as exc:
+            except BaseException as exc:
                 raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
         raise
     finally:
         if descriptor is not None:
+            closing = descriptor
+            descriptor = None
             try:
-                os.close(descriptor)
+                os.close(closing)
             except OSError:
                 pass
         if recovery is not None:
@@ -613,7 +673,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        before = source_snapshot(args.expected_head, args.expected_tree)
+        git = bind_git()
+        before = source_snapshot(args.expected_head, args.expected_tree, git)
         selection = next_pin_selection((ROOT / "TODO_RELEASE_BETA.md").read_text(encoding="utf-8"))
         if selection != "not selected":
             refuse("TODO selects a next ExifTool release; the checked three-row matrix and read policy do not support that transition")
@@ -636,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_policy_sha256=args.expected_read_policy_sha256,
                 expected_tools=tools, expected_binaries=binaries)
             subordinates = subordinate_snapshot(replay_paths, value)
-            if source_snapshot(args.expected_head, args.expected_tree) != before:
+            if source_snapshot(args.expected_head, args.expected_tree, git) != before:
                 refuse("owned source changed during Task19 replay")
             for row, path in zip(ROWS, replay_paths, strict=True):
                 require_marker_unchanged(
@@ -656,17 +717,24 @@ def main(argv: list[str] | None = None) -> int:
                 refuse("Task19 subordinate evidence changed before publication")
             if subordinate_snapshot(replay_paths, value) != subordinates:
                 refuse("Task19 subordinate files changed during replay")
-            if source_snapshot(args.expected_head, args.expected_tree) != before:
+            if source_snapshot(args.expected_head, args.expected_tree, git) != before:
                 refuse("owned source changed before Task19 publication")
             refuse_source_output_overlap(output)
             if subordinate_snapshot(replay_paths, value) != subordinates:
                 refuse("Task19 subordinate files changed before publication")
             for path, pin in pins.items():
                 require_marker_unchanged(path, pin.binding, pin)
-            def validate_pins() -> None:
+            value["git"] = git.evidence()
+            def validate_inputs() -> None:
+                git.revalidate()
                 for path, pin in pins.items():
                     require_marker_unchanged(path, pin.binding, pin)
-            publish_receipt_no_replace(output, value, validate_inputs=validate_pins)
+                if subordinate_snapshot(replay_paths, value) != subordinates:
+                    refuse("Task19 subordinate files changed during publication")
+                if source_snapshot(args.expected_head, args.expected_tree, git) != before:
+                    refuse("owned source changed during Task19 publication")
+            publish_receipt_no_replace(output, value, validate_inputs=validate_inputs,
+                                       close_inputs=marker_stack.close)
     except qualification.OutcomeUnknown as exc:
         print(f"Task19 replay publication outcome unknown: {exc}", file=sys.stderr)
         return 4
