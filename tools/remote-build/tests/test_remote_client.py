@@ -772,6 +772,7 @@ class RemoteTestProfileTests(unittest.TestCase):
 
     def test_remote_test_refuses_changed_bytes_hidden_after_clean_status(self):
         from lib import remote_build
+        import qualification_source
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'source'
@@ -789,25 +790,39 @@ class RemoteTestProfileTests(unittest.TestCase):
             source_file = root / 'code.rs'
             source_file.write_text('committed\n')
             subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
-            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test',
-                            '-c', 'user.email=test@example.invalid',
-                            'commit', '-qm', 'fixture'], check=True)
+            key = Path(directory) / 'snapshot-key'
+            subprocess.run(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519',
+                            '-N', '', '-f', str(key)], check=True)
+            public = ' '.join(key.with_suffix('.pub').read_text().split()[:2])
+            fingerprint = subprocess.check_output(
+                ['/usr/bin/ssh-keygen', '-lf', str(key) + '.pub'], text=True).split()[1]
+            signers = Path(directory) / 'snapshot-signers'
+            signers.write_text(qualification_source.PRINCIPAL + ' ' + public + '\n')
+            for name, value in (('user.name', 'swackhamer'),
+                                ('user.email', qualification_source.PRINCIPAL),
+                                ('gpg.format', 'ssh'), ('user.signingkey', str(key)),
+                                ('gpg.ssh.allowedSignersFile', str(signers))):
+                subprocess.run(['git', '-C', str(root), 'config', name, value], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-S', '-qm', 'fixture'], check=True)
             subprocess.run(['git', '-C', str(root), 'update-index',
                             '--assume-unchanged', 'code.rs'], check=True)
 
             real_run = subprocess.run
+            real_status = remote_build.source_clean_status
             mutated = False
 
-            def change_after_clean_status(command, **kwargs):
+            def change_after_clean_status(source, head):
                 nonlocal mutated
-                result = real_run(command, stdout=subprocess.PIPE, check=True, **kwargs).stdout
-                if not mutated and 'status' in command and '--porcelain' in command:
+                result = real_status(source, head)
+                if not mutated:
                     self.assertEqual(result, '')
                     source_file.write_text('corrupted\n')
                     mutated = True
                 return result
 
             def reject_remote_command(command, **kwargs):
+                if command[0] in ("git", "/usr/bin/git", "/usr/bin/ssh-keygen"):
+                    return real_run(command, **kwargs)
                 # On the broken path the archive would already contain the
                 # altered checkout bytes before the first remote command.
                 with tarfile.open(Path(directory) / 'evidence' / 'remote-source.tar.gz') as archive:
@@ -818,8 +833,8 @@ class RemoteTestProfileTests(unittest.TestCase):
             with patch.object(remote_build.ssh_transport, 'identity', return_value=None), \
                  patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
                  patch.object(remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}), \
-                 patch.object(remote_build, 'verify_signed_source'), \
-                 patch.object(remote_build.subprocess, 'check_output', side_effect=change_after_clean_status), \
+                 patch.object(qualification_source, '_trusted_key', return_value=(public, fingerprint)), \
+                 patch.object(remote_build, 'source_clean_status', side_effect=change_after_clean_status), \
                  patch.object(remote_build.subprocess, 'run', side_effect=reject_remote_command):
                 with self.assertRaisesRegex(RuntimeError, 'Fleet source differs from signed HEAD'):
                     remote_build.main(['--source', str(root), '--instance', 'builder-vm', '--zone', 'z',
