@@ -241,6 +241,42 @@ class Task19AdapterControls(unittest.TestCase):
             adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertIn('verified_read_only', output.read_text())
 
+    def test_publication_invalidation_failure_preserves_outcome_unknown(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "receipt.json"
+            original_truncate = os.ftruncate
+            calls = 0
+            def fail_invalidation(descriptor, length):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("cannot invalidate")
+                return original_truncate(descriptor, length)
+            with patch.object(adapter.qualification, "_fsync_directory", side_effect=OSError("directory")), \
+                 patch.object(adapter.os, "ftruncate", side_effect=fail_invalidation):
+                with self.assertRaisesRegex(adapter.qualification.OutcomeUnknown, "invalidation is uncertain"):
+                    adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            # A storage failure can leave old bytes. It must never become a
+            # routine refusal or a claimed successful publication.
+            self.assertIn("verified_read_only", output.read_text())
+
+    def test_close_only_failure_invalidates_owned_inode(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "receipt.json"
+            original_close = os.close
+            calls = 0
+            def fail_first_close(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise OSError("primary close failed")
+                return original_close(descriptor)
+            with patch.object(adapter.qualification, "_fsync_directory"), \
+                 patch.object(adapter.os, "close", side_effect=fail_first_close):
+                with self.assertRaisesRegex(adapter.qualification.OutcomeUnknown, "close outcome is uncertain"):
+                    adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertIn("publication_failed", output.read_text())
+
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
             repo = Path(directory)

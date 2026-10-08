@@ -492,8 +492,21 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
     return captured
 
 
+def _write_owned_state(descriptor: int, payload: bytes) -> None:
+    """Use unbuffered writes so descriptor close can never flush stale success."""
+    os.ftruncate(descriptor, 0)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    written = 0
+    while written < len(payload):
+        count = os.write(descriptor, payload[written:])
+        if count <= 0:
+            raise OSError("Task19 output write made no progress")
+        written += count
+    os.fsync(descriptor)
+
+
 def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
-    """Create exclusively, keep the owned descriptor, and invalidate on failure."""
+    """Create exclusively; retain an unbuffered recovery descriptor until settled."""
     changed = qualification._make_parent(output)
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
     pending = b'{"status":"publication_pending","promotion":"forbidden"}\n'
@@ -503,37 +516,47 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
                              getattr(os, "O_NOFOLLOW", 0), 0o600)
     except FileExistsError as exc:
         raise qualification.Refused("Task19 replay output already exists") from exc
-    with os.fdopen(descriptor, "r+b") as stream:
-        owned = os.fstat(stream.fileno())
+    recovery = None
+    try:
+        recovery = os.dup(descriptor)
+        owned = os.fstat(descriptor)
+        _write_owned_state(descriptor, pending)
+        _write_owned_state(descriptor, payload)
+        for directory in dict.fromkeys(changed):
+            qualification._fsync_directory(directory)
         try:
-            stream.write(pending)
-            stream.flush()
-            os.fsync(stream.fileno())
-            stream.seek(0)
-            stream.write(payload)
-            stream.truncate()
-            stream.flush()
-            os.fsync(stream.fileno())
-            for directory in dict.fromkeys(changed):
-                qualification._fsync_directory(directory)
+            current = output.lstat()
+        except FileNotFoundError as exc:
+            raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
+        if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
+            raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
+        descriptor = None
+    except (OSError, qualification.Refused, qualification.OutcomeUnknown):
+        # Recovery remains open even if the primary descriptor's close failed.
+        # No pathname is used or removed during invalidation.
+        if recovery is not None:
             try:
-                current = output.lstat()
-            except FileNotFoundError as exc:
-                raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
-            if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
-                raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
-        except (OSError, qualification.Refused, qualification.OutcomeUnknown):
-            # A retained descriptor invalidates only this invocation's inode.
-            # Never unlink or open the destination pathname during cleanup.
-            try:
-                stream.seek(0)
-                stream.write(failed)
-                stream.truncate()
-                stream.flush()
-                os.fsync(stream.fileno())
+                _write_owned_state(recovery, failed)
             except OSError as exc:
                 raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
-            raise
+        raise
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if recovery is not None:
+            # This duplicate has no userspace buffer and all writes were fsynced.
+            # Its close cannot change durable receipt bytes.
+            try:
+                os.close(recovery)
+            except OSError:
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
