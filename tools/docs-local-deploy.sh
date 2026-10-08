@@ -111,7 +111,11 @@ else
   SOURCE_IDENTITY="$SHA"
   CANDIDATE_SHA="$SHA"
   step "snapshot: $REF @ ${SHA:0:12}"
-  git -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
+  # Archive attributes must come only from the signed commit, without private
+  # overrides or export rules that can omit/substitute committed page bytes.
+  export GIT_ATTR_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+  python3 "$REPO/tools/docs/check-archive-source.py" "$REPO" "$SHA"
+  git -c core.attributesFile=/dev/null -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
 fi
 
 if [ "$USE_WORKTREE" = 1 ]; then

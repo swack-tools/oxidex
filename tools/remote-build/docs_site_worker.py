@@ -13,6 +13,9 @@ SOURCE = Path('/target/checkout')
 OUTPUT = Path('/target/docs-site')
 # The approved Spot image provides Node/npm here; CI must provide the same runtime.
 RUNTIME_PATH = '/opt/node/bin:/usr/bin:/bin'
+CI_DURABLE_ROOT = Path('/mnt/runner-data/remote-build/targets')
+SYSTEM_TEMP_ROOTS = (Path('/tmp'), Path('/var/tmp'), Path('/private/tmp'),
+                     Path('/dev/shm'), Path('/run'))
 
 
 def _root_owned_path(path):
@@ -49,7 +52,8 @@ def build_environment(home):
     """Pass only runtime tool lookup plus fixed Git, npm and site settings."""
     return {'PATH': RUNTIME_PATH, 'HOME': str(home), 'TMPDIR': '/tmp',
             'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC',
-            'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+            'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_ATTR_NOSYSTEM': '1',
+            'GIT_CONFIG_GLOBAL': os.devnull,
             'GIT_CONFIG_SYSTEM': os.devnull, 'DOCS_CHANNEL': 'stable',
             'DOCS_BASE': '/', 'NPM_CONFIG_USERCONFIG': str(home / 'npm-user.npmrc'),
             'NPM_CONFIG_GLOBALCONFIG': str(home / 'npm-global.npmrc'),
@@ -87,10 +91,21 @@ def selected_context():
 
     route.verify_ci_fleet_checkout()
     from test_runner import fleet_recipe_target
+    if not os.environ.get('CARGO_TARGET_DIR'):
+        raise RuntimeError('Docs site CI requires an explicit durable CARGO_TARGET_DIR')
     target = fleet_recipe_target()
     if (target.is_symlink() or target.resolve() != target
             or target == source or target in source.parents):
         raise RuntimeError('Docs site CI target is not a separate canonical directory')
+    runner_temp = Path(os.environ.get('RUNNER_TEMP', '/nonexistent-runner-temp'))
+    temporary_roots = (*SYSTEM_TEMP_ROOTS, runner_temp)
+    if any(root.is_absolute() and (target == root or target.is_relative_to(root))
+           for root in temporary_roots):
+        raise RuntimeError('Docs site CI target is temporary and cannot retain a snapshot')
+    if (not CI_DURABLE_ROOT.is_dir() or CI_DURABLE_ROOT.resolve() != CI_DURABLE_ROOT
+            or target == CI_DURABLE_ROOT or not target.is_relative_to(CI_DURABLE_ROOT)):
+        raise RuntimeError('Docs site CI requires an explicit target under the durable '
+                           '/mnt/runner-data/remote-build/targets mount')
     run_id = os.environ.get('GITHUB_RUN_ID', '')
     attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
     job = os.environ.get('GITHUB_JOB', '')

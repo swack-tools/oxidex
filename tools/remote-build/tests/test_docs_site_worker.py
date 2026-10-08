@@ -1,6 +1,7 @@
 """Lightweight website recipe controls; no Node installation or site build."""
 import json
 import os
+import sys
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,17 +14,134 @@ import docs_site_worker
 import route
 
 HELPER = Path(__file__).resolve().parents[2] / 'docs' / 'dist-sha256.sh'
+ARCHIVE_GUARD = Path(__file__).resolve().parents[2] / 'docs' / 'check-archive-source.py'
 REAL_RUN = subprocess.run
 
 
 class DocsSiteWorkerTests(unittest.TestCase):
+    def test_archive_source_rejects_private_and_committed_export_attributes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve() / 'repo'
+            repo.mkdir()
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            (repo / 'page.md').write_text('signed page\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T',
+                            '-c', 'user.email=t@x', 'commit', '-qm', 'signed'], check=True)
+            head = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                                           text=True).strip()
+            command = [sys.executable, str(ARCHIVE_GUARD), str(repo), head]
+            subprocess.run(command, check=True, capture_output=True)
+            global_attrs = Path(directory).resolve() / 'global-attrs'
+            global_attrs.write_text('page.md export-ignore\n')
+            global_config = Path(directory).resolve() / 'global-config'
+            global_config.write_text('[core]\n attributesFile = ' + str(global_attrs) + '\n')
+            global_env = {**os.environ, 'GIT_CONFIG_GLOBAL': str(global_config),
+                          'GIT_CONFIG_SYSTEM': os.devnull, 'GIT_ATTR_NOSYSTEM': '1'}
+            self.assertNotIn(b'page.md', subprocess.check_output(
+                ['git', '-C', str(repo), 'archive', head], env=global_env))
+            clean_env = {**global_env, 'GIT_CONFIG_GLOBAL': os.devnull}
+            self.assertIn(b'page.md', subprocess.check_output(
+                ['git', '-c', 'core.attributesFile=/dev/null', '-C', str(repo),
+                 'archive', head], env=clean_env))
+            private = repo / '.git' / 'info' / 'attributes'
+            private.write_text('page.md export-ignore\n')
+            self.assertEqual(subprocess.check_output(
+                ['git', '-C', str(repo), 'status', '--porcelain']), b'')
+            refused = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('private Git attributes', refused.stderr)
+            private.unlink()
+            (repo / '.gitattributes').write_text('page.md export-ignore\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.gitattributes'], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T',
+                            '-c', 'user.email=t@x', 'commit', '-qm', 'attributes'], check=True)
+            new_head = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                                               text=True).strip()
+            refused = subprocess.run([*command[:-1], new_head], capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('committed export attribute', refused.stderr)
+
+    def test_dist_hash_refuses_symlink_root_and_nonregular_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            dist = root / 'dist'
+            dist.mkdir()
+            (dist / 'index.html').write_text('site')
+            command = ['bash', str(HELPER), str(dist)]
+            baseline = subprocess.check_output(command, text=True).strip()
+            outside = root / 'outside'
+            outside.write_text('outside')
+            (dist / 'link').symlink_to(outside)
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            (dist / 'link').unlink()
+            other_outside = root / 'other-outside'
+            other_outside.write_text('changed outside')
+            (dist / 'link').symlink_to(other_outside)
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            (dist / 'link').unlink()
+            os.mkfifo(dist / 'pipe')
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            (dist / 'pipe').unlink()
+            linked_root = root / 'linked-dist'
+            linked_root.symlink_to(dist, target_is_directory=True)
+            self.assertNotEqual(subprocess.run(['bash', str(HELPER), str(linked_root)],
+                                               capture_output=True).returncode, 0)
+            self.assertEqual(subprocess.check_output(command, text=True).strip(), baseline)
+
+    def test_ci_output_refuses_temporary_or_default_checkout_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / 'checkout'
+            source.mkdir()
+            durable = root / 'durable'
+            durable.mkdir()
+            runner_temp = durable / 'RUNNER_TEMP'
+            runner_temp.mkdir()
+            env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
+                   'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs',
+                   'RUNNER_TEMP': str(runner_temp),
+                   'CARGO_TARGET_DIR': str(runner_temp)}
+            with patch.dict(os.environ, env), \
+                 patch.object(Path, 'cwd', return_value=source), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=False), \
+                 patch.object(route, 'verify_ci_fleet_checkout'), \
+                 patch('test_runner.fleet_recipe_target', return_value=runner_temp), \
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
+                with self.assertRaisesRegex(RuntimeError, 'temporary'):
+                    docs_site_worker.selected_context()
+            system_temp = Path('/private/tmp/site')
+            with patch.dict(os.environ, {**env, 'CARGO_TARGET_DIR': str(system_temp)}), \
+                 patch.object(Path, 'cwd', return_value=source), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=False), \
+                 patch.object(route, 'verify_ci_fleet_checkout'), \
+                 patch('test_runner.fleet_recipe_target', return_value=system_temp):
+                with self.assertRaisesRegex(RuntimeError, 'temporary'):
+                    docs_site_worker.selected_context()
+            with patch.dict(os.environ, env, clear=False), \
+                 patch.object(Path, 'cwd', return_value=source), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=False), \
+                 patch.object(route, 'verify_ci_fleet_checkout'), \
+                 patch('test_runner.fleet_recipe_target', return_value=source / 'target'):
+                os.environ.pop('CARGO_TARGET_DIR', None)
+                with self.assertRaisesRegex(RuntimeError, 'durable|explicit'):
+                    docs_site_worker.selected_context()
+
     def test_verified_actions_checkout_gets_unique_target_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory).resolve() / 'checkout'
+            root = Path(directory).resolve()
+            source = root / 'checkout'
             source.mkdir()
-            target = source / 'target'
+            durable = root / 'durable'
+            durable.mkdir()
+            target = durable / 'run'
+            target.mkdir()
             env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
-                   'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_JOB': 'docs-build'}
+                   'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_JOB': 'docs-build',
+                   'CARGO_TARGET_DIR': str(target)}
             with patch.dict(docs_site_worker.os.environ, env), \
                  patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
                  patch.object(route, 'local_worker_context', return_value=True), \
@@ -31,7 +149,8 @@ class DocsSiteWorkerTests(unittest.TestCase):
                  patch.object(route, 'verify_ci_fleet_checkout') as verified, \
                  patch.object(docs_site_worker.secrets, 'token_hex',
                               side_effect=['b' * 16, 'c' * 16]), \
-                 patch('test_runner.fleet_recipe_target', return_value=target):
+                 patch('test_runner.fleet_recipe_target', return_value=target), \
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
                 selected_source, output = docs_site_worker.selected_context()
                 _, second_output = docs_site_worker.selected_context()
             self.assertEqual(verified.call_count, 2)
@@ -49,19 +168,23 @@ class DocsSiteWorkerTests(unittest.TestCase):
             root = Path(directory).resolve()
             source = root / 'checkout'
             source.mkdir()
-            target = source / 'target'
+            durable = root / 'durable'
+            durable.mkdir()
+            target = durable / 'run'
             target.mkdir()
             outside = root / 'outside'
             outside.mkdir()
             (target / 'docs-site').symlink_to(outside, target_is_directory=True)
             env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
-                   'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs'}
+                   'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs',
+                   'CARGO_TARGET_DIR': str(target)}
             with patch.dict(docs_site_worker.os.environ, env), \
                  patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
                  patch.object(route, 'local_worker_context', return_value=True), \
                  patch.object(route, 'trusted_marker', return_value=False), \
                  patch.object(route, 'verify_ci_fleet_checkout'), \
-                 patch('test_runner.fleet_recipe_target', return_value=target):
+                 patch('test_runner.fleet_recipe_target', return_value=target), \
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
                 with self.assertRaisesRegex(RuntimeError, 'not canonical'):
                     docs_site_worker.selected_context()
             self.assertEqual(list(outside.iterdir()), [])
@@ -86,6 +209,7 @@ class DocsSiteWorkerTests(unittest.TestCase):
         self.assertTrue(all(key not in child for key in hostile
                             if key != 'NPM_CONFIG_USERCONFIG'))
         self.assertEqual(child['GIT_NO_REPLACE_OBJECTS'], '1')
+        self.assertEqual(child['GIT_ATTR_NOSYSTEM'], '1')
         self.assertEqual(child['GIT_CONFIG_GLOBAL'], os.devnull)
         self.assertEqual(child['GIT_CONFIG_SYSTEM'], os.devnull)
         self.assertEqual((child['DOCS_CHANNEL'], child['DOCS_BASE']), ('stable', '/'))
@@ -95,7 +219,8 @@ class DocsSiteWorkerTests(unittest.TestCase):
         self.assertEqual(child['NPM_CONFIG_CACHE'], '/trusted/home/npm-cache')
         self.assertEqual(set(child), {
             'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
-            'GIT_NO_REPLACE_OBJECTS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
+            'GIT_NO_REPLACE_OBJECTS', 'GIT_ATTR_NOSYSTEM',
+            'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
             'DOCS_CHANNEL', 'DOCS_BASE', 'NPM_CONFIG_USERCONFIG',
             'NPM_CONFIG_GLOBALCONFIG', 'NPM_CONFIG_CACHE',
         })
