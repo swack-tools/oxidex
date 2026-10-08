@@ -43,3 +43,37 @@ fn structural_and_decline_fallback_paths_stay_present() {
     assert!(keyed.contains("fn process_keyed_directory"));
     assert!(serial.contains("fn process_serial_directory"));
 }
+
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
+/// Sanity-check the actual generated-on/off CLI route on a pinned carrier.
+/// CanonRaw is not one of the five historical Task18 changes, so this does
+/// not qualify those rows; per-field attribution is still required.
+/// A missing t/images fixture is a refusal, not a passing skip.
+#[test]
+fn generated_off_removes_only_the_attributed_canonraw_occurrence() {
+    use std::process::Command;
+    let path = fixtures::required_t_images_fixture_path("CanonRaw.crw");
+    let read = |off: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
+        command.args(["-j", "-G1", "-a"]);
+        if off {
+            command.env("OXIDEX_GENSHARE_SILENCE", "keyed");
+        } else {
+            command.env_remove("OXIDEX_GENSHARE_SILENCE");
+        }
+        let output = command.arg(&path).output().expect("run explicit release candidate CLI");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let value: Value = serde_json::from_slice(&output.stdout).expect("CLI JSON");
+        value[0].as_object().expect("one metadata object").clone()
+    };
+    let on = read(false);
+    let off = read(true);
+    let tag = "CanonRaw:CanonFirmwareVersion";
+    assert_eq!(on[tag], "Firmware Version 1.1.1");
+    assert!(!off.contains_key(tag));
+    let missing: Vec<_> = on.keys().filter(|key| !off.contains_key(*key)).map(String::as_str).collect();
+    assert_eq!(missing, [tag]);
+    assert_eq!(on["CanonRaw:OwnerName"], off["CanonRaw:OwnerName"]);
+}

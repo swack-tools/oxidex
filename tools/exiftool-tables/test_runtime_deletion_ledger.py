@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import shutil
+import subprocess
+import tempfile
 import json
 from pathlib import Path
 import sys
@@ -85,6 +89,103 @@ class Task18DeletionGateControls(unittest.TestCase):
         second = dict(first, symbol="src/core/tiff_helpers.rs::HAND_ARM")
         with self.assertRaisesRegex(gate.ownership.Refused, "duplicate owner"):
             gate.no_new_manual([first, second])
+
+
+class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
+    def test_signed_packet_acceptance_and_mutations(self) -> None:
+        if not shutil.which("ssh-keygen"):
+            self.skipTest("ssh-keygen unavailable")
+        with tempfile.TemporaryDirectory(prefix="task18-packet-") as directory:
+            ops = Path(directory)
+            key = ops / "test-only-controller"
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                           check=True, capture_output=True)
+            trusted = key.with_suffix(".pub").read_bytes()
+            binary_file = ops / "candidate-bin"
+            binary_file.write_bytes(b"test-only-binary")
+            binary = gate._sha(binary_file.read_bytes())
+            source = "sha256:" + "b" * 64
+            head = "c" * 40
+            integration = gate.INTEGRATION_COMMIT
+            symbol = "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT"
+            source_field = "Exif::Main:index:IFD0/0x9c9b"
+            row = field("IFD0/0x9c9b", "generated", "src/exiftool_tables/conv/exif_main.rs::arm")
+            candidate = {"old_symbol": symbol, "source_fields": [source_field], "new_owner": "generated",
+                         "candidate_source_sha256": source, "candidate_binary_sha256": binary}
+
+            def sign(name: str, document: dict) -> dict:
+                path = ops / f"{name}.json"
+                path.write_text(json.dumps(document, sort_keys=True))
+                subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key), "-n",
+                                "oxidex-task18-controller", str(path)], check=True, capture_output=True)
+                return {"path": str(path), "sha256": gate._sha(path.read_bytes()),
+                        "signature_path": str(path) + ".sig"}
+
+            appendix = sign("appendix", {"schema": "runtime-deletion-appendix/v1", "task": "18",
+                        "approval": "prospective-approved", "candidate_commit": head,
+                        "integration_sha": integration, "merge_sha": integration,
+                        "source_sha256": source, "binary_sha256": binary, "candidates": [candidate]})
+            common = {"schema": "runtime-deletion-evidence/v1", "task": "18", "old_symbol": symbol,
+                      "source_fields": [source_field], "source_sha256": source, "binary_sha256": binary,
+                      "integration_sha": integration, "merge_sha": integration}
+            capability = sign("capability", dict(common, kind="oracle_capability", release="13.59",
+                                                     perl="5.38.2", capability_probe="PASS"))
+            fixture = "sha256:" + "f" * 64
+            receipts = {"oracle_capability": capability,
+                        "oracle": sign("oracle", dict(common, kind="oracle", capability_sha256=capability["sha256"],
+                                                   matched_occurrences=1, lost_occurrences=0, new_value_rows=0,
+                                                   fixture_sha256=fixture)),
+                        "attribution": sign("attribution", dict(common, kind="attribution", generated_on="matched",
+                                                                 generated_off="missing-or-residual", duplicate_owner=False)),
+                        "zero_reachability": sign("reach", dict(common, kind="zero_reachability", reachable=False,
+                                                                  remaining_callsites=[], definition_checked=True,
+                                                                  fixture_sha256=fixture,
+                                                                  capability_sha256=capability["sha256"]))}
+            manifest = sign("manifest", {"schema": "runtime-deletion-manifest/v1", "task": "18",
+                            "appendix_sha256": appendix["sha256"], "candidate_commit": head,
+                            "source_sha256": source, "binary_sha256": binary,
+                            "integration_sha": integration, "merge_sha": integration,
+                            "receipts": {symbol: {kind: binding["sha256"] for kind, binding in receipts.items()}}})
+            entry = dict(candidate, receipt_task="18", receipt_integration_sha=integration,
+                         receipt_merge_sha=integration,
+                         controller_reconciliation_manifest_sha256=manifest["sha256"],
+                         generated_on="matched", generated_off="missing-or-residual",
+                         receipt_bindings=receipts, deletion_commit=None)
+            packet = {"schema": "runtime-deletion-packet/v1", "appendix": appendix,
+                      "manifest": manifest, "entries": [entry]}
+            original = subprocess.run
+            def bounded_run(args, *a, **kw):
+                if isinstance(args, list) and "merge-base" in args:
+                    return subprocess.CompletedProcess(args, 0)
+                return original(args, *a, **kw)
+            with patch.object(gate, "verify_history", return_value=head), \
+                 patch.object(gate.clean_snapshot, "source_tree_sha256", return_value="b" * 64), \
+                 patch.object(gate.ownership, "load_rows", return_value=[row]), \
+                 patch.object(gate.subprocess, "run", side_effect=bounded_run):
+                # Only ancestry and heavy source inventory are test seams.
+                # The real ssh-keygen verifies every signed byte.
+                self.assertEqual(gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
+                                 binary_path=binary_file, controller_key=trusted,
+                                 test_only_attribution_bridge=lambda _attr, fields: fields == [source_field])["status"],
+                                 "PASS_TEST_PACKET_BINDINGS")
+                changed = copy.deepcopy(packet)
+                changed["entries"][0]["receipt_bindings"]["oracle"]["sha256"] = "sha256:" + "0" * 64
+                with self.assertRaisesRegex(gate.Refused, "digest"):
+                    gate.evaluate_prospective(changed, root=ROOT, ops_root=ops,
+                                             binary_path=binary_file, controller_key=trusted,
+                                             test_only_attribution_bridge=lambda _attr, _fields: True)
+                changed = copy.deepcopy(packet)
+                changed["entries"][0]["source_fields"] = ["Exif::Main:index:IFD0/0x9c9c"]
+                with self.assertRaises(gate.Refused):
+                    gate.evaluate_prospective(changed, root=ROOT, ops_root=ops,
+                                             binary_path=binary_file, controller_key=trusted,
+                                             test_only_attribution_bridge=lambda _attr, _fields: True)
+                with self.assertRaisesRegex(gate.Refused, "BLOCKED_ATTRIBUTION"):
+                    gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
+                                             binary_path=binary_file, controller_key=trusted)
+                with self.assertRaisesRegex(gate.Refused, "BLOCKED_AUTHORITY"):
+                    gate.evaluate_prospective(packet, root=ROOT, ops_root=ops,
+                                             binary_path=binary_file, controller_key=None)
 
 
 if __name__ == "__main__":

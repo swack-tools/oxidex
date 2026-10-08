@@ -7,13 +7,18 @@ pre-deletion approval. A historical output-parity receipt is not authorization.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from typing import Callable
 
 import runtime_ownership as ownership
+import version_rehearsal_clean_snapshot as clean_snapshot
 
 LEDGER = Path("docs/reference/generated-runtime-deletion-ledger.json")
 INTEGRATION_COMMIT = "4f653243d33cf053107f4f19b8bd449329de611b"
@@ -36,6 +41,12 @@ KNOWN_GENERATED_RESIDUALS = {
       for suffix in "bcdef"),
 }
 SYMBOL = re.compile(r"(?:src/[A-Za-z0-9_./-]+\.rs)::[A-Za-z_][A-Za-z0-9_:.-]*\Z")
+# A packet cannot appoint its own authority. No Task18 controller signing
+# key has been approved; tests inject an independently generated test key.
+PRODUCTION_CONTROLLER_KEY: bytes | None = None
+STRUCTURAL = {"process_keyed_directory", "process_serial_directory", "ifd0_walk",
+              "take_ifd0", "finish_ifd0", "keep_hand_on_decline", "process_exif",
+              "process_binary_data", "execute"}
 
 
 class Refused(ValueError):
@@ -136,13 +147,207 @@ def verify(root: Path, *, ops_root: Path | None = None) -> dict:
                         "zero-reachability and oracle-capability receipts"]}
 
 
+def _sha(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _file(path: object, ops_root: Path) -> Path:
+    if not isinstance(path, str) or not Path(path).is_absolute():
+        raise Refused("evidence path must be absolute")
+    value = Path(path)
+    if (value.is_symlink() or not value.is_file() or
+            not value.resolve().is_relative_to(ops_root.resolve()) or value.stat().st_size > 8_000_000):
+        raise Refused("evidence must be bounded regular file below durable ops root")
+    return value
+
+
+def _signed(binding: object, ops_root: Path, key: bytes) -> dict:
+    if not isinstance(binding, dict) or set(binding) != {"path", "sha256", "signature_path"}:
+        raise Refused("signed evidence binding incomplete")
+    if not isinstance(binding["sha256"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", binding["sha256"]):
+        raise Refused("signed evidence digest malformed")
+    raw = _file(binding["path"], ops_root).read_bytes()
+    sig = _file(binding["signature_path"], ops_root)
+    if _sha(raw) != binding["sha256"]:
+        raise Refused("signed evidence bytes differ from digest")
+    ssh = shutil.which("ssh-keygen")
+    if not ssh or not key.startswith(b"ssh-ed25519 "):
+        raise Refused("BLOCKED_AUTHORITY: trusted controller key unavailable")
+    with tempfile.TemporaryDirectory(prefix="task18-verify-") as directory:
+        allowed = Path(directory) / "allowed"
+        allowed.write_bytes(b"task18-controller " + key.strip() + b"\n")
+        check = subprocess.run([ssh, "-Y", "verify", "-f", str(allowed), "-I", "task18-controller",
+                                "-n", "oxidex-task18-controller", "-s", str(sig)],
+                               input=raw, capture_output=True, timeout=30)
+    if check.returncode:
+        raise Refused("controller signature invalid")
+    document = json.loads(raw)
+    if not isinstance(document, dict):
+        raise Refused("signed evidence is not an object")
+    return document
+
+
+def _identity(document: dict, kind: str, entry: dict, source: str, binary: str,
+              integration: str, merge: str) -> None:
+    expected = {"schema": "runtime-deletion-evidence/v1", "kind": kind, "task": "18",
+                "old_symbol": entry["old_symbol"], "source_fields": entry["source_fields"],
+                "source_sha256": source, "binary_sha256": binary,
+                "integration_sha": integration, "merge_sha": merge}
+    if any(document.get(name) != value for name, value in expected.items()):
+        raise Refused(f"{kind} evidence identity mismatch")
+
+
+def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
+                         binary_path: Path, controller_key: bytes | None,
+                         test_only_attribution_bridge: Callable[[dict, list[str]], bool] | None = None) -> dict:
+    """Replay finite packet bindings; production additionally requires Task8 proof.
+
+    The test-only callback verifies packet plumbing, never production approval.
+    """
+    if controller_key is None:
+        raise Refused("BLOCKED_AUTHORITY: no approved Task18 controller trust anchor")
+    if not isinstance(packet, dict) or set(packet) != {"schema", "appendix", "manifest", "entries"} or packet["schema"] != "runtime-deletion-packet/v1":
+        raise Refused("prospective packet schema malformed")
+    if not isinstance(packet["entries"], list) or not packet["entries"]:
+        raise Refused("empty prospective packet cannot pass")
+    root, ops_root = root.resolve(), ops_root.resolve()
+    head = verify_history(root)
+    source = "sha256:" + clean_snapshot.source_tree_sha256(root)
+    if (not binary_path.is_absolute() or binary_path.is_symlink() or not binary_path.is_file()
+            or binary_path.stat().st_size > 1_000_000_000):
+        raise Refused("explicit release binary must be a bounded regular absolute file")
+    binary = _sha(binary_path.read_bytes())
+    appendix = _signed(packet["appendix"], ops_root, controller_key)
+    manifest = _signed(packet["manifest"], ops_root, controller_key)
+    integration, merge = appendix.get("integration_sha"), appendix.get("merge_sha")
+    if (appendix.get("schema") != "runtime-deletion-appendix/v1" or appendix.get("task") != "18"
+            or appendix.get("approval") != "prospective-approved"
+            or not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) for value in (integration, merge))
+            or appendix.get("candidate_commit") != head or appendix.get("source_sha256") != source
+            or appendix.get("binary_sha256") != binary or not isinstance(appendix.get("candidates"), list)
+            or not appendix["candidates"]):
+        raise Refused("appendix not approved for current candidate source/binary")
+    for ancestor in (integration, merge):
+        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, head],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode:
+            raise Refused("appendix lineage not in source history")
+    if (manifest.get("schema") != "runtime-deletion-manifest/v1" or manifest.get("task") != "18"
+            or manifest.get("appendix_sha256") != packet["appendix"]["sha256"]
+            or any(manifest.get(name) != value for name, value in
+                   {"candidate_commit": head, "source_sha256": source, "binary_sha256": binary,
+                    "integration_sha": integration, "merge_sha": merge}.items())):
+        raise Refused("controller reconciliation manifest identity mismatch")
+    rows = ownership.load_rows(root, ops_root)
+    no_new_manual(rows)
+    by_field = {ownership.StableFieldId.from_row(row).text(): row for row in rows}
+    candidates = appendix["candidates"]
+    if not all(isinstance(candidate, dict) and set(candidate) == {"old_symbol", "source_fields", "new_owner", "candidate_source_sha256", "candidate_binary_sha256"} for candidate in candidates):
+        raise Refused("appendix candidate malformed")
+    approved = {candidate["old_symbol"]: candidate for candidate in candidates}
+    if len(approved) != len(candidates) or len(packet["entries"]) != len(candidates):
+        raise Refused("appendix and ledger are not one finite set")
+    seen, expected_receipts = set(), {}
+    for entry in packet["entries"]:
+        expected_keys = {"old_symbol", "source_fields", "new_owner", "candidate_source_sha256", "candidate_binary_sha256", "receipt_task", "receipt_integration_sha", "receipt_merge_sha", "controller_reconciliation_manifest_sha256", "generated_on", "generated_off", "receipt_bindings", "deletion_commit"}
+        if not isinstance(entry, dict) or set(entry) != expected_keys:
+            raise Refused("ledger entry malformed")
+        symbol, fields, owner = entry["old_symbol"], entry["source_fields"], entry["new_owner"]
+        if not isinstance(symbol, str) or not SYMBOL.fullmatch(symbol) or symbol in seen or symbol not in approved:
+            raise Refused("unlisted, duplicate, or nonliteral symbol")
+        seen.add(symbol)
+        if symbol.rsplit("::", 1)[-1] in STRUCTURAL:
+            raise Refused("structural/live public owner is nondeletable")
+        if (not isinstance(fields, list) or not fields or not all(isinstance(field, str) for field in fields)
+                or len(set(fields)) != len(fields) or any(field not in by_field for field in fields)):
+            raise Refused("source fields absent or mismatched with ownership")
+        if not isinstance(owner, str) or not owner or any(
+                row["owner"] != ("generated" if owner == "generated" else "residual")
+                or (owner != "generated" and row["symbol"] != owner)
+                for row in (by_field[field] for field in fields)):
+            raise Refused("replacement owner or duplicate owner mismatch")
+        if {key: entry[key] for key in approved[symbol]} != approved[symbol]:
+            raise Refused("ledger entry differs from authenticated appendix")
+        if (entry["candidate_source_sha256"] != source or entry["candidate_binary_sha256"] != binary
+                or entry["receipt_task"] != "18" or entry["receipt_integration_sha"] != integration
+                or entry["receipt_merge_sha"] != merge
+                or entry["controller_reconciliation_manifest_sha256"] != packet["manifest"]["sha256"]
+                or entry["generated_on"] != "matched" or entry["generated_off"] != "missing-or-residual"
+                or entry["deletion_commit"] not in (None, head)):
+            raise Refused("candidate identity, generated on/off, or lineage mismatch")
+        bindings = entry["receipt_bindings"]
+        kinds = {"oracle", "attribution", "zero_reachability", "oracle_capability"}
+        if not isinstance(bindings, dict) or set(bindings) != kinds:
+            raise Refused("required authenticated receipt missing")
+        evidence = {kind: _signed(binding, ops_root, controller_key) for kind, binding in bindings.items()}
+        for kind, document in evidence.items():
+            _identity(document, kind, entry, source, binary, integration, merge)
+        cap = evidence["oracle_capability"]
+        if cap.get("release") != "13.59" or cap.get("perl") != "5.38.2" or cap.get("capability_probe") != "PASS":
+            raise Refused("pinned oracle capability absent")
+        oracle = evidence["oracle"]
+        if (oracle.get("capability_sha256") != bindings["oracle_capability"]["sha256"]
+                or type(oracle.get("matched_occurrences")) is not int or oracle["matched_occurrences"] < 1
+                or oracle.get("lost_occurrences") != 0 or oracle.get("new_value_rows") != 0):
+            raise Refused("oracle replacement proof absent or regressed")
+        attr = evidence["attribution"]
+        if attr.get("generated_on") != "matched" or attr.get("generated_off") != "missing-or-residual" or attr.get("duplicate_owner") is not False:
+            raise Refused("generated on/off or duplicate-owner proof absent")
+        if test_only_attribution_bridge is not None:
+            if test_only_attribution_bridge(attr, fields) is not True:
+                raise Refused("BLOCKED_ATTRIBUTION: test bridge did not exercise every source field")
+        else:
+            task8 = attr.get("task8_v3_receipt")
+            if not isinstance(task8, dict):
+                raise Refused("BLOCKED_ATTRIBUTION: actual Task8 v3 receipt absent")
+            from genshare import attribute as task8_validator
+            retained = _signed(task8, ops_root, controller_key)
+            receipt_path = Path(task8["path"])
+            try:
+                task8_validator.validate_main(["--receipt", str(receipt_path),
+                                                "--require-success", "--recheck-live-inputs"])
+            except (task8_validator.ReceiptError, OSError, ValueError) as exc:
+                raise Refused("BLOCKED_ATTRIBUTION: Task8 v3 replay failed") from exc
+            if (retained.get("source", {}).get("commit") != head
+                    or retained.get("build", {}).get("binary", {}).get("sha256") != binary.removeprefix("sha256:")):
+                raise Refused("BLOCKED_ATTRIBUTION: Task8 source/binary differs")
+            # v3 is an aggregate census; it has no authenticated direct mapping
+            # from an arbitrary literal source field to the named old symbol.
+            raise Refused("BLOCKED_ATTRIBUTION: no reviewed per-field Task8 bridge")
+        reach = evidence["zero_reachability"]
+        if (reach.get("reachable") is not False or reach.get("remaining_callsites") != []
+                or reach.get("definition_checked") is not True
+                or reach.get("fixture_sha256") != oracle.get("fixture_sha256")
+                or reach.get("capability_sha256") != bindings["oracle_capability"]["sha256"]):
+            raise Refused("zero-reachability proof absent, live, or stale")
+        expected_receipts[symbol] = {kind: binding["sha256"] for kind, binding in bindings.items()}
+    if seen != set(approved) or manifest.get("receipts") != expected_receipts:
+        raise Refused("controller manifest receipt set incomplete")
+    if (verify_history(root) != head or "sha256:" + clean_snapshot.source_tree_sha256(root) != source
+            or _sha(binary_path.read_bytes()) != binary):
+        raise Refused("candidate source or binary changed during receipt replay")
+    return {"status": "PASS_TEST_PACKET_BINDINGS", "control": "prospective-deletion-packet-test-only", "candidate_head": head,
+            "source_sha256": source, "binary_sha256": binary, "approved_symbols": sorted(seen)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("verify", "no-new-manual"))
+    parser.add_argument("command", choices=("verify", "no-new-manual", "prospective"))
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--ops-root", type=Path)
+    parser.add_argument("--packet", type=Path)
+    parser.add_argument("--binary", type=Path)
     args = parser.parse_args()
     try:
+        if args.command == "prospective":
+            if args.packet is None or args.binary is None or args.ops_root is None:
+                raise Refused("prospective evaluation requires --packet, --binary, and --ops-root")
+            if PRODUCTION_CONTROLLER_KEY is None:
+                raise Refused("BLOCKED_AUTHORITY: no approved Task18 controller trust anchor")
+            packet = json.loads(_file(str(args.packet), args.ops_root).read_bytes())
+            print(json.dumps(evaluate_prospective(packet, root=args.root, ops_root=args.ops_root,
+                                                 binary_path=args.binary,
+                                                 controller_key=PRODUCTION_CONTROLLER_KEY), sort_keys=True))
+            return 0
         if args.command == "no-new-manual":
             rows = ownership.load_rows(args.root.resolve(), args.ops_root)
             no_new_manual(rows)
