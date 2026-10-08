@@ -45,10 +45,19 @@ class DistributionSurfaceTests(unittest.TestCase):
     def test_historical_benchmark_provenance_remains_exact_and_non_candidate(self):
         self.assertIn("Historical indicative CI measurement", PERFORMANCE_PAGE)
         self.assertIn("run `35355315041`", PERFORMANCE_PAGE)
+        provenance = " ".join(PERFORMANCE_PAGE.split())
         self.assertIn(
-            "commit\n`b07fb7f6406689b401b221cecb3a891735b902fd`", PERFORMANCE_PAGE
+            "PR head `b07fb7f6406689b401b221cecb3a891735b902fd`", provenance
         )
-        self.assertNotIn("commit\n`24184580`", PERFORMANCE_PAGE)
+        self.assertIn(
+            "measured the synthetic merge commit `24184580f640a91c9b9bbd488a17a50330dfb5cf`",
+            provenance,
+        )
+        self.assertIn("ID `10551838043`", provenance)
+        self.assertIn(
+            "d281ece4049dc7a48f1e3e20d89dd5002aa5bb087d9b36ef66ae629f943d381a",
+            provenance,
+        )
         self.assertIn("Benchmarks (historical, non-candidate)", AUTOGENERATION_PLAN)
         self.assertIn("exact-candidate receipt is required", AUTOGENERATION_PLAN)
 
