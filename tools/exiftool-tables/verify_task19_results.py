@@ -48,6 +48,12 @@ PIN_WORD = re.compile(r"\bpin\b", re.IGNORECASE)
 CURRENT_PIN_PROSE = re.compile(
     r"^(?:(?:for|the)\s+)?current pin(?:\s+is)?\s+[0-9]+\.[0-9]+(?:[,;]\s*[^0-9]*)?$",
     re.IGNORECASE)
+CURRENT_PIN_FIELD = re.compile(
+    r"^current (?:pin|ExifTool (?:release|version))\s*:\s*13\.59$",
+    re.IGNORECASE)
+CURRENT_PIN_FIELD = re.compile(
+    r"^current (?:pin|ExifTool (?:release|version))\s*:\s*13\.59$",
+    re.IGNORECASE)
 # Do not mine `2.0` out of an OxiDex `v2.0.0-beta.1` release label.
 RELEASE_IN_LINE = re.compile(r"(?<![0-9A-Za-z.])v?[0-9]+\.[0-9]+(?![0-9.])")
 
@@ -129,7 +135,7 @@ def source_snapshot(expected_head: str, expected_tree: str) -> dict[str, str]:
 
 
 def next_pin_selection(todo: str) -> str:
-    """Recognize the four named labels; never treat an unknown numeric selector as absence."""
+    """Parse explicit next selectors; leave only the bound current pin descriptive."""
     selected: list[str] = []
     for line in todo.splitlines():
         # Only Markdown presentation is stripped. The selection language stays
@@ -139,6 +145,8 @@ def next_pin_selection(todo: str) -> str:
         match = NEXT_PIN_FIELD.fullmatch(normalized)
         if match is not None:
             selected.append(match.group(1).lower())
+        elif CURRENT_PIN_FIELD.fullmatch(normalized):
+            continue
         elif (NEXT_PIN_LABEL.match(normalized)
               or (RELEASE_IN_LINE.search(normalized)
                   and (SELECTION_HINT.search(normalized)
@@ -176,8 +184,14 @@ def require_marker_unchanged(path: Path, expected: dict[str, int | str]) -> None
 
 def refuse_source_output_overlap(output: Path) -> None:
     """Keep read-only verification output physically outside the owned source."""
-    if output.resolve().is_relative_to(ROOT.resolve()):
+    source = ROOT.resolve()
+    if output.resolve().is_relative_to(source):
         refuse("Task19 replay output overlaps the frozen source checkout")
+    # On a case-insensitive filesystem resolve() may retain an alternate
+    # spelling. A bind/volume alias can likewise name the same directory.
+    for ancestor in (output, *output.parents):
+        if ancestor.is_dir() and os.path.samefile(ancestor, source):
+            refuse("Task19 replay output overlaps the frozen source checkout")
 
 
 def replay_committed_write(row: dict[str, object], side: str, root: Path,
@@ -382,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
             require_marker_unchanged(
                 path, {key: val for key, val in value["rows"][row]["result"].items()
                        if key != "path"})
+        refuse_source_output_overlap(output)
+        if output.exists() or output.is_symlink():
+            refuse("Task19 replay output already exists")
         qualification._atomic_json(output, value)
     except (qualification.Refused, OSError, KeyError, TypeError, ValueError) as exc:
         print(f"Task19 replay refused: {exc}", file=sys.stderr)

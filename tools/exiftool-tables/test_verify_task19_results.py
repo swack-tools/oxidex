@@ -56,14 +56,19 @@ class Task19AdapterControls(unittest.TestCase):
                      "For current pin 13.59, confirm archive fixtures",
                      "The current pin is 13.59",
                      "- [ ] Verify ExifTool version 13.59 capability",
-                     "Next release: v2.0.0-beta.1"):
+                     "Next release: v2.0.0-beta.1",
+                     "Current ExifTool release: 13.59\nNext pin: not selected",
+                     "- [ ] **Current ExifTool version:** 13.59\nNext pin: not selected",
+                     "Current pin: 13.59"):
             with self.subTest(text=text):
                 self.assertEqual(adapter.next_pin_selection(text), "not selected")
         for text in ("- [ ] Next pin maybe 13.60", "Next pin: 13.60\nNext pin: 13.61",
                      "- [ ] Upcoming pin: 13.60", "The intended next pin is 13.60",
                      "Potential pin: 13.60", "Upcoming ExifTool release: 13.60",
                      "The intended ExifTool release is 13.60", "Next version: 13.60", "ExifTool version: 13.60",
-                     "Set pin to 13.60", "Set current pin to 13.60"):
+                     "Set pin to 13.60", "Set current pin to 13.60",
+                     "Current ExifTool release: 13.60",
+                     "Current ExifTool version: 13.60"):
             with self.subTest(text=text), self.assertRaises(adapter.qualification.Refused):
                 adapter.next_pin_selection(text)
 
@@ -134,6 +139,19 @@ class Task19AdapterControls(unittest.TestCase):
                             adapter.qualification.Refused, "overlaps"):
                         adapter.refuse_source_output_overlap(output)
                 adapter.refuse_source_output_overlap(Path(directory) / "evidence" / "receipt.json")
+                # The real case alias exists only on case-insensitive volumes.
+                case_alias = source.with_name(source.name.upper())
+                if case_alias.exists() and os.path.samefile(case_alias, source):
+                    with self.assertRaisesRegex(adapter.qualification.Refused, "overlaps"):
+                        adapter.refuse_source_output_overlap(case_alias / "receipt.json")
+                # A synthetic inode alias exercises the identity check on Linux.
+                bind_alias = Path(directory) / "bind-alias"
+                bind_alias.mkdir()
+                original_samefile = os.path.samefile
+                with patch.object(adapter.os.path, "samefile", side_effect=lambda left, right:
+                                  left == bind_alias or original_samefile(left, right)):
+                    with self.assertRaisesRegex(adapter.qualification.Refused, "overlaps"):
+                        adapter.refuse_source_output_overlap(bind_alias / "receipt.json")
 
     def test_cli_rejects_source_output_before_replay_or_write(self) -> None:
         with TemporaryDirectory() as directory:
