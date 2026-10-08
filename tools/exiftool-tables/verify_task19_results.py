@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
@@ -27,13 +31,25 @@ HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 ROWS = ("same-pin-13.59", "11.78-to-12.64", "12.64-to-11.78")
 # One explicit selection grammar preserves the original aliases and Markdown forms.
 NEXT_PIN_LABEL = re.compile(
-    r"(?:next[- ]pin|intended next[- ]pin|intended ExifTool pin|ExifTool pin after current)",
+    r"(?:next[- ]pin|intended next[- ]pin|intended ExifTool pin|ExifTool pin after current"
+    r"|next ExifTool release|intended ExifTool release)",
     re.IGNORECASE)
 NEXT_PIN_FIELD = re.compile(
     rf"^(?:{NEXT_PIN_LABEL.pattern})\s*:\s*(not selected|[0-9]+\.[0-9]+)$",
     re.IGNORECASE)
+SELECTION_HINT = re.compile(
+    r"(?:intended\s+next|next|intended|planned|upcoming|target)\s+"
+    r"(?:ExifTool\s+(?:pin|release|version)|(?:pin|version))\b",
+    re.IGNORECASE)
+UNKNOWN_SELECTION_FIELD = re.compile(
+    r"^[A-Za-z][A-Za-z -]*(?:pin|ExifTool\s+(?:release|version)|version)\s*:",
+    re.IGNORECASE)
 PIN_WORD = re.compile(r"\bpin\b", re.IGNORECASE)
-RELEASE_IN_LINE = re.compile(r"(?<![0-9])[0-9]+\.[0-9]+(?![0-9])")
+CURRENT_PIN_PROSE = re.compile(
+    r"^(?:(?:for|the)\s+)?current pin(?:\s+is)?\s+[0-9]+\.[0-9]+(?:[,;]\s*[^0-9]*)?$",
+    re.IGNORECASE)
+# Do not mine `2.0` out of an OxiDex `v2.0.0-beta.1` release label.
+RELEASE_IN_LINE = re.compile(r"(?<![0-9A-Za-z.])v?[0-9]+\.[0-9]+(?![0-9.])")
 
 
 def refuse(message: str) -> None:
@@ -124,11 +140,44 @@ def next_pin_selection(todo: str) -> str:
         if match is not None:
             selected.append(match.group(1).lower())
         elif (NEXT_PIN_LABEL.match(normalized)
-              or (PIN_WORD.search(normalized) and RELEASE_IN_LINE.search(normalized))):
+              or (RELEASE_IN_LINE.search(normalized)
+                  and (SELECTION_HINT.search(normalized)
+                       or UNKNOWN_SELECTION_FIELD.match(normalized)
+                       or (PIN_WORD.search(normalized) and not CURRENT_PIN_PROSE.fullmatch(normalized))))):
             refuse("TODO next-pin selection is ambiguous or uses an unknown label")
     if len(selected) > 1:
         refuse("TODO has multiple next-pin selections")
     return selected[0] if selected else "not selected"
+
+
+def marker_snapshot(path: Path) -> tuple[dict[str, int | str], bytes]:
+    """Read one regular final marker through a stable, non-symlink descriptor."""
+    if path.is_symlink():
+        refuse("qualification final marker must not be a symlink")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as stream:
+            identity = os.fstat(stream.fileno())
+            if not stat.S_ISREG(identity.st_mode):
+                refuse("qualification final marker must be a regular file")
+            data = stream.read()
+    except OSError as exc:
+        raise qualification.Refused(f"qualification final marker is unavailable: {path}") from exc
+    return ({"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+             "device": identity.st_dev, "inode": identity.st_ino,
+             "mtime_ns": identity.st_mtime_ns, "ctime_ns": identity.st_ctime_ns}, data)
+
+
+def require_marker_unchanged(path: Path, expected: dict[str, int | str]) -> None:
+    current, _ = marker_snapshot(path)
+    if current != expected:
+        refuse(f"qualification final marker changed during replay: {path}")
+
+
+def refuse_source_output_overlap(output: Path) -> None:
+    """Keep read-only verification output physically outside the owned source."""
+    if output.resolve().is_relative_to(ROOT.resolve()):
+        refuse("Task19 replay output overlaps the frozen source checkout")
 
 
 def replay_committed_write(row: dict[str, object], side: str, root: Path,
@@ -225,10 +274,20 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
         refuse("six explicit binary identities are required")
     accepted: dict[str, dict[str, object]] = {}
     policy_binding: dict[str, str] | None = None
+    markers: dict[Path, dict[str, int | str]] = {}
     for required_row, path in zip(ROWS, paths, strict=True):
+        marker, marker_bytes = marker_snapshot(path)
         # This replays the final marker, exact manifest, quiescent lease,
         # row receipts, read union, snapshots, and native read pair policy.
         result = qualification.load_committed_result(path)
+        try:
+            loaded_bytes = json.loads(marker_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise qualification.Refused("qualification final marker bytes are malformed") from exc
+        if result != loaded_bytes:
+            refuse("replayed result differs from the loaded final marker bytes")
+        require_marker_unchanged(path, marker)
+        markers[path] = marker
         rows = result["rows"]
         if len(rows) != 1 or rows[0]["id"] != required_row:
             refuse(f"{required_row} result path does not contain its required row")
@@ -268,14 +327,17 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
                            "write_report_sha256": entry["write_report_sha256"],
                            "execution_journal_sha256": entry["execution_journal_sha256"],
                            "committed_write": write_proof}
+        require_marker_unchanged(path, marker)
         accepted[row["id"]] = {
-            "result": {"path": str(path.resolve()), "sha256": sha(path)},
+            "result": {"path": str(path.resolve()), **marker},
             "run_id": result["run_id"], "binaries": binaries,
             "sides": sides, "read_payload_floors": row["read_payload_floors"],
             "read_policy_pair": row["read_policy_pair"],
         }
     if set(accepted) != set(ROWS):
         refuse("committed results omit a required transition row")
+    for path, marker in markers.items():
+        require_marker_unchanged(path, marker)
     return {"schema": 1, "kind": "oxidex_task19_committed_replay",
             "status": "verified_read_only", "promotion": "forbidden",
             "candidate": {"head": expected_head, "tree": expected_tree, "pin": "13.59"},
@@ -301,10 +363,11 @@ def main(argv: list[str] | None = None) -> int:
         before = source_snapshot(args.expected_head, args.expected_tree)
         selection = next_pin_selection((ROOT / "TODO_RELEASE_BETA.md").read_text(encoding="utf-8"))
         if selection != "not selected":
-            refuse("TODO selects a next pin; a fourth authenticated Task19 row is required")
+            refuse("TODO selects a next ExifTool release; the checked three-row matrix and read policy do not support that transition")
         tools = tool_expectations(args.expected_tool)
         binaries = binary_expectations(args.expected_binary)
         output = qualification._evidence_location(args.output, "Task19 replay output")
+        refuse_source_output_overlap(output)
         if output.exists() or output.is_symlink():
             refuse("Task19 replay output already exists")
         value = verify_results(
@@ -315,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
             expected_tools=tools, expected_binaries=binaries)
         if source_snapshot(args.expected_head, args.expected_tree) != before:
             refuse("owned source changed during Task19 replay")
+        for row, path in zip(ROWS, (args.same_pin_result, args.forward_result, args.reverse_result), strict=True):
+            require_marker_unchanged(
+                path, {key: val for key, val in value["rows"][row]["result"].items()
+                       if key != "path"})
         qualification._atomic_json(output, value)
     except (qualification.Refused, OSError, KeyError, TypeError, ValueError) as exc:
         print(f"Task19 replay refused: {exc}", file=sys.stderr)

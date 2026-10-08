@@ -5,6 +5,8 @@ These do not claim that synthetic results pass the production replay verifier.
 """
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 from pathlib import Path
 import os
 import subprocess
@@ -39,7 +41,8 @@ class Task19AdapterControls(unittest.TestCase):
 
     def test_next_pin_markdown_selection_and_ambiguity(self) -> None:
         labels = ("Next pin", "Intended next pin", "Intended ExifTool pin",
-                  "ExifTool pin after current")
+                  "ExifTool pin after current", "Next ExifTool release",
+                  "Intended ExifTool release")
         forms = ("{label}: 13.60", "- [ ] {label}: 13.60",
                  "- **{label}:** 13.60", "- [x] **{label}:** 13.60")
         for label in labels:
@@ -48,14 +51,122 @@ class Task19AdapterControls(unittest.TestCase):
                 with self.subTest(text=text):
                     self.assertEqual(adapter.next_pin_selection(text), "13.60")
         for text in ("- [ ] Run one current-pin -> next-pin rehearsal",
-                     "**Next pin:** not selected", "- [ ] Intended next pin: not selected"):
+                     "**Next pin:** not selected", "- [ ] Intended next pin: not selected",
+                     "For ExifTool release 13.59, confirm archive fixtures",
+                     "For current pin 13.59, confirm archive fixtures",
+                     "The current pin is 13.59",
+                     "- [ ] Verify ExifTool version 13.59 capability",
+                     "Next release: v2.0.0-beta.1"):
             with self.subTest(text=text):
                 self.assertEqual(adapter.next_pin_selection(text), "not selected")
         for text in ("- [ ] Next pin maybe 13.60", "Next pin: 13.60\nNext pin: 13.61",
                      "- [ ] Upcoming pin: 13.60", "The intended next pin is 13.60",
-                     "Potential pin: 13.60"):
+                     "Potential pin: 13.60", "Upcoming ExifTool release: 13.60",
+                     "The intended ExifTool release is 13.60", "Next version: 13.60", "ExifTool version: 13.60",
+                     "Set pin to 13.60", "Set current pin to 13.60"):
             with self.subTest(text=text), self.assertRaises(adapter.qualification.Refused):
                 adapter.next_pin_selection(text)
+
+    def test_final_marker_identity_binds_loaded_bytes_and_rejects_swap(self) -> None:
+        import json
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "qualification-result.json"
+            original = {"schema": 1, "run_id": "original"}
+            marker.write_text(json.dumps(original))
+            binding, original_bytes = adapter.marker_snapshot(marker)
+            self.assertEqual(json.loads(original_bytes), original)
+            adapter.require_marker_unchanged(marker, binding)
+            replacement = Path(directory) / "replacement.json"
+            replacement.write_text(json.dumps({"schema": 1, "run_id": "replacement"}))
+            replacement.replace(marker)
+            with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
+                adapter.require_marker_unchanged(marker, binding)
+            # Replacing with identical bytes is still a different file identity.
+            same = Path(directory) / "same.json"
+            same.write_bytes(original_bytes)
+            same.replace(marker)
+            with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
+                adapter.require_marker_unchanged(marker, binding)
+
+    def test_fifo_final_marker_refuses_without_waiting_for_writer(self) -> None:
+        with TemporaryDirectory() as directory:
+            fifo = Path(directory) / "qualification-result.json"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(adapter.qualification.Refused, "regular file"):
+                adapter.marker_snapshot(fifo)
+
+    def test_final_marker_swap_during_loader_cannot_bind_replacement(self) -> None:
+        import json
+        with TemporaryDirectory() as directory:
+            paths = []
+            for name in ("same", "forward", "reverse"):
+                parent = Path(directory) / name
+                parent.mkdir()
+                marker = parent / "qualification-result.json"
+                marker.write_text(json.dumps({"schema": 1}))
+                paths.append(marker)
+            expected_binaries = {
+                (row, side): {"path": f"/target/{row}/{side}", "sha256": "b" * 64}
+                for row in adapter.ROWS for side in adapter.qualification.SIDES}
+            expected_tools = {name: adapter.sha(adapter.ROOT / name) for name in adapter.TOOL_FILES}
+            def swap(_path):
+                replacement = paths[0].with_name("replacement.json")
+                replacement.write_text(json.dumps({"schema": 1, "replacement": True}))
+                replacement.replace(paths[0])
+                return {"schema": 1}
+            with patch.object(adapter.qualification, "load_committed_result", side_effect=swap):
+                with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
+                    adapter.verify_results(
+                        paths=tuple(paths), expected_head="a" * 40, expected_tree="c" * 40,
+                        expected_matrix_sha256=adapter.sha(adapter.qualification.CANONICAL_MATRIX),
+                        expected_policy_sha256=adapter.POLICY_SHA256,
+                        expected_tools=expected_tools, expected_binaries=expected_binaries)
+
+    def test_output_cannot_physically_overlap_owned_source(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            alias = Path(directory) / "alias"
+            alias.symlink_to(source, target_is_directory=True)
+            with patch.object(adapter, "ROOT", source):
+                for output in (source / "receipt.json", alias / "receipt.json"):
+                    with self.subTest(output=output), self.assertRaisesRegex(
+                            adapter.qualification.Refused, "overlaps"):
+                        adapter.refuse_source_output_overlap(output)
+                adapter.refuse_source_output_overlap(Path(directory) / "evidence" / "receipt.json")
+
+    def test_cli_rejects_source_output_before_replay_or_write(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            (repo / ".exiftool-version").write_text("13.59\n")
+            (repo / "TODO_RELEASE_BETA.md").write_text("Next pin: not selected\n")
+            subprocess.run(["git", "-C", str(repo), "add", ".exiftool-version", "TODO_RELEASE_BETA.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
+            head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+            tree = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"], text=True).strip()
+            output = repo / "receipt.json"
+            argv = ["--same-pin-result", "/missing/same/qualification-result.json",
+                    "--forward-result", "/missing/forward/qualification-result.json",
+                    "--reverse-result", "/missing/reverse/qualification-result.json",
+                    "--expected-head", head, "--expected-tree", tree,
+                    "--expected-matrix-sha256", "a" * 64,
+                    "--expected-read-policy-sha256", adapter.POLICY_SHA256,
+                    "--next-pin", "not-selected", "--output", str(output)]
+            for name in adapter.TOOL_FILES:
+                argv.extend(["--expected-tool", f"{name}={'b' * 64}"])
+            for row in adapter.ROWS:
+                for side in adapter.qualification.SIDES:
+                    argv.extend(["--expected-binary", f"{row}:{side}:/target/oxidex:{'c' * 64}"])
+            with patch.object(adapter, "ROOT", repo), \
+                 patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path), \
+                 patch.object(adapter, "verify_results") as replay, redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(adapter.main(argv), 2)
+                self.assertIn("overlaps", error.getvalue())
+                replay.assert_not_called()
+            self.assertFalse(output.exists())
 
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
