@@ -634,11 +634,15 @@ class SideAndRecoveryTests(unittest.TestCase):
                     "corpus_manifest": {"kind": "file", "path": str(manifest), "sha256": manifest_sha},
                     "corpus_tree": {"kind": "tree", "path": str(corpus), "sha256": tree_sha}}}))
 
-            with patch.object(qualification.ops_paths, "ops_root", return_value=root):
+            proof = {"path": str(corpus), "tree_sha256": lock["corpus_tree_sha256"],
+                     "file_count": 1, "mode": corpus.stat().st_mode & 0o777}
+            with patch.object(qualification.ops_paths, "ops_root", return_value=root), \
+                 patch.object(qualification, "_corpus_directory_proof", return_value=proof):
                 bind(qualification._sha_file(manifest), lock["corpus_tree_sha256"])
                 self.assertEqual(qualification._fixture_corpus_authority(), {
                     "ops_root": str(root), "bootstrap_pin": "13.59", "corpus": str(corpus),
                     "corpus_tree_sha256": lock["corpus_tree_sha256"],
+                    "directory_proof": proof,
                     "manifest": {"path": str(manifest), "sha256": qualification._sha_file(manifest),
                                  "file_count": 1},
                 })
@@ -647,6 +651,52 @@ class SideAndRecoveryTests(unittest.TestCase):
                     bind(manifest_sha, tree_sha)
                     with self.assertRaisesRegex(qualification.Refused, "not bootstrap-verified"):
                         qualification._fixture_corpus_authority()
+
+    def test_actual_corpus_tree_proof_refuses_changed_membership_bytes_and_modes(self) -> None:
+        import importlib.util
+        script = qualification.REPOSITORY_ROOT / "tools/release/bootstrap_oracle.py"
+        spec = importlib.util.spec_from_file_location("oxidex_tiny_corpus_bootstrap", script)
+        assert spec is not None and spec.loader is not None
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        with TemporaryDirectory() as temporary:
+            corpus = Path(temporary).resolve() / "combined-samples"
+            corpus.mkdir()
+            first = corpus / "a.jpg"
+            second = corpus / "b.jpg"
+            first.write_bytes(b"a")
+            second.write_bytes(b"b")
+            manifest = corpus.parent / "combined-samples.manifest"
+            manifest.write_text("".join(
+                f"{qualification._sha_file(path)}  {path.name}\n" for path in (first, second)))
+            expected = bootstrap.sha256_tree(corpus)
+            def check():
+                return qualification._corpus_directory_proof(bootstrap, corpus, manifest, expected)
+            proof = check()
+            self.assertEqual(proof["tree_sha256"], expected)
+            self.assertEqual(proof["file_count"], 2)
+            original_mode = first.stat().st_mode & 0o777
+            for change in ("mutate", "replace", "add", "remove", "mode"):
+                with self.subTest(change=change):
+                    if change == "mutate":
+                        first.write_bytes(b"changed")
+                    elif change == "replace":
+                        replacement = corpus.parent / "replacement.jpg"
+                        replacement.write_bytes(b"different")
+                        replacement.replace(first)
+                    elif change == "add":
+                        (corpus / "extra.jpg").write_bytes(b"extra")
+                    elif change == "remove":
+                        second.unlink()
+                    else:
+                        first.chmod(original_mode ^ 0o100)
+                    with self.assertRaises(qualification.Refused):
+                        check()
+                    first.write_bytes(b"a")
+                    first.chmod(original_mode)
+                    second.write_bytes(b"b")
+                    (corpus / "extra.jpg").unlink(missing_ok=True)
+                    self.assertEqual(check(), proof)
 
     def test_output_and_input_evidence_roots_are_fenced_under_the_ops_root(self) -> None:
         matrix = qualification.load_matrix(qualification.CANONICAL_MATRIX, "13.59")

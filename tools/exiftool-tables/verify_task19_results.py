@@ -84,6 +84,30 @@ def tool_expectations(items: list[str]) -> dict[str, str]:
     return values
 
 
+def _rooted_directory(path: Path, root: Path, label: str) -> Path:
+    if (not path.is_absolute() or path == root or not path.is_relative_to(root)
+            or path.is_symlink() or path.resolve() != path or not path.is_dir()):
+        refuse(f"{label} is not a canonical directory beneath configured durable root {root}: {path}")
+    return path
+
+
+def _rooted_executable(path: Path, root: Path, label: str) -> Path:
+    if (not path.is_absolute() or path == root or not path.is_relative_to(root)
+            or path.is_symlink() or path.resolve() != path or not path.is_file()):
+        refuse(f"{label} is not a canonical file beneath configured durable root {root}: {path}")
+    return path
+
+
+def _durable_executable_roots() -> tuple[Path, Path, Path]:
+    try:
+        targets = qualification.ops_paths.target_root()
+        ops = qualification.ops_paths.ops_root()
+    except ValueError as exc:
+        raise qualification.Refused(f"configured executable root is not durable: {exc}") from exc
+    approved_perl = ops / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+    return targets, ops, approved_perl
+
+
 def binary_expectations(items: list[str]) -> dict[tuple[str, str], dict[str, str]]:
     values: dict[tuple[str, str], dict[str, str]] = {}
     for item in items:
@@ -427,6 +451,12 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
         refuse("final paths must identify three distinct committed runs")
     if set(expected_binaries) != {(row, side) for row in ROWS for side in qualification.SIDES}:
         refuse("six explicit binary identities are required")
+    target_root, ops_root, perl_path = _durable_executable_roots()
+    for expected in expected_binaries.values():
+        _rooted_executable(Path(expected["path"]), target_root, "expected OxiDex binary")
+    _rooted_executable(perl_path, ops_root, "approved Perl executable")
+    if qualification._perl(ops_root) != perl_path:
+        refuse("approved Perl differs from configured durable installation")
     accepted: dict[str, dict[str, object]] = {}
     policy_binding: dict[str, str] | None = None
     markers: dict[Path, dict[str, int | str]] = {}
@@ -476,6 +506,13 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             run_dir = path.parent / row["id"] / side
             journal = qualification._read_object(run_dir / "execution-status.json", "execution journal")
             config = qualification._read_object(run_dir / "inputs" / "config.json", "execution config")
+            _rooted_directory(Path(config["target_directories"][release]), target_root,
+                              "committed Cargo target")
+            _rooted_executable(Path(expected["path"]), Path(config["target_directories"][release]),
+                               "expected side binary")
+            native_perl = Path(instrument["native_identity"]["perl"]["path"])
+            if native_perl != perl_path:
+                refuse("committed Perl differs from approved durable executable")
             checkout = run_dir / "checkouts" / executor._safe_name(release)
             build = qualification._report_for(run_dir, journal, release, "build")
             build_environment = qualification._build_environment_receipt(build, release, checkout)
@@ -498,9 +535,12 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             if entry.get("source_identity") != verified_source:
                 refuse(f"{row['id']} {side} source identity differs from verified input bundle")
             write_proof = replay_committed_write(row, side, path.parent, expected_head)
+            _rooted_executable(Path(write_proof["writer_binary"]["path"]),
+                               Path(config["target_directories"][release]), "committed writer binary")
             binaries[side] = expected
             sides[side] = {"release": release, "source_identity": verified_source,
                            "source_root": source_identity["source_root"],
+                           "target_directory": config["target_directories"][release],
                            "source_dependencies": source_identity["dependencies"],
                            "materialized_trees": source_identity["materialized_trees"],
                            "fixture_dependencies": fixture_dependencies,
@@ -521,10 +561,12 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
         refuse("committed results omit a required transition row")
     for path, marker in markers.items():
         require_marker_unchanged(path, marker)
+    corpus_proof = qualification._fixture_corpus_authority()["directory_proof"]
     return {"schema": 1, "kind": "oxidex_task19_committed_replay",
             "status": "verified_read_only", "promotion": "forbidden",
             "candidate": {"head": expected_head, "tree": expected_tree, "pin": "13.59"},
             "matrix_sha256": expected_matrix_sha256,
+            "fixture_corpus_directory": corpus_proof,
             "read_policy_input": policy_binding, "tools": expected_tools,
             "rows": {name: accepted[name] for name in ROWS},
             "next_pin": {"selection": "not selected",
@@ -536,6 +578,14 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
     """Bind the complete run directories and external executables across replay."""
     files: set[Path] = {qualification.CANONICAL_MATRIX,
                         Path(value["read_policy_input"]["path"])}
+    if value.get("kind") == "oxidex_task19_committed_replay":
+        expected_corpus = value.get("fixture_corpus_directory")
+        if (not isinstance(expected_corpus, dict)
+                or qualification._fixture_corpus_authority()["directory_proof"] != expected_corpus):
+            refuse("actual combined corpus directory changed during replay or publication")
+        target_root, ops_root, perl_path = _durable_executable_roots()
+    else:
+        target_root = ops_root = perl_path = None
     directories: set[Path] = {
         qualification._evidence_location(marker, "Task19 committed result").parent
         for marker in paths}
@@ -543,6 +593,16 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
         for side in qualification.SIDES:
             proof = row["sides"][side]
             native = proof["native_identity"]
+            if target_root is not None:
+                target = _rooted_directory(Path(proof["target_directory"]), target_root,
+                                           "replayed Cargo target")
+                _rooted_executable(Path(row["binaries"][side]["path"]), target,
+                                   "replayed OxiDex binary")
+                _rooted_executable(Path(proof["committed_write"]["writer_binary"]["path"]),
+                                   target, "replayed writer binary")
+                if Path(native["perl"]["path"]) != perl_path:
+                    refuse("replayed Perl differs from approved durable executable")
+                _rooted_executable(perl_path, ops_root, "replayed approved Perl executable")
             source_name = Path(proof["source_identity"]["source_directory"])
             if source_name.is_absolute() or len(source_name.parts) != 1 or source_name.name in (".", ".."):
                 refuse("verified materialization source name is not a single relative directory")

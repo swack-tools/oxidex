@@ -39,6 +39,24 @@ class Task19AdapterControls(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(adapter.qualification.Refused):
                 adapter.binary_expectations(invalid)
 
+    def test_configured_executable_root_rejects_temporary_and_symlinked_paths(self) -> None:
+        with patch.dict(os.environ, {"OXIDEX_TARGET_ROOT": "/tmp/task19-target"}):
+            with self.assertRaisesRegex(adapter.qualification.Refused, "not durable"):
+                adapter._durable_executable_roots()
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "configured-target"
+            target.mkdir()
+            binary = target / "oxidex"
+            binary.write_bytes(b"binary")
+            link = target / "linked-oxidex"
+            link.symlink_to(binary)
+            self.assertEqual(adapter._rooted_directory(target, root, "target"), target)
+            self.assertEqual(adapter._rooted_executable(binary, target, "binary"), binary)
+            for candidate in (link, root / "outside", Path("/tmp/foreign-oxidex")):
+                with self.subTest(candidate=candidate), self.assertRaises(adapter.qualification.Refused):
+                    adapter._rooted_executable(candidate, target, "binary")
+
     def test_next_pin_markdown_selection_and_ambiguity(self) -> None:
         labels = ("Next pin", "Intended next pin", "Intended ExifTool pin",
                   "ExifTool pin after current", "Next ExifTool release",
@@ -144,7 +162,10 @@ class Task19AdapterControls(unittest.TestCase):
                 replacement.replace(paths[0])
                 return {"schema": 1}
             with patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path), \
-                 patch.object(adapter.qualification, "load_committed_result", side_effect=swap):
+                 patch.object(adapter.qualification, "load_committed_result", side_effect=swap), \
+                 patch.object(adapter, "_durable_executable_roots", return_value=(Path("/target"), Path("/ops"), Path("/ops/perl"))), \
+                 patch.object(adapter, "_rooted_executable", side_effect=lambda path, _root, _label: path), \
+                 patch.object(adapter.qualification, "_perl", return_value=Path("/ops/perl")):
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
                     adapter.verify_results(
                         paths=tuple(paths), expected_head="a" * 40, expected_tree="c" * 40,
@@ -733,12 +754,15 @@ class Task19AdapterControls(unittest.TestCase):
         # adapter itself still traverses all six sides, inventories and publishes.
         import json
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
+            target_root = root / "targets"
+            target_root.mkdir()
             source_root = root / "sources"
             commit = "a" * 40
             sources = {}
             natives = {}
-            perl = root / "perl"
+            perl = root / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+            perl.parent.mkdir(parents=True)
             perl.write_text("perl")
             for release in ("13.59", "11.78", "12.64"):
                 source_name = adapter.qualification.catalog_stage._source_directory_name(release, commit)
@@ -814,14 +838,17 @@ class Task19AdapterControls(unittest.TestCase):
                             "11.78-to-12.64": ("11.78", "12.64"),
                             "12.64-to-11.78": ("12.64", "11.78")}[row_name]
                 for side, release in zip(adapter.qualification.SIDES, releases, strict=True):
-                    binary = root / f"{row_name}-{side}-oxidex"
+                    target = target_root / row_name / side
+                    target.mkdir(parents=True)
+                    binary = target / "oxidex"
                     binary.write_text("binary")
                     binaries[(row_name, side)] = {"path": str(binary), "sha256": adapter.sha(binary)}
                     side_run = run / row_name / side
                     (side_run / "inputs").mkdir(parents=True)
                     (side_run / "execution-status.json").write_text('{}')
                     (side_run / "inputs" / "config.json").write_text(json.dumps({
-                        "verified_input_bundle": str(bundle)}))
+                        "verified_input_bundle": str(bundle),
+                        "target_directories": {release: str(target)}}))
                     sides[side] = {"release": release, "source_identity": sources[release],
                                    "instrument": {"source_commit": expected_head,
                                                   "binary": binaries[(row_name, side)],
@@ -854,6 +881,22 @@ class Task19AdapterControls(unittest.TestCase):
                 return real_source_resolver(identity, selected_bundle)
             def report_for(_run, _journal, _release, stage):
                 return {"state": "passed"} if stage == "test" else {"build_environment": {}}
+            import importlib.util
+            bootstrap_script = adapter.qualification.REPOSITORY_ROOT / "tools/release/bootstrap_oracle.py"
+            spec = importlib.util.spec_from_file_location("oxidex_adapter_tiny_corpus", bootstrap_script)
+            assert spec is not None and spec.loader is not None
+            bootstrap = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bootstrap)
+            corpus = root / "synthetic-corpus"
+            corpus.mkdir()
+            corpus_file = corpus / "fixture.jpg"
+            corpus_file.write_bytes(b"fixture")
+            corpus_manifest = root / "synthetic-corpus.manifest"
+            corpus_manifest.write_text(f"{adapter.sha(corpus_file)}  fixture.jpg\n")
+            corpus_tree = bootstrap.sha256_tree(corpus)
+            def corpus_authority():
+                return {"directory_proof": adapter.qualification._corpus_directory_proof(
+                    bootstrap, corpus, corpus_manifest, corpus_tree)}
             output = root / "verified.json"
             argv = ["--same-pin-result", str(markers[0]), "--forward-result", str(markers[1]),
                     "--reverse-result", str(markers[2]), "--expected-head", expected_head,
@@ -883,9 +926,14 @@ class Task19AdapterControls(unittest.TestCase):
                     patch.object(adapter.qualification.catalog_stage, "verify_source_resolution"),
                     patch.object(adapter.qualification.catalog_stage, "verify_source_materialization"),
                     patch.object(adapter.qualification, "resolve_source_identity", side_effect=source_check),
-                    patch.object(adapter, "replay_committed_write", return_value={
-                        "writer_binary": {"path": str(next(iter(binaries.values()))["path"]),
+                    patch.object(adapter, "replay_committed_write", side_effect=lambda row, side, *_args: {
+                        "writer_binary": {"path": binaries[(row["id"], side)]["path"],
                                           "sha256": "4" * 64}}),
+                    patch.object(adapter.qualification.ops_paths, "target_root", return_value=target_root),
+                    patch.object(adapter.qualification.ops_paths, "ops_root", return_value=root),
+                    patch.object(adapter.qualification, "_perl", return_value=perl),
+                    patch.object(adapter.qualification, "_fixture_corpus_authority",
+                                 side_effect=corpus_authority),
                 ):
                     patches.enter_context(context)
                 error = patches.enter_context(redirect_stderr(io.StringIO()))
@@ -893,6 +941,85 @@ class Task19AdapterControls(unittest.TestCase):
                 self.assertEqual(adapter.main(argv), 0, error.getvalue())
                 self.assertEqual(json.loads(output.read_text())["git"]["path"], system_git)
                 self.assertEqual(adapter.source_snapshot(expected_head, expected_tree, adapter.bind_git())["head"], expected_head)
+                # The report, config, and caller-supplied hash can agree on an
+                # ephemeral target; configured durable roots still reject it.
+                key = (adapter.ROWS[0], "before")
+                old_identity = binaries[key]
+                bad_target = root / "ephemeral-target"
+                bad_target.mkdir()
+                bad_binary = bad_target / "oxidex"
+                bad_binary.write_bytes(b"binary")
+                bad_identity = {"path": str(bad_binary), "sha256": adapter.sha(bad_binary)}
+                config_path = markers[0].parent / key[0] / key[1] / "inputs/config.json"
+                old_config = config_path.read_bytes()
+                old_marker = markers[0].read_bytes()
+                old_argument = f"{key[0]}:{key[1]}:{old_identity['path']}:{old_identity['sha256']}"
+                bad_argument = f"{key[0]}:{key[1]}:{bad_identity['path']}:{bad_identity['sha256']}"
+                bad_argv = list(argv)
+                bad_argv[bad_argv.index(old_argument)] = bad_argument
+                bad_output = root / "ephemeral-replay.json"
+                bad_argv[bad_argv.index("--output") + 1] = str(bad_output)
+                try:
+                    binaries[key] = bad_identity
+                    config = json.loads(old_config)
+                    config["target_directories"]["13.59"] = str(bad_target)
+                    config_path.write_text(json.dumps(config))
+                    marker = json.loads(old_marker)
+                    marker["rows"][0]["before"]["instrument"]["binary"] = bad_identity
+                    markers[0].write_text(json.dumps(marker))
+                    self.assertEqual(adapter.main(bad_argv), 2)
+                    self.assertFalse(bad_output.exists())
+                finally:
+                    binaries[key] = old_identity
+                    config_path.write_bytes(old_config)
+                    markers[0].write_bytes(old_marker)
+                value = json.loads(output.read_text())
+                baseline = adapter.subordinate_snapshot(tuple(markers), value)
+                callbacks = 0
+                def validate_corpus():
+                    nonlocal callbacks
+                    callbacks += 1
+                    if adapter.subordinate_snapshot(tuple(markers), value) != baseline:
+                        raise adapter.qualification.Refused("corpus publication dependency changed")
+                adapter.publish_receipt_no_replace(root / "corpus-stable.json", value,
+                                                   validate_inputs=validate_corpus)
+                self.assertEqual(callbacks, 2)
+                original_corpus_mode = corpus_file.stat().st_mode & 0o777
+                original_publication_write = adapter._write_owned_state
+                for change in ("mutate", "replace", "add", "remove", "mode"):
+                    with self.subTest(corpus_change=change):
+                        changed = False
+                        def write_then_change(descriptor, payload):
+                            nonlocal changed
+                            original_publication_write(descriptor, payload)
+                            if b'verified_read_only' not in payload or changed:
+                                return
+                            changed = True
+                            if change == "mutate":
+                                corpus_file.write_bytes(b"different")
+                            elif change == "replace":
+                                replacement = corpus.parent / "replacement.jpg"
+                                replacement.write_bytes(b"different")
+                                replacement.replace(corpus_file)
+                            elif change == "add":
+                                (corpus / "extra.jpg").write_bytes(b"extra")
+                            elif change == "remove":
+                                corpus_file.unlink()
+                            else:
+                                corpus_file.chmod(original_corpus_mode ^ 0o100)
+                        fault_output = root / f"corpus-{change}.json"
+                        try:
+                            with patch.object(adapter, "_write_owned_state", side_effect=write_then_change):
+                                with self.assertRaises(adapter.qualification.Refused):
+                                    adapter.publish_receipt_no_replace(fault_output, value,
+                                                                       validate_inputs=validate_corpus)
+                            self.assertTrue(changed)
+                            self.assertEqual(json.loads(fault_output.read_text())["status"], "publication_failed")
+                        finally:
+                            corpus_file.write_bytes(b"fixture")
+                            corpus_file.chmod(original_corpus_mode)
+                            (corpus / "extra.jpg").unlink(missing_ok=True)
+                        self.assertEqual(adapter.subordinate_snapshot(tuple(markers), value), baseline)
                 subordinate = root / adapter.ROWS[0] / adapter.ROWS[0] / "before" / "execution-status.json"
                 owned_source = repo / "TODO_RELEASE_BETA.md"
                 original_write = adapter._write_owned_state

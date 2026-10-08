@@ -883,6 +883,27 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
             "fixture_corpus": corpus, "compiler": compiler}
 
 
+def _corpus_directory_proof(bootstrap: Any, corpus: Path, manifest: Path,
+                            expected_tree: str) -> dict[str, Any]:
+    """Measure actual corpus members with the bootstrap's mode-aware tree hash."""
+    if corpus.is_symlink() or not corpus.is_dir():
+        raise Refused("combined corpus directory is unavailable or linked")
+    try:
+        before = corpus.lstat()
+        actual_tree = bootstrap.sha256_tree(corpus)
+        count = stage_adapter._corpus_manifest_entries(corpus, manifest)
+        after_tree = bootstrap.sha256_tree(corpus)
+        after = corpus.lstat()
+    except (OSError, ValueError, stage_adapter.Refused) as exc:
+        raise Refused("combined corpus directory cannot be verified") from exc
+    if (actual_tree != expected_tree or after_tree != expected_tree
+            or (before.st_dev, before.st_ino, before.st_mode, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_mode, after.st_mtime_ns)):
+        raise Refused("combined corpus directory differs from the bootstrap lock")
+    return {"path": str(corpus), "tree_sha256": actual_tree,
+            "file_count": count, "mode": stat.S_IMODE(after.st_mode)}
+
+
 def _fixture_corpus_authority() -> dict[str, Any]:
     """This host's bootstrap-verified combined corpus, read independently of any receipt."""
     import importlib.util
@@ -902,10 +923,11 @@ def _fixture_corpus_authority() -> dict[str, Any]:
     if (artifacts_.get("corpus_manifest") != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
             or artifacts_.get("corpus_tree") != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
         raise Refused("this host's combined corpus manifest is not bootstrap-verified")
-    count = sum(1 for line in manifest.read_text(encoding="utf-8").splitlines() if line)
+    proof = _corpus_directory_proof(bootstrap, corpus, manifest, tree_sha)
     return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "corpus": str(corpus),
-            "corpus_tree_sha256": tree_sha,
-            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count}}
+            "corpus_tree_sha256": tree_sha, "directory_proof": proof,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha,
+                         "file_count": proof["file_count"]}}
 
 
 def _release_test_corpus(suite: Mapping[str, Any], release: str) -> dict[str, Any]:
