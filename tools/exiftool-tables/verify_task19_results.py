@@ -873,41 +873,82 @@ def pinned_output_parent(output: Path):
             for descriptor in reversed(descriptors):
                 os.fsync(descriptor)
 
+        identities = tuple((info.st_dev, info.st_ino)
+                           for info in (os.fstat(fd) for fd in descriptors))
+
+        def check_path_after_close() -> None:
+            # The retained descriptors establish custody while open. After
+            # their closes, recheck every physical pathname component without
+            # following a substituted symlink before reporting success.
+            path = Path("/")
+            try:
+                for index, identity in enumerate(identities):
+                    if index:
+                        path /= names[index - 1]
+                    observed = os.lstat(path)
+                    if (not stat.S_ISDIR(observed.st_mode)
+                            or (observed.st_dev, observed.st_ino) != identity):
+                        raise qualification.OutcomeUnknown(
+                            "Task19 output parent lost physical custody")
+            except OSError as exc:
+                raise qualification.OutcomeUnknown(
+                    "Task19 output parent custody cannot be established") from exc
+
         check_chain()
-        yield descriptors[-1], check_chain, sync_chain, [output.parent, *changed]
+        yield (descriptors[-1], check_chain, check_path_after_close,
+               sync_chain, [output.parent, *changed])
     except FileExistsError as exc:
         raise qualification.Refused("Task19 output parent changed during creation") from exc
     finally:
+        close_error = None
         for descriptor in reversed(descriptors):
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except BaseException as exc:
+                if close_error is None:
+                    close_error = exc
+        if close_error is not None:
+            if isinstance(close_error, OSError):
+                raise qualification.OutcomeUnknown(
+                    "Task19 output parent close outcome is uncertain") from close_error
+            raise close_error
 
 
 def publish_receipt_no_replace(output: Path, value: dict[str, object],
                                validate_inputs=None, close_inputs=None) -> None:
     """Own output recovery through both validation gates and input custody closure.
 
-    Success is returned only after retained inputs and the primary output FD
-    close. Any earlier failure invalidates the owned inode through its duplicate.
-    An uncertain close is never retried; no pathname is removed or overwritten.
+    Success is returned only after retained inputs, primary output and parent
+    FDs close, followed by final byte and physical-path custody checks. Every
+    earlier failure invalidates the owned inode through its duplicate. An
+    uncertain close is never retried; no pathname is removed or overwritten.
     """
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
     pending = b'{"status":"publication_pending","promotion":"forbidden"}\n'
     failed = b'{"status":"publication_failed","promotion":"forbidden"}\n'
-    with pinned_output_parent(output) as (parent_fd, check_parent, sync_parent_chain, changed):
-        try:
-            check_parent()
-            descriptor = os.open(output.name, os.O_RDWR | os.O_CREAT | os.O_EXCL |
-                                 os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
-        except FileExistsError as exc:
-            raise qualification.Refused("Task19 replay output already exists") from exc
-        recovery = None
-        try:
+    descriptor = None
+    recovery = None
+    try:
+        with pinned_output_parent(output) as (parent_fd, check_parent,
+                                               check_path_after_close,
+                                               sync_parent_chain, changed):
+            try:
+                check_parent()
+                descriptor = os.open(output.name, os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                                     os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+            except FileExistsError as exc:
+                raise qualification.Refused("Task19 replay output already exists") from exc
             recovery = os.dup(descriptor)
             owned = os.fstat(descriptor)
-            def check_output_custody() -> None:
+            def check_output_custody(*, final: bool = False) -> None:
                 try:
-                    check_parent()
-                    current = os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if final:
+                        check_path_after_close()
+                        current = os.lstat(output)
+                    else:
+                        check_parent()
+                        current = os.stat(output.name, dir_fd=parent_fd,
+                                          follow_symlinks=False)
                     retained = os.fstat(recovery)
                 except FileNotFoundError as exc:
                     raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
@@ -948,31 +989,40 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
             if final_bytes != payload:
                 refuse("Task19 output bytes changed during publication")
             check_output_custody()
-        except BaseException:
-            # Recovery remains open even if the primary descriptor's close failed.
-            # Every callback/cleanup failure must invalidate success. No pathname
-            # is used or removed, including when a foreign inode replaced it.
-            if recovery is not None:
-                try:
-                    _write_owned_state(recovery, failed)
-                except BaseException as exc:
-                    raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
-            raise
-        finally:
-            if descriptor is not None:
-                closing = descriptor
-                descriptor = None
-                try:
-                    os.close(closing)
-                except OSError:
-                    pass
-            if recovery is not None:
-                # This duplicate has no userspace buffer and all writes were fsynced.
-                # Its close cannot change durable receipt bytes.
-                try:
-                    os.close(recovery)
-                except OSError:
-                    pass
+        # Parent context closure is part of the transaction. Its close can
+        # fail after the kernel has already closed the FD, so keep recovery.
+        check_output_custody(final=True)
+        try:
+            final_bytes = os.pread(recovery, len(payload) + 1, 0)
+        except OSError as exc:
+            raise qualification.OutcomeUnknown("Task19 output bytes cannot be established") from exc
+        if final_bytes != payload:
+            refuse("Task19 output bytes changed during publication")
+        check_output_custody(final=True)
+    except BaseException:
+        # Every callback and close failure invalidates the owned inode by FD.
+        # A foreign replacement is never removed or overwritten by pathname.
+        if descriptor is not None:
+            closing = descriptor
+            descriptor = None  # An uncertain close must not be retried.
+            try:
+                os.close(closing)
+            except BaseException:
+                pass
+        if recovery is not None:
+            try:
+                _write_owned_state(recovery, failed)
+            except BaseException as exc:
+                raise qualification.OutcomeUnknown("Task19 owned output invalidation is uncertain") from exc
+        raise
+    finally:
+        if recovery is not None:
+            # This duplicate has no userspace buffer and all writes were fsynced.
+            # Its close cannot change durable receipt bytes.
+            try:
+                os.close(recovery)
+            except OSError:
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
