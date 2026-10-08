@@ -118,16 +118,24 @@ def _caller_excludes(source: Path) -> bytes:
             if query[0] == '--name-only' and result.returncode == 0:
                 raise RuntimeError('Included Git exclusions require explicit review')
             if query[0] == '--path' and result.returncode == 0:
-                rows = [row for row in result.stdout.split(b'\0') if row]
-                if rows:
-                    selected = Path(os.fsdecode(rows[-1]))
+                # --null emits one NUL even for an explicitly empty value.
+                # Empty is an override, unlike return code 1 (unset).
+                if not result.stdout.endswith(b'\0'):
+                    raise RuntimeError('Caller Git exclusion value is not NUL-terminated')
+                rows = result.stdout.split(b'\0')[:-1]
+                if not rows:
+                    raise RuntimeError('Caller Git exclusion value is unavailable')
+                selected = os.fsdecode(rows[-1])
     xdg = os.environ.get('XDG_CONFIG_HOME')
     if xdg is not None and not Path(xdg).is_absolute():
         raise RuntimeError('Caller XDG configuration path is not absolute')
+    if selected == '':
+        return b''  # Explicit empty disables an earlier file and the XDG default.
     if selected is None:
         selected = (Path(xdg) if xdg else Path(home) / '.config') / 'git' / 'ignore'
         required = False
     else:
+        selected = Path(selected)
         required = True
     if not selected.is_absolute():
         raise RuntimeError('Caller Git exclusion path is not absolute')

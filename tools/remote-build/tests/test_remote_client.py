@@ -175,6 +175,56 @@ class ClientTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'Included Git exclusions'):
                     remote_build.eligible_snapshot_paths(source)
 
+    def test_explicit_empty_excludes_overrides_file_and_default_at_each_scope(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            (source/'wanted.txt').write_text('wanted\n')
+            (source/'public.txt').write_text('public\n')
+            ignore=root/'ignore';ignore.write_text('wanted.txt\n')
+            default=root/'xdg/git/ignore';default.parent.mkdir(parents=True)
+            default.write_text('wanted.txt\n')
+            global_config=root/'global';system_config=root/'system'
+            global_config.write_text('[core]\n\texcludesFile = '+str(ignore)+'\n')
+            system_config.write_text('')
+            environment={k:v for k,v in os.environ.items()
+                         if k not in ('GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS')}
+            environment.update(HOME=str(root),XDG_CONFIG_HOME=str(root/'xdg'),
+                GIT_CONFIG_GLOBAL=str(global_config),GIT_CONFIG_SYSTEM=str(system_config))
+            def git(*args):
+                return subprocess.run(['/usr/bin/git','-C',str(source),*args],
+                    env=os.environ,capture_output=True,check=True).stdout
+            def assert_match():
+                actual=sorted(filter(None,git('ls-files','-z','--cached','--others',
+                    '--exclude-standard').decode().split('\0')))
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),actual)
+                receipt=remote_build.make_snapshot(source,root/'packet.tar.gz')
+                self.assertEqual([row['path'] for row in receipt['files']],actual)
+                return actual
+            with patch.dict(os.environ,environment,clear=True):
+                self.assertNotIn('wanted.txt',assert_match())
+                git('config','--local','core.excludesFile','')
+                self.assertIn('wanted.txt',assert_match())
+                git('config','--local','--unset','core.excludesFile')
+                global_config.write_text('[core]\n\texcludesFile = '+str(ignore)+
+                                         '\n\texcludesFile =\n')
+                self.assertIn('wanted.txt',assert_match())  # Repeated file then empty.
+                global_config.write_text('[core]\n\texcludesFile =\n\texcludesFile = '+
+                                         str(ignore)+'\n')
+                self.assertNotIn('wanted.txt',assert_match())  # Repeated empty then file.
+                global_config.write_text('')
+                self.assertNotIn('wanted.txt',assert_match())  # Unset selects default XDG.
+                system_config.write_text('[core]\n\texcludesFile =\n')
+                self.assertIn('wanted.txt',assert_match())  # System empty suppresses default.
+                global_config.write_text('[core]\n\texcludesFile = '+str(ignore)+'\n')
+                self.assertNotIn('wanted.txt',assert_match())
+                git('config','--local','extensions.worktreeConfig','true')
+                git('config','--worktree','core.excludesFile','')
+                self.assertIn('wanted.txt',assert_match())
+
     def test_ordinary_snapshot_uses_default_user_ignore_and_refuses_unreadable_policy(self):
         import os
         from unittest.mock import patch
