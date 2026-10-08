@@ -15,6 +15,73 @@ import qualification_source
 
 
 class InfraPythonProfileTests(unittest.TestCase):
+    def test_unsigned_filter_config_cannot_execute_before_infra_admission(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            source = root / 'source'
+            source.mkdir()
+            key = root / 'key'
+            subprocess.run(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+            public = ' '.join((root / 'key.pub').read_text().split()[:2])
+            fingerprint = subprocess.check_output(['/usr/bin/ssh-keygen', '-lf', str(key) + '.pub'],
+                                                  text=True).split()[1]
+            signers = root / 'signers'
+            signers.write_text(qualification_source.PRINCIPAL + ' ' + public + '\n')
+            def git(*args):
+                return subprocess.check_output(['/usr/bin/git', '-C', str(source), *args],
+                                               text=True, env=remote_build.source_git_env()).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'swackhamer')
+            git('config', 'user.email', qualification_source.PRINCIPAL)
+            git('config', 'gpg.ssh.allowedSignersFile', str(signers))
+            git('remote', 'add', 'origin', 'git@github.com:swack-tools/spot-github-runners.git')
+            (source / '.gitattributes').write_text('payload filter=marker\n')
+            payload = source / 'payload'
+            payload.write_text('unsigned bytes\n')
+            git('add', '.')
+            git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'Unsigned unadmitted source')
+            head = git('rev-parse', 'HEAD')
+            marker = root / 'filter-ran'
+            driver = root / 'clean-filter'
+            driver.write_text(f'#!/bin/sh\n/usr/bin/touch {marker}\n/bin/cat\n')
+            driver.chmod(0o755)
+            git('config', 'filter.marker.clean', str(driver))
+            git('config', 'filter.marker.required', 'true')
+            before = payload.stat()
+            os.utime(payload, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+            self.assertEqual(remote_build.source_clean_status(source, head), '')
+            self.assertFalse(marker.exists(), 'clean filter ran during source inspection')
+            transport = SimpleNamespace(instance_id='2', host='192.0.2.1',
+                ssh=lambda command: ['ssh', command],
+                scp=lambda *args, **kwargs: self.fail('unsigned source transfer started'))
+            with patch.dict(os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': str(root / 'known')}), \
+                 patch.object(qualification_source, 'KEY', public), \
+                 patch.object(qualification_source, 'FINGERPRINT', fingerprint), \
+                 patch.object(remote_build.ssh_transport, 'identity', return_value=('uploader', 'key')), \
+                 patch.object(remote_build.ssh_transport, 'DirectTransport', return_value=transport), \
+                 patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
+                 patch.object(remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}), \
+                 patch.object(remote_build, 'make_snapshot', side_effect=AssertionError('snapshot started')):
+                with self.assertRaisesRegex(RuntimeError, 'signed maintainer HEAD'):
+                    remote_build.main(['--source', str(source), '--instance', 'builder-vm',
+                        '--zone', 'zone', '--instance-id', '2', '--worktree-id', 'fixture',
+                        '--evidence-dir', str(root / 'evidence'), '--source-profile', 'infra-python-v1',
+                        '--just-recipe', 'infra-python-tests'])
+            self.assertFalse(marker.exists(), 'unsigned source filter ran before rejection')
+            receipt = json.loads((root / 'evidence/remote-build.json').read_text())
+            self.assertEqual(receipt['source_commit'], head)
+            self.assertEqual(receipt['source_status'], '')
+            self.assertNotIn('source_provenance', receipt)
+            payload.write_text('changed bytes\n')
+            self.assertIn('payload', remote_build.source_clean_status(source, head))
+            self.assertFalse(marker.exists(), 'clean filter ran during dirty-source refusal')
+            sibling = root / 'sibling'
+            sibling.mkdir()
+            git('config', 'core.worktree', str(sibling))
+            with self.assertRaisesRegex(RuntimeError, 'worktree differs'):
+                remote_build.source_clean_status(source, head)
+            self.assertFalse(marker.exists())
+
     def test_attacker_git_executable_config_does_not_run_during_source_admission(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
@@ -61,8 +128,7 @@ class InfraPythonProfileTests(unittest.TestCase):
             with patch.dict(os.environ, {'PATH': str(fakebin) + ':/usr/bin:/bin'}), \
                  patch.object(qualification_source, 'KEY', public), \
                  patch.object(qualification_source, 'FINGERPRINT', fingerprint):
-                self.assertEqual(git('status', '--porcelain', '--untracked-files=all',
-                                     env=remote_build.source_git_env()), '')
+                self.assertEqual(remote_build.source_clean_status(source, head), '')
                 remote_build.verify_signed_source(source, head, signers)
             self.assertFalse(fsmonitor_marker.exists(), 'repository fsmonitor executed')
             self.assertFalse(verifier_marker.exists(), 'repository SSH verifier executed')
@@ -216,6 +282,7 @@ class InfraPythonProfileTests(unittest.TestCase):
                 git('update-index', '--skip-worktree', 'justfile')
                 (source / 'justfile').write_text('infra-python-tests:\n    echo unsigned\n')
                 self.assertEqual(git('status', '--porcelain', '--untracked-files=all'), '')
+                self.assertIn('justfile', remote_build.source_clean_status(source, head))
                 with self.assertRaisesRegex(RuntimeError, 'differs from signed HEAD: justfile'):
                     remote_build.make_snapshot(source, archive, signed_head=head,
                         source_profile=remote_build.INFRA_PYTHON_PROFILE)

@@ -369,6 +369,72 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
             'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
 
 
+def source_clean_status(source: Path, head: str) -> str:
+    """Compare index and worktree to HEAD without Git diff/status/filter drivers.
+
+    Git status may execute repository-local clean filters even for unsigned
+    source. Object and index enumeration are non-filtering; hash actual bytes
+    here instead of asking Git to convert them.
+    """
+    env = source_git_env()
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
+    effective_root = Path(subprocess.check_output(
+        ['git', '-C', str(source), 'rev-parse', '--show-toplevel'], env=env,
+        text=True).strip()).resolve(strict=True)
+    if effective_root != source.resolve(strict=True):
+        raise RuntimeError('Source Git worktree differs from selected source root')
+    if subprocess.check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
+                               env=env).strip() != b'sha1':
+        raise RuntimeError('Source Git object format is unsupported')
+    tree = subprocess.check_output(['git', '-C', str(source), 'ls-tree', '-r', '-z', head], env=env)
+    index = subprocess.check_output(['git', '-C', str(source), 'ls-files', '--stage', '-z'], env=env)
+    expected = {}
+    for record in filter(None, tree.split(b'\0')):
+        metadata, raw_name = record.split(b'\t', 1)
+        mode, kind, object_id = metadata.decode('ascii').split()
+        name = os.fsdecode(raw_name)
+        if (name in expected or not name or Path(name).is_absolute()
+                or '..' in Path(name).parts or kind not in {'blob', 'commit'}):
+            raise RuntimeError('Source HEAD has unsupported tree member')
+        expected[name] = (mode, object_id)
+    actual_index = {}
+    for record in filter(None, index.split(b'\0')):
+        metadata, raw_name = record.split(b'\t', 1)
+        mode, object_id, stage = metadata.decode('ascii').split()
+        name = os.fsdecode(raw_name)
+        if name in actual_index or stage != '0':
+            raise RuntimeError('Source index is unmerged or ambiguous')
+        actual_index[name] = (mode, object_id)
+    changed = []
+    if actual_index != expected:
+        changed.append(' M index')
+    for name, (mode, object_id) in expected.items():
+        path = source / name
+        try:
+            info = path.lstat()
+            if mode in {'100644', '100755'} and stat.S_ISREG(info.st_mode):
+                data = path.read_bytes()
+                if bool(info.st_mode & 0o111) != (mode == '100755'):
+                    changed.append(' M ' + name)
+                    continue
+            elif mode == '120000' and stat.S_ISLNK(info.st_mode):
+                data = os.fsencode(os.readlink(path))
+            else:
+                changed.append(' M ' + name)
+                continue
+        except OSError:
+            changed.append(' D ' + name)
+            continue
+        digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+        if digest != object_id:
+            changed.append(' M ' + name)
+    untracked = subprocess.check_output(
+        ['git', '-C', str(source), 'ls-files', '--others', '--exclude-standard', '-z'], env=env)
+    changed.extend('?? ' + os.fsdecode(name) for name in filter(None, untracked.split(b'\0')))
+    return '\n'.join(changed) + ('\n' if changed else '')
+
+
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
     names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
@@ -674,8 +740,7 @@ def main(argv=None):
                                                         text=True,env=source_git_env()).strip()
         receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
                                                       text=True,env=source_git_env()).strip()
-        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],
-                                                        text=True,env=source_git_env())
+        receipt['source_status']=source_clean_status(source, receipt['source_commit'])
         if args.just_recipe == 'freeze-linux-perl':
             source_tree=receipt['source_tree']
             if args.just_arg != [receipt['source_commit'], source_tree]:
@@ -746,8 +811,7 @@ def main(argv=None):
         receipt['packaging_seconds']=time.monotonic()-start
         after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
                                              text=True,env=source_git_env()).strip()
-        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],
-                                             text=True,env=source_git_env())
+        after_status=source_clean_status(source, receipt['source_commit'])
         if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
                 or (receipt['snapshot'].get('eligible_paths') is not None
                     and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
