@@ -28,7 +28,8 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
                  '--scp-flag=-oServerAliveCountMax=3')
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
-                           'prove-linux-perl-component'})
+                           'prove-linux-perl-component', 'docs-site-build',
+                           'test-remote-build'})
 INFRA_PYTHON_PROFILE = 'infra-python-v1'
 INFRA_PYTHON_RECIPE = 'infra-python-tests'
 INFRA_PYTHON_ORIGINS = frozenset({
@@ -777,6 +778,9 @@ def main(argv=None):
                                          'target':'/mnt/runner-data/remote-build/targets/'+args.worktree_id}
                 if args.just_recipe == 'docs-build':
                     receipt['rustdoc_path'] = receipt['remote_paths']['target'] + '/doc'
+                if args.just_recipe == 'docs-site-build':
+                    receipt['docs_site_snapshot_path'] = (
+                        receipt['remote_paths']['target'] + '/docs-site')
                 receipt['recipe_state']='RUNNING_OR_UNKNOWN'
                 receipt['remote_command']=remote
                 save()
