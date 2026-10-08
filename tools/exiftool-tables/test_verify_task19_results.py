@@ -78,20 +78,44 @@ class Task19AdapterControls(unittest.TestCase):
             marker = Path(directory) / "qualification-result.json"
             original = {"schema": 1, "run_id": "original"}
             marker.write_text(json.dumps(original))
-            binding, original_bytes = adapter.marker_snapshot(marker)
-            self.assertEqual(json.loads(original_bytes), original)
-            adapter.require_marker_unchanged(marker, binding)
-            replacement = Path(directory) / "replacement.json"
-            replacement.write_text(json.dumps({"schema": 1, "run_id": "replacement"}))
-            replacement.replace(marker)
-            with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
-                adapter.require_marker_unchanged(marker, binding)
-            # Replacing with identical bytes is still a different file identity.
-            same = Path(directory) / "same.json"
-            same.write_bytes(original_bytes)
-            same.replace(marker)
-            with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
-                adapter.require_marker_unchanged(marker, binding)
+            with adapter.pin_marker(marker) as pinned:
+                binding, original_bytes = pinned.binding, pinned.data
+                self.assertEqual(json.loads(original_bytes), original)
+                adapter.require_marker_unchanged(marker, binding, pinned)
+                replacement = Path(directory) / "replacement.json"
+                replacement.write_text(json.dumps({"schema": 1, "run_id": "replacement"}))
+                replacement.replace(marker)
+                with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
+                    adapter.require_marker_unchanged(marker, binding, pinned)
+                # Keep the original descriptor open across *both* replacements.
+                # The filesystem cannot recycle its inode for identical bytes.
+                same = Path(directory) / "same.json"
+                same.write_bytes(original_bytes)
+                same.replace(marker)
+                with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
+                    adapter.require_marker_unchanged(marker, binding, pinned)
+                descriptor = pinned.descriptor
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_marker_pin_read_failure_closes_owned_descriptor(self) -> None:
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "qualification-result.json"
+            marker.write_bytes(b'{}')
+            opened = []
+            original_open = adapter.os.open
+            def recording_open(*args, **kwargs):
+                descriptor = original_open(*args, **kwargs)
+                opened.append(descriptor)
+                return descriptor
+            with patch.object(adapter.os, "open", side_effect=recording_open), \
+                 patch.object(adapter.os, "pread", side_effect=OSError("injected read failure")):
+                with self.assertRaisesRegex(adapter.qualification.Refused, "read failed"):
+                    with adapter.pin_marker(marker):
+                        pass
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
 
     def test_fifo_final_marker_refuses_without_waiting_for_writer(self) -> None:
         with TemporaryDirectory() as directory:
@@ -240,6 +264,21 @@ class Task19AdapterControls(unittest.TestCase):
             output.unlink()
             adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertIn('verified_read_only', output.read_text())
+
+    def test_publication_marker_recheck_invalidates_owned_success(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "receipt.json"
+            calls = 0
+            def changed_marker():
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise adapter.qualification.Refused("marker changed before publication")
+            with self.assertRaisesRegex(adapter.qualification.Refused, "marker changed"):
+                adapter.publish_receipt_no_replace(
+                    output, {"status": "verified_read_only"}, validate_inputs=changed_marker)
+            self.assertEqual(calls, 2)
+            self.assertEqual(adapter.json.loads(output.read_text())["status"], "publication_failed")
 
     def test_publication_invalidation_failure_preserves_outcome_unknown(self) -> None:
         with TemporaryDirectory() as directory:

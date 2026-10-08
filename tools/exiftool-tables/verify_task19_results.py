@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -203,33 +205,68 @@ def next_pin_selection(todo: str) -> str:
     return selected[0] if selected else "not selected"
 
 
-def marker_snapshot(path: Path) -> tuple[dict[str, int | str], bytes]:
-    """Read one regular final marker through a stable, non-symlink descriptor."""
+@dataclass(frozen=True)
+class PinnedMarker:
+    descriptor: int
+    binding: dict[str, int | str]
+    data: bytes
+
+
+def _marker_binding(identity: os.stat_result, data: bytes) -> dict[str, int | str]:
+    return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+            "device": identity.st_dev, "inode": identity.st_ino,
+            "mtime_ns": identity.st_mtime_ns, "ctime_ns": identity.st_ctime_ns}
+
+
+@contextmanager
+def pin_marker(path: Path):
+    """Retain the original final-marker inode through replay and publication."""
     if path.is_symlink():
         refuse("qualification final marker must not be a symlink")
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(descriptor, "rb") as stream:
-            identity = os.fstat(stream.fileno())
-            if not stat.S_ISREG(identity.st_mode):
-                refuse("qualification final marker must be a regular file")
-            if identity.st_size > MAX_MARKER_BYTES:
-                refuse("qualification final marker exceeds bounded size")
-            data = stream.read(MAX_MARKER_BYTES + 1)
-            if len(data) > MAX_MARKER_BYTES:
-                refuse("qualification final marker exceeds bounded size")
     except OSError as exc:
         raise qualification.Refused(f"qualification final marker is unavailable: {path}") from exc
-    return ({"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
-             "device": identity.st_dev, "inode": identity.st_ino,
-             "mtime_ns": identity.st_mtime_ns, "ctime_ns": identity.st_ctime_ns}, data)
+    try:
+        identity = os.fstat(descriptor)
+        if not stat.S_ISREG(identity.st_mode):
+            refuse("qualification final marker must be a regular file")
+        if identity.st_size > MAX_MARKER_BYTES:
+            refuse("qualification final marker exceeds bounded size")
+        data = os.pread(descriptor, MAX_MARKER_BYTES + 1, 0)
+        if len(data) > MAX_MARKER_BYTES:
+            refuse("qualification final marker exceeds bounded size")
+        current = path.lstat()
+        if (not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)):
+            refuse(f"qualification final marker changed during open: {path}")
+        yield PinnedMarker(descriptor, _marker_binding(identity, data), data)
+    except OSError as exc:
+        raise qualification.Refused(f"qualification final marker read failed: {path}") from exc
+    finally:
+        os.close(descriptor)
 
 
-def require_marker_unchanged(path: Path, expected: dict[str, int | str]) -> None:
+def marker_snapshot(path: Path) -> tuple[dict[str, int | str], bytes]:
+    """One-shot read for callers outside an outer pinned replay lifetime."""
+    with pin_marker(path) as pinned:
+        return pinned.binding, pinned.data
+
+
+def require_marker_unchanged(path: Path, expected: dict[str, int | str],
+                             pinned: PinnedMarker | None = None) -> None:
+    if pinned is not None:
+        try:
+            identity = os.fstat(pinned.descriptor)
+            data = os.pread(pinned.descriptor, MAX_MARKER_BYTES + 1, 0)
+        except OSError as exc:
+            raise qualification.Refused(f"qualification final marker descriptor read failed: {path}") from exc
+        if (_marker_binding(identity, data) != pinned.binding
+                or pinned.binding != expected or data != pinned.data):
+            refuse(f"qualification final marker changed on bound descriptor: {path}")
     current, _ = marker_snapshot(path)
     if current != expected:
         refuse(f"qualification final marker changed during replay: {path}")
-
 
 def refuse_source_output_overlap(output: Path) -> None:
     """Keep read-only verification output physically outside the owned source."""
@@ -505,7 +542,8 @@ def _write_owned_state(descriptor: int, payload: bytes) -> None:
     os.fsync(descriptor)
 
 
-def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
+def publish_receipt_no_replace(output: Path, value: dict[str, object],
+                               validate_inputs=None) -> None:
     """Create exclusively; retain an unbuffered recovery descriptor until settled."""
     changed = qualification._make_parent(output)
     payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -521,6 +559,8 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
         recovery = os.dup(descriptor)
         owned = os.fstat(descriptor)
         _write_owned_state(descriptor, pending)
+        if validate_inputs is not None:
+            validate_inputs()
         _write_owned_state(descriptor, payload)
         for directory in dict.fromkeys(changed):
             qualification._fsync_directory(directory)
@@ -530,6 +570,8 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
             raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
         if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
             raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+        if validate_inputs is not None:
+            validate_inputs()
         try:
             os.close(descriptor)
         except OSError as exc:
@@ -581,40 +623,50 @@ def main(argv: list[str] | None = None) -> int:
         refuse_source_output_overlap(output)
         if output.exists() or output.is_symlink():
             refuse("Task19 replay output already exists")
-        replay_paths = (args.same_pin_result, args.forward_result, args.reverse_result)
-        value = verify_results(
-            paths=replay_paths,
-            expected_head=args.expected_head, expected_tree=args.expected_tree,
-            expected_matrix_sha256=args.expected_matrix_sha256,
-            expected_policy_sha256=args.expected_read_policy_sha256,
-            expected_tools=tools, expected_binaries=binaries)
-        subordinates = subordinate_snapshot(replay_paths, value)
-        if source_snapshot(args.expected_head, args.expected_tree) != before:
-            refuse("owned source changed during Task19 replay")
-        for row, path in zip(ROWS, (args.same_pin_result, args.forward_result, args.reverse_result), strict=True):
-            require_marker_unchanged(
-                path, {key: val for key, val in value["rows"][row]["result"].items()
-                       if key != "path"})
-        refuse_source_output_overlap(output)
-        if output.exists() or output.is_symlink():
-            refuse("Task19 replay output already exists")
-        # Re-run the complete subordinate replay so an earlier side changed
-        # while later rows were checked cannot be published as verified.
-        if verify_results(
+        replay_paths = tuple(qualification._evidence_location(path, "Task19 committed result")
+                             for path in (args.same_pin_result, args.forward_result, args.reverse_result))
+        with ExitStack() as marker_stack:
+            pins = {path: marker_stack.enter_context(pin_marker(path)) for path in replay_paths}
+            for path, pin in pins.items():
+                require_marker_unchanged(path, pin.binding, pin)
+            value = verify_results(
                 paths=replay_paths,
                 expected_head=args.expected_head, expected_tree=args.expected_tree,
                 expected_matrix_sha256=args.expected_matrix_sha256,
                 expected_policy_sha256=args.expected_read_policy_sha256,
-                expected_tools=tools, expected_binaries=binaries) != value:
-            refuse("Task19 subordinate evidence changed before publication")
-        if subordinate_snapshot(replay_paths, value) != subordinates:
-            refuse("Task19 subordinate files changed during replay")
-        if source_snapshot(args.expected_head, args.expected_tree) != before:
-            refuse("owned source changed before Task19 publication")
-        refuse_source_output_overlap(output)
-        if subordinate_snapshot(replay_paths, value) != subordinates:
-            refuse("Task19 subordinate files changed before publication")
-        publish_receipt_no_replace(output, value)
+                expected_tools=tools, expected_binaries=binaries)
+            subordinates = subordinate_snapshot(replay_paths, value)
+            if source_snapshot(args.expected_head, args.expected_tree) != before:
+                refuse("owned source changed during Task19 replay")
+            for row, path in zip(ROWS, replay_paths, strict=True):
+                require_marker_unchanged(
+                    path, {key: val for key, val in value["rows"][row]["result"].items()
+                           if key != "path"}, pins[path])
+            refuse_source_output_overlap(output)
+            if output.exists() or output.is_symlink():
+                refuse("Task19 replay output already exists")
+            # Re-run the complete subordinate replay so an earlier side changed
+            # while later rows were checked cannot be published as verified.
+            if verify_results(
+                    paths=replay_paths,
+                    expected_head=args.expected_head, expected_tree=args.expected_tree,
+                    expected_matrix_sha256=args.expected_matrix_sha256,
+                    expected_policy_sha256=args.expected_read_policy_sha256,
+                    expected_tools=tools, expected_binaries=binaries) != value:
+                refuse("Task19 subordinate evidence changed before publication")
+            if subordinate_snapshot(replay_paths, value) != subordinates:
+                refuse("Task19 subordinate files changed during replay")
+            if source_snapshot(args.expected_head, args.expected_tree) != before:
+                refuse("owned source changed before Task19 publication")
+            refuse_source_output_overlap(output)
+            if subordinate_snapshot(replay_paths, value) != subordinates:
+                refuse("Task19 subordinate files changed before publication")
+            for path, pin in pins.items():
+                require_marker_unchanged(path, pin.binding, pin)
+            def validate_pins() -> None:
+                for path, pin in pins.items():
+                    require_marker_unchanged(path, pin.binding, pin)
+            publish_receipt_no_replace(output, value, validate_inputs=validate_pins)
     except qualification.OutcomeUnknown as exc:
         print(f"Task19 replay publication outcome unknown: {exc}", file=sys.stderr)
         return 4
