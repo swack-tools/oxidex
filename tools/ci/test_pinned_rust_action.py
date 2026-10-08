@@ -161,9 +161,11 @@ class PinnedRustActionTests(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         gate = workflow.split('  read-regression-gate:', 1)[1].split('\n  verify-tables-', 1)[0]
         expression = gate.split("grep -qE '", 1)[1].split("'", 1)[0]
-        result = subprocess.run(['grep', '-qE', expression],
-                                input='.github/actions/pinned-rust/action.yml\n', text=True)
-        self.assertEqual(result.returncode, 0)
+        for changed in ('.github/actions/pinned-rust/action.yml',
+                        'tools/ci/preinstalled_rust.py'):
+            result = subprocess.run(['grep', '-qE', expression],
+                                    input=changed + '\n', text=True)
+            self.assertEqual(result.returncode, 0, changed)
 
     def test_readiness_rejects_shadowed_tools_and_compiler_override(self):
         source = textwrap.dedent(ACTION.read_text().rsplit('      run: |\n', 1)[1])
