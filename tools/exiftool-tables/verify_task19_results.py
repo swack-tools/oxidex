@@ -18,6 +18,7 @@ executor = qualification.executor
 stage_adapter = qualification.stage_adapter
 
 ROOT = Path(__file__).resolve().parents[2]
+MAX_MARKER_BYTES = 16 * 1024 * 1024
 POLICY_SHA256 = "a354c24dfbadae4c1b243b26b706f303bc25326b5dfd255e751f9fadd472dac5"
 TOOL_FILES = (
     "tools/exiftool-tables/version_transition_qualification.py",
@@ -116,6 +117,48 @@ def _git_blob(name: str) -> bytes:
         raise qualification.Refused(f"cannot read committed {name}") from exc
 
 
+def _tracked_source_bytes() -> None:
+    """Reject hidden index flags and compare every tracked byte and mode to HEAD."""
+    try:
+        listing = subprocess.check_output(
+            ["git", "-C", str(ROOT), "ls-files", "--stage", "-v", "-z"], timeout=30)
+        algorithm = _git("rev-parse", "--show-object-format")
+        digest_type = {"sha1": hashlib.sha1, "sha256": hashlib.sha256}[algorithm]
+        for record in filter(None, listing.split(b"\0")):
+            metadata, relative = record.split(b"\t", 1)
+            flag, mode, oid, stage = metadata.decode("ascii").split()
+            name = relative.decode("utf-8", "surrogateescape")
+            path = ROOT / name
+            if flag != "H" or stage != "0" or name.startswith("/") or ".." in Path(name).parts:
+                refuse(f"frozen source has hidden index flags or invalid path: {name}")
+            file_stat = path.lstat()
+            if mode == "120000":
+                if not stat.S_ISLNK(file_stat.st_mode):
+                    refuse(f"tracked symlink mode differs: {name}")
+                data = os.fsencode(os.readlink(path))
+            elif mode in ("100644", "100755"):
+                if not stat.S_ISREG(file_stat.st_mode) or bool(file_stat.st_mode & 0o111) != (mode == "100755"):
+                    refuse(f"tracked file mode differs: {name}")
+                data = path.read_bytes()
+            else:
+                refuse(f"unsupported tracked source mode: {name}")
+            digest = digest_type(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            if digest != oid:
+                refuse(f"tracked source bytes differ from frozen index: {name}")
+    except qualification.Refused:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+        raise qualification.Refused("cannot compare tracked source bytes and modes") from exc
+
+
+def require_imported_source_paths() -> None:
+    imported = ((qualification, TOOL_FILES[0]), (executor, TOOL_FILES[2]),
+                (stage_adapter, TOOL_FILES[3]))
+    if any(Path(module.__file__).resolve() != (ROOT / name).resolve()
+           for module, name in imported):
+        refuse("imported replay verifier differs from frozen source path")
+
+
 def source_snapshot(expected_head: str, expected_tree: str) -> dict[str, str]:
     """Require actual clean bytes and index at the frozen signed source."""
     if _git("status", "--porcelain=v1", "--untracked-files=all"):
@@ -123,6 +166,8 @@ def source_snapshot(expected_head: str, expected_tree: str) -> dict[str, str]:
     head, tree, index = _git("rev-parse", "HEAD"), _git("rev-parse", "HEAD^{tree}"), _git("write-tree")
     if (head, tree, index) != (expected_head, expected_tree, expected_tree):
         refuse("adapter HEAD, tree, or index differs from frozen candidate")
+    _tracked_source_bytes()
+    require_imported_source_paths()
     pin = ROOT / ".exiftool-version"
     todo = ROOT / "TODO_RELEASE_BETA.md"
     if pin.read_bytes() != b"13.59\n":
@@ -168,7 +213,11 @@ def marker_snapshot(path: Path) -> tuple[dict[str, int | str], bytes]:
             identity = os.fstat(stream.fileno())
             if not stat.S_ISREG(identity.st_mode):
                 refuse("qualification final marker must be a regular file")
-            data = stream.read()
+            if identity.st_size > MAX_MARKER_BYTES:
+                refuse("qualification final marker exceeds bounded size")
+            data = stream.read(MAX_MARKER_BYTES + 1)
+            if len(data) > MAX_MARKER_BYTES:
+                refuse("qualification final marker exceeds bounded size")
     except OSError as exc:
         raise qualification.Refused(f"qualification final marker is unavailable: {path}") from exc
     return ({"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
@@ -226,12 +275,15 @@ def replay_committed_write(row: dict[str, object], side: str, root: Path,
                 or executor._require_fixture_proof(checked) != binding["fixtures"]):
             refuse("write fixtures differ from immutable selected scope")
         raw = qualification._read_object(Path(checked["raw_report"]["path"]), "raw write report")
+        commands = raw.get("commands")
+        if not isinstance(commands, list) or any(not isinstance(command, dict) for command in commands):
+            refuse("raw write commands must be a list of objects")
         matrices = checked.get("matrix_reports")
         fixtures = checked["fixtures"]["entries"]
         if (not isinstance(matrices, list) or not matrices or len(matrices) != len(fixtures)
                 or raw.get("state") != "ok" or raw.get("matrix_reports") != matrices
-                or len(raw.get("commands", [])) != len(matrices)
-                or any(command.get("state") != "ok" for command in raw["commands"])):
+                or len(commands) != len(matrices)
+                or any(command.get("state") != "ok" for command in commands)):
             refuse("write matrix list or raw command outcomes are incomplete")
         paths = stage_adapter._matrix_source_artifacts(checkout)
         source_proof = stage_adapter._source_proof(paths)
@@ -282,6 +334,9 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
         qualification.CANONICAL_MATRIX, "13.59")["rows"])
     if matrix_rows != ROWS:
         refuse("Task19 matrix does not contain the exact required rows")
+    if any(path.is_symlink() for path in paths):
+        refuse("Task19 committed result path must not be a symlink")
+    paths = tuple(qualification._evidence_location(path, "Task19 committed result") for path in paths)
     if len({path.resolve() for path in paths}) != 3:
         refuse("final paths must identify three distinct committed runs")
     if set(expected_binaries) != {(row, side) for row in ROWS for side in qualification.SIDES}:
@@ -332,9 +387,31 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
                     or binary.get("sha256") != expected["sha256"]
                     or entry.get("release") != release):
                 refuse(f"{row['id']} {side} source, binary, or release differs")
+            run_dir = path.parent / row["id"] / side
+            journal = qualification._read_object(run_dir / "execution-status.json", "execution journal")
+            config = qualification._read_object(run_dir / "inputs" / "config.json", "execution config")
+            checkout = run_dir / "checkouts" / executor._safe_name(release)
+            build = qualification._report_for(run_dir, journal, release, "build")
+            build_environment = qualification._build_environment_receipt(build, release, checkout)
+            release_tests = qualification._release_test_receipt(run_dir, journal, release)
+            test_report = qualification._report_for(run_dir, journal, release, "test")
+            executor._require_test_suite_proof(test_report)
+            if entry.get("build_environment") != build_environment or entry.get("release_tests") != release_tests:
+                refuse(f"{row['id']} {side} build or release-test receipt differs from accepted proof")
+            bundle = config.get("verified_input_bundle")
+            if not isinstance(bundle, str):
+                refuse("committed side lacks verified source input bundle")
+            source_identity = qualification.resolve_source_identity(
+                {"expected_release": release},
+                qualification._evidence_location(Path(bundle), "verified source input bundle"))
+            source_fields = ("release", "tag_object", "peeled_commit", "source_directory",
+                             "source_tree_sha256", "materialization_sha256")
+            verified_source = {key: source_identity[key] for key in source_fields}
+            if entry.get("source_identity") != verified_source:
+                refuse(f"{row['id']} {side} source identity differs from verified input bundle")
             write_proof = replay_committed_write(row, side, path.parent, expected_head)
             binaries[side] = expected
-            sides[side] = {"release": release, "source_identity": entry["source_identity"],
+            sides[side] = {"release": release, "source_identity": verified_source,
                            "native_identity": instrument["native_identity"],
                            "read_fixture_manifest_sha256": instrument["read_fixture_manifest_sha256"],
                            "read_report_sha256": entry["read_report_sha256"],
@@ -362,6 +439,123 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
                          "todo_sha256": sha(ROOT / "TODO_RELEASE_BETA.md")}}
 
 
+def subordinate_snapshot(paths: tuple[Path, Path, Path],
+                         value: dict[str, object]) -> dict[str, tuple[int, int, int, int, str]]:
+    """Bind the complete run directories and external executables across replay."""
+    files: set[Path] = {qualification.CANONICAL_MATRIX,
+                        Path(value["read_policy_input"]["path"])}
+    directories: set[Path] = {
+        qualification._evidence_location(marker, "Task19 committed result").parent
+        for marker in paths}
+    for row in value["rows"].values():
+        for side in qualification.SIDES:
+            proof = row["sides"][side]
+            native = proof["native_identity"]
+            directories.add(qualification._evidence_location(
+                Path(proof["source_identity"]["source_directory"]), "verified native source"))
+            files.add(Path(row["binaries"][side]["path"]))
+            files.add(Path(proof["committed_write"]["writer_binary"]["path"]))
+            files.add(Path(native["lib"]["path"]) / "Image" / "ExifTool.pm")
+            files.add(Path(native["perl"]["path"]))
+    for directory in directories:
+        if not directory.is_dir():
+            refuse("committed evidence directory disappeared during replay")
+        for item in directory.rglob("*"):
+            if not item.is_dir():
+                files.add(item)
+                if len(files) > 200_000:
+                    refuse("committed evidence exceeds bounded file inventory")
+    captured: dict[str, tuple[int, int, int, int, str]] = {}
+    for path in sorted(files):
+        observed = path.lstat()
+        if stat.S_ISLNK(observed.st_mode):
+            data = os.fsencode(os.readlink(path))
+            digest = hashlib.sha256(data).hexdigest()
+        elif stat.S_ISREG(observed.st_mode):
+            digest = qualification._sha_file(path)
+        else:
+            refuse(f"committed evidence contains a non-regular file: {path}")
+        after = path.lstat()
+        fields = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if fields != (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns):
+            refuse(f"committed evidence changed while hashing: {path}")
+        captured[str(path)] = (*fields, digest)
+    return captured
+
+
+def _retract_owned_output(output: Path, identity: os.stat_result) -> None:
+    """Never remove a foreign replacement after a publication failure."""
+    try:
+        current = output.lstat()
+    except FileNotFoundError:
+        return
+    if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+        raise qualification.OutcomeUnknown("Task19 output was replaced during failed publication")
+    try:
+        output.unlink()
+    except OSError:
+        # If unlink itself fails, remove the authoritative status in place
+        # only while this invocation still owns the same regular inode.
+        try:
+            descriptor = os.open(output, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "wb") as stream:
+                current = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(current.st_mode)
+                        or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)):
+                    raise qualification.OutcomeUnknown("Task19 output ownership changed during retraction")
+                stream.write(b'{"status":"publication_failed","promotion":"forbidden"}\n')
+                stream.truncate()
+                stream.flush()
+                os.fsync(stream.fileno())
+            qualification._fsync_directory(output.parent)
+        except OSError as exc:
+            raise qualification.OutcomeUnknown("Task19 output retraction outcome is uncertain") from exc
+    else:
+        try:
+            qualification._fsync_directory(output.parent)
+        except OSError as exc:
+            raise qualification.OutcomeUnknown("Task19 output was retracted but its directory durability is uncertain") from exc
+
+
+def publish_receipt_no_replace(output: Path, value: dict[str, object]) -> None:
+    """Publish a durable receipt without ever replacing an existing destination."""
+    changed = qualification._make_parent(output)
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp")
+    identity = None
+    linked = False
+    try:
+        payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+            identity = os.fstat(stream.fileno())
+        try:
+            os.link(temporary, output, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise qualification.Refused("Task19 replay output already exists") from exc
+        linked = True
+        current = temporary.lstat()
+        if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+            refuse("Task19 temporary receipt changed before publication")
+        temporary.unlink()
+        for directory in dict.fromkeys(changed):
+            qualification._fsync_directory(directory)
+    except (OSError, qualification.Refused) as exc:
+        if linked and identity is not None:
+            _retract_owned_output(output, identity)
+        raise
+    finally:
+        try:
+            if identity is not None:
+                current = temporary.lstat()
+                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    temporary.unlink()
+        except (FileNotFoundError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for flag in ("same-pin", "forward", "reverse"):
@@ -384,12 +578,14 @@ def main(argv: list[str] | None = None) -> int:
         refuse_source_output_overlap(output)
         if output.exists() or output.is_symlink():
             refuse("Task19 replay output already exists")
+        replay_paths = (args.same_pin_result, args.forward_result, args.reverse_result)
         value = verify_results(
-            paths=(args.same_pin_result, args.forward_result, args.reverse_result),
+            paths=replay_paths,
             expected_head=args.expected_head, expected_tree=args.expected_tree,
             expected_matrix_sha256=args.expected_matrix_sha256,
             expected_policy_sha256=args.expected_read_policy_sha256,
             expected_tools=tools, expected_binaries=binaries)
+        subordinates = subordinate_snapshot(replay_paths, value)
         if source_snapshot(args.expected_head, args.expected_tree) != before:
             refuse("owned source changed during Task19 replay")
         for row, path in zip(ROWS, (args.same_pin_result, args.forward_result, args.reverse_result), strict=True):
@@ -399,8 +595,29 @@ def main(argv: list[str] | None = None) -> int:
         refuse_source_output_overlap(output)
         if output.exists() or output.is_symlink():
             refuse("Task19 replay output already exists")
-        qualification._atomic_json(output, value)
-    except (qualification.Refused, OSError, KeyError, TypeError, ValueError) as exc:
+        # Re-run the complete subordinate replay so an earlier side changed
+        # while later rows were checked cannot be published as verified.
+        if verify_results(
+                paths=replay_paths,
+                expected_head=args.expected_head, expected_tree=args.expected_tree,
+                expected_matrix_sha256=args.expected_matrix_sha256,
+                expected_policy_sha256=args.expected_read_policy_sha256,
+                expected_tools=tools, expected_binaries=binaries) != value:
+            refuse("Task19 subordinate evidence changed before publication")
+        if subordinate_snapshot(replay_paths, value) != subordinates:
+            refuse("Task19 subordinate files changed during replay")
+        if source_snapshot(args.expected_head, args.expected_tree) != before:
+            refuse("owned source changed before Task19 publication")
+        refuse_source_output_overlap(output)
+        if subordinate_snapshot(replay_paths, value) != subordinates:
+            refuse("Task19 subordinate files changed before publication")
+        publish_receipt_no_replace(output, value)
+    except qualification.OutcomeUnknown as exc:
+        print(f"Task19 replay publication outcome unknown: {exc}", file=sys.stderr)
+        return 4
+    except (qualification.Refused, executor.Refused, stage_adapter.Refused,
+            qualification.rehearsal.Refused, qualification.catalog_stage.Refused,
+            OSError, KeyError, TypeError, AttributeError, ValueError) as exc:
         print(f"Task19 replay refused: {exc}", file=sys.stderr)
         return 2
     print(str(output))

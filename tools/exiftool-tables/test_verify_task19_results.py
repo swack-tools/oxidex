@@ -119,7 +119,8 @@ class Task19AdapterControls(unittest.TestCase):
                 replacement.write_text(json.dumps({"schema": 1, "replacement": True}))
                 replacement.replace(paths[0])
                 return {"schema": 1}
-            with patch.object(adapter.qualification, "load_committed_result", side_effect=swap):
+            with patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path), \
+                 patch.object(adapter.qualification, "load_committed_result", side_effect=swap):
                 with self.assertRaisesRegex(adapter.qualification.Refused, "changed"):
                     adapter.verify_results(
                         paths=tuple(paths), expected_head="a" * 40, expected_tree="c" * 40,
@@ -179,12 +180,64 @@ class Task19AdapterControls(unittest.TestCase):
                 for side in adapter.qualification.SIDES:
                     argv.extend(["--expected-binary", f"{row}:{side}:/target/oxidex:{'c' * 64}"])
             with patch.object(adapter, "ROOT", repo), \
+                 patch.object(adapter, "require_imported_source_paths"), \
                  patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path), \
                  patch.object(adapter, "verify_results") as replay, redirect_stderr(io.StringIO()) as error:
                 self.assertEqual(adapter.main(argv), 2)
                 self.assertIn("overlaps", error.getvalue())
                 replay.assert_not_called()
             self.assertFalse(output.exists())
+
+    def test_durable_result_path_refuses_temporary_evidence(self) -> None:
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "qualification-result.json"
+            marker.write_text("{}")
+            with self.assertRaisesRegex(adapter.qualification.Refused, "durable"):
+                adapter.qualification._evidence_location(marker, "Task19 committed result")
+
+    def test_subordinate_inventory_detects_earlier_run_mutation(self) -> None:
+        with TemporaryDirectory() as directory:
+            roots = []
+            for label in ("same", "forward", "reverse"):
+                run = Path(directory) / label
+                run.mkdir()
+                marker = run / "qualification-result.json"
+                marker.write_text('{}')
+                roots.append(marker)
+            earlier = roots[0].parent / "execution-status.json"
+            earlier.write_text('{"state":"complete"}')
+            policy = Path(directory) / "policy.json"
+            policy.write_text('{}')
+            value = {"rows": {}, "read_policy_input": {"path": str(policy)}}
+            with patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: path):
+                before = adapter.subordinate_snapshot(tuple(roots), value)
+                self.assertEqual(adapter.subordinate_snapshot(tuple(roots), value), before)
+                earlier.write_text('{"state":"tampered"}')
+                self.assertNotEqual(adapter.subordinate_snapshot(tuple(roots), value), before)
+
+    def test_no_replace_publication_and_failed_durability_retract(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "receipt.json"
+            output.write_text('{"owner":"foreign"}\n')
+            with self.assertRaisesRegex(adapter.qualification.Refused, "already exists"):
+                adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertEqual(output.read_text(), '{"owner":"foreign"}\n')
+            output.unlink()
+            original_link = os.link
+            def publish_foreign(source, destination, **kwargs):
+                Path(destination).write_text('{"owner":"racer"}\n')
+                return original_link(source, destination, **kwargs)
+            with patch.object(adapter.os, "link", side_effect=publish_foreign):
+                with self.assertRaisesRegex(adapter.qualification.Refused, "already exists"):
+                    adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertEqual(output.read_text(), '{"owner":"racer"}\n')
+            output.unlink()
+            with patch.object(adapter.qualification, "_fsync_directory", side_effect=[OSError("disk"), None]):
+                with self.assertRaises(OSError):
+                    adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertFalse(output.exists())
+            adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
+            self.assertIn('verified_read_only', output.read_text())
 
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
@@ -199,7 +252,8 @@ class Task19AdapterControls(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
             head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
             tree = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"], text=True).strip()
-            with patch.object(adapter, "ROOT", repo):
+            with patch.object(adapter, "ROOT", repo), \
+                 patch.object(adapter, "require_imported_source_paths"):
                 clean = adapter.source_snapshot(head, tree)
                 self.assertEqual(clean["head"], head)
                 pin.write_text("13.60\n")
@@ -211,6 +265,10 @@ class Task19AdapterControls(unittest.TestCase):
                     adapter.source_snapshot(head, tree)
                 todo.write_text("Next pin: not selected\n")
                 self.assertEqual(adapter.source_snapshot(head, tree), clean)
+                subprocess.run(["git", "-C", str(repo), "update-index", "--skip-worktree", ".exiftool-version"], check=True)
+                with self.assertRaisesRegex(adapter.qualification.Refused, "hidden index flags"):
+                    adapter.source_snapshot(head, tree)
+                subprocess.run(["git", "-C", str(repo), "update-index", "--no-skip-worktree", ".exiftool-version"], check=True)
 
     def test_committed_write_matrix_replay_from_synthetic_stage_fixture(self) -> None:
         # The stage fixture runs a real source-derived 1,530-row matrix parser.
@@ -275,6 +333,26 @@ class Task19AdapterControls(unittest.TestCase):
                     adapter.replay_committed_write(row, "before", run_dir.parent.parent,
                                                    fixture_module.COMMIT)
                 matrix.write_bytes(original_matrix)
+            raw_path = Path(write["raw_report"]["path"])
+            raw_original = raw_path.read_bytes()
+            malformed = __import__("json").loads(raw_original)
+            malformed["commands"] = [1]
+            raw_path.write_text(__import__("json").dumps(malformed))
+            import copy, hashlib
+            malformed_write = copy.deepcopy(write)
+            malformed_write["raw_report"]["sha256"] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+            row["before"]["write_report_sha256"] = digester(malformed_write)
+            original_report_for = adapter.qualification._report_for
+            def report_for(path, status, selected_release, stage_name):
+                return malformed_write if stage_name == "write" else original_report_for(
+                    path, status, selected_release, stage_name)
+            with patch.object(adapter.qualification, "_report_for", side_effect=report_for), \
+                 patch.object(adapter.executor, "_stage_result", return_value=malformed_write):
+                with self.assertRaisesRegex(adapter.qualification.Refused, "commands must be a list of objects"):
+                    adapter.replay_committed_write(row, "before", run_dir.parent.parent,
+                                                   fixture_module.COMMIT)
+            row["before"]["write_report_sha256"] = digester(write)
+            raw_path.write_bytes(raw_original)
             wrong_writer = dict(write, writer_binary=dict(write["writer_binary"], sha256="0" * 64))
             with patch.object(adapter.executor, "_stage_result", return_value=wrong_writer):
                 with self.assertRaisesRegex(adapter.qualification.Refused, "writer"):
