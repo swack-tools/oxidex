@@ -46,13 +46,14 @@ default:
 test:
     python3 tools/remote-build/route.py test
 
+# The outer ordinary test dispatch selects the source before this worker runs.
 _test-worker:
     python3 tools/remote-build/route.py --require-local-context
     @echo "Running all tests (matching CI)..."
     {{unwind}} cargo test --release --all-features --features tag-comparison-binary --lib --bins --tests
     @echo "Running doctests (requires panic=unwind)..."
     cargo test --all-features --features tag-comparison-binary --doc
-    just test-remote-build
+    just _test-remote-build-ordinary-worker
 
 # Run the full beta.1 ignored test suite on the Spot builder.
 test-ignored:
@@ -70,12 +71,17 @@ _test-ignored-worker:
     python3 tools/remote-build/route.py --require-local-context
     python3 tools/remote-build/ignored_suite.py
 
-# Run the repository-owned remote-builder client tests.
+# Run the repository-owned remote-builder client tests as a standalone signed job.
 test-remote-build:
     python3 tools/remote-build/route.py test-remote-build
 
 _test-remote-build-worker:
     python3 tools/remote-build/route.py --require-local-context test-remote-build
+    cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
+
+# Nested under ordinary `just test`: retain its already admitted source mode.
+_test-remote-build-ordinary-worker:
+    python3 tools/remote-build/route.py --require-local-context
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
 
 # Run all tests with cargo-nextest (faster parallel execution)

@@ -222,6 +222,34 @@ class DocsSiteWorkerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'temporary'):
                     docs_site_worker.selected_context()
 
+    def test_verified_ci_target_refuses_both_checkout_containment_directions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for source, durable, target in (
+                (root / 'workspace', root / 'workspace/durable',
+                 root / 'workspace/durable/run'),
+                (root / 'durable/run/checkout', root / 'durable',
+                 root / 'durable/run'),
+            ):
+                with self.subTest(source=source, target=target):
+                    source.mkdir(parents=True, exist_ok=True)
+                    target.mkdir(parents=True, exist_ok=True)
+                    env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
+                           'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs',
+                           'CARGO_TARGET_DIR': str(target),
+                           'RUNNER_TEMP': '/nonexistent-runner-temp'}
+                    with patch.dict(os.environ, env), \
+                         patch.object(Path, 'cwd', return_value=source), \
+                         patch.object(route, 'local_worker_context', return_value=True), \
+                         patch.object(route, 'trusted_marker', return_value=False), \
+                         patch.object(route, 'verify_ci_fleet_checkout') as verified, \
+                         patch('test_runner.fleet_recipe_target', return_value=target), \
+                         patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable), \
+                         patch.object(docs_site_worker, 'SYSTEM_TEMP_ROOTS', ()):
+                        with self.assertRaisesRegex(RuntimeError, 'separate canonical directory'):
+                            docs_site_worker.selected_context()
+                    verified.assert_called_once()
+
     def test_verified_actions_checkout_gets_unique_target_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -95,7 +95,7 @@ def selected_context():
         raise RuntimeError('Docs site CI requires an explicit durable CARGO_TARGET_DIR')
     target = fleet_recipe_target()
     if (target.is_symlink() or target.resolve() != target
-            or target == source or target in source.parents):
+            or route.target_overlaps_checkout(source, target)):
         raise RuntimeError('Docs site CI target is not a separate canonical directory')
     runner_temp = Path(os.environ.get('RUNNER_TEMP', '/nonexistent-runner-temp'))
     temporary_roots = (*SYSTEM_TEMP_ROOTS, runner_temp)
