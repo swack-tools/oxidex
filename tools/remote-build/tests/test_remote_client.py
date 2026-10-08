@@ -548,21 +548,29 @@ class RemoteTestProfileTests(unittest.TestCase):
     def test_remote_test_refuses_unsigned_or_other_signer_before_upload(self):
         from lib import remote_build
         from unittest.mock import patch
-        with patch.object(remote_build.subprocess,'check_output',return_value=(
-             'swackhamer|swackhamer@users.noreply.github.com|'
-             'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
-             patch.object(remote_build.subprocess,'run') as verify:
-            with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
-                remote_build.verify_signed_source(Path('/repo'),'a'*40)
-            verify.assert_not_called()
-        signed=('swackhamer|swackhamer@users.noreply.github.com|'
-                'swackhamer|swackhamer@users.noreply.github.com|G|'
-                'swackhamer@users.noreply.github.com\n')
-        with patch.object(remote_build.subprocess,'check_output',return_value=signed), \
-             patch.object(remote_build.subprocess,'run') as verify:
-            remote_build.verify_signed_source(Path('/repo'),'a'*40)
-            self.assertIn('verify-commit', verify.call_args.args[0])
-            self.assertEqual(remote_build.subprocess.check_output.call_args.args[0][-1], 'a'*40)
+        from scripts import ops_paths
+        import qualification_source
+        with tempfile.TemporaryDirectory() as folder:
+            signer = Path(folder) / 'signers'
+            signer.write_text('fixture signer\n')
+            with patch.object(ops_paths,'ops_root',return_value=Path(folder) / 'ops'), \
+                 patch.object(remote_build,'configured_signer_path',return_value=signer), \
+                 patch.object(qualification_source,'_trusted_key'):
+                with patch.object(remote_build.subprocess,'check_output',return_value=(
+                     'swackhamer|swackhamer@users.noreply.github.com|'
+                     'swackhamer|swackhamer@users.noreply.github.com|U|\n')), \
+                     patch.object(remote_build.subprocess,'run') as verify:
+                    with self.assertRaisesRegex(RuntimeError,'signed maintainer HEAD'):
+                        remote_build.verify_signed_source(Path('/repo'),'a'*40)
+                    verify.assert_not_called()
+                signed=('swackhamer|swackhamer@users.noreply.github.com|'
+                        'swackhamer|swackhamer@users.noreply.github.com|G|'
+                        'swackhamer@users.noreply.github.com\n')
+                with patch.object(remote_build.subprocess,'check_output',return_value=signed), \
+                     patch.object(remote_build.subprocess,'run') as verify:
+                    remote_build.verify_signed_source(Path('/repo'),'a'*40)
+                    self.assertIn('verify-commit', verify.call_args.args[0])
+                    self.assertEqual(remote_build.subprocess.check_output.call_args.args[0][-1], 'a'*40)
 
     def test_completed_test_retains_remote_proof_if_download_fails(self):
         from lib import remote_build

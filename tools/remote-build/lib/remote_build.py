@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import io
+import tempfile
 import tomllib
 import time
 from pathlib import Path
@@ -104,7 +105,7 @@ def pinned_toolchain(source):
 
 
 def _canonical_signer_path(signer_path):
-    """Bind the trusted key check and Git verification to one file."""
+    """Require a direct absolute signer file before opening it without following links."""
     signer_path = Path(signer_path)
     if not signer_path.is_absolute():
         raise RuntimeError('Maintainer allowed signers path must be absolute')
@@ -113,15 +114,101 @@ def _canonical_signer_path(signer_path):
     return signer_path.resolve(strict=True)
 
 
-def verify_signed_source(source, head, signer_path=None):
+MAX_SIGNER_BYTES = 8192
+
+
+def configured_signer_path(source):
+    value = subprocess.check_output(
+        ['git', '-C', str(source), 'config', '--path', '--get', 'gpg.ssh.allowedSignersFile'],
+        text=True, env=source_git_env()).strip()
+    return _canonical_signer_path(value)
+
+
+def freeze_signer(signer_path, evidence):
+    """Copy one stable, bounded signer read outside the source into private custody."""
+    signer_path = _canonical_signer_path(signer_path)
+    evidence = Path(evidence)
+    info = evidence.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise RuntimeError('Signer evidence directory must be private and launcher owned')
+    custody = Path(tempfile.mkdtemp(prefix='signer-custody-', dir=evidence))
+    os.chmod(custody, 0o700)
+    frozen = custody / 'maintainer.allowed_signers'
+    original = None
+    output = None
+    try:
+        before = signer_path.lstat()
+        original = os.open(signer_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        opened = os.fstat(original)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or not 0 < opened.st_size <= MAX_SIGNER_BYTES
+                or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+            raise RuntimeError('Maintainer signer is not one bounded regular file')
+        raw = bytearray()
+        while len(raw) <= MAX_SIGNER_BYTES:
+            part = os.read(original, MAX_SIGNER_BYTES + 1 - len(raw))
+            if not part:
+                break
+            raw.extend(part)
+        after = os.fstat(original)
+        path_after = signer_path.lstat()
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (len(raw) != opened.st_size or len(raw) > MAX_SIGNER_BYTES
+                or identity(opened) != identity(after)
+                or identity(opened) != identity(path_after)
+                or not stat.S_ISREG(path_after.st_mode)):
+            raise RuntimeError('Maintainer signer changed or was short-read during custody')
+        output = os.open(frozen, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        if os.write(output, raw) != len(raw):
+            raise RuntimeError('Maintainer signer custody write was short')
+        os.fsync(output)
+        os.fchmod(output, 0o400)
+        os.fsync(output)
+        os.close(output)
+        output = None
+        directory = os.open(custody, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        digest = hashlib.sha256(raw).hexdigest()
+        assert_frozen_signer(frozen, digest)
+        return frozen, digest
+    except Exception:
+        frozen.unlink(missing_ok=True)
+        custody.rmdir()
+        raise
+    finally:
+        if original is not None:
+            os.close(original)
+        if output is not None:
+            os.close(output)
+
+
+def assert_frozen_signer(path, digest):
+    before = path.lstat()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        raw = os.read(fd, MAX_SIGNER_BYTES + 1)
+        after = os.fstat(fd)
+        stable = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_mode & 0o222 or not 0 < opened.st_size <= MAX_SIGNER_BYTES
+                or stable(before) != stable(opened) or stable(opened) != stable(after)
+                or len(raw) != opened.st_size or hashlib.sha256(raw).hexdigest() != digest):
+            raise RuntimeError('Frozen maintainer signer custody changed')
+    finally:
+        os.close(fd)
+
+
+def _verify_signed_source_with_frozen_signer(source, head, signer_path, digest):
     env = source_git_env()  # Validate fixed Git and SSH verifier before key inspection.
-    if signer_path is not None:
-        signer_path = _canonical_signer_path(signer_path)
-        from qualification_source import _trusted_key
-        _trusted_key(signer_path)
-    command=['git','-C',str(source)]
-    if signer_path is not None:
-        command += ['-c','gpg.format=ssh', '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
+    assert_frozen_signer(signer_path, digest)
+    from qualification_source import _trusted_key
+    _trusted_key(signer_path)
+    command=['git','-C',str(source), '-c','gpg.format=ssh',
+             '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
     identity = subprocess.check_output(
         [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
         text=True, env=env).strip().split('|')
@@ -132,6 +219,22 @@ def verify_signed_source(source, head, signer_path=None):
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
     subprocess.run([*command,'verify-commit',head], check=True, env=env,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert_frozen_signer(signer_path, digest)
+
+
+def verify_signed_source(source, head, signer_path=None):
+    """Direct callers also get one private signer copy for both Git invocations."""
+    if signer_path is None:
+        signer_path = configured_signer_path(source)
+    from scripts.ops_paths import ops_root
+    evidence = ops_root() / 'evidence' / 'signer-verification'
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    frozen, digest = freeze_signer(signer_path, evidence)
+    try:
+        return _verify_signed_source_with_frozen_signer(source, head, frozen, digest)
+    finally:
+        frozen.unlink()
+        frozen.parent.rmdir()
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
                         expected_toolchain, expected_oracle, *, require_pass=True, transport=None):
@@ -903,16 +1006,20 @@ def main(argv=None):
                 raise RuntimeError('Perl producer arguments differ from selected signed HEAD/tree')
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
+        frozen_signer = None
+        signer_digest = None
+        if args.profile == 'test' or args.just_recipe in FLEET_RECIPES or infra_python:
+            if evidence.is_relative_to(source):
+                raise RuntimeError('Signer custody evidence must be outside signed source')
+            signer_path = configured_signer_path(source)
+            frozen_signer, signer_digest = freeze_signer(signer_path, evidence)
         if args.profile == 'test':
-            verify_signed_source(source, receipt['source_commit'])
+            _verify_signed_source_with_frozen_signer(
+                source, receipt['source_commit'], frozen_signer, signer_digest)
         extra_files={}
         if args.just_recipe in FLEET_RECIPES or infra_python:
             if receipt['source_status']:
                 raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
-            signer_path=Path(subprocess.check_output(
-                ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
-                text=True,env=source_git_env()).strip())
-            signer_path=_canonical_signer_path(signer_path)
             if infra_python:
                 raw_origins=subprocess.check_output(
                     ['git','-C',str(source),'config','--local','--get-all','remote.origin.url'],
@@ -921,12 +1028,15 @@ def main(argv=None):
                     raise RuntimeError('Infrastructure source raw origin is not the approved repository')
                 receipt['source_origin_configured']=raw_origins[0]
                 receipt['source_origin_check']='raw_local_config_allowlist'
-                verify_signed_source(source, receipt['source_commit'], signer_path)
+                _verify_signed_source_with_frozen_signer(
+                    source, receipt['source_commit'], frozen_signer, signer_digest)
             else:
-                verify_signed_source(source, receipt['source_commit'])
+                _verify_signed_source_with_frozen_signer(
+                    source, receipt['source_commit'], frozen_signer, signer_digest)
                 # Fleet qualification also binds the OxiDex-specific source pins.
                 from qualification_source import verify_source
-                verify_source(source, receipt['source_commit'], signer_path)
+                verify_source(source, receipt['source_commit'], frozen_signer)
+                assert_frozen_signer(frozen_signer, signer_digest)
             bundle=evidence/'repository.bundle'
             subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
                            env=source_git_env())
@@ -935,7 +1045,7 @@ def main(argv=None):
             source_head=evidence/'fleet-source-head'
             source_head.write_text(receipt['source_commit']+'\n')
             extra_files={'repository.bundle':bundle,
-                         'maintainer.allowed_signers':signer_path,
+                         'maintainer.allowed_signers':frozen_signer,
                          'fleet-source-head':source_head}
             if infra_python:
                 infra_manifest, manifest_bytes = infra_python_manifest(source, receipt['source_commit'])
@@ -955,6 +1065,13 @@ def main(argv=None):
                                               signed_head=receipt['source_commit'])
         else:
             receipt['snapshot']=make_snapshot(source,archive)
+        if frozen_signer is not None:
+            assert_frozen_signer(frozen_signer, signer_digest)
+            if extra_files:
+                signer_row = next(row for row in receipt['snapshot']['files']
+                                  if row['path'] == 'maintainer.allowed_signers')
+                if signer_row['sha256'] != signer_digest:
+                    raise RuntimeError('Snapshot signer differs from frozen maintainer signer')
         if infra_python:
             receipt['source_provenance']='signed_exact_head_infra_python_v1'
         if extra_files:
