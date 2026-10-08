@@ -632,8 +632,11 @@ def main(argv=None):
                          'fleet-source-head':source_head}
             if component:
                 extra_files['approved-linux-perl.json']=envelope
-        receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
-                                          signed_head=receipt['source_commit']) if extra_files else make_snapshot(source,archive)
+        if extra_files or args.profile == 'test':
+            receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
+                                              signed_head=receipt['source_commit'])
+        else:
+            receipt['snapshot']=make_snapshot(source,archive)
         if extra_files:
             receipt['fleet_source_bundle_sha256']=next(
                 row['sha256'] for row in receipt['snapshot']['files']
