@@ -11,6 +11,7 @@ from pathlib import Path
 import os
 import subprocess
 import shutil
+import stat
 import sys
 from unittest.mock import patch
 from tempfile import TemporaryDirectory
@@ -790,6 +791,116 @@ class Task19AdapterControls(unittest.TestCase):
                 with self.assertRaisesRegex(adapter.qualification.OutcomeUnknown, "close outcome is uncertain"):
                     adapter.publish_receipt_no_replace(output, {"status": "verified_read_only"})
             self.assertIn("publication_failed", output.read_text())
+
+    def test_actual_parent_close_failure_invalidates_owned_inode(self) -> None:
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            output = Path(directory).resolve() / "out" / "receipt.json"
+            original_dup, original_close = os.dup, os.close
+            recovery = None
+            primary = None
+            primary_closed = False
+            injected = False
+            later_parent_closes = 0
+
+            def record_dup(fd):
+                nonlocal recovery, primary
+                primary = fd
+                recovery = original_dup(fd)
+                return recovery
+
+            def close_then_fail(fd):
+                nonlocal primary_closed, injected, later_parent_closes
+                is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+                original_close(fd)
+                if fd == primary:
+                    primary_closed = True
+                if is_directory and injected:
+                    later_parent_closes += 1
+                if is_directory and primary_closed and not injected:
+                    injected = True
+                    self.assertIsNotNone(recovery)
+                    os.fstat(recovery)  # Recovery must outlive the real parent close.
+                    raise OSError("injected parent close failure")
+
+            with patch.object(adapter.os, "dup", side_effect=record_dup), \
+                 patch.object(adapter.os, "close", side_effect=close_then_fail):
+                with self.assertRaisesRegex(adapter.qualification.OutcomeUnknown,
+                                            "parent close outcome is uncertain"):
+                    adapter.publish_receipt_no_replace(
+                        output, {"status": "verified_read_only", "promotion": "forbidden"})
+            self.assertTrue(injected)
+            self.assertGreater(later_parent_closes, 0)
+            self.assertEqual(adapter.json.loads(output.read_text())["status"],
+                             "publication_failed")
+
+    def test_final_boundary_after_parent_close_checks_bytes_and_path(self) -> None:
+        with TemporaryDirectory(dir=Path.home()) as directory:
+            root = Path(directory).resolve()
+            original_dup, original_close = os.dup, os.close
+            for action in ("positive", "overwrite", "replace", "parent-swap"):
+                with self.subTest(action=action):
+                    output = root / action / "receipt.json"
+                    retained = root / action / "owned.json"
+                    foreign = root / action / "foreign.json"
+                    foreign_bytes = b'{"owner":"foreign"}\n'
+                    changed = False
+                    primary = None
+                    primary_closed = False
+
+                    def record_dup(fd):
+                        nonlocal primary
+                        primary = fd
+                        return original_dup(fd)
+
+                    def close_then_change(fd):
+                        nonlocal changed, primary_closed
+                        is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+                        original_close(fd)
+                        if fd == primary:
+                            primary_closed = True
+                        if (is_directory and primary_closed and not changed
+                                and action != "positive"):
+                            changed = True
+                            if action == "overwrite":
+                                with output.open("r+b", buffering=0) as stream:
+                                    stream.write(b"X")
+                            elif action == "replace":
+                                os.link(output, retained)
+                                foreign.write_bytes(foreign_bytes)
+                                os.replace(foreign, output)
+                            else:
+                                output.parent.rename(root / "parent-swap-moved")
+                                output.parent.mkdir()
+                                output.write_bytes(foreign_bytes)
+
+                    with patch.object(adapter.os, "dup", side_effect=record_dup), \
+                         patch.object(adapter.os, "close", side_effect=close_then_change):
+                        if action == "positive":
+                            adapter.publish_receipt_no_replace(
+                                output, {"status": "verified_read_only"})
+                        else:
+                            with self.assertRaises((adapter.qualification.Refused,
+                                                    adapter.qualification.OutcomeUnknown)):
+                                adapter.publish_receipt_no_replace(
+                                    output, {"status": "verified_read_only"})
+                    if action == "positive":
+                        self.assertEqual(adapter.json.loads(output.read_text())["status"],
+                                         "verified_read_only")
+                    elif action == "overwrite":
+                        self.assertTrue(changed)
+                        self.assertEqual(adapter.json.loads(output.read_text())["status"],
+                                         "publication_failed")
+                    elif action == "replace":
+                        self.assertTrue(changed)
+                        self.assertEqual(output.read_bytes(), foreign_bytes)
+                        self.assertEqual(adapter.json.loads(retained.read_text())["status"],
+                                         "publication_failed")
+                    else:
+                        self.assertTrue(changed)
+                        self.assertEqual(output.read_bytes(), foreign_bytes)
+                        self.assertEqual(adapter.json.loads(
+                            (root / "parent-swap-moved" / "receipt.json").read_text())["status"],
+                            "publication_failed")
 
     def test_actual_source_refuses_dirty_pin_and_todo(self) -> None:
         with TemporaryDirectory() as directory:
