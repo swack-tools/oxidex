@@ -25,6 +25,15 @@ TOOL_FILES = (
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 ROWS = ("same-pin-13.59", "11.78-to-12.64", "12.64-to-11.78")
+# One explicit selection grammar preserves the original aliases and Markdown forms.
+NEXT_PIN_LABEL = re.compile(
+    r"(?:next[- ]pin|intended next[- ]pin|intended ExifTool pin|ExifTool pin after current)",
+    re.IGNORECASE)
+NEXT_PIN_FIELD = re.compile(
+    rf"^(?:{NEXT_PIN_LABEL.pattern})\s*:\s*(not selected|[0-9]+\.[0-9]+)$",
+    re.IGNORECASE)
+PIN_WORD = re.compile(r"\bpin\b", re.IGNORECASE)
+RELEASE_IN_LINE = re.compile(r"(?<![0-9])[0-9]+\.[0-9]+(?![0-9])")
 
 
 def refuse(message: str) -> None:
@@ -104,19 +113,19 @@ def source_snapshot(expected_head: str, expected_tree: str) -> dict[str, str]:
 
 
 def next_pin_selection(todo: str) -> str:
-    """Parse an explicit selection label; refuse selection-like ambiguous text."""
+    """Recognize the four named labels; never treat an unknown numeric selector as absence."""
     selected: list[str] = []
     for line in todo.splitlines():
+        # Only Markdown presentation is stripped. The selection language stays
+        # one explicit grammar, so a new alias cannot silently mean "absent".
         normalized = re.sub(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?", "", line)
-        normalized = re.sub(r"\*\*", "", normalized).strip()
-        if not re.match(r"(?i)^(?:next[- ]pin|intended ExifTool pin)\b", normalized):
-            continue
-        match = re.fullmatch(
-            r"(?i)(?:next[- ]pin|intended ExifTool pin)\s*:\s*(not selected|[0-9]+\.[0-9]+)",
-            normalized)
-        if match is None:
-            refuse("TODO next-pin selection is ambiguous")
-        selected.append(match.group(1).lower())
+        normalized = normalized.replace("**", "").strip()
+        match = NEXT_PIN_FIELD.fullmatch(normalized)
+        if match is not None:
+            selected.append(match.group(1).lower())
+        elif (NEXT_PIN_LABEL.match(normalized)
+              or (PIN_WORD.search(normalized) and RELEASE_IN_LINE.search(normalized))):
+            refuse("TODO next-pin selection is ambiguous or uses an unknown label")
     if len(selected) > 1:
         refuse("TODO has multiple next-pin selections")
     return selected[0] if selected else "not selected"

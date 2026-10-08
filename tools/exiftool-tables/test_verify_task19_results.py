@@ -38,14 +38,22 @@ class Task19AdapterControls(unittest.TestCase):
                 adapter.binary_expectations(invalid)
 
     def test_next_pin_markdown_selection_and_ambiguity(self) -> None:
-        for text in ("Next pin: 13.60", "- [ ] Next pin: 13.60",
-                     "- **Next pin:** 13.60", "- [x] **Next pin:** 13.60"):
+        labels = ("Next pin", "Intended next pin", "Intended ExifTool pin",
+                  "ExifTool pin after current")
+        forms = ("{label}: 13.60", "- [ ] {label}: 13.60",
+                 "- **{label}:** 13.60", "- [x] **{label}:** 13.60")
+        for label in labels:
+            for form in forms:
+                text = form.format(label=label)
+                with self.subTest(text=text):
+                    self.assertEqual(adapter.next_pin_selection(text), "13.60")
+        for text in ("- [ ] Run one current-pin -> next-pin rehearsal",
+                     "**Next pin:** not selected", "- [ ] Intended next pin: not selected"):
             with self.subTest(text=text):
-                self.assertEqual(adapter.next_pin_selection(text), "13.60")
-        self.assertEqual(adapter.next_pin_selection("- [ ] Run one current-pin -> next-pin rehearsal"),
-                         "not selected")
-        self.assertEqual(adapter.next_pin_selection("**Next pin:** not selected"), "not selected")
-        for text in ("- [ ] Next pin maybe 13.60", "Next pin: 13.60\nNext pin: 13.61"):
+                self.assertEqual(adapter.next_pin_selection(text), "not selected")
+        for text in ("- [ ] Next pin maybe 13.60", "Next pin: 13.60\nNext pin: 13.61",
+                     "- [ ] Upcoming pin: 13.60", "The intended next pin is 13.60",
+                     "Potential pin: 13.60"):
             with self.subTest(text=text), self.assertRaises(adapter.qualification.Refused):
                 adapter.next_pin_selection(text)
 
