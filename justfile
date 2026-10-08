@@ -75,6 +75,14 @@ _test-ignored-worker:
 test-remote-build:
     python3 tools/remote-build/route.py test-remote-build
 
+# Run the fixed Task19/qualification Python control suites on signed Spot source.
+test-qualification:
+    python3 tools/remote-build/route.py test-qualification
+
+_test-qualification-worker:
+    python3 tools/remote-build/route.py --require-local-context test-qualification
+    python3 tools/remote-build/qualification_test_runner.py
+
 _test-remote-build-worker:
     python3 tools/remote-build/route.py --require-local-context test-remote-build
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_*.py'
