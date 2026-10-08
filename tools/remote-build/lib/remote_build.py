@@ -45,6 +45,11 @@ MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
+def source_git_env():
+    """Read signed source identity and bytes without Git replacement refs."""
+    return dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+
+
 def pinned_toolchain(source):
     pin = tomllib.loads((source/'rust-toolchain.toml').read_text())['toolchain']['channel']
     if not re.fullmatch(r'\d+\.\d+\.\d+', pin):
@@ -74,13 +79,13 @@ def verify_signed_source(source, head, signer_path=None):
         command += ['-c','gpg.format=ssh', '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
     identity = subprocess.check_output(
         [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
-        text=True).strip().split('|')
+        text=True, env=source_git_env()).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
-    subprocess.run([*command,'verify-commit',head], check=True,
+    subprocess.run([*command,'verify-commit',head], check=True, env=source_git_env(),
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
@@ -332,7 +337,8 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
     names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
-                                     '--cached','--others','--exclude-standard']).decode().split('\0')
+                                     '--cached','--others','--exclude-standard'],
+                                    env=source_git_env()).decode().split('\0')
     eligible=[]
     for name in names:
         parts=Path(name).parts
@@ -353,7 +359,7 @@ def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> di
     """Enumerate fleet packet blobs and modes from the authenticated commit."""
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
-    env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
+    env=source_git_env()
     tree=subprocess.check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
     signed={}
     for entry in tree.split(b'\0'):
@@ -404,7 +410,7 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
                 object_id, mode=signed[name]
                 data=subprocess.check_output(
                     ['git','-C',str(source),'cat-file','blob',object_id],
-                    env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
+                    env=source_git_env())
                 if path.is_symlink() or not path.is_file() or path.read_bytes()!=data:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}')
                 if bool(path.stat().st_mode & 0o111) != (mode==0o755):
@@ -629,11 +635,14 @@ def main(argv=None):
         receipt['toolchain']=pinned_toolchain(source)
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
-        receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
-        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
+                                                        text=True,env=source_git_env()).strip()
+        receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
+                                                      text=True,env=source_git_env()).strip()
+        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],
+                                                        text=True,env=source_git_env())
         if args.just_recipe == 'freeze-linux-perl':
-            source_tree=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
+            source_tree=receipt['source_tree']
             if args.just_arg != [receipt['source_commit'], source_tree]:
                 raise RuntimeError('Perl producer arguments differ from selected signed HEAD/tree')
         if args.profile == 'test' and receipt['source_status']:
@@ -646,15 +655,17 @@ def main(argv=None):
                 raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
             signer_path=Path(subprocess.check_output(
                 ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
-                text=True).strip())
+                text=True,env=source_git_env()).strip())
             if signer_path.is_symlink() or not signer_path.is_file():
                 raise RuntimeError('Maintainer allowed signers file is unavailable')
             if infra_python:
-                origin=subprocess.check_output(
-                    ['git','-C',str(source),'remote','get-url','origin'], text=True).strip()
-                if origin not in INFRA_PYTHON_ORIGINS:
-                    raise RuntimeError('Infrastructure source origin is not the approved repository')
-                receipt['source_repository']='swack-tools/spot-github-runners'
+                raw_origins=subprocess.check_output(
+                    ['git','-C',str(source),'config','--local','--get-all','remote.origin.url'],
+                    text=True,env=source_git_env()).splitlines()
+                if len(raw_origins)!=1 or raw_origins[0] not in INFRA_PYTHON_ORIGINS:
+                    raise RuntimeError('Infrastructure source raw origin is not the approved repository')
+                receipt['source_origin_configured']=raw_origins[0]
+                receipt['source_origin_check']='raw_local_config_allowlist'
                 verify_signed_source(source, receipt['source_commit'], signer_path)
             else:
                 verify_signed_source(source, receipt['source_commit'])
@@ -663,9 +674,9 @@ def main(argv=None):
                 verify_source(source, receipt['source_commit'], signer_path)
             bundle=evidence/'repository.bundle'
             subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
-                           env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
+                           env=source_git_env())
             subprocess.run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
-                           stdout=subprocess.DEVNULL)
+                           env=source_git_env(),stdout=subprocess.DEVNULL)
             source_head=evidence/'fleet-source-head'
             source_head.write_text(receipt['source_commit']+'\n')
             extra_files={'repository.bundle':bundle,
@@ -699,8 +710,10 @@ def main(argv=None):
                 receipt['component_envelope_sha256']=envelope_sha256
                 receipt['component_envelope_bytes']=envelope_row['bytes']
         receipt['packaging_seconds']=time.monotonic()-start
-        after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
+                                             text=True,env=source_git_env()).strip()
+        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],
+                                             text=True,env=source_git_env())
         if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
                 or (receipt['snapshot'].get('eligible_paths') is not None
                     and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
@@ -835,7 +848,8 @@ def main(argv=None):
                           'status':'COMPONENT_ONLY_PASS','run_id':args.worktree_id,
                           'source_head':receipt['source_commit'],
                           'source_tree':subprocess.check_output(
-                              ['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip(),
+                              ['git','-C',str(source),'rev-parse','HEAD^{tree}'],
+                              text=True,env=source_git_env()).strip(),
                           'bundle_sha256':receipt['fleet_source_bundle_sha256'],
                           'descriptor_sha256':_sha256_file(descriptor_path),
                           'lock_sha256':_sha256_file(source/'tools/release/oracle-lock.json'),
