@@ -87,6 +87,17 @@ class Task18DeletionGateControls(unittest.TestCase):
         with self.assertRaisesRegex(gate.Refused, "new manual owner"):
             gate.no_new_manual([newly_generated, old_residual])
 
+    def test_candidate_cannot_erase_pinned_generated_owner_before_manual_transfer(self) -> None:
+        baseline = gate.generated_baseline(ROOT)
+        self.assertIn(("Exif", "Main", "0x9c9b"), baseline)
+        # The candidate contains no generated 0x9c9b row at all. A relabeled
+        # hand-kept residual must still be compared with the pinned parent.
+        transferred = field("IFD0/0x9c9b", "residual",
+                            "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+                            disposition="hand-kept")
+        with self.assertRaisesRegex(gate.Refused, "new manual owner"):
+            gate.no_new_manual([transferred], root=ROOT)
+
     def test_ownership_duplicate_is_not_a_deletion_waiver(self) -> None:
         first = field("0x1234", "generated", "src/exiftool_tables/conv/exif_main.rs::arm_1234")
         second = dict(first, symbol="src/core/tiff_helpers.rs::HAND_ARM")
@@ -116,6 +127,43 @@ class DurableEvidencePathControls(unittest.TestCase):
 
 
 class CandidateHistoryIdentityControls(unittest.TestCase):
+    def test_fake_path_git_and_ambient_git_overrides_cannot_forge_history(self) -> None:
+        system_git = Path("/usr/bin/git")
+        if not system_git.is_file():
+            self.skipTest("fixed system Git unavailable")
+        with tempfile.TemporaryDirectory(prefix="task18-git-authority-") as directory:
+            base = Path(directory)
+            fake_dir = base / "fake-bin"
+            fake_dir.mkdir()
+            fake = fake_dir / "git"
+            fake.write_text("#!/bin/sh\ncase \"$*\" in *status*) exit 0;; *write-tree*|*rev-parse*) echo 1111111111111111111111111111111111111111;; esac\nexit 0\n")
+            fake.chmod(0o755)
+            nonrepo = base / "dirty-nonrepo"
+            nonrepo.mkdir()
+            (nonrepo / "untracked").write_text("dirty")
+            hostile = {"PATH": str(fake_dir) + os.pathsep + os.environ["PATH"],
+                       "GIT_DIR": str(base / "forged.git"),
+                       "GIT_INDEX_FILE": str(base / "forged-index"),
+                       "GIT_NO_REPLACE_OBJECTS": "0"}
+            with patch.dict(os.environ, hostile):
+                with self.assertRaises(gate.Refused):
+                    gate.verify_history(nonrepo)
+            repo = base / "genuine"
+            repo.mkdir()
+            env = gate._git_env()
+            for args in (("init", "-q"), ("config", "user.name", "Task18 Test"),
+                         ("config", "user.email", "task18@example.invalid")):
+                subprocess.run([str(system_git), "-C", str(repo), *args], check=True,
+                               capture_output=True, env=env)
+            (repo / "source").write_text("genuine")
+            for args in (("add", "source"), ("commit", "-qm", "candidate")):
+                subprocess.run([str(system_git), "-C", str(repo), *args], check=True,
+                               capture_output=True, env=env)
+            head = subprocess.check_output([str(system_git), "-C", str(repo),
+                                            "rev-parse", "HEAD"], env=env, text=True).strip()
+            with patch.dict(os.environ, hostile), patch.object(gate, "INTEGRATION_COMMIT", head):
+                self.assertEqual(gate.verify_history(repo), head)
+
     def test_replace_ref_cannot_supply_candidate_ancestry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="task18-replace-") as directory:
             root = Path(directory)

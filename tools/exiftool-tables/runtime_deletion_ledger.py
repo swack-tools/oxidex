@@ -28,6 +28,12 @@ from scripts import ops_paths
 
 LEDGER = Path("docs/reference/generated-runtime-deletion-ledger.json")
 INTEGRATION_COMMIT = "4f653243d33cf053107f4f19b8bd449329de611b"
+GENERATED_BASELINE_BLOB = "a8af250fee51d8f12b93c6935b6f05b41e77cc67"
+GENERATED_BASELINE_SHA256 = "d77ab9d6c74110280edf3069596b4345c718c82b2569445ffd4aa0f82293612c"
+# The generated owner set at the already-recorded Task18 integration point.
+# Candidate inventory changes cannot remove this independent reference.
+GENERATED_BASELINE_BLOB = "a8af250fee51d8f12b93c6935b6f05b41e77cc67"
+GENERATED_BASELINE_SHA256 = "d77ab9d6c74110280edf3069596b4345c718c82b2569445ffd4aa0f82293612c"
 HISTORICAL = {
     "D1": ("src/core/exif_dir_engine.rs::DirEngineRows::drain", "test-only-alias-removal", "13ce49071830ca2b76cfcdfdececb537a21e3e9a"),
     "D2": ("src/core/tiff_helpers.rs::EXIF_IFD_SILENCE_EDGES", "constant-inline", "0ddcbb1b9cb7c67aa12d55059649e16bc7e4eb53"),
@@ -104,10 +110,29 @@ def validate_document(document: object) -> dict:
     return document
 
 
-def no_new_manual(rows: list[dict]) -> None:
-    ownership.verify_rows(rows)
+def generated_baseline(root: Path) -> set[tuple[str, str, str]]:
+    if git(root, "rev-parse", f"{INTEGRATION_COMMIT}:tools/exiftool-tables/runtime_ownership.json") != GENERATED_BASELINE_BLOB:
+        raise Refused("pinned generated ownership baseline is not the integration inventory")
+    raw = git_bytes(root, "cat-file", "blob", GENERATED_BASELINE_BLOB)
+    if hashlib.sha256(raw).hexdigest() != GENERATED_BASELINE_SHA256:
+        raise Refused("pinned generated ownership baseline differs")
+    baseline = _strict_json(raw)
+    if (not isinstance(baseline, dict) or baseline.get("schema") != 1
+            or baseline.get("source_release") != "13.59" or not isinstance(baseline.get("rows"), list)):
+        raise Refused("pinned generated ownership baseline malformed")
+    ownership.verify_rows(baseline["rows"])
     generated = {(row["module"], row["table"], row["field"]["value"].split("/")[-1])
-                 for row in rows if row["owner"] == "generated"}
+                 for row in baseline["rows"] if row["owner"] == "generated"}
+    if len(generated) != 563 or ("Exif", "Main", "0x9c9b") not in generated:
+        raise Refused("pinned generated ownership baseline incomplete")
+    return generated
+
+
+def no_new_manual(rows: list[dict], *, root: Path | None = None) -> None:
+    ownership.verify_rows(rows)
+    generated = generated_baseline(root or Path(__file__).resolve().parents[2])
+    generated.update((row["module"], row["table"], row["field"]["value"].split("/")[-1])
+                     for row in rows if row["owner"] == "generated")
     for row in rows:
         if row["owner"] != "residual":
             continue
@@ -119,18 +144,42 @@ def no_new_manual(rows: list[dict]) -> None:
             raise Refused(f"new manual owner for generated source construct: {row['module']}::{row['table']}:{identity}")
 
 
-def git(root: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(root), *args], text=True,
-                                   stderr=subprocess.PIPE, timeout=30,
-                                   env=_git_env()).strip()
+def _trusted_git() -> str:
+    path = Path("/usr/bin/git")
+    for component in (Path("/"), Path("/usr"), Path("/usr/bin"), path):
+        try:
+            info = component.lstat()
+        except OSError as exc:
+            raise Refused("trusted Git executable unavailable") from exc
+        kind_ok = stat.S_ISREG(info.st_mode) if component == path else stat.S_ISDIR(info.st_mode)
+        if not kind_ok or info.st_uid != 0 or info.st_mode & 0o022:
+            raise Refused("trusted Git executable identity invalid")
+    return str(path)
 
 
 def _git_env() -> dict[str, str]:
-    return dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    # No ambient GIT_DIR, index, config, namespace, object directory or PATH.
+    return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": "/nonexistent",
+            "GIT_NO_REPLACE_OBJECTS": "1", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null"}
+
+
+def git_bytes(root: Path, *args: str) -> bytes:
+    try:
+        return subprocess.check_output([_trusted_git(), "-c", "core.fsmonitor=false",
+                                        "-C", str(root), *args],
+                                       stderr=subprocess.PIPE, timeout=30, env=_git_env())
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise Refused("candidate Git object or checkout verification failed") from exc
+
+
+def git(root: Path, *args: str) -> str:
+    return git_bytes(root, *args).decode("utf-8").strip()
 
 
 def _is_ancestor(root: Path, ancestor: str, head: str) -> bool:
-    return subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, head],
+    return subprocess.run([_trusted_git(), "-c", "core.fsmonitor=false", "-C", str(root),
+                           "merge-base", "--is-ancestor", ancestor, head],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
                           env=_git_env()).returncode == 0
 
@@ -153,7 +202,7 @@ def verify(root: Path, *, ops_root: Path | None = None) -> dict:
     document = validate_document(json.loads((root / LEDGER).read_text(encoding="utf-8")))
     head = verify_history(root)
     rows = ownership.load_rows(root, ops_root)
-    no_new_manual(rows)
+    no_new_manual(rows, root=root)
     return {"status": "BLOCKED", "candidate_head": head,
             "historical_unqualified": len(document["historical_changes"]),
             "retained": sum(group["count"] for group in document["retained_groups"]),
@@ -308,7 +357,7 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
                     "integration_sha": integration, "merge_sha": merge}.items())):
         raise Refused("controller reconciliation manifest identity mismatch")
     rows = ownership.load_rows(root, ops_root)
-    no_new_manual(rows)
+    no_new_manual(rows, root=root)
     by_field = {ownership.StableFieldId.from_row(row).text(): row for row in rows}
     candidates = appendix["candidates"]
     if not all(isinstance(candidate, dict) and set(candidate) == {"old_symbol", "source_fields", "new_owner", "candidate_source_sha256", "candidate_binary_sha256"} for candidate in candidates):
@@ -444,7 +493,7 @@ def main() -> int:
             return 0
         if args.command == "no-new-manual":
             rows = ownership.load_rows(args.root.resolve(), args.ops_root)
-            no_new_manual(rows)
+            no_new_manual(rows, root=root)
             print(json.dumps({"status": "PASS", "control": "no-new-manual-knowledge", "rows": len(rows)}))
             return 0
         print(json.dumps(verify(args.root, ops_root=args.ops_root), sort_keys=True))

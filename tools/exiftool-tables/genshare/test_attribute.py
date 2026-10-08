@@ -1014,6 +1014,21 @@ class EmptyDiagnosticReceiptTests(unittest.TestCase):
                         attribute.write_json(parsed_path, document)
                         process["candidate"]["stdout"] = attribute._artifact_record(stdout_path)
                         process["candidate"]["parsed"] = attribute._artifact_record(parsed_path)
+                        # The forged process claims to have emitted the changed
+                        # bytes. Keep its typed ledger self-consistent so the
+                        # diagnostic contract, not the ledger guard, is tested.
+                        retained = json.loads(parsed_path.read_text())
+                        raw_occurrences = attribute.occurrence_sequence(
+                            retained, normalize_access_date=False)
+                        normalized_occurrences = attribute.occurrence_sequence(
+                            retained, normalize_access_date=True)
+                        process["candidate_occurrences_raw"] = raw_occurrences
+                        process["candidate_occurrences"] = normalized_occurrences
+                        process["raw_occurrences_sha256"] = attribute.canonical_sha256(raw_occurrences)
+                        process["normalized_occurrences_sha256"] = attribute.canonical_sha256(normalized_occurrences)
+                        process["normalization_count"] = sum(
+                            left["value"] != right["value"]
+                            for left, right in zip(raw_occurrences, normalized_occurrences))
                         attribute.write_json(process_path, process)
                         child["process"] = attribute._artifact_record(process_path)
                         forged["runs"][mode]["non_comparable_inputs"][0]["process"] = child["process"]
