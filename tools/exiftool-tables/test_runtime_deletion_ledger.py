@@ -36,6 +36,15 @@ class Task18DeletionGateControls(unittest.TestCase):
     def setUp(self) -> None:
         self.document = json.loads((ROOT / gate.LEDGER).read_text())
 
+    def test_ci_runs_standalone_no_new_manual_after_pinned_baseline(self) -> None:
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text()
+        job = workflow.split('\n  verify-tables-tools:\n', 1)[1].split('\n  verify-tables-drift:\n', 1)[0]
+        fetch = job.index('Fetch pinned Task18 generated-owner baseline')
+        control = job.index('python3 tools/exiftool-tables/runtime_deletion_ledger.py no-new-manual --root .')
+        self.assertLess(fetch, control)
+        self.assertIn('git fetch --no-tags --depth=1 origin "$TASK18_BASELINE_COMMIT"', job[:control])
+        self.assertNotIn('runtime_deletion_ledger.py verify --root .', job)
+
     def test_exact_five_historical_changes_and_49_keep_are_structurally_valid(self) -> None:
         self.assertEqual(gate.validate_document(self.document), self.document)
         self.assertEqual(sum(row["count"] for row in self.document["retained_groups"]), 49)
@@ -189,6 +198,34 @@ class CandidateHistoryIdentityControls(unittest.TestCase):
                                             "rev-parse", "HEAD"], env=env, text=True).strip()
             with patch.dict(os.environ, hostile), patch.object(gate, "INTEGRATION_COMMIT", head):
                 self.assertEqual(gate.verify_history(repo), head)
+
+    def test_core_worktree_cannot_redirect_history_to_clean_sibling(self) -> None:
+        system_git = Path('/usr/bin/git')
+        if not system_git.is_file():
+            self.skipTest('fixed system Git unavailable')
+        with tempfile.TemporaryDirectory(prefix='task18-worktree-authority-') as directory:
+            base = Path(directory).resolve()
+            selected = base / 'selected'; selected.mkdir()
+            sibling = base / 'sibling'; sibling.mkdir()
+            env = gate._git_env()
+            def git(*args: str) -> str:
+                return subprocess.check_output([str(system_git), '-C', str(selected), *args],
+                                               env=env, text=True).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'Task18 Test')
+            git('config', 'user.email', 'task18@example.invalid')
+            (selected / 'source').write_text('clean\n')
+            git('add', 'source')
+            git('commit', '-qm', 'selected source')
+            head = git('rev-parse', 'HEAD')
+            (sibling / 'source').write_text('clean\n')
+            (selected / 'source').write_text('dirty\n')
+            git('config', 'core.worktree', str(sibling))
+            self.assertEqual(git('status', '--porcelain=v1', '--untracked-files=all'), '')
+            self.assertEqual(git('rev-parse', '--show-toplevel'), str(sibling))
+            with patch.object(gate, 'INTEGRATION_COMMIT', head):
+                with self.assertRaisesRegex(gate.Refused, 'worktree|root'):
+                    gate.verify_history(selected)
 
     def test_replace_ref_cannot_supply_candidate_ancestry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="task18-replace-") as directory:

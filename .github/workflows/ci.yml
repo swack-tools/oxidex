@@ -903,6 +903,10 @@ jobs:
           TASK18_BASELINE_COMMIT=4f653243d33cf053107f4f19b8bd449329de611b
           git fetch --no-tags --depth=1 origin "$TASK18_BASELINE_COMMIT"
           test "$(git rev-parse "${TASK18_BASELINE_COMMIT}:tools/exiftool-tables/runtime_ownership.json")" = a8af250fee51d8f12b93c6935b6f05b41e77cc67
+      - name: Check Task18 no-new-manual ownership
+        run: |
+          set -euo pipefail
+          python3 tools/exiftool-tables/runtime_deletion_ledger.py no-new-manual --root .
       - id: exiftool
         uses: ./.github/actions/pinned-exiftool
       - uses: ./.github/actions/pinned-rust

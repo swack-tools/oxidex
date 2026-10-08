@@ -185,6 +185,12 @@ def _is_ancestor(root: Path, ancestor: str, head: str) -> bool:
 
 
 def verify_history(root: Path) -> str:
+    # Local core.worktree can make Git inspect a clean sibling while the
+    # ownership and ledger readers still consume `root` directly.
+    selected = root.resolve(strict=True)
+    effective = Path(git(root, "rev-parse", "--show-toplevel")).resolve(strict=True)
+    if effective != selected:
+        raise Refused("deletion gate Git worktree differs from selected source root")
     if git(root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise Refused("deletion gate source must be clean")
     head = git(root, "rev-parse", "HEAD")
