@@ -191,6 +191,11 @@ def verify_history(root: Path) -> str:
     effective = Path(git(root, "rev-parse", "--show-toplevel")).resolve(strict=True)
     if effective != selected:
         raise Refused("deletion gate Git worktree differs from selected source root")
+    # Status and write-tree can both look clean while these flags hide changed
+    # checkout bytes. -v lowercases assume-unchanged tags; S marks skip-worktree.
+    entries = git_bytes(root, "ls-files", "--cached", "-v", "-z").split(b"\0")
+    if any(entry[:1] == b"S" or entry[:1].islower() for entry in entries):
+        raise Refused("deletion gate index must not use assume-unchanged or skip-worktree")
     if git(root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise Refused("deletion gate source must be clean")
     head = git(root, "rev-parse", "HEAD")

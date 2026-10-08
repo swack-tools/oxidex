@@ -227,6 +227,48 @@ class CandidateHistoryIdentityControls(unittest.TestCase):
                 with self.assertRaisesRegex(gate.Refused, 'worktree|root'):
                     gate.verify_history(selected)
 
+    def test_hiding_index_flags_refuse_in_main_and_linked_checkouts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix='task18-index-flags-') as directory:
+            base = Path(directory).resolve()
+            selected = base / 'selected'; selected.mkdir()
+            env = gate._git_env()
+            def git(root: Path, *args: str) -> str:
+                return subprocess.check_output(['/usr/bin/git', '-C', str(root), *args],
+                                               env=env, text=True, stderr=subprocess.PIPE).strip()
+            git(selected, 'init', '-q')
+            git(selected, 'config', 'user.name', 'Task18 Test')
+            git(selected, 'config', 'user.email', 'task18@example.invalid')
+            name = 'source\nwith newline'
+            (selected / name).write_text('committed\n')
+            git(selected, 'add', '--', name)
+            git(selected, 'commit', '-qm', 'selected source')
+            head = git(selected, 'rev-parse', 'HEAD')
+            linked = base / 'linked'
+            git(selected, 'worktree', 'add', '--detach', '-q', str(linked), head)
+            with patch.object(gate, 'INTEGRATION_COMMIT', head):
+                for root in (selected, linked):
+                    self.assertEqual(gate.verify_history(root), head)
+                    for flags in (('--assume-unchanged',), ('--skip-worktree',),
+                                  ('--assume-unchanged', '--skip-worktree')):
+                        for changed in (False, True):
+                            with self.subTest(checkout=root.name, flags=flags, changed=changed):
+                                for flag in flags:
+                                    git(root, 'update-index', flag, '--', name)
+                                try:
+                                    if changed:
+                                        (root / name).write_text('changed selected bytes\n')
+                                        self.assertNotEqual((root / name).read_text(),
+                                                            git(root, 'show', 'HEAD:' + name) + '\n')
+                                    self.assertEqual(git(root, 'status', '--porcelain=v1', '--untracked-files=all'), '')
+                                    self.assertEqual(git(root, 'write-tree'), git(root, 'rev-parse', 'HEAD^{tree}'))
+                                    with self.assertRaisesRegex(gate.Refused, 'index.*assume-unchanged|index.*skip-worktree'):
+                                        gate.verify_history(root)
+                                finally:
+                                    for clear in ('--no-assume-unchanged', '--no-skip-worktree'):
+                                        git(root, 'update-index', clear, '--', name)
+                                    (root / name).write_text('committed\n')
+                    self.assertEqual(gate.verify_history(root), head)
+
     def test_replace_ref_cannot_supply_candidate_ancestry(self) -> None:
         with tempfile.TemporaryDirectory(prefix="task18-replace-") as directory:
             root = Path(directory)
