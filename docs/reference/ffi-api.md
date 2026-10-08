@@ -38,9 +38,15 @@ Two headers declare the API:
 - `include/oxidex.h` is maintained by hand, and the C integration test
   (`tests/ffi/c_integration_test.c`) uses it.
 
-Both declare the 19 exported `exiftool_*` functions. Tag names are the
+Both declare the 20 exported `exiftool_*` functions. Tag names are the
 group-qualified keys that `oxidex -j` prints, such as `IFD0:Make` and
 `ExifIFD:ISO`.
+
+The current surface includes five additive functions:
+`exiftool_get_tag_string_in_channel`, `exiftool_write_file_with_outcome`,
+`exiftool_get_last_error_tag_count`, `exiftool_get_last_error_tag`, and
+`exiftool_get_last_error_tag_reason`. The write-refusal status
+`EXIFTOOL_ERR_TAG_NOT_WRITTEN` is code 7.
 
 ## Quick Start (C)
 
@@ -297,6 +303,19 @@ if (make) {
 
 Gets a tag string from the requested stored, ValueConv, or PrintConv channel.
 
+The channel is an integer type with these named values:
+
+```c
+typedef int ExifToolValueChannel;
+#define EXIFTOOL_VALUE_CHANNEL_STORED 0
+#define EXIFTOOL_VALUE_CHANNEL_VALUE_CONV 1
+#define EXIFTOOL_VALUE_CHANNEL_PRINT_CONV 2
+```
+
+`exiftool_get_tag_string()` retains its PrintConv-default view. An unknown
+channel value makes this accessor return `NULL` and sets the thread-local
+last-error message to `Unknown value channel: <value>`.
+
 ```c
 const char* exiftool_get_tag_string_in_channel(
     const ExifToolHandle* handle, const char* tag_name, ExifToolValueChannel channel);
@@ -309,13 +328,13 @@ const char* exiftool_get_tag_string_in_channel(
 Gets tag value as a 64-bit integer.
 
 ```c
-int exiftool_get_tag_integer(ExifToolHandle* handle, const char* tag_name, int64_t* out);
+int exiftool_get_tag_integer(const ExifToolHandle* handle, const char* tag_name, int64_t* out_value);
 ```
 
 **Parameters:**
 - `handle`: Valid handle
 - `tag_name`: Tag name (e.g., "ExifIFD:ISO")
-- `out`: Pointer to store result
+- `out_value`: Pointer to store result
 
 **Returns:**
 - `EXIFTOOL_OK` on success
@@ -335,13 +354,13 @@ if (exiftool_get_tag_integer(handle, "ExifIFD:ISO", &iso) == EXIFTOOL_OK) {
 Gets tag value as a 64-bit floating-point number.
 
 ```c
-int exiftool_get_tag_float(ExifToolHandle* handle, const char* tag_name, double* out);
+int exiftool_get_tag_float(const ExifToolHandle* handle, const char* tag_name, double* out_value);
 ```
 
 **Parameters:**
 - `handle`: Valid handle
 - `tag_name`: Tag name (e.g., "ExifIFD:FNumber")
-- `out`: Pointer to store result
+- `out_value`: Pointer to store result
 
 **Returns:**
 - `EXIFTOOL_OK` on success
@@ -454,12 +473,12 @@ order leaves no EXIF.
 Writes modified metadata to file.
 
 ```c
-int exiftool_write_file(ExifToolHandle* handle, const char* path);
+int exiftool_write_file(const ExifToolHandle* handle, const char* filepath);
 ```
 
 **Parameters:**
 - `handle`: Valid handle with modifications
-- `path`: An **existing** file in a writable format (JPEG EXIF, TIFF or
+- `filepath`: An **existing** file in a writable format (JPEG EXIF, TIFF or
   TIFF-based RAW, PNG, PDF). It is updated in place, atomically. The call
   does not create a new file. See [Writing metadata](/guide/writing) for
   which tags are proven against ExifTool.
@@ -488,7 +507,7 @@ file-system rows are never deleted, and the file-system ones (`FileName`,
 exiftool_set_tag_string(handle, "EXIF:Artist", "Jane Doe");
 int result = exiftool_write_file(handle, "photo.jpg");
 if (result == EXIFTOOL_ERR_TAG_NOT_WRITTEN) {
-    for (size_t i = 0; i < exiftool_get_last_error_tag_count(); i++) {
+    for (uintptr_t i = 0; i < exiftool_get_last_error_tag_count(); i++) {
         fprintf(stderr, "not written: %s (%s)\n",
                 exiftool_get_last_error_tag(i),
                 exiftool_get_last_error_tag_reason(i));
@@ -502,7 +521,7 @@ As `exiftool_write_file()`, and reports what the write did, like ExifTool's
 `WriteInfo` return value.
 
 ```c
-int exiftool_write_file_with_outcome(ExifToolHandle* handle, const char* path, int* outcome);
+int exiftool_write_file_with_outcome(const ExifToolHandle* handle, const char* filepath, int* outcome);
 ```
 
 **Returns:** the same codes as `exiftool_write_file()`, plus
@@ -538,9 +557,9 @@ The tags the last `EXIFTOOL_ERR_TAG_NOT_WRITTEN` on this thread named, each
 spelled as the write request spelled it, and why each would not be written.
 
 ```c
-size_t exiftool_get_last_error_tag_count(void);
-const char* exiftool_get_last_error_tag(size_t index);
-const char* exiftool_get_last_error_tag_reason(size_t index);
+uintptr_t exiftool_get_last_error_tag_count(void);
+const char* exiftool_get_last_error_tag(uintptr_t index);
+const char* exiftool_get_last_error_tag_reason(uintptr_t index);
 ```
 
 **Returns:**
@@ -553,7 +572,7 @@ const char* exiftool_get_last_error_tag_reason(size_t index);
 Gets number of tags in current metadata.
 
 ```c
-size_t exiftool_get_tag_count(ExifToolHandle* handle);
+uintptr_t exiftool_get_tag_count(const ExifToolHandle* handle);
 ```
 
 **Returns:**
@@ -562,8 +581,9 @@ size_t exiftool_get_tag_count(ExifToolHandle* handle);
 **Example:**
 
 ```c
-size_t count = exiftool_get_tag_count(handle);
-printf("Found %zu tags\n", count);
+#include <inttypes.h>
+uintptr_t count = exiftool_get_tag_count(handle);
+printf("Found %" PRIuPTR " tags\n", count);
 ```
 
 #### `exiftool_get_tag_name_at()`
@@ -572,7 +592,7 @@ Gets the name of the tag at an index, for iterating all tags together with
 `exiftool_get_tag_count()`.
 
 ```c
-const char* exiftool_get_tag_name_at(const ExifToolHandle* handle, size_t index);
+const char* exiftool_get_tag_name_at(const ExifToolHandle* handle, uintptr_t index);
 ```
 
 **Parameters:**
@@ -587,8 +607,8 @@ const char* exiftool_get_tag_name_at(const ExifToolHandle* handle, size_t index)
 **Example:**
 
 ```c
-size_t count = exiftool_get_tag_count(handle);
-for (size_t i = 0; i < count; i++) {
+uintptr_t count = exiftool_get_tag_count(handle);
+for (uintptr_t i = 0; i < count; i++) {
     printf("%s\n", exiftool_get_tag_name_at(handle, i));
 }
 ```
