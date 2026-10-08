@@ -132,36 +132,50 @@ def run(source, output):
     home = output.with_name(output.name + '-home')
     check_output_path(home)
     home.mkdir(mode=0o700)
-    check_output_path(home)
-    prepare_npm_configs(home)
-    env = build_environment(home)
-    verify_runtime_tools()
-    version = subprocess.check_output(['node', '--version'], text=True, env=env).strip()
-    if not re.fullmatch(r'v24\.[0-9]+\.[0-9]+', version):
-        raise RuntimeError(f'Docs site build requires Node.js 24, found {version}')
-    subprocess.run(['npm', '--version'], check=True, stdout=subprocess.DEVNULL, env=env)
-    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True, env=env).strip()
-    tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True, env=env).strip()
-    subprocess.run(['bash', 'tools/docs-local-deploy.sh', '--ref', 'HEAD',
-                    '--build-only', '--output', str(output)],
-                   check=True, env=env)
-    subprocess.run(['node', 'docs/scripts/check-base-links.mjs',
-                    str(output / 'dist'), '/'], check=True, env=env)
-    manifest = json.loads((output / 'snapshot-manifest.json').read_text())
-    declared_digest = manifest.get('dist_sha256')
-    if not isinstance(declared_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', declared_digest):
-        raise RuntimeError('Docs site snapshot has no valid dist_sha256')
-    actual_digest = subprocess.check_output(
-        ['bash', 'tools/docs/dist-sha256.sh', str(output / 'dist')],
-        text=True, env=env).strip()
-    if actual_digest != declared_digest:
-        raise RuntimeError('Docs site snapshot dist_sha256 differs from retained dist')
-    if (manifest.get('candidate_sha') != head or manifest.get('source_head_sha') != head
-            or manifest.get('tree_hash') != tree or manifest.get('source_kind') != 'commit'
-            or manifest.get('base_path') != '/'
-            or manifest.get('dist') != str(output / 'dist')
-            or not (output / 'dist' / 'index.html').is_file()):
-        raise RuntimeError('Docs site snapshot does not bind the selected signed HEAD and rendered dist')
+    home_identity = home.lstat()
+    try:
+        check_output_path(home)
+        prepare_npm_configs(home)
+        env = build_environment(home)
+        verify_runtime_tools()
+        version = subprocess.check_output(['node', '--version'], text=True, env=env).strip()
+        if not re.fullmatch(r'v24\.[0-9]+\.[0-9]+', version):
+            raise RuntimeError(f'Docs site build requires Node.js 24, found {version}')
+        subprocess.run(['npm', '--version'], check=True, stdout=subprocess.DEVNULL, env=env)
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True, env=env).strip()
+        tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True, env=env).strip()
+        subprocess.run(['bash', 'tools/docs-local-deploy.sh', '--ref', 'HEAD',
+                        '--build-only', '--output', str(output)],
+                       check=True, env=env)
+        subprocess.run(['node', 'docs/scripts/check-base-links.mjs',
+                        str(output / 'dist'), '/'], check=True, env=env)
+        manifest = json.loads((output / 'snapshot-manifest.json').read_text())
+        declared_digest = manifest.get('dist_sha256')
+        if not isinstance(declared_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', declared_digest):
+            raise RuntimeError('Docs site snapshot has no valid dist_sha256')
+        actual_digest = subprocess.check_output(
+            ['bash', 'tools/docs/dist-sha256.sh', str(output / 'dist')],
+            text=True, env=env).strip()
+        if actual_digest != declared_digest:
+            raise RuntimeError('Docs site snapshot dist_sha256 differs from retained dist')
+        if (manifest.get('candidate_sha') != head or manifest.get('source_head_sha') != head
+                or manifest.get('tree_hash') != tree or manifest.get('source_kind') != 'commit'
+                or manifest.get('base_path') != '/'
+                or manifest.get('dist') != str(output / 'dist')
+                or not (output / 'dist' / 'index.html').is_file()):
+            raise RuntimeError('Docs site snapshot does not bind the selected signed HEAD and rendered dist')
+    finally:
+        try:
+            current_identity = home.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError('Docs site private npm home changed before cleanup') from exc
+        if (not stat.S_ISDIR(current_identity.st_mode)
+                or current_identity.st_dev != home_identity.st_dev
+                or current_identity.st_ino != home_identity.st_ino
+                or current_identity.st_uid != os.getuid()
+                or home.resolve() != home):
+            raise RuntimeError('Docs site private npm home changed before cleanup')
+        shutil.rmtree(home)
     print(f'DOCS_SITE_SNAPSHOT: source={head} output={output}', flush=True)
 
 

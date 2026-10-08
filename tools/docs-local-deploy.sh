@@ -116,6 +116,7 @@ else
   export GIT_ATTR_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
   python3 "$REPO/tools/docs/check-archive-source.py" "$REPO" "$SHA"
   git -c core.attributesFile=/dev/null -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
+  bash "$REPO/tools/docs/attach-snapshot-history.sh" "$REPO" "$SHA" "$SRC"
 fi
 
 if [ "$USE_WORKTREE" = 1 ]; then

@@ -15,6 +15,7 @@ import route
 
 HELPER = Path(__file__).resolve().parents[2] / 'docs' / 'dist-sha256.sh'
 ARCHIVE_GUARD = Path(__file__).resolve().parents[2] / 'docs' / 'check-archive-source.py'
+HISTORY_HELPER = Path(__file__).resolve().parents[2] / 'docs' / 'attach-snapshot-history.sh'
 REAL_RUN = subprocess.run
 
 
@@ -61,6 +62,70 @@ class DocsSiteWorkerTests(unittest.TestCase):
             refused = subprocess.run([*command[:-1], new_head], capture_output=True, text=True)
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn('committed export attribute', refused.stderr)
+
+    def test_archived_snapshot_recovers_only_authenticated_selected_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            (repo / 'docs').mkdir()
+            (repo / 'docs' / 'page.md').write_text('page\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            first_env = {**os.environ, 'GIT_AUTHOR_DATE': '2020-01-02T00:00:00+0000',
+                         'GIT_COMMITTER_DATE': '2020-01-02T00:00:00+0000'}
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T',
+                            '-c', 'user.email=t@x', 'commit', '-qm', 'page'],
+                           env=first_env, check=True)
+            (repo / 'other').write_text('later\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            second_env = {**os.environ, 'GIT_AUTHOR_DATE': '2021-03-04T00:00:00+0000',
+                          'GIT_COMMITTER_DATE': '2021-03-04T00:00:00+0000'}
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T',
+                            '-c', 'user.email=t@x', 'commit', '-qm', 'later'],
+                           env=second_env, check=True)
+            head = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                                           text=True).strip()
+            src = root / 'snapshot'
+            src.mkdir()
+            import io
+            archive = subprocess.check_output(['git', '-C', str(repo), 'archive', head])
+            with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+                tar.extractall(src)
+            self.assertFalse((src / '.git').exists())
+            expected = subprocess.check_output(
+                ['git', '-C', str(repo), 'log', '-1', '--format=%at', '--', 'docs/page.md'],
+                text=True).strip()
+            (repo / 'docs' / 'page.md').write_text('replaced page\n')
+            subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T',
+                            '-c', 'user.email=t@x', 'commit', '-qm', 'replacement'], check=True)
+            replacement = subprocess.check_output(
+                ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+            subprocess.run(['git', '-C', str(repo), 'replace', head, replacement], check=True)
+            clean_git = docs_site_worker.build_environment(root / 'home')
+            expected_tree = subprocess.check_output(
+                ['git', '-C', str(repo), 'rev-parse', head + '^{tree}'],
+                env=clean_git, text=True).strip()
+            self.assertNotEqual(subprocess.check_output(
+                ['git', '-C', str(repo), 'rev-parse', head + '^{tree}'],
+                text=True).strip(), expected_tree)
+            subprocess.run(['bash', str(HISTORY_HELPER), str(repo), head, str(src)],
+                           check=True, env=docs_site_worker.build_environment(root / 'home'))
+            actual = subprocess.check_output(
+                ['git', '-C', str(src), 'log', '-1', '--format=%at', '--', 'docs/page.md'],
+                text=True, env=docs_site_worker.build_environment(root / 'home')).strip()
+            self.assertEqual(actual, expected)
+            self.assertEqual((src / 'docs' / 'page.md').read_text(), 'page\n')
+            self.assertEqual(subprocess.check_output(
+                ['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True).strip(), head)
+            self.assertEqual(subprocess.check_output(
+                ['git', '-C', str(src), 'status', '--porcelain'], text=True).strip(), '')
+            self.assertFalse((src / '.git' / 'info' / 'attributes').exists())
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(['bash', str(HISTORY_HELPER), str(repo), head, str(src)],
+                               check=True, capture_output=True,
+                               env=docs_site_worker.build_environment(root / 'home'))
 
     def test_dist_hash_refuses_symlink_root_and_nonregular_members(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -412,6 +477,8 @@ class DocsSiteWorkerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'requires Node.js 24'):
                     docs_site_worker.run(source, output)
                 command.assert_not_called()
+            self.assertFalse(output.with_name(output.name + '-home').exists())
+            self.assertTrue(output.is_dir())
 
     def exercise_snapshot(self, digest_mode):
         with tempfile.TemporaryDirectory() as directory:
@@ -467,7 +534,35 @@ class DocsSiteWorkerTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(RuntimeError, 'dist_sha256'):
                         docs_site_worker.run(source, output)
+            self.assertFalse(output.with_name(output.name + '-home').exists())
+            self.assertTrue(output.is_dir())
             return output, calls
+
+    def test_private_home_cleanup_refuses_replaced_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / 'source'
+            source.mkdir()
+            output = root / 'site'
+            outside = root / 'outside'
+            outside.mkdir()
+            (outside / 'marker').write_text('preserve')
+            moved = root / 'owned-home-moved'
+
+            def replace_home(home):
+                home.rename(moved)
+                home.symlink_to(outside, target_is_directory=True)
+
+            with patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
+                 patch.object(docs_site_worker, 'prepare_npm_configs',
+                              side_effect=replace_home), \
+                 patch.object(docs_site_worker, 'verify_runtime_tools',
+                              side_effect=RuntimeError('early failure')):
+                with self.assertRaisesRegex(RuntimeError, 'private npm home changed'):
+                    docs_site_worker.run(source, output)
+            self.assertEqual((outside / 'marker').read_text(), 'preserve')
+            self.assertTrue(moved.is_dir())
+            self.assertTrue(output.is_dir())
 
     def test_invokes_snapshot_mirror_and_checks_actual_tiny_dist(self):
         output, calls = self.exercise_snapshot('valid')
