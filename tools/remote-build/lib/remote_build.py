@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .config import approved_instances, builder_instance_name, matching_approval
 from . import ssh_transport
+from . import infra_repository_binding
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.release import approved_linux_perl
@@ -1157,6 +1158,8 @@ def main(argv=None):
                 receipt['source_origin_check']='raw_local_config_allowlist'
                 _verify_signed_source_with_frozen_signer(
                     source, receipt['source_commit'], frozen_signer, signer_digest)
+                receipt['infra_repository_binding'] = infra_repository_binding.admit(
+                    source, receipt['source_commit'], receipt['source_tree'], source_git_env())
             else:
                 _verify_signed_source_with_frozen_signer(
                     source, receipt['source_commit'], frozen_signer, signer_digest)
@@ -1229,6 +1232,13 @@ def main(argv=None):
                        for row in receipt['snapshot'].get('files',[])
                        if row['path'] in receipt['snapshot'].get('eligible_paths', []))):
             raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')
+        if infra_python:
+            binding = receipt['infra_repository_binding']
+            infra_repository_binding.recheck(source, binding, source_git_env())
+            infra_repository_binding.bind_packet(binding, args.worktree_id,
+                receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
+            infra_repository_binding.verify_packet(binding, receipt['source_commit'], receipt['source_tree'],
+                args.worktree_id, receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
         save()
         project=shlex.quote(args.worktree_id)
         receipt['stage']='prepare'
@@ -1344,6 +1354,9 @@ def main(argv=None):
                         or eligible_snapshot_paths(source) != receipt['snapshot']['eligible_paths']):
                     raise RuntimeError('Infrastructure source changed during remote measurement')
                 receipt['infra_python_test_proof']=summary
+                infra_repository_binding.verify_packet(receipt['infra_repository_binding'],
+                    receipt['source_commit'], receipt['source_tree'], args.worktree_id,
+                    receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
                 receipt['infra_python_test_artifacts']=artifacts
                 receipt['infra_python_proof_state']='VALIDATED'
                 receipt['validation_scope']='infra_python_unittest_only'

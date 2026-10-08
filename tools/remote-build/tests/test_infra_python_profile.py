@@ -12,10 +12,21 @@ import hashlib
 from unittest.mock import patch
 
 from lib import remote_build
+from lib import infra_repository_binding
 import qualification_source
 
 
 class InfraPythonProfileTests(unittest.TestCase):
+    def setUp(self):
+        # No fixture may resolve a real credential or contact GitHub. Positives
+        # replace only these two seams; real source/graph binding still executes.
+        token = patch.object(infra_repository_binding, '_maintainer_token',
+                             side_effect=AssertionError('unexpected credential lookup'))
+        api = patch.object(infra_repository_binding, '_api',
+                           side_effect=AssertionError('unexpected GitHub request'))
+        token.start(); self.addCleanup(token.stop)
+        api.start(); self.addCleanup(api.stop)
+
     def test_missing_promised_tree_cannot_run_local_transport_helper(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder).resolve()
@@ -284,7 +295,18 @@ class InfraPythonProfileTests(unittest.TestCase):
                         kwargs['stdout'].write('Ran 854 tests in 1.0s\n\nOK\n')
                     return SimpleNamespace(returncode=0)
                 evidence = root / 'evidence'
-                with patch.dict(os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': str(root / 'known')}), \
+                def github_response(endpoint, token):
+                    return json.dumps({
+                        '/user': {'login':'swackhamer'},
+                        infra_repository_binding.REPO_ENDPOINT: {
+                            'id':1397480856, 'full_name':infra_repository_binding.REPOSITORY,
+                            'default_branch':'main', 'fork':False, 'archived':False},
+                        infra_repository_binding.REF_ENDPOINT: {
+                            'ref':'refs/heads/main', 'object':{'type':'commit','sha':head}},
+                    }[endpoint]).encode()
+                with patch.object(infra_repository_binding, '_maintainer_token', return_value='fixture'), \
+                     patch.object(infra_repository_binding, '_api', side_effect=github_response), \
+                     patch.dict(os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': str(root / 'known')}), \
                      patch.object(remote_build.ssh_transport, 'identity', return_value=('uploader', 'key')), \
                      patch.object(remote_build.ssh_transport, 'DirectTransport', return_value=transport), \
                      patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
@@ -299,6 +321,12 @@ class InfraPythonProfileTests(unittest.TestCase):
                         '--just-recipe', 'infra-python-tests'])
                 receipt = json.loads((evidence / 'remote-build.json').read_text())
                 self.assertEqual(receipt['source_commit'], head)
+                self.assertEqual(receipt['infra_repository_binding']['witness']['path'], [head])
+                self.assertEqual(receipt['infra_repository_binding']['packet']['bundle_sha256'],
+                                 receipt['fleet_source_bundle_sha256'])
+                self.assertEqual(receipt['infra_repository_binding']['packet']['manifest_sha256'],
+                                 receipt['infra_python_manifest_sha256'])
+                self.assertEqual(receipt['infra_repository_binding']['packet']['run_id'],receipt['run_id'])
                 self.assertEqual(receipt['source_origin_configured'],
                                  'git@github.com:swack-tools/spot-github-runners.git')
                 self.assertEqual(receipt['source_origin_check'], 'raw_local_config_allowlist')
