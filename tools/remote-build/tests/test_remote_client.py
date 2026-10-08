@@ -523,7 +523,10 @@ class RemoteTestProfileTests(unittest.TestCase):
             return SimpleNamespace(returncode=0)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            (root/'.exiftool-version').write_text('13.59\n')
+            source=root/'source';source.mkdir()
+            evidence=root/'evidence'
+            signer=root/'signers';signer.write_text('synthetic signer\n')
+            (source/'.exiftool-version').write_text('13.59\n')
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1','rustc_commit':'f'*40}), \
                  patch.object(remote_build,'make_snapshot',return_value={'archive_sha256':'0'*64}), \
@@ -531,12 +534,16 @@ class RemoteTestProfileTests(unittest.TestCase):
                  patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain',return_value={'channel':'1.97.1'}), \
-                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'configured_signer_path',return_value=signer), \
+                 patch.object(remote_build,'_verify_signed_source_with_frozen_signer') as signed, \
                  patch.object(remote_build,'download_artifact') as download, \
                  patch.object(remote_build,'download_test_proof',return_value={'status':'PASS'}) as proof_download:
-                self.assertEqual(remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
-                    '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test']),0)
-            receipt=__import__('json').loads((root/'evidence'/'remote-build.json').read_text())
+                self.assertEqual(remote_build.main(['--source',str(source),'--instance','builder-vm','--zone','z','--instance-id','2',
+                    '--worktree-id','checkout','--evidence-dir',str(evidence), '--profile','test']),0)
+            signed.assert_called_once()
+            self.assertEqual(signed.call_args.args[2].read_bytes(), signer.read_bytes())
+            self.assertTrue(signed.call_args.args[2].is_relative_to(evidence.resolve()))
+            receipt=__import__('json').loads((evidence/'remote-build.json').read_text())
             self.assertEqual(receipt['test_exit_code'],0)
             self.assertTrue(receipt['verified'])
             self.assertEqual(receipt['test_proof']['status'], 'PASS')
@@ -589,7 +596,10 @@ class RemoteTestProfileTests(unittest.TestCase):
             return 'b'*40+'\n'
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            (root/'.exiftool-version').write_text('13.59\n')
+            source=root/'source';source.mkdir()
+            evidence=root/'evidence'
+            signer=root/'signers';signer.write_text('synthetic signer\n')
+            (source/'.exiftool-version').write_text('13.59\n')
             with patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={
                      'channel':'1.97.1','rustc_commit':'f'*40,'cargo_version':'cargo 1.97.1 (abc)'}), \
@@ -598,12 +608,15 @@ class RemoteTestProfileTests(unittest.TestCase):
                  patch.object(remote_build,'source_clean_status',return_value=''), \
                  patch.object(remote_build.subprocess,'run',side_effect=run), \
                  patch.object(remote_build,'verify_remote_toolchain'), \
-                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'configured_signer_path',return_value=signer), \
+                 patch.object(remote_build,'_verify_signed_source_with_frozen_signer') as signed, \
                  patch.object(remote_build,'download_test_proof',side_effect=RuntimeError('download unavailable')):
                 with self.assertRaisesRegex(RuntimeError,'download unavailable'):
-                    remote_build.main(['--source',str(root),'--instance','builder-vm','--zone','z','--instance-id','2',
-                        '--worktree-id','checkout','--evidence-dir',str(root/'evidence'), '--profile','test'])
-            receipt=json.loads((root/'evidence'/'remote-build.json').read_text())
+                    remote_build.main(['--source',str(source),'--instance','builder-vm','--zone','z','--instance-id','2',
+                        '--worktree-id','checkout','--evidence-dir',str(evidence), '--profile','test'])
+            signed.assert_called_once()
+            self.assertEqual(signed.call_args.args[2].read_bytes(), signer.read_bytes())
+            receipt=json.loads((evidence/'remote-build.json').read_text())
             self.assertTrue(receipt['remote_retained'])
             self.assertIn('/remote-build/targets/',receipt['remote_paths']['target'])
             self.assertNotIn('remote_cleanup',receipt)

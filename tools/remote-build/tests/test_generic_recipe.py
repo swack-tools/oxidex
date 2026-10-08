@@ -200,6 +200,7 @@ class GenericRecipeTests(unittest.TestCase):
                  cleanup_failure=False, cleanup_observations=None):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external_directory:
             root=Path(directory);commands=[]
+            evidence=Path(external_directory)/'evidence'
             signer=root/'maintainer.allowed_signers'
             signer.write_text('fixture signer')
             envelope=Path(external_directory).resolve()/'approved-linux-perl.json'
@@ -227,7 +228,7 @@ class GenericRecipeTests(unittest.TestCase):
                 if ' cleanup' in ' '.join(command):
                     if cleanup_observations is not None:
                         cleanup_observations.append(json.loads(
-                            (root/'evidence/remote-build.json').read_text()))
+                            (evidence/'remote-build.json').read_text()))
                     if cleanup_failure:
                         raise remote_build.subprocess.CalledProcessError(1, command)
                 if 'bundle' in command and 'create' in command:
@@ -254,7 +255,7 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
                  patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.99.0'}), \
-                 patch.object(remote_build,'verify_signed_source'), \
+                 patch.object(remote_build,'_verify_signed_source_with_frozen_signer'), \
                  patch('qualification_source.verify_source'), \
                  patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
                  patch.object(remote_build,'retrieve_perl_candidate',
@@ -270,7 +271,7 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build.subprocess,'run',side_effect=run):
                 argv=['--source',str(root),'--instance','builder-vm','--zone','z',
                       '--instance-id','2','--worktree-id','checkout',
-                      '--evidence-dir',str(root/'evidence'),'--just-recipe',recipe]
+                      '--evidence-dir',str(evidence),'--just-recipe',recipe]
                 if recipe=='test-package':
                     argv += ['--just-arg=package with spaces']
                 if recipe=='freeze-linux-perl':
@@ -302,7 +303,7 @@ class GenericRecipeTests(unittest.TestCase):
                     if recipe=='prove-linux-perl-component':
                         component_proof.assert_called_once()
                 clean_status.assert_called_with(root.resolve(), 'a'*40)
-            receipt=json.loads((root/'evidence/remote-build.json').read_text())
+            receipt=json.loads((evidence/'remote-build.json').read_text())
             return receipt,commands,root,extras_seen,signed_heads
 
     def test_component_packet_binds_one_envelope_and_cleans_only_after_proof(self):
