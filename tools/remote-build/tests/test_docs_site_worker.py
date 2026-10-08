@@ -130,18 +130,48 @@ class DocsSiteWorkerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'durable|explicit'):
                     docs_site_worker.selected_context()
 
+    def test_linux_system_temp_fixture_is_not_a_retained_target(self):
+        if sys.platform != 'linux':
+            self.skipTest('Linux system temporary-path classification')
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+            root = Path(directory).resolve()
+            source = root / 'checkout'
+            source.mkdir()
+            durable = root / 'fake-durable'
+            durable.mkdir()
+            target = durable / 'run'
+            target.mkdir()
+            self.assertTrue(any(target.is_relative_to(temp)
+                                for temp in docs_site_worker.SYSTEM_TEMP_ROOTS))
+            env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
+                   'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs',
+                   'CARGO_TARGET_DIR': str(target),
+                   'RUNNER_TEMP': '/nonexistent-runner-temp'}
+            with patch.dict(os.environ, env), \
+                 patch.object(Path, 'cwd', return_value=source), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=False), \
+                 patch.object(route, 'verify_ci_fleet_checkout'), \
+                 patch('test_runner.fleet_recipe_target', return_value=target), \
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
+                with self.assertRaisesRegex(RuntimeError, 'temporary'):
+                    docs_site_worker.selected_context()
+
     def test_verified_actions_checkout_gets_unique_target_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             source = root / 'checkout'
             source.mkdir()
+            # Model a mounted durable target inside the disposable test root;
+            # the separate Linux control tests real system-temp refusal.
             durable = root / 'durable'
             durable.mkdir()
             target = durable / 'run'
             target.mkdir()
             env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
                    'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_JOB': 'docs-build',
-                   'CARGO_TARGET_DIR': str(target)}
+                   'CARGO_TARGET_DIR': str(target),
+                   'RUNNER_TEMP': '/nonexistent-runner-temp'}
             with patch.dict(docs_site_worker.os.environ, env), \
                  patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
                  patch.object(route, 'local_worker_context', return_value=True), \
@@ -150,7 +180,8 @@ class DocsSiteWorkerTests(unittest.TestCase):
                  patch.object(docs_site_worker.secrets, 'token_hex',
                               side_effect=['b' * 16, 'c' * 16]), \
                  patch('test_runner.fleet_recipe_target', return_value=target), \
-                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable), \
+                 patch.object(docs_site_worker, 'SYSTEM_TEMP_ROOTS', ()):
                 selected_source, output = docs_site_worker.selected_context()
                 _, second_output = docs_site_worker.selected_context()
             self.assertEqual(verified.call_count, 2)
@@ -177,14 +208,16 @@ class DocsSiteWorkerTests(unittest.TestCase):
             (target / 'docs-site').symlink_to(outside, target_is_directory=True)
             env = {'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '123',
                    'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_JOB': 'docs',
-                   'CARGO_TARGET_DIR': str(target)}
+                   'CARGO_TARGET_DIR': str(target),
+                   'RUNNER_TEMP': '/nonexistent-runner-temp'}
             with patch.dict(docs_site_worker.os.environ, env), \
                  patch.object(docs_site_worker.Path, 'cwd', return_value=source), \
                  patch.object(route, 'local_worker_context', return_value=True), \
                  patch.object(route, 'trusted_marker', return_value=False), \
                  patch.object(route, 'verify_ci_fleet_checkout'), \
                  patch('test_runner.fleet_recipe_target', return_value=target), \
-                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable):
+                 patch.object(docs_site_worker, 'CI_DURABLE_ROOT', durable), \
+                 patch.object(docs_site_worker, 'SYSTEM_TEMP_ROOTS', ()):
                 with self.assertRaisesRegex(RuntimeError, 'not canonical'):
                     docs_site_worker.selected_context()
             self.assertEqual(list(outside.iterdir()), [])
