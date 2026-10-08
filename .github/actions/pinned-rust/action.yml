@@ -22,8 +22,13 @@ runs:
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"channel={channel}\ncomponents={','.join(components)}\n")
         PYTHON
-    - name: Bootstrap rustup if missing on Linux
+    - name: Probe fixed read-only Spot Rust image
+      id: preinstalled
       if: runner.os == 'Linux'
+      shell: bash
+      run: python3 tools/ci/preinstalled_rust.py
+    - name: Bootstrap rustup if missing on Linux
+      if: runner.os == 'Linux' && steps.preinstalled.outputs.ready != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -80,6 +85,7 @@ runs:
         test -x "$CARGO_HOME/bin/rustup"
         echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
     - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable action, explicit repo version
+      if: steps.preinstalled.outputs.ready != 'true'
       with:
         toolchain: ${{ steps.pin.outputs.channel }}
         components: ${{ steps.pin.outputs.components }}
