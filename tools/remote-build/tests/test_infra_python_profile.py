@@ -15,6 +15,42 @@ import qualification_source
 
 
 class InfraPythonProfileTests(unittest.TestCase):
+    def test_missing_promised_tree_cannot_run_local_transport_helper(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            source = base / 'source'
+            source.mkdir()
+            def git(*args):
+                return subprocess.check_output(['/usr/bin/git', '-C', str(source), *args],
+                    text=True, env=remote_build.source_git_env(), stderr=subprocess.PIPE).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'Unsigned Fixture')
+            git('config', 'user.email', 'fixture@example.invalid')
+            (source / 'nested').mkdir()
+            (source / 'nested/payload').write_text('unsigned fixture\n')
+            git('add', '.')
+            git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'Unsigned source')
+            head = git('rev-parse', 'HEAD')
+            tree = git('rev-parse', 'HEAD:nested')
+            marker = base / 'helper-ran'
+            helper = base / 'local-helper'
+            helper.write_text(f'#!/bin/sh\n/usr/bin/touch {marker}\nexit 1\n')
+            helper.chmod(0o755)
+            git('config', 'remote.origin.url', 'ext::' + str(helper))
+            git('config', 'remote.origin.promisor', 'true')
+            git('config', 'extensions.partialClone', 'origin')
+            git('config', 'remote.origin.partialclonefilter', 'blob:none')
+            git('config', 'protocol.ext.allow', 'always')
+            (source / '.git/objects' / tree[:2] / tree[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError):
+                remote_build.source_clean_status(source, head)
+            self.assertFalse(marker.exists(), 'pre-admission Git started local transport helper')
+            transport = subprocess.run(['/usr/bin/git', '-C', str(source), 'ls-remote',
+                'ext::' + str(helper)], env=remote_build.source_git_env(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertNotEqual(transport.returncode, 0)
+            self.assertFalse(marker.exists(), 'source Git environment allowed explicit transport')
+
     def test_unsigned_filter_config_cannot_execute_before_infra_admission(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

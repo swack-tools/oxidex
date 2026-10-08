@@ -64,7 +64,8 @@ def source_git_env():
     ssh_verifier = _trusted_source_tool('/usr/bin/ssh-keygen')
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     env.update(PATH='/usr/bin:/bin', HOME='/nonexistent',
-               GIT_NO_REPLACE_OBJECTS='1', GIT_CONFIG_NOSYSTEM='1',
+               GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1',
+               GIT_ALLOW_PROTOCOL='', GIT_CONFIG_NOSYSTEM='1',
                GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
                GIT_CONFIG_COUNT='3', GIT_CONFIG_KEY_0='core.fsmonitor',
                GIT_CONFIG_VALUE_0='false', GIT_CONFIG_KEY_1='gpg.format',
