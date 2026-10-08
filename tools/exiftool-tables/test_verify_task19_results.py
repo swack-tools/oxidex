@@ -5,7 +5,7 @@ These do not claim that synthetic results pass the production replay verifier.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 from pathlib import Path
 import os
@@ -280,6 +280,87 @@ class Task19AdapterControls(unittest.TestCase):
             self.assertEqual(calls, 2)
             self.assertEqual(adapter.json.loads(output.read_text())["status"], "publication_failed")
 
+    def test_final_output_mode_and_link_custody_refuse(self) -> None:
+        with TemporaryDirectory() as directory:
+            for fault in ("mode", "link"):
+                output = Path(directory) / f"{fault}.json"
+                retained = Path(directory) / f"{fault}-retained.json"
+                calls = 0
+                def alter_on_final_validation():
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        if fault == "mode":
+                            output.chmod(0o644)
+                        else:
+                            os.link(output, retained)
+                with self.assertRaisesRegex(adapter.qualification.Refused, "custody"):
+                    adapter.publish_receipt_no_replace(
+                        output, {"status": "verified_read_only"},
+                        validate_inputs=alter_on_final_validation)
+                self.assertEqual(calls, 2)
+                self.assertEqual(adapter.json.loads(output.read_text())["status"], "publication_failed")
+                if fault == "link":
+                    self.assertEqual(adapter.json.loads(retained.read_text())["status"], "publication_failed")
+
+    def test_shared_fixture_closure_names_external_authorities(self) -> None:
+        import json
+        shared = adapter.qualification
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            read_file = root / "read.bin"
+            read_file.write_bytes(b"read")
+            write_file = root / "write.jpg"
+            write_file.write_bytes(b"\xff\xd8write")
+            native_file = root / "native.bin"
+            native_file.write_bytes(b"native")
+            def manifest(name, kind, fixture):
+                path = root / name
+                path.write_text(json.dumps({"schema": 1, "kind": kind, "fixtures": [{
+                    "path": str(fixture), "sha256": adapter.sha(fixture),
+                    "bytes": fixture.stat().st_size}]}))
+                return path
+            read_manifest = manifest("read.json", "oxidex_version_rehearsal_fixture_manifest", read_file)
+            write_manifest = manifest("write.json", "oxidex_version_rehearsal_write_fixture_manifest", write_file)
+            read_binding = shared.executor._fixture_binding(str(read_manifest),
+                kind="oxidex_version_rehearsal_fixture_manifest", jpeg_only=False)
+            write_binding = shared.executor._write_fixture_binding(str(write_manifest))
+            run_dir = root / "run"
+            (run_dir / "inputs").mkdir(parents=True)
+            (run_dir / "inputs" / "config.json").write_text(json.dumps({
+                "read_fixture_manifests": {"13.59": str(read_manifest)},
+                "read_fixture_bindings": {"13.59": read_binding},
+                "write_fixture_manifests": {"13.59": str(write_manifest)},
+                "write_fixture_bindings": {"13.59": write_binding},
+                "native_cases": {"13.59": [{"name": "fixture"}]}}))
+            corpus_manifest = root / "combined-samples.manifest"
+            corpus_manifest.write_text("fixture\n")
+            storage = root / "evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json"
+            storage.parent.mkdir(parents=True)
+            storage.write_text("{}\n")
+            authority = {"ops_root": str(root), "bootstrap_pin": "13.59",
+                         "corpus": str(root / "combined-samples"),
+                         "corpus_tree_sha256": "a" * 64,
+                         "manifest": {"path": str(corpus_manifest),
+                                      "sha256": adapter.sha(corpus_manifest), "file_count": 1}}
+            row = {"read_union": {"original_manifests": {
+                "before": read_binding, "after": read_binding}}}
+            with ExitStack() as patches:
+                patches.enter_context(patch.object(shared, "_evidence_location",
+                    side_effect=lambda path, _label: Path(path).resolve()))
+                patches.enter_context(patch.object(shared, "_fixture_corpus_authority",
+                    return_value=authority))
+                patches.enter_context(patch.object(shared, "_native_fixture_bindings",
+                    return_value=[{"path": str(native_file)}]))
+                patches.enter_context(patch.object(shared.ops_paths, "ops_root", return_value=root))
+                dependencies = shared.replay_fixture_dependencies(
+                    row, "before", run_dir, "13.59", {"fixture_corpus": authority})
+            self.assertEqual({item["path"] for item in dependencies}, {
+                *(str(path.resolve()) for path in (read_manifest, read_file, write_manifest,
+                    write_file, native_file, corpus_manifest, storage))})
+            self.assertTrue(all(item["sha256"] == adapter.sha(Path(item["path"]))
+                                for item in dependencies))
+
     def test_publication_invalidation_failure_preserves_outcome_unknown(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "receipt.json"
@@ -478,6 +559,36 @@ class Task19AdapterControls(unittest.TestCase):
                 natives[release] = {"source": {"path": str(native_source)},
                                     "lib": {"path": str(native_source / "lib")},
                                     "perl": {"path": str(perl)}}
+            bundle = root / "provisioned" / "verified-inputs"
+            bundle.mkdir(parents=True)
+            archive_cache = root / "selected-archive-cache"
+            (archive_cache / "archives").mkdir(parents=True)
+            selected = []
+            for release in sources:
+                archive_path = archive_cache / "archives" / f"{release}.tar.gz"
+                archive_path.write_bytes(f"selected archive {release}\n".encode())
+                digest = adapter.sha(archive_path)
+                resolved_path = archive_cache / "archives" / f"{digest}.tar.gz"
+                archive_path.rename(resolved_path)
+                selected.append({"release": release, "archive": {"sha256": digest,
+                    "bytes": resolved_path.stat().st_size,
+                    "cache_key": f"archives/{digest}.tar.gz"}})
+            documents = {
+                "capture": {"schema": 1, "kind": "fixture-capture"},
+                "catalog": {"schema": 1, "kind": "fixture-catalog"},
+                "plan": {"pairs": [{"old": {"release": release, "tag_object": "d" * 40,
+                    "peeled_commit": commit}, "new": {"release": release,
+                    "tag_object": "d" * 40, "peeled_commit": commit}} for release in sources]},
+                "resolution": {"selected_releases": selected},
+                "materialization": {"selected_releases": [
+                    {"release": release, "source_directory": sources[release]["source_directory"],
+                     "tree": {"tree_sha256": sources[release]["source_tree_sha256"]}}
+                    for release in sources], "materialization_sha256": "f" * 64},
+                "locations": {"schema": 1, "kind": "oxidex_version_transition_input_locations",
+                    "archive_cache": str(archive_cache), "source_root": str(source_root)},
+            }
+            for name, document in documents.items():
+                (bundle / f"{name}.json").write_text(json.dumps(document))
             policy = root / "policy.json"
             policy.write_text('{}')
             repo = root / "checkout"
@@ -514,7 +625,7 @@ class Task19AdapterControls(unittest.TestCase):
                     (side_run / "inputs").mkdir(parents=True)
                     (side_run / "execution-status.json").write_text('{}')
                     (side_run / "inputs" / "config.json").write_text(json.dumps({
-                        "verified_input_bundle": str(root / "bundle")}))
+                        "verified_input_bundle": str(bundle)}))
                     sides[side] = {"release": release, "source_identity": sources[release],
                                    "instrument": {"source_commit": expected_head,
                                                   "binary": binaries[(row_name, side)],
@@ -541,9 +652,10 @@ class Task19AdapterControls(unittest.TestCase):
             def test_check(*_args):
                 checks.append("test")
                 return {"passed": 1}
-            def source_check(identity, _bundle):
+            real_source_resolver = adapter.qualification.resolve_source_identity
+            def source_check(identity, selected_bundle):
                 checks.append("source")
-                return {**sources[identity["expected_release"]], "source_root": str(source_root)}
+                return real_source_resolver(identity, selected_bundle)
             def report_for(_run, _journal, _release, stage):
                 return {"state": "passed"} if stage == "test" else {"build_environment": {}}
             output = root / "verified.json"
@@ -556,20 +668,32 @@ class Task19AdapterControls(unittest.TestCase):
                 argv.extend(["--expected-tool", f"{name}={digest}"])
             for (row_name, side), identity in binaries.items():
                 argv.extend(["--expected-binary", f"{row_name}:{side}:{identity['path']}:{identity['sha256']}"])
-            with patch.object(adapter, "ROOT", repo), \
-                 patch.object(adapter, "require_imported_source_paths"), \
-                 patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: Path(path).resolve()), \
-                 patch.object(adapter.qualification, "load_matrix", return_value={"rows": [{"id": row} for row in adapter.ROWS]}), \
-                 patch.object(adapter.qualification, "load_committed_result", side_effect=lambda path: json.loads(path.read_text())), \
-                 patch.object(adapter.qualification, "_report_for", side_effect=report_for), \
-                 patch.object(adapter.qualification, "_build_environment_receipt", side_effect=build_check), \
-                 patch.object(adapter.qualification, "_release_test_receipt", side_effect=test_check), \
-                 patch.object(adapter.executor, "_require_test_suite_proof"), \
-                 patch.object(adapter.qualification, "resolve_source_identity", side_effect=source_check), \
-                 patch.object(adapter, "replay_committed_write", return_value={
-                     "writer_binary": {"path": str(next(iter(binaries.values()))["path"]),
-                                       "sha256": "4" * 64}}), \
-                 redirect_stderr(io.StringIO()) as error, redirect_stdout(io.StringIO()):
+            with ExitStack() as patches:
+                for context in (
+                    patch.object(adapter, "ROOT", repo),
+                    patch.object(adapter, "require_imported_source_paths"),
+                    patch.object(adapter.qualification, "_evidence_location", side_effect=lambda path, _label: Path(path).resolve()),
+                    patch.object(adapter.qualification, "load_matrix", return_value={"rows": [{"id": row} for row in adapter.ROWS]}),
+                    patch.object(adapter.qualification, "load_committed_result", side_effect=lambda path: json.loads(path.read_text())),
+                    patch.object(adapter.qualification, "_report_for", side_effect=report_for),
+                    patch.object(adapter.qualification, "_build_environment_receipt", side_effect=build_check),
+                    patch.object(adapter.qualification, "_release_test_receipt", side_effect=test_check),
+                    patch.object(adapter.qualification, "replay_fixture_dependencies",
+                                 return_value=[{"path": str(policy.resolve()), "sha256": adapter.sha(policy),
+                                                "bytes": policy.stat().st_size}]),
+                    patch.object(adapter.executor, "_require_test_suite_proof"),
+                    patch.object(adapter.qualification.catalog_stage, "verify_capture_binding"),
+                    patch.object(adapter.qualification.rehearsal, "verify_plan"),
+                    patch.object(adapter.qualification.catalog_stage, "verify_source_resolution"),
+                    patch.object(adapter.qualification.catalog_stage, "verify_source_materialization"),
+                    patch.object(adapter.qualification, "resolve_source_identity", side_effect=source_check),
+                    patch.object(adapter, "replay_committed_write", return_value={
+                        "writer_binary": {"path": str(next(iter(binaries.values()))["path"]),
+                                          "sha256": "4" * 64}}),
+                ):
+                    patches.enter_context(context)
+                error = patches.enter_context(redirect_stderr(io.StringIO()))
+                patches.enter_context(redirect_stdout(io.StringIO()))
                 self.assertEqual(adapter.main(argv), 0, error.getvalue())
                 self.assertEqual(json.loads(output.read_text())["git"]["path"], system_git)
                 self.assertEqual(adapter.source_snapshot(expected_head, expected_tree, adapter.bind_git())["head"], expected_head)
@@ -604,7 +728,10 @@ class Task19AdapterControls(unittest.TestCase):
                 self.assertTrue(close_failed)
                 self.assertEqual(json.loads(close_output.read_text())["status"], "publication_failed")
 
-                for target_name, target in (("subordinate", subordinate), ("source", owned_source)):
+                selected_archive = archive_cache / selected[0]["archive"]["cache_key"]
+                for target_name, target in (("subordinate", subordinate), ("source", owned_source),
+                                            ("bundle-document", bundle / "materialization.json"),
+                                            ("selected-archive", selected_archive)):
                     for window in ("write", "fsync"):
                         original = target.read_bytes()
                         changed = False
@@ -636,6 +763,53 @@ class Task19AdapterControls(unittest.TestCase):
                             self.assertEqual(json.loads(fault_output.read_text())["status"], "publication_failed")
                         finally:
                             target.write_bytes(original)
+                for window in ("final-validation", "marker-close"):
+                    for action in ("replace", "remove"):
+                        fault_output = root / f"output-{window}-{action}.json"
+                        retained = root / f"retained-{window}-{action}.json"
+                        foreign_bytes = b'{"owner":"foreign"}\n'
+                        changed = False
+                        wrote_success = False
+                        original_snapshot = adapter.subordinate_snapshot
+                        def lose_output():
+                            nonlocal changed
+                            if changed:
+                                return
+                            os.link(fault_output, retained)
+                            if action == "replace":
+                                replacement = root / f"foreign-{window}-{action}.json"
+                                replacement.write_bytes(foreign_bytes)
+                                os.replace(replacement, fault_output)
+                            else:
+                                fault_output.unlink()
+                            changed = True
+                        def mark_success(fd, payload):
+                            nonlocal wrote_success
+                            original_write(fd, payload)
+                            if b'verified_read_only' in payload:
+                                wrote_success = True
+                        def snapshot_then_lose(*args):
+                            if wrote_success and window == "final-validation":
+                                lose_output()
+                            return original_snapshot(*args)
+                        def close_then_lose(fd):
+                            marker_fd = os.fstat(fd).st_ino in marker_inodes
+                            original_close(fd)
+                            if wrote_success and marker_fd and window == "marker-close":
+                                lose_output()
+                        fault_argv = list(argv)
+                        fault_argv[fault_argv.index("--output") + 1] = str(fault_output)
+                        with ExitStack() as controls:
+                            controls.enter_context(patch.object(adapter, "_write_owned_state", side_effect=mark_success))
+                            controls.enter_context(patch.object(adapter, "subordinate_snapshot", side_effect=snapshot_then_lose))
+                            controls.enter_context(patch.object(adapter.os, "close", side_effect=close_then_lose))
+                            self.assertEqual(adapter.main(fault_argv), 4)
+                        self.assertTrue(changed)
+                        self.assertEqual(json.loads(retained.read_text())["status"], "publication_failed")
+                        if action == "replace":
+                            self.assertEqual(fault_output.read_bytes(), foreign_bytes)
+                        else:
+                            self.assertFalse(fault_output.exists())
                 forged = json.loads(markers[0].read_text())
                 forged["rows"][0]["before"]["instrument"]["native_identity"]["source"]["path"] = (
                     natives["11.78"]["source"]["path"])

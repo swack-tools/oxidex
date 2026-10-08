@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import stat
 import sys
 import tempfile
 import threading
@@ -367,6 +368,28 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
     if (not isinstance(source_directory, str) or not isinstance(tree, dict)
             or not isinstance(tree.get("tree_sha256"), str)):
         raise Refused("materialized source identity is incomplete")
+    # Emit the files the shared resolver actually consumed. A publisher cannot
+    # reconstruct this closure from a run directory: provisioned bundles and
+    # content-addressed archives normally live beside it.
+    dependencies = []
+    for name, document in zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True):
+        path = _evidence_location(bundle / f"{name}.json", f"{name} input")
+        if _read_object(path, f"{name} input") != document:
+            raise Refused(f"{name} input changed during source resolution")
+        dependencies.append(_source_dependency(path, f"{name} input", 16 * 1024 * 1024))
+    locations_path = _evidence_location(bundle / "locations.json", "verified input locations")
+    if _read_object(locations_path, "verified input locations") != locations:
+        raise Refused("verified input locations changed during source resolution")
+    dependencies.append(_source_dependency(locations_path, "verified input locations", 16 * 1024 * 1024))
+    for selected in resolution["selected_releases"]:
+        archive = selected["archive"]
+        path = _evidence_location(
+            catalog_stage._archive_cache_path(archive_cache, archive["cache_key"]),
+            "selected source archive")
+        binding = _source_dependency(path, "selected source archive", catalog_stage.MAX_ARCHIVE_BYTES)
+        if binding["sha256"] != archive["sha256"] or binding["bytes"] != archive["bytes"]:
+            raise Refused("selected source archive changed during resolution")
+        dependencies.append(binding)
     return {
         "release": release,
         "tag_object": plan_side.get("tag_object"),
@@ -378,7 +401,22 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
         "archive_cache": str(archive_cache),
         "source_root": str(source_root),
         "documents": dict(zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True)),
+        "dependencies": dependencies,
     }
+
+
+def _source_dependency(path: Path, label: str, limit: int) -> dict[str, Any]:
+    """Bind one canonical durable regular input with a bounded byte count."""
+    path = _evidence_location(path, label)
+    observed = path.lstat()
+    if not stat.S_ISREG(observed.st_mode) or observed.st_size < 1 or observed.st_size > limit:
+        raise Refused(f"{label} must be a bounded regular file")
+    digest = _sha_file(path)
+    after = path.lstat()
+    if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+            observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns):
+        raise Refused(f"{label} changed while binding")
+    return {"path": str(path), "sha256": digest, "bytes": observed.st_size}
 
 
 def _file_binding(file_path: Path, label: str) -> dict[str, Any]:
@@ -406,6 +444,55 @@ def _native_fixture_bindings(cases: list[Any]) -> list[dict[str, Any]]:
     if not bindings:
         raise Refused("at least one native case fixture is required")
     return bindings
+
+
+def replay_fixture_dependencies(row: Mapping[str, Any], side: str, run_dir: Path,
+                                release: str, release_tests: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Resolve external files consulted by the committed fixture validators."""
+    config = _read_object(run_dir / "inputs" / "config.json", "execution config")
+    bindings = []
+    try:
+        for name, kind, jpeg_only in (
+                ("read", "oxidex_version_rehearsal_fixture_manifest", False),
+                ("write", executor._WRITE_FIXTURE_KIND, True)):
+            path = config[f"{name}_fixture_manifests"][release]
+            current = executor._fixture_binding(path, kind=kind, jpeg_only=jpeg_only)
+            saved = config.get(f"{name}_fixture_bindings")
+            if saved is not None and current != saved[release]:
+                raise Refused(f"{name} fixture dependency differs from committed config")
+            bindings.append(current)
+        originals = row["read_union"]["original_manifests"]
+        for name in SIDES:
+            current = executor._fixture_binding(
+                originals[name]["path"], kind="oxidex_version_rehearsal_fixture_manifest",
+                jpeg_only=False)
+            if current != originals[name]:
+                raise Refused("original read fixture dependency changed")
+            bindings.append(current)
+        cases = config["native_cases"][release]
+        bindings.extend(_native_fixture_bindings(cases))
+        corpus = release_tests["fixture_corpus"]
+        authority = _fixture_corpus_authority()
+        if any(corpus.get(key) != authority[key] for key in (
+                "ops_root", "bootstrap_pin", "corpus", "corpus_tree_sha256", "manifest")):
+            raise Refused("release test fixture authority changed")
+        import importlib.util
+        script = REPOSITORY_ROOT / "tools" / "release" / "bootstrap_oracle.py"
+        spec = importlib.util.spec_from_file_location("oxidex_replay_bootstrap_oracle", script)
+        if spec is None or spec.loader is None:
+            raise Refused("oracle bootstrap cannot be loaded")
+        bootstrap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bootstrap)
+        storage = _evidence_location(Path(bootstrap.manifest_path(ops_paths.ops_root())),
+                                     "oracle storage manifest")
+        paths = [Path(binding["path"]) for binding in bindings]
+        paths.extend(Path(fixture["path"]) for binding in bindings
+                     for fixture in binding.get("fixtures", []))
+        paths.extend((Path(authority["manifest"]["path"]), storage))
+        return [_source_dependency(path, "verified fixture dependency", 128 * 1024 * 1024)
+                for path in sorted(set(paths))]
+    except (KeyError, TypeError, executor.Refused) as exc:
+        raise Refused(f"committed fixture dependency closure is incomplete: {exc}") from exc
 
 
 def _freeze_side_inputs(row: Mapping[str, Any], side: str) -> dict[str, Any]:

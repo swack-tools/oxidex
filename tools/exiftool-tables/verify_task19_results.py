@@ -480,6 +480,8 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             build = qualification._report_for(run_dir, journal, release, "build")
             build_environment = qualification._build_environment_receipt(build, release, checkout)
             release_tests = qualification._release_test_receipt(run_dir, journal, release)
+            fixture_dependencies = qualification.replay_fixture_dependencies(
+                row, side, run_dir, release, release_tests)
             test_report = qualification._report_for(run_dir, journal, release, "test")
             executor._require_test_suite_proof(test_report)
             if entry.get("build_environment") != build_environment or entry.get("release_tests") != release_tests:
@@ -499,6 +501,8 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             binaries[side] = expected
             sides[side] = {"release": release, "source_identity": verified_source,
                            "source_root": source_identity["source_root"],
+                           "source_dependencies": source_identity["dependencies"],
+                           "fixture_dependencies": fixture_dependencies,
                            "native_identity": instrument["native_identity"],
                            "read_fixture_manifest_sha256": instrument["read_fixture_manifest_sha256"],
                            "read_report_sha256": entry["read_report_sha256"],
@@ -552,6 +556,30 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
             files.add(Path(proof["committed_write"]["writer_binary"]["path"]))
             files.add(Path(native["lib"]["path"]) / "Image" / "ExifTool.pm")
             files.add(Path(native["perl"]["path"]))
+            source_dependencies = proof.get("source_dependencies")
+            fixture_dependencies = proof.get("fixture_dependencies")
+            if (not isinstance(source_dependencies, list) or len(source_dependencies) < 7
+                    or not isinstance(fixture_dependencies, list) or not fixture_dependencies):
+                refuse("verified input dependency closure is incomplete")
+            dependencies = source_dependencies + fixture_dependencies
+            for dependency in dependencies:
+                if (not isinstance(dependency, dict)
+                        or set(dependency) != {"path", "sha256", "bytes"}
+                        or not isinstance(dependency["path"], str)
+                        or not HEX64.fullmatch(str(dependency["sha256"]))
+                        or type(dependency["bytes"]) is not int or dependency["bytes"] < 1):
+                    refuse("verified source dependency binding is malformed")
+                path = qualification._evidence_location(
+                    Path(dependency["path"]), "verified source dependency")
+                if str(path) != dependency["path"]:
+                    refuse("verified source dependency is not canonical")
+                observed = path.lstat()
+                if (not stat.S_ISREG(observed.st_mode)
+                        or observed.st_size != dependency["bytes"]
+                        or observed.st_size > qualification.catalog_stage.MAX_ARCHIVE_BYTES
+                        or qualification._sha_file(path) != dependency["sha256"]):
+                    refuse("verified source dependency changed during replay")
+                files.add(path)
     for directory in directories:
         if not directory.is_dir():
             refuse("committed evidence directory disappeared during replay")
@@ -612,18 +640,30 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
     try:
         recovery = os.dup(descriptor)
         owned = os.fstat(descriptor)
+        def check_output_custody() -> None:
+            try:
+                current = output.lstat()
+                retained = os.fstat(recovery)
+            except FileNotFoundError as exc:
+                raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
+            except OSError as exc:
+                raise qualification.OutcomeUnknown("Task19 output custody cannot be established") from exc
+            if ((current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino)
+                    or (retained.st_dev, retained.st_ino) != (owned.st_dev, owned.st_ino)):
+                raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+            if (not stat.S_ISREG(current.st_mode) or not stat.S_ISREG(retained.st_mode)
+                    or current.st_nlink != 1 or retained.st_nlink != 1
+                    or stat.S_IMODE(current.st_mode) != 0o600
+                    or stat.S_IMODE(retained.st_mode) != 0o600
+                    or current.st_uid != owned.st_uid):
+                refuse("Task19 output lost regular, private, single-link custody")
         _write_owned_state(descriptor, pending)
         if validate_inputs is not None:
             validate_inputs()
         _write_owned_state(descriptor, payload)
         for directory in dict.fromkeys(changed):
             qualification._fsync_directory(directory)
-        try:
-            current = output.lstat()
-        except FileNotFoundError as exc:
-            raise qualification.OutcomeUnknown("Task19 output disappeared during publication") from exc
-        if (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino):
-            raise qualification.OutcomeUnknown("Task19 output was replaced during publication")
+        check_output_custody()
         if validate_inputs is not None:
             validate_inputs()
         if close_inputs is not None:
@@ -634,6 +674,7 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
             os.close(closing)
         except OSError as exc:
             raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
+        check_output_custody()
     except BaseException:
         # Recovery remains open even if the primary descriptor's close failed.
         # Every callback/cleanup failure must invalidate success. No pathname
