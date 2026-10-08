@@ -1310,11 +1310,7 @@ fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
         };
         let on = read(normal.path(), false);
         let off = read(normal.path(), true);
-        assert_eq!(
-            on.get(&key),
-            Some(&Value::String("Hi".into())),
-            "{id:#06x}"
-        );
+        assert_eq!(on.get(&key), Some(&Value::String("Hi".into())), "{id:#06x}");
         assert!(
             !off.contains_key(&key),
             "{id:#06x} generated-off must lose exact key"
@@ -1327,8 +1323,11 @@ fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
         // hand fallback must survive both mode settings, with the same typed
         // public value; this is a separate branch from the normal carrier.
         let declined = tempfile::NamedTempFile::new().expect("decline carrier");
-        std::fs::write(declined.path(), task18_xp_carrier(id, &[0x3c, 0xd8, 0x8c, 0xdf, 0, 0]))
-            .expect("write decline carrier");
+        std::fs::write(
+            declined.path(),
+            task18_xp_carrier(id, &[0x3c, 0xd8, 0x8c, 0xdf, 0, 0]),
+        )
+        .expect("write decline carrier");
         let fallback = read_metadata(declined.path()).expect("public fallback XP read");
         let fallback_rows: Vec<_> = fallback
             .project_occurrences(ValueChannel::PrintConv)
