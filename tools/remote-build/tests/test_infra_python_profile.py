@@ -118,7 +118,8 @@ class InfraPythonProfileTests(unittest.TestCase):
             self.assertFalse(marker.exists(), 'unsigned source filter ran before rejection')
             receipt = json.loads((root / 'evidence/remote-build.json').read_text())
             self.assertEqual(receipt['source_commit'], head)
-            self.assertEqual(receipt['source_status'], '')
+            # Rejected unsigned external source has not had working files read.
+            self.assertIsNone(receipt['source_status'])
             self.assertNotIn('source_provenance', receipt)
             payload.write_text('changed bytes\n')
             self.assertIn('payload', remote_build.source_clean_status(source, head))

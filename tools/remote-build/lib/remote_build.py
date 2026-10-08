@@ -163,8 +163,51 @@ def _caller_excludes(source: Path) -> bytes:
         os.close(fd)
 
 
-def pinned_toolchain(source):
-    pin = tomllib.loads((source/'rust-toolchain.toml').read_text())['toolchain']['channel']
+MAX_TOOLCHAIN_PIN_BYTES = 16 * 1024
+
+
+def _signed_toolchain_text(source, head):
+    """Read only the authenticated HEAD pin blob, with fixed byte/time bounds."""
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Toolchain pin HEAD identity refused')
+    env = source_git_env()
+    deadline = time.monotonic() + 5
+    def git(arguments, limit, data=None):
+        return infra_repository_binding._bounded_command(
+            ['/usr/bin/git', '-C', str(source), *arguments], env, limit,
+            deadline-time.monotonic(), data=data)
+    entry = git(['ls-tree', '-z', head, '--', 'rust-toolchain.toml'], 256)
+    match = re.fullmatch(rb'(?:100644|100755) blob ([0-9a-f]{40})\trust-toolchain.toml\0', entry)
+    if not match:
+        raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
+    oid = match[1].decode('ascii')
+    info = git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+               128, (oid+'\n').encode())
+    match = re.fullmatch(rb'([0-9a-f]{40}) blob ([0-9]{1,12})\n', info)
+    if not match or match[1].decode() != oid:
+        raise RuntimeError('Toolchain pin blob identity refused')
+    size = int(match[2])
+    if not 0 < size <= MAX_TOOLCHAIN_PIN_BYTES:
+        raise RuntimeError('Toolchain pin blob exceeds fixed bound')
+    # Do not let the subsequent general status scan stream a huge substituted
+    # pin, or parse a FIFO/symlink. No working-tree pin bytes are opened here.
+    info = (source/'rust-toolchain.toml').lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+        raise RuntimeError('Toolchain pin worktree type or size differs from signed blob')
+    raw = git(['cat-file', 'blob', oid], size)
+    if (len(raw) != size or
+            hashlib.sha1(b'blob '+str(size).encode()+b'\0'+raw).hexdigest() != oid):
+        raise RuntimeError('Toolchain pin blob hash or size differs')
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        raise RuntimeError('Toolchain pin blob is not UTF-8') from None
+
+
+def pinned_toolchain(source, *, signed_head=None):
+    text = (_signed_toolchain_text(source, signed_head) if signed_head is not None
+            else (source/'rust-toolchain.toml').read_text())
+    pin = tomllib.loads(text)['toolchain']['channel']
     if not re.fullmatch(r'\d+\.\d+\.\d+', pin):
         raise RuntimeError('A numeric Rust toolchain pin is required')
     try:
@@ -1122,14 +1165,17 @@ def main(argv=None):
     archive=evidence/'remote-source.tar.gz'
     try:
         receipt['stage']='local_toolchain'
-        receipt['toolchain']=pinned_toolchain(source)
+        if not infra_python:
+            receipt['toolchain']=pinned_toolchain(source)
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
                                                         text=True,env=source_git_env()).strip()
         receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
                                                       text=True,env=source_git_env()).strip()
-        receipt['source_status']=source_clean_status(source, receipt['source_commit'])
+        # External source is authenticated before its pin or working files are read.
+        receipt['source_status'] = (None if infra_python else
+            source_clean_status(source, receipt['source_commit']))
         if args.just_recipe == 'freeze-linux-perl':
             source_tree=receipt['source_tree']
             if args.just_arg != [receipt['source_commit'], source_tree]:
@@ -1162,6 +1208,11 @@ def main(argv=None):
                     source, receipt['source_commit'], frozen_signer, signer_digest)
                 receipt['infra_repository_binding'] = infra_repository_binding.admit(
                     source, receipt['source_commit'], receipt['source_tree'], source_git_env())
+                receipt['toolchain'] = pinned_toolchain(
+                    source, signed_head=receipt['source_commit'])
+                receipt['source_status'] = source_clean_status(source, receipt['source_commit'])
+                if receipt['source_status']:
+                    raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
             else:
                 _verify_signed_source_with_frozen_signer(
                     source, receipt['source_commit'], frozen_signer, signer_digest)
