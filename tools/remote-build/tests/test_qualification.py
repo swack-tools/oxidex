@@ -1,8 +1,9 @@
 """Safety boundaries for the Spot qualification transport."""
 import hashlib
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,31 @@ from unittest.mock import patch
 
 import qualification
 sys.path.insert(0, str(qualification.ROOT))
+
+
+@contextmanager
+def canonical_git_fixture(prepare):
+    """Commit the shipped carrier in a tiny repository for Git-bound checks."""
+    carrier = (qualification.ROOT / prepare.WRITE_COHORT).read_bytes()
+    if (len(carrier) != prepare.WRITE_COHORT_BYTES
+            or hashlib.sha256(carrier).hexdigest() != prepare.WRITE_COHORT_SHA256):
+        raise AssertionError("test source does not contain the Task19 carrier")
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        checkout = root / prepare.WRITE_COHORT
+        checkout.parent.mkdir(parents=True)
+        checkout.write_bytes(carrier)
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        def git(*args):
+            return subprocess.run(["git", "-C", str(root), *args], env=env,
+                                  check=True, capture_output=True)
+        git("init", "-q")
+        git("add", prepare.WRITE_COHORT)
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "-qm", "canonical carrier")
+        with patch.dict(os.environ, env, clear=True), patch.object(prepare, "ROOT", root):
+            yield root, checkout, carrier, git
 
 
 class QualificationTransportTests(unittest.TestCase):
@@ -448,19 +474,28 @@ if __name__ == "__main__":
 class RestrictedPreparationTests(unittest.TestCase):
     def test_committed_canonical_write_carrier_is_copied_into_new_output(self):
         import qualification_prepare as prepare
-        with TemporaryDirectory() as directory:
-            output = Path(directory)
+        with canonical_git_fixture(prepare) as (root, checkout, carrier, git):
+            output = root / "output"
             row = prepare.canonical_write_carrier(output)
             self.assertEqual(row, {"path": str(output / "write-cohort/tag_matrix_base.jpg"),
                                    "sha256": prepare.WRITE_COHORT_SHA256, "bytes": 771})
             self.assertEqual(prepare.sha(Path(row["path"])), prepare.WRITE_COHORT_SHA256)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 prepare.canonical_write_carrier(output)
+            checkout.write_bytes(carrier[:-1] + bytes([carrier[-1] ^ 1]))
+            with self.assertRaisesRegex(ValueError, "differs from Task19 contract"):
+                prepare.canonical_write_carrier(root / "checkout-corrupt")
+            self.assertFalse((root / "checkout-corrupt").exists())
+            git("add", prepare.WRITE_COHORT)
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "-qm", "corrupt carrier")
+            with self.assertRaisesRegex(ValueError, "differs from Task19 contract"):
+                prepare.canonical_write_carrier(root / "committed-corrupt")
+            self.assertFalse((root / "committed-corrupt").exists())
 
     def test_write_rebinding_uses_canonical_copy_and_checks_approved_source(self):
         import qualification_prepare as prepare
-        with TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+        with canonical_git_fixture(prepare) as (root, _, _, _):
             source = root / "source"
             images = source / "t/images"
             images.mkdir(parents=True)
@@ -560,6 +595,28 @@ class RestrictedPreparationTests(unittest.TestCase):
                     transport.download(FakeTransport(), "/target/proof.json", local, "0" * 64)
             self.assertFalse(local.exists())
             self.assertEqual(list(local.parent.iterdir()), [])
+
+
+class ArchiveContextPreparationTests(unittest.TestCase):
+    def test_canonical_unit_paths_run_from_gitless_uploaded_source(self):
+        """Both complete carrier tests must pass with an ordinary /src root."""
+        import qualification_prepare as prepare
+        with TemporaryDirectory() as directory:
+            source = Path(directory).resolve() / "source"
+            carrier = source / prepare.WRITE_COHORT
+            carrier.parent.mkdir(parents=True)
+            carrier.write_bytes((qualification.ROOT / prepare.WRITE_COHORT).read_bytes())
+            self.assertFalse((source / ".git").exists())
+            probe = subprocess.run(["git", "-C", str(source), "rev-parse", "--is-inside-work-tree"],
+                                   capture_output=True, text=True)
+            self.assertNotEqual(probe.returncode, 0)
+            tests = unittest.TestSuite(RestrictedPreparationTests(name) for name in (
+                "test_committed_canonical_write_carrier_is_copied_into_new_output",
+                "test_write_rebinding_uses_canonical_copy_and_checks_approved_source"))
+            with patch.object(qualification, "ROOT", source), patch.object(prepare, "ROOT", source):
+                result = unittest.TextTestRunner(stream=io.StringIO()).run(tests)
+            self.assertEqual(result.testsRun, 2)
+            self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
 
 class ArchiveReplayCompletenessTests(unittest.TestCase):
     def test_success_requires_all_three_archived_markers_and_full_loader(self):
