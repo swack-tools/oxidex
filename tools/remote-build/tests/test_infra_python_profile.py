@@ -277,7 +277,7 @@ class InfraPythonProfileTests(unittest.TestCase):
                     ssh=lambda command: ['ssh', command],
                     scp=lambda local, remote, download=False: ['scp', str(local), remote])
                 def fake_run(command, **kwargs):
-                    if command[0] in ('git', '/usr/bin/ssh-keygen'):
+                    if command[0] in ('git', '/usr/bin/git', '/usr/bin/ssh-keygen'):
                         return actual_run(command, **kwargs)
                     remote_commands.append(command)
                     if 'stdout' in kwargs and hasattr(kwargs['stdout'], 'write'):
