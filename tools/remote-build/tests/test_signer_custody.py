@@ -106,12 +106,21 @@ class SignerCustodyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'short-read'):
                     remote_build.freeze_signer(original, evidence)
             real_read = os.read
+            # A same-size write can share a filesystem timestamp tick. Replacing
+            # the path changes its inode on both Linux and macOS.
+            replacement = root / 'replacement'
+            replacement.write_bytes(b'attacker\n')
+            swaps = []
             def mutate_during_read(fd, count):
-                original.write_bytes(b'attacker\n')
+                if not swaps:
+                    os.replace(replacement, original)
+                    swaps.append(True)
                 return real_read(fd, count)
             with patch.object(remote_build.os, 'read', side_effect=mutate_during_read):
                 with self.assertRaisesRegex(RuntimeError, 'changed or was short-read'):
                     remote_build.freeze_signer(original, evidence)
+            self.assertEqual(original.read_bytes(), b'attacker\n')
+            self.assertEqual(len(swaps), 1)
             self.assertFalse(list(evidence.iterdir()))
 
     def test_main_packages_approved_bytes_after_external_path_changes(self):
