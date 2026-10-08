@@ -16,6 +16,9 @@ class QualificationTestRunnerControls(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertIn("tools/exiftool-tables/test_verify_task19_results.py", names)
         self.assertIn("tools/exiftool-tables/test_version_transition_read_policy.py", names)
+        rehearsal = {path.stem for path in runner.TABLES.glob("test_version_rehearsal*.py")}
+        self.assertEqual({name for name in runner.TABLE_MODULES
+                          if name.startswith("test_version_rehearsal")}, rehearsal)
         self.assertEqual(runner.SUITES[0][1][-2:], ("-p", "test_qualification*.py"))
         seen = []
         with patch("route.main", side_effect=lambda args: seen.append(("guard", args))), \
@@ -29,7 +32,7 @@ class QualificationTestRunnerControls(unittest.TestCase):
         manifest = json.loads(next(line.split(" ", 1)[1] for line in output.getvalue().splitlines()
                                    if line.startswith("QUALIFICATION_PYTHON_MANIFEST ")))
         self.assertEqual(manifest["source_head"], "a" * 40)
-        self.assertEqual(len(manifest["suites"]), 8)
+        self.assertEqual(len(manifest["suites"]), 13)
         self.assertIn("no Task19 rows or corpus gate", manifest["claim"])
 
     def test_suite_failure_is_not_reported_as_success(self):

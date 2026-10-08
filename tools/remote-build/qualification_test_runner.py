@@ -19,8 +19,13 @@ TABLE_MODULES = (
     "test_verify_task19_results",
     "test_qualification_bootstrap_boundary",
     "test_version_transition_read_policy",
-    "test_version_rehearsal_executor",
+    "test_version_rehearsal",
+    "test_version_rehearsal_catalog",
     "test_version_rehearsal_clean_snapshot",
+    "test_version_rehearsal_executor",
+    "test_version_rehearsal_native_oracle",
+    "test_version_rehearsal_raw_maps",
+    "test_version_rehearsal_stage_adapter",
     "test_conformance",
 )
 SUITES = (
