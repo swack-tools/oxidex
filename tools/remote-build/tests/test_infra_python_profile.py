@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 import json
 import os
+import hashlib
 from unittest.mock import patch
 
 from lib import remote_build
@@ -239,7 +240,7 @@ class InfraPythonProfileTests(unittest.TestCase):
             git('init', '-q')
             git('remote', 'add', 'origin', 'git@github.com:swack-tools/spot-github-runners.git')
             members = {name: b'signed\n' for name in remote_build.INFRA_PYTHON_REQUIRED}
-            members['justfile'] = b'infra-python-tests:\n    echo signed\n'
+            members['justfile'] = b"infra-python-tests:\n    echo 'Ran 854 tests'\n    echo OK\n"
             members['rust-toolchain.toml'] = b'[toolchain]\nchannel = "1.99.0"\n'
             for name, contents in members.items():
                 path = source / name
@@ -263,6 +264,13 @@ class InfraPythonProfileTests(unittest.TestCase):
                                  remote_build.INFRA_PYTHON_REQUIRED)
                 with tarfile.open(archive, 'r:gz') as stream:
                     self.assertEqual(stream.extractfile('justfile').read(), members['justfile'])
+                with patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1):
+                    manifest, manifest_raw = remote_build.infra_python_manifest(source, head)
+                self.assertEqual(manifest['modules'], [{'path':'tests/test_builder_c9_proof_repairs.py',
+                    'sha256':hashlib.sha256(members['tests/test_builder_c9_proof_repairs.py']).hexdigest(),
+                    'module':'test_builder_c9_proof_repairs'}])
+                self.assertEqual(hashlib.sha256(manifest_raw).hexdigest(),
+                    hashlib.sha256(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()).hexdigest())
                 actual_run = subprocess.run
                 remote_commands = []
                 transport = SimpleNamespace(instance_id='2', host='192.0.2.1',
@@ -273,7 +281,7 @@ class InfraPythonProfileTests(unittest.TestCase):
                         return actual_run(command, **kwargs)
                     remote_commands.append(command)
                     if 'stdout' in kwargs and hasattr(kwargs['stdout'], 'write'):
-                        kwargs['stdout'].write('synthetic recipe result\n')
+                        kwargs['stdout'].write('Ran 854 tests in 1.0s\n\nOK\n')
                     return SimpleNamespace(returncode=0)
                 evidence = root / 'evidence'
                 with patch.dict(os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': str(root / 'known')}), \
@@ -282,8 +290,10 @@ class InfraPythonProfileTests(unittest.TestCase):
                      patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
                      patch.object(remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0', 'rustc_commit': 'a'*40}), \
                      patch.object(remote_build, 'verify_remote_toolchain'), \
-                     patch.object(remote_build.subprocess, 'run', side_effect=fake_run):
-                    remote_build.main(['--source', str(source), '--instance', 'builder-vm',
+                     patch.object(remote_build.subprocess, 'run', side_effect=fake_run), \
+                     patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1):
+                    with self.assertRaises(Exception):
+                        remote_build.main(['--source', str(source), '--instance', 'builder-vm',
                         '--zone', 'zone', '--instance-id', '2', '--worktree-id', 'fixture',
                         '--evidence-dir', str(evidence), '--source-profile', 'infra-python-v1',
                         '--just-recipe', 'infra-python-tests'])
@@ -294,7 +304,13 @@ class InfraPythonProfileTests(unittest.TestCase):
                 self.assertEqual(receipt['source_origin_check'], 'raw_local_config_allowlist')
                 self.assertEqual(receipt['source_tree'], git('rev-parse', 'HEAD^{tree}'))
                 self.assertEqual(receipt['source_provenance'], 'signed_exact_head_infra_python_v1')
-                self.assertEqual(receipt['validation_scope'], 'infra_python_unittest_only')
+                self.assertNotIn('validation_scope', receipt)
+                self.assertEqual(receipt['infra_python_manifest_sha256'],hashlib.sha256(manifest_raw).hexdigest())
+                self.assertIn('infra-python-test-manifest.json',
+                    {row['path'] for row in receipt['snapshot']['files']})
+                self.assertNotIn('verified', receipt)
+                self.assertEqual(receipt['infra_python_proof_state'], 'PENDING')
+                self.assertTrue(receipt['remote_retained'])
                 self.assertTrue(receipt['remote_toolchain_verified'])
                 self.assertEqual(receipt['recipe_exit_code'], 0)
                 self.assertTrue(receipt['remote_command'].endswith('just infra-python-tests'))
@@ -401,3 +417,101 @@ class InfraPythonProfileTests(unittest.TestCase):
                 self.assertEqual(receipt['source_commit'], unsigned)
                 self.assertEqual(receipt['source_tree'], git('rev-parse', 'HEAD^{tree}',
                     env=remote_build.source_git_env()))
+
+
+class InfraPythonProofControls(unittest.TestCase):
+    def fixture(self):
+        head = 'a'*40
+        manifest = {'schema':1, 'kind':'infra_python_test_manifest_v1',
+                    'source_commit':head,
+                    'modules':[{'path':'tests/test_one.py','sha256':'b'*64,'module':'test_one'},
+                               {'path':'tests/test_two.py','sha256':'c'*64,'module':'test_two'}]}
+        raw = json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()
+        manifest_hash = hashlib.sha256(raw).hexdigest()
+        log = b'two actual unittest cases\n'
+        proof = {'schema':1,'kind':'infra_python_unittest_v1','source_commit':head,
+                 'manifest_sha256':manifest_hash,
+                 'runner_argv':remote_build.INFRA_PYTHON_RUNNER_ARGV,
+                 'unittest_argv':remote_build.INFRA_PYTHON_UNITTEST_ARGV,
+                 'discovery':remote_build.INFRA_PYTHON_DISCOVERY,
+                 'python_executable':'/opt/build-tools/python3','discovered_tests':2,
+                 'tests_run':2,'module_counts':{'test_one':1,'test_two':1},
+                 'failures':0,'errors':0,'skipped':0,'expected_failures':0,
+                 'unexpected_successes':0,'success':True,'exit_code':0,'status':'PASS',
+                 'diagnostic_log_sha256':hashlib.sha256(log).hexdigest()}
+        return head,manifest,manifest_hash,log,proof
+
+    def test_strict_result_refuses_noop_partial_wrong_head_and_forgery(self):
+        head,manifest,manifest_hash,log,proof = self.fixture()
+        def check(value):
+            return remote_build.validate_infra_python_proof(
+                json.dumps(value).encode(),manifest,head,manifest_hash,
+                hashlib.sha256(log).hexdigest())
+        with patch.object(remote_build,'INFRA_PYTHON_MIN_TESTS',2), \
+             patch.object(remote_build,'INFRA_PYTHON_MIN_MODULES',2):
+            self.assertEqual(check(proof)['tests_run'],2)
+            mutations=[{'source_commit':'d'*40},{'manifest_sha256':'e'*64},
+                       {'runner_argv':['echo','signed']},{'unittest_argv':['echo','Ran 854 tests']},
+                       {'discovery':{'start_dir':'tests','pattern':'other*.py','top_level_dir':None}},
+                       {'discovered_tests':0,'tests_run':0,'module_counts':{}},
+                       {'discovered_tests':1},{'module_counts':{'test_one':2}},
+                       {'module_counts':{'test_one':1,'test_two':True}},
+                       {'failures':1},{'skipped':1},{'errors':1},
+                       {'expected_failures':1},{'unexpected_successes':1},
+                       {'success':False},{'exit_code':1},{'status':'FAIL'},
+                       {'diagnostic_log_sha256':'0'*64}]
+            for changes in mutations:
+                with self.subTest(changes=changes),self.assertRaises(RuntimeError):
+                    check({**proof,**changes})
+            for raw in (b'{}',b'{"schema":1,"schema":1}',b'{"schema":NaN}',
+                        b' '* (remote_build.INFRA_PYTHON_PROOF_LIMIT+1)):
+                with self.subTest(raw=raw[:30]),self.assertRaises(RuntimeError):
+                    remote_build.validate_infra_python_proof(raw,manifest,head,
+                        manifest_hash,hashlib.sha256(log).hexdigest())
+        with self.assertRaises(RuntimeError):
+            check(proof)  # Production 854/82 floors never relax through the CLI.
+
+    def test_fixed_remote_artifacts_are_hashed_and_actual_log_downloaded(self):
+        head,manifest,manifest_hash,log,proof = self.fixture()
+        proof_raw=json.dumps(proof,sort_keys=True).encode()
+        run_id='infra-'+'a'*32
+        base='/mnt/runner-data/remote-build/targets/'+run_id+'/'
+        remote={base+'infra-python-test-proof.json':proof_raw,
+                base+'infra-python-test.log':log}
+        def ssh(command):return ['ssh',command]
+        def scp(local,path,download=False):
+            self.assertTrue(download)
+            return ['scp',path,str(local)]
+        transport=SimpleNamespace(scp=scp)
+        def checksum(command,**kwargs):
+            path=command[1].removeprefix('sha256sum ')
+            return hashlib.sha256(remote[path]).hexdigest()+'  '+path+'\n'
+        def copy(command,**kwargs):
+            Path(command[2]).write_bytes(remote[command[1]])
+            return SimpleNamespace(returncode=0)
+        with tempfile.TemporaryDirectory() as folder, \
+             patch.object(remote_build,'INFRA_PYTHON_MIN_TESTS',2), \
+             patch.object(remote_build,'INFRA_PYTHON_MIN_MODULES',2), \
+             patch.object(remote_build.subprocess,'check_output',side_effect=checksum), \
+             patch.object(remote_build.subprocess,'run',side_effect=copy):
+            root=Path(folder)
+            summary, artifacts=remote_build.retrieve_infra_python_proof(
+                transport,ssh,'builder','zone','project',run_id,root,head,manifest,manifest_hash)
+            self.assertEqual(summary['module_count'],2)
+            self.assertEqual(artifacts['infra-python-test.log']['sha256'],hashlib.sha256(log).hexdigest())
+            self.assertEqual((root/'infra-python-test.log').read_bytes(),log)
+            remote[base+'infra-python-test.log']=b'forged diagnostic log\n'
+            rejected=root/'rejected';rejected.mkdir()
+            with self.assertRaisesRegex(RuntimeError,'identity or result differs'):
+                remote_build.retrieve_infra_python_proof(transport,ssh,'builder','zone','project',
+                    run_id,rejected,head,manifest,manifest_hash)
+            # The remote stat/hash can precede a changed SCP payload; local bytes
+            # must still match the previously observed digest.
+            transfer=root/'changed-transfer';transfer.mkdir()
+            remote[base+'infra-python-test.log']=log
+            with patch.object(remote_build.subprocess,'check_output',return_value=(
+                    hashlib.sha256(proof_raw).hexdigest()+'  '+base+'infra-python-test-proof.json\n')):
+                remote[base+'infra-python-test-proof.json']=proof_raw+b'changed'
+                with self.assertRaisesRegex(RuntimeError,'checksum differs'):
+                    remote_build.retrieve_infra_python_proof(transport,ssh,'builder','zone','project',
+                        run_id,transfer,head,manifest,manifest_hash)

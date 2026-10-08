@@ -41,8 +41,16 @@ INFRA_PYTHON_ORIGINS = frozenset({
 INFRA_PYTHON_REQUIRED = frozenset({
     'justfile', 'rust-toolchain.toml', 'src/lib/host_admission.py',
     'src/lib/qualification_trust/control_engine.py',
-    'tests/test_builder_c9_proof_repairs.py',
+    'tests/test_builder_c9_proof_repairs.py', 'tools/infra_python_test_proof.py',
 })
+INFRA_PYTHON_MIN_TESTS = 854
+INFRA_PYTHON_MIN_MODULES = 82
+INFRA_PYTHON_PROOF_LIMIT = 64 * 1024
+INFRA_PYTHON_LOG_LIMIT = 16 * 1024 * 1024
+INFRA_PYTHON_RUNNER_ARGV = ['python3', '-B', 'tools/infra_python_test_proof.py']
+INFRA_PYTHON_UNITTEST_ARGV = ['python3', '-B', '-m', 'unittest', 'discover',
+                              '-s', 'tests', '-p', 'test_*.py', '-v']
+INFRA_PYTHON_DISCOVERY = {'start_dir':'tests', 'pattern':'test_*.py', 'top_level_dir':None}
 
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -495,6 +503,152 @@ def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> di
     return signed
 
 
+def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
+    """Bind the complete top-level unittest discovery set to signed blob bytes."""
+    signed = signed_snapshot_files(source, head, source_profile=INFRA_PYTHON_PROFILE)
+    modules = []
+    for name, (object_id, _) in sorted(signed.items()):
+        if not re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name):
+            continue
+        data = subprocess.check_output(['git', '-C', str(source), 'cat-file', 'blob', object_id],
+                                       env=source_git_env())
+        modules.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
+                        'module': Path(name).stem})
+    if len(modules) < INFRA_PYTHON_MIN_MODULES:
+        raise RuntimeError('Signed infrastructure unittest module floor not met')
+    manifest = {'schema': 1, 'kind': 'infra_python_test_manifest_v1',
+                'source_commit': head, 'modules': modules}
+    raw = json.dumps(manifest, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    if len(raw) > INFRA_PYTHON_PROOF_LIMIT:
+        raise RuntimeError('Infrastructure unittest manifest exceeds fixed bound')
+    return manifest, raw
+
+
+def _infra_json_pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError('Duplicate infrastructure proof JSON key')
+        result[key] = value
+    return result
+
+
+def _infra_json_constant(value):
+    raise ValueError('Non-finite infrastructure proof JSON value: ' + value)
+
+
+def validate_infra_python_proof(raw: bytes, manifest: dict, source_commit: str,
+                                manifest_sha256: str, diagnostic_log_sha256: str) -> dict:
+    """Validate actual unittest result fields; SSH recipe text has no authority."""
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= INFRA_PYTHON_PROOF_LIMIT:
+        raise RuntimeError('Infrastructure unittest proof byte bound differs')
+    try:
+        proof = json.loads(raw.decode('utf-8'), object_pairs_hook=_infra_json_pairs,
+                           parse_constant=_infra_json_constant)
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError('Infrastructure unittest proof JSON invalid') from exc
+    fields = {'schema', 'kind', 'source_commit', 'manifest_sha256', 'runner_argv',
+              'unittest_argv', 'discovery', 'python_executable', 'discovered_tests',
+              'tests_run', 'module_counts', 'failures', 'errors', 'skipped',
+              'expected_failures', 'unexpected_successes', 'success', 'exit_code',
+              'status', 'diagnostic_log_sha256'}
+    if not isinstance(proof, dict) or set(proof) != fields:
+        raise RuntimeError('Infrastructure unittest proof schema differs')
+    if (type(proof['schema']) is not int or proof['schema'] != 1
+            or proof['kind'] != 'infra_python_unittest_v1'
+            or proof['source_commit'] != source_commit
+            or proof['manifest_sha256'] != manifest_sha256
+            or proof['runner_argv'] != INFRA_PYTHON_RUNNER_ARGV
+            or proof['unittest_argv'] != INFRA_PYTHON_UNITTEST_ARGV
+            or proof['discovery'] != INFRA_PYTHON_DISCOVERY
+            or not isinstance(proof['python_executable'], str)
+            or not proof['python_executable'].startswith('/')
+            or proof['diagnostic_log_sha256'] != diagnostic_log_sha256
+            or proof['status'] != 'PASS' or proof['success'] is not True):
+        raise RuntimeError('Infrastructure unittest proof identity or result differs')
+    for key in ('discovered_tests', 'tests_run', 'failures', 'errors', 'skipped',
+                'expected_failures', 'unexpected_successes', 'exit_code'):
+        if type(proof[key]) is not int or proof[key] < 0:
+            raise RuntimeError('Infrastructure unittest proof count invalid')
+    if (proof['discovered_tests'] < INFRA_PYTHON_MIN_TESTS
+            or proof['tests_run'] != proof['discovered_tests']
+            or any(proof[key] != 0 for key in ('failures', 'errors', 'skipped',
+                            'expected_failures', 'unexpected_successes', 'exit_code'))):
+        raise RuntimeError('Infrastructure unittest suite did not complete and pass')
+    expected = {row['module'] for row in manifest['modules']}
+    counts = proof['module_counts']
+    if (len(expected) < INFRA_PYTHON_MIN_MODULES or len(expected) != len(manifest['modules'])
+            or not isinstance(counts, dict) or set(counts) != expected
+            or any(type(value) is not int or value <= 0 for value in counts.values())
+            or sum(counts.values()) != proof['tests_run']):
+        raise RuntimeError('Infrastructure unittest module discovery incomplete')
+    return {'tests_run': proof['tests_run'], 'module_count': len(counts),
+            'source_commit': source_commit, 'status': 'PASS'}
+
+
+def _download_infra_python_bytes(transport, instance, zone, project, remote: str,
+                                 local: Path, expected_sha256: str, maximum: int) -> bytes:
+    """Fetch one fixed target artifact with existing checked SCP transport."""
+    import tempfile
+    if (not re.fullmatch(r'[0-9a-f]{64}', expected_sha256)
+            or local.exists() or local.is_symlink()):
+        raise RuntimeError('Infrastructure proof destination or checksum differs')
+    descriptor, name = tempfile.mkstemp(prefix='.infra-python-proof-', dir=local.parent)
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        command = (transport.scp(temporary, remote, download=True) if transport else
+            ['gcloud', 'compute', 'scp', ssh_transport.target(instance)+':'+remote,
+             str(temporary), '--zone='+zone, '--project='+project, '--quiet',
+             *SCP_KEEPALIVE, *ssh_transport.flags('scp')])
+        subprocess.run(command, check=True, preexec_fn=lambda: resource.setrlimit(
+            resource.RLIMIT_FSIZE, (maximum, maximum)))
+        fd = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or not 0 < before.st_size <= maximum):
+                raise RuntimeError('Infrastructure proof artifact exceeds fixed bound')
+            raw = os.read(fd, maximum + 1)
+            after = os.fstat(fd)
+            if (len(raw) != before.st_size or
+                    (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+                     before.st_ctime_ns) !=
+                    (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+                     after.st_ctime_ns) or
+                    hashlib.sha256(raw).hexdigest() != expected_sha256):
+                raise RuntimeError('Infrastructure proof artifact changed or checksum differs')
+        finally:
+            os.close(fd)
+        temporary.replace(local)
+        return raw
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def retrieve_infra_python_proof(transport, ssh, instance, zone, project, run_id,
+                                evidence, source_commit, manifest, manifest_sha256):
+    target = '/mnt/runner-data/remote-build/targets/' + run_id
+    artifacts = (('infra-python-test-proof.json', INFRA_PYTHON_PROOF_LIMIT),
+                 ('infra-python-test.log', INFRA_PYTHON_LOG_LIMIT))
+    downloaded = {}
+    for name, maximum in artifacts:
+        remote = target + '/' + name
+        observed = subprocess.check_output(ssh('sha256sum ' + shlex.quote(remote)),
+                                           text=True).split()
+        if len(observed) != 2 or not re.fullmatch(r'[0-9a-f]{64}', observed[0]) or observed[1] != remote:
+            raise RuntimeError('Infrastructure proof remote checksum unavailable')
+        local = evidence / name
+        raw = _download_infra_python_bytes(transport, instance, zone, project,
+                                           remote, local, observed[0], maximum)
+        downloaded[name] = {'sha256': observed[0], 'bytes': len(raw), 'path': str(local), 'raw': raw}
+    summary = validate_infra_python_proof(downloaded['infra-python-test-proof.json']['raw'],
+                  manifest, source_commit, manifest_sha256,
+                  downloaded['infra-python-test.log']['sha256'])
+    return summary, {name: {key: value for key, value in item.items() if key != 'raw'}
+                     for name, item in downloaded.items()}
+
+
 def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
     if source_profile is not None and signed_head is None:
         raise RuntimeError('Signed source profile requires exact HEAD')
@@ -783,6 +937,13 @@ def main(argv=None):
             extra_files={'repository.bundle':bundle,
                          'maintainer.allowed_signers':signer_path,
                          'fleet-source-head':source_head}
+            if infra_python:
+                infra_manifest, manifest_bytes = infra_python_manifest(source, receipt['source_commit'])
+                manifest_file = evidence/'infra-python-test-manifest.json'
+                manifest_file.write_bytes(manifest_bytes)
+                receipt['infra_python_manifest_sha256'] = hashlib.sha256(manifest_bytes).hexdigest()
+                receipt['infra_python_manifest_modules'] = len(infra_manifest['modules'])
+                extra_files['infra-python-test-manifest.json'] = manifest_file
             if component:
                 extra_files['approved-linux-perl.json']=envelope
         if infra_python:
@@ -796,7 +957,6 @@ def main(argv=None):
             receipt['snapshot']=make_snapshot(source,archive)
         if infra_python:
             receipt['source_provenance']='signed_exact_head_infra_python_v1'
-            receipt['validation_scope']='infra_python_unittest_only'
         if extra_files:
             receipt['fleet_source_bundle_sha256']=next(
                 row['sha256'] for row in receipt['snapshot']['files']
@@ -925,6 +1085,25 @@ def main(argv=None):
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
         if args.just_recipe:
             receipt['stage']='verify'
+            if infra_python:
+                receipt['infra_python_proof_state']='PENDING'
+                save()
+                summary, artifacts = retrieve_infra_python_proof(
+                    transport, ssh, args.instance, args.zone, args.project, args.worktree_id,
+                    evidence, receipt['source_commit'], infra_manifest,
+                    receipt['infra_python_manifest_sha256'])
+                after_head=subprocess.check_output(
+                    ['git','-C',str(source),'rev-parse','HEAD'],
+                    text=True,env=source_git_env()).strip()
+                if (after_head != receipt['source_commit']
+                        or source_clean_status(source, receipt['source_commit'])
+                        or eligible_snapshot_paths(source) != receipt['snapshot']['eligible_paths']):
+                    raise RuntimeError('Infrastructure source changed during remote measurement')
+                receipt['infra_python_test_proof']=summary
+                receipt['infra_python_test_artifacts']=artifacts
+                receipt['infra_python_proof_state']='VALIDATED'
+                receipt['validation_scope']='infra_python_unittest_only'
+                save()
             binary_kind={'build':'debug','build-bin':'debug',
                          'build-release-local':'release','build-bin-release':'release'}.get(args.just_recipe)
             if binary_kind:
