@@ -244,6 +244,71 @@ class ClientTests(unittest.TestCase):
                 git('config','--worktree','core.excludesFile','')
                 self.assertIn('wanted.txt',assert_match())
 
+    def test_clean_status_and_snapshot_share_global_ignore(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','init','-q',str(source)],check=True)
+            (source/'tracked.txt').write_text('tracked\n')
+            subprocess.run(['/usr/bin/git','-C',str(source),'add','tracked.txt'],check=True)
+            subprocess.run(['/usr/bin/git','-C',str(source),'-c','user.name=Test',
+                            '-c','user.email=test@example.invalid','commit','-qm','base'],check=True)
+            head=subprocess.check_output(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+            (source/'credentials.json').write_text('private\n')
+            (source/'public.txt').write_text('public\n')
+            ignore=root/'global-ignore';ignore.write_text('credentials.json\n')
+            config=root/'global-config';config.write_text('[core]\nexcludesFile = '+str(ignore)+'\n')
+            environment={k:v for k,v in os.environ.items()
+                         if k not in ('GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS','GIT_CONFIG_NOSYSTEM')}
+            environment.update(HOME=str(root),GIT_CONFIG_GLOBAL=str(config))
+            with patch.dict(os.environ,environment,clear=True):
+                self.assertEqual(remote_build.source_clean_status(source,head),'?? public.txt\n')
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),
+                                 ['public.txt','tracked.txt'])
+                receipt=remote_build.make_snapshot(source,root/'packet.tar.gz')
+                self.assertEqual([row['path'] for row in receipt['files']],
+                                 ['public.txt','tracked.txt'])
+                with tarfile.open(root/'packet.tar.gz') as packet:
+                    self.assertEqual(packet.getnames(),['public.txt','tracked.txt'])
+
+    def test_nosystem_keeps_default_ignore_in_status_and_snapshot(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','init','-q',str(source)],check=True)
+            (source/'tracked.txt').write_text('tracked\n')
+            subprocess.run(['/usr/bin/git','-C',str(source),'add','tracked.txt'],check=True)
+            subprocess.run(['/usr/bin/git','-C',str(source),'-c','user.name=Test',
+                            '-c','user.email=test@example.invalid','commit','-qm','base'],check=True)
+            head=subprocess.check_output(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+            (source/'credentials.json').write_text('private\n')
+            (source/'public.txt').write_text('public\n')
+            default=root/'xdg/git/ignore';default.parent.mkdir(parents=True)
+            default.write_text('credentials.json\n')
+            system=root/'system';system.write_text('[core]\nexcludesFile =\n')
+            environment={k:v for k,v in os.environ.items()
+                         if k not in ('GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS')}
+            environment.update(HOME=str(root),XDG_CONFIG_HOME=str(root/'xdg'),
+                GIT_CONFIG_GLOBAL='/dev/null',GIT_CONFIG_SYSTEM=str(system),
+                GIT_CONFIG_NOSYSTEM='1')
+            with patch.dict(os.environ,environment,clear=True):
+                actual=subprocess.check_output(['/usr/bin/git','-C',str(source),'ls-files',
+                    '-z','--cached','--others','--exclude-standard'],env=os.environ).decode()
+                self.assertEqual(sorted(filter(None,actual.split('\0'))),
+                                 ['public.txt','tracked.txt'])
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),
+                                 ['public.txt','tracked.txt'])
+                self.assertEqual(remote_build.source_clean_status(source,head),'?? public.txt\n')
+                receipt=remote_build.make_snapshot(source,root/'packet.tar.gz')
+                self.assertEqual([row['path'] for row in receipt['files']],
+                                 ['public.txt','tracked.txt'])
+                with tarfile.open(root/'packet.tar.gz') as packet:
+                    self.assertEqual(packet.getnames(),['public.txt','tracked.txt'])
+
     def test_ordinary_snapshot_uses_default_user_ignore_and_refuses_unreadable_policy(self):
         import os
         from unittest.mock import patch

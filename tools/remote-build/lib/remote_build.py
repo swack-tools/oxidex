@@ -192,12 +192,30 @@ def _caller_excludes(source: Path) -> bytes:
             env[key] = os.environ[key]
         else:
             env.pop(key, None)
-    env.pop('GIT_CONFIG_NOSYSTEM', None)
+    if 'GIT_CONFIG_NOSYSTEM' in os.environ:
+        env['GIT_CONFIG_NOSYSTEM'] = os.environ['GIT_CONFIG_NOSYSTEM']
+    else:
+        env.pop('GIT_CONFIG_NOSYSTEM', None)
     env['GIT_CONFIG_COUNT'] = '0'
     for suffix in ('KEY_0', 'VALUE_0', 'KEY_1', 'VALUE_1', 'KEY_2', 'VALUE_2'):
         env.pop('GIT_CONFIG_' + suffix, None)
     selected = None
-    for scope in ('--system', '--global', '--local', '--worktree'):
+    no_system = os.environ.get('GIT_CONFIG_NOSYSTEM', '').lower()
+    if no_system not in ('', '0', 'false', 'no', 'off', '1', 'true', 'yes', 'on'):
+        raise RuntimeError('Caller Git system configuration policy is unsupported')
+    scopes = (('--global', '--local', '--worktree') if no_system in ('1', 'true', 'yes', 'on')
+              else ('--system', '--global', '--local', '--worktree'))
+    # Git rejects an explicit --worktree query for linked worktrees unless the
+    # common repository enabled worktreeConfig. In that case there is no
+    # worktree configuration scope to contribute an exclusion value.
+    enabled = _git_run(['/usr/bin/git', '-C', str(source), 'config', '--local',
+                        '--no-includes', '--bool', '--get', 'extensions.worktreeConfig'],
+                       env=env, capture_output=True, timeout=GIT_ADMISSION_TIMEOUT)
+    if enabled.returncode not in (0, 1) or enabled.stdout not in (b'', b'true\n', b'false\n'):
+        raise RuntimeError('Caller Git worktree configuration is unavailable')
+    if enabled.returncode == 1 or enabled.stdout == b'false\n':
+        scopes = tuple(scope for scope in scopes if scope != '--worktree')
+    for scope in scopes:
         prefix = ['/usr/bin/git', '-C', str(source), 'config', scope, '--no-includes', '--null']
         for query in (['--name-only', '--get-regexp', '^include'],
                       ['--path', '--get-all', 'core.excludesFile']):
@@ -796,28 +814,34 @@ def source_clean_status(source: Path, head: str) -> str:
             digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         if digest != object_id:
             changed.append(' M ' + name)
-    untracked = _git_check_output(
-        ['git', '-C', str(source), 'ls-files', '--others', '--exclude-standard', '-z'], env=env)
+    untracked = _list_files_with_caller_ignore(source, include_cached=False)
     changed.extend('?? ' + os.fsdecode(name) for name in filter(None, untracked.split(b'\0')))
     return '\n'.join(changed) + ('\n' if changed else '')
 
 
-def eligible_snapshot_paths(source: Path) -> list[str]:
-    """Enumerate tracked plus nonignored untracked files under existing exclusions."""
-    _local_config_preflight(source)
-    command = ['git','-C',str(source),'ls-files','-z',
-               '--cached','--others','--exclude-standard']
+def _list_files_with_caller_ignore(source: Path, *, include_cached: bool) -> bytes:
+    """Use one frozen caller ignore policy for status and snapshot paths."""
     patterns = _caller_excludes(source)
     env = source_git_env()
-    # The frozen data is core.excludesFile, Git's lowest ignore tier. It must
-    # not become --exclude-from, which has command-line priority over .gitignore.
+    # core.excludesFile is Git's lowest ignore tier. --exclude-from would
+    # override .gitignore negations instead of preserving actual precedence.
     with tempfile.TemporaryFile() as excludes:
         excludes.write(patterns); excludes.flush(); excludes.seek(0)
         fd = excludes.fileno()
         env['GIT_CONFIG_COUNT'] = '4'
         env['GIT_CONFIG_KEY_3'] = 'core.excludesFile'
         env['GIT_CONFIG_VALUE_3'] = '/dev/fd/' + str(fd)
-        listed = _git_check_output(command, env=env, pass_fds=(fd,))
+        command = ['git', '-C', str(source), 'ls-files', '-z']
+        if include_cached:
+            command.append('--cached')
+        command.extend(('--others', '--exclude-standard'))
+        return _git_check_output(command, env=env, pass_fds=(fd,))
+
+
+def eligible_snapshot_paths(source: Path) -> list[str]:
+    """Enumerate tracked plus nonignored untracked files under existing exclusions."""
+    _local_config_preflight(source)
+    listed = _list_files_with_caller_ignore(source, include_cached=True)
     names = set(listed.decode().split('\0'))
     eligible=[]
     for name in names:
