@@ -390,6 +390,18 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
         if binding["sha256"] != archive["sha256"] or binding["bytes"] != archive["bytes"]:
             raise Refused("selected source archive changed during resolution")
         dependencies.append(binding)
+    materialized_trees = []
+    for selected in materialization["selected_releases"]:
+        source = _evidence_location(source_root / selected["source_directory"],
+                                    "selected materialized source")
+        if (source != source_root / selected["source_directory"]
+                or source.parent != source_root or source.is_symlink() or not source.is_dir()):
+            raise Refused("selected materialized source directory changed during resolution")
+        tree_identity = catalog_stage._tree_identity(source)
+        if tree_identity != selected["tree"]:
+            raise Refused("selected materialized source tree changed during resolution")
+        materialized_trees.append({"path": str(source),
+                                   "tree_sha256": tree_identity["tree_sha256"]})
     return {
         "release": release,
         "tag_object": plan_side.get("tag_object"),
@@ -402,6 +414,7 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
         "source_root": str(source_root),
         "documents": dict(zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True)),
         "dependencies": dependencies,
+        "materialized_trees": materialized_trees,
     }
 
 

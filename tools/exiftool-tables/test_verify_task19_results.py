@@ -239,6 +239,147 @@ class Task19AdapterControls(unittest.TestCase):
                 earlier.write_text('{"state":"tampered"}')
                 self.assertNotEqual(adapter.subordinate_snapshot(tuple(roots), value), before)
 
+    def test_real_selected_extra_source_tree_closes_publication_inventory(self) -> None:
+        import json
+        import test_version_rehearsal_catalog as catalog_fixture
+        import test_version_rehearsal_native_oracle as native_fixture
+
+        shared = adapter.qualification
+        ops_root = shared.ops_paths.ops_root()
+        ops_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(dir=ops_root, prefix="task19-tree-control-") as directory:
+            root = Path(directory)
+            capture = shared.catalog_stage.capture_tag_catalog(
+                catalog_fixture.FixtureGet(catalog_fixture.complete_responses()),
+                "2026-09-13T00:00:00Z")
+            catalog = shared.rehearsal.normalize_catalog(
+                shared.catalog_stage.raw_catalog_from_capture(capture))
+            plan = shared.rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+            selected = {item["release"]: item for pair in plan["pairs"]
+                        for item in (pair["old"], pair["new"])}
+            self.assertEqual(set(selected), {"13.57", "13.59"})
+            responses = {
+                shared.catalog_stage.immutable_archive_url(release, item["peeled_commit"]):
+                catalog_fixture.response(native_fixture.archive_bytes(release))
+                for release, item in selected.items()}
+            cache, sources = root / "cache", root / "sources"
+            resolution = shared.catalog_stage.resolve_selected_archives(
+                plan, catalog, capture, catalog_fixture.FixtureGet(responses), cache)
+            materialization = shared.catalog_stage.materialize_selected_sources(
+                plan, catalog, capture, resolution, cache, sources)
+            bundle = root / "provisioned" / "13.59"
+            bundle.mkdir(parents=True)
+            for name, document in zip(shared.INPUT_NAMES,
+                                       (capture, catalog, plan, resolution, materialization), strict=True):
+                (bundle / f"{name}.json").write_text(json.dumps(document))
+            (bundle / "locations.json").write_text(json.dumps({
+                "schema": 1, "kind": "oxidex_version_transition_input_locations",
+                "archive_cache": str(cache), "source_root": str(sources)}))
+            identity = shared.resolve_source_identity({"expected_release": "13.59"}, bundle)
+            self.assertEqual(len(identity["materialized_trees"]), 2)
+            extra = next(item for item in materialization["selected_releases"]
+                         if item["release"] == "13.57")
+            extra_dir = sources / extra["source_directory"]
+            extra_file = extra_dir / "exiftool"
+            original = extra_file.read_bytes()
+            paths = []
+            for number in range(3):
+                run = root / f"run{number}"
+                run.mkdir()
+                marker = run / "qualification-result.json"
+                marker.write_text("{}\n")
+                paths.append(marker)
+            policy, perl, binary = (root / name for name in ("policy.json", "perl", "oxidex"))
+            for path in (policy, perl, binary):
+                path.write_text("{}\n")
+            native = sources / identity["source_directory"]
+            source_fields = ("release", "tag_object", "peeled_commit", "source_directory",
+                             "source_tree_sha256", "materialization_sha256")
+            proof = {
+                "source_identity": {key: identity[key] for key in source_fields},
+                "source_root": identity["source_root"],
+                "source_dependencies": identity["dependencies"],
+                "materialized_trees": identity["materialized_trees"],
+                "fixture_dependencies": [shared._source_dependency(policy, "fixture", 1024)],
+                "native_identity": {"source": {"path": str(native)},
+                                    "lib": {"path": str(native / "lib")},
+                                    "perl": {"path": str(perl)}},
+                "committed_write": {"writer_binary": {"path": str(binary)}}}
+            value = {"status": "verified_read_only", "read_policy_input": {"path": str(policy)},
+                     "rows": {"same-pin-13.59": {"sides": {side: proof for side in shared.SIDES},
+                                               "binaries": {side: {"path": str(binary)}
+                                                            for side in shared.SIDES}}}}
+            for window in ("payload-write", "directory-fsync"):
+                for change in ("mutate", "add", "remove", "empty-directory", "mode", "symlink"):
+                    with self.subTest(window=window, change=change):
+                        baseline = adapter.subordinate_snapshot(tuple(paths), value)
+                        self.assertIn(str(extra_file), baseline)
+                        output = root / f"{window}-{change}" / "receipt.json"
+                        extra_added = extra_dir / "added.txt"
+                        extra_empty = extra_dir / "added-empty"
+                        extra_link = extra_dir / "added-link"
+                        original_mode = extra_file.stat().st_mode & 0o777
+
+                        def alter() -> None:
+                            if change == "mutate":
+                                extra_file.write_bytes(original + b"changed")
+                            elif change == "add":
+                                extra_added.write_bytes(b"new")
+                            elif change == "remove":
+                                extra_file.unlink()
+                            elif change == "empty-directory":
+                                extra_empty.mkdir()
+                            elif change == "mode":
+                                extra_file.chmod(original_mode ^ 0o100)
+                            else:
+                                extra_link.symlink_to("exiftool")
+
+                        calls = 0
+                        altered = False
+                        def validate() -> None:
+                            nonlocal calls
+                            calls += 1
+                            if adapter.subordinate_snapshot(tuple(paths), value) != baseline:
+                                raise shared.Refused("selected source tree changed")
+
+                        original_write = adapter._write_owned_state
+                        original_sync = shared._fsync_directory
+                        def write_then_alter(descriptor: int, payload: bytes) -> None:
+                            original_write(descriptor, payload)
+                            if window == "payload-write" and b'verified_read_only' in payload:
+                                alter()
+
+                        def sync_then_alter(path: Path) -> None:
+                            nonlocal altered
+                            original_sync(path)
+                            if window == "directory-fsync" and not altered:
+                                altered = True
+                                alter()
+
+                        try:
+                            with patch.object(adapter, "_write_owned_state", side_effect=write_then_alter), \
+                                 patch.object(shared, "_fsync_directory", side_effect=sync_then_alter):
+                                with self.assertRaisesRegex(shared.Refused, "source tree changed"):
+                                    adapter.publish_receipt_no_replace(
+                                        output, value, validate_inputs=validate)
+                            self.assertEqual(calls, 2)
+                            self.assertEqual(json.loads(output.read_text())["status"],
+                                             "publication_failed")
+                        finally:
+                            if change == "add":
+                                extra_added.unlink(missing_ok=True)
+                            elif change == "empty-directory":
+                                extra_empty.rmdir()
+                            elif change == "mode":
+                                extra_file.chmod(original_mode)
+                            elif change == "symlink":
+                                extra_link.unlink(missing_ok=True)
+                            else:
+                                extra_file.write_bytes(original)
+                        self.assertEqual(shared.resolve_source_identity(
+                            {"expected_release": "13.59"}, bundle)["materialized_trees"],
+                                         identity["materialized_trees"])
+
     def test_no_replace_publication_and_failed_durability_retract(self) -> None:
         with TemporaryDirectory() as directory:
             output = Path(directory) / "receipt.json"
@@ -302,6 +443,58 @@ class Task19AdapterControls(unittest.TestCase):
                 self.assertEqual(adapter.json.loads(output.read_text())["status"], "publication_failed")
                 if fault == "link":
                     self.assertEqual(adapter.json.loads(retained.read_text())["status"], "publication_failed")
+
+    def test_final_output_bytes_refuse_same_inode_changes(self) -> None:
+        with TemporaryDirectory() as directory:
+            for window in ("final-validation", "input-close", "primary-close"):
+                for change in ("overwrite", "truncate", "extend"):
+                    with self.subTest(window=window, change=change):
+                        output = Path(directory) / f"{window}-{change}.json"
+                        original_close = os.close
+                        validation_calls = 0
+                        changed = False
+
+                        def mutate() -> None:
+                            nonlocal changed
+                            before = output.stat()
+                            with output.open("r+b", buffering=0) as stream:
+                                if change == "overwrite":
+                                    stream.seek(0)
+                                    stream.write(b"X")
+                                elif change == "truncate":
+                                    stream.truncate(1)
+                                else:
+                                    stream.seek(0, os.SEEK_END)
+                                    stream.write(b"X")
+                            changed = (before.st_dev, before.st_ino) == (
+                                output.stat().st_dev, output.stat().st_ino)
+
+                        def validate() -> None:
+                            nonlocal validation_calls
+                            validation_calls += 1
+                            if validation_calls == 2 and window == "final-validation":
+                                mutate()
+
+                        def close_inputs() -> None:
+                            if window == "input-close":
+                                mutate()
+
+                        def close_then_mutate(descriptor: int) -> None:
+                            is_output = os.fstat(descriptor).st_ino == output.stat().st_ino
+                            original_close(descriptor)
+                            if window == "primary-close" and is_output and not changed:
+                                mutate()
+
+                        with patch.object(adapter.os, "close", side_effect=close_then_mutate):
+                            with self.assertRaisesRegex(adapter.qualification.Refused,
+                                                        "output bytes changed"):
+                                adapter.publish_receipt_no_replace(
+                                    output, {"status": "verified_read_only", "owner": "expected"},
+                                    validate_inputs=validate, close_inputs=close_inputs)
+                        self.assertTrue(changed)
+                        self.assertEqual(validation_calls, 2)
+                        self.assertEqual(adapter.json.loads(output.read_text())["status"],
+                                         "publication_failed")
 
     def test_shared_fixture_closure_names_external_authorities(self) -> None:
         import json
@@ -553,9 +746,11 @@ class Task19AdapterControls(unittest.TestCase):
                 native_lib = native_source / "lib" / "Image"
                 native_lib.mkdir(parents=True)
                 (native_lib / "ExifTool.pm").write_text("module")
+                tree = adapter.qualification.catalog_stage._tree_identity(native_source)
                 sources[release] = {"release": release, "tag_object": "d" * 40,
                                     "peeled_commit": commit, "source_directory": source_name,
-                                    "source_tree_sha256": "e" * 64, "materialization_sha256": "f" * 64}
+                                    "source_tree_sha256": tree["tree_sha256"],
+                                    "materialization_sha256": "f" * 64}
                 natives[release] = {"source": {"path": str(native_source)},
                                     "lib": {"path": str(native_source / "lib")},
                                     "perl": {"path": str(perl)}}
@@ -582,7 +777,8 @@ class Task19AdapterControls(unittest.TestCase):
                 "resolution": {"selected_releases": selected},
                 "materialization": {"selected_releases": [
                     {"release": release, "source_directory": sources[release]["source_directory"],
-                     "tree": {"tree_sha256": sources[release]["source_tree_sha256"]}}
+                     "tree": adapter.qualification.catalog_stage._tree_identity(
+                         source_root / sources[release]["source_directory"])}
                     for release in sources], "materialization_sha256": "f" * 64},
                 "locations": {"schema": 1, "kind": "oxidex_version_transition_input_locations",
                     "archive_cache": str(archive_cache), "source_root": str(source_root)},

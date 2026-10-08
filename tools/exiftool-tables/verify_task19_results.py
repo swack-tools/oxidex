@@ -502,6 +502,7 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
             sides[side] = {"release": release, "source_identity": verified_source,
                            "source_root": source_identity["source_root"],
                            "source_dependencies": source_identity["dependencies"],
+                           "materialized_trees": source_identity["materialized_trees"],
                            "fixture_dependencies": fixture_dependencies,
                            "native_identity": instrument["native_identity"],
                            "read_fixture_manifest_sha256": instrument["read_fixture_manifest_sha256"],
@@ -531,7 +532,7 @@ def verify_results(*, paths: tuple[Path, Path, Path], expected_head: str,
 
 
 def subordinate_snapshot(paths: tuple[Path, Path, Path],
-                         value: dict[str, object]) -> dict[str, tuple[int, int, int, int, str]]:
+                         value: dict[str, object]) -> dict[str, tuple[int, int, int, int, int, str]]:
     """Bind the complete run directories and external executables across replay."""
     files: set[Path] = {qualification.CANONICAL_MATRIX,
                         Path(value["read_policy_input"]["path"])}
@@ -551,7 +552,31 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
                 source_root / source_name, "verified native source")
             if native_source != Path(native["source"]["path"]).resolve():
                 refuse("native source differs from verified materialization directory")
-            directories.add(native_source)
+            materialized_trees = proof.get("materialized_trees")
+            if not isinstance(materialized_trees, list) or not materialized_trees:
+                refuse("verified materialized tree closure is incomplete")
+            selected_paths: set[Path] = set()
+            for binding in materialized_trees:
+                if (not isinstance(binding, dict)
+                        or set(binding) != {"path", "tree_sha256"}
+                        or not isinstance(binding["path"], str)
+                        or not HEX64.fullmatch(str(binding["tree_sha256"]))):
+                    refuse("verified materialized tree binding is malformed")
+                selected = qualification._evidence_location(
+                    Path(binding["path"]), "selected materialized source")
+                if (str(selected) != binding["path"] or selected.parent != source_root
+                        or selected in selected_paths or selected.is_symlink() or not selected.is_dir()):
+                    refuse("verified materialized tree path changed during replay")
+                selected_paths.add(selected)
+                try:
+                    current_tree = qualification.catalog_stage._tree_identity(selected)
+                except qualification.catalog_stage.Refused as exc:
+                    raise qualification.Refused("verified materialized source tree changed during replay") from exc
+                if current_tree["tree_sha256"] != binding["tree_sha256"]:
+                    refuse("verified materialized source tree changed during replay")
+                directories.add(selected)
+            if native_source not in selected_paths:
+                refuse("native source is absent from verified materialized trees")
             files.add(Path(row["binaries"][side]["path"]))
             files.add(Path(proof["committed_write"]["writer_binary"]["path"]))
             files.add(Path(native["lib"]["path"]) / "Image" / "ExifTool.pm")
@@ -581,14 +606,14 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
                     refuse("verified source dependency changed during replay")
                 files.add(path)
     for directory in directories:
-        if not directory.is_dir():
+        if directory.is_symlink() or not directory.is_dir():
             refuse("committed evidence directory disappeared during replay")
+        files.add(directory)
         for item in directory.rglob("*"):
-            if not item.is_dir():
-                files.add(item)
-                if len(files) > 200_000:
-                    refuse("committed evidence exceeds bounded file inventory")
-    captured: dict[str, tuple[int, int, int, int, str]] = {}
+            files.add(item)
+            if len(files) > 200_000:
+                refuse("committed evidence exceeds bounded file inventory")
+    captured: dict[str, tuple[int, int, int, int, int, str]] = {}
     for path in sorted(files):
         observed = path.lstat()
         if stat.S_ISLNK(observed.st_mode):
@@ -596,11 +621,15 @@ def subordinate_snapshot(paths: tuple[Path, Path, Path],
             digest = hashlib.sha256(data).hexdigest()
         elif stat.S_ISREG(observed.st_mode):
             digest = qualification._sha_file(path)
+        elif stat.S_ISDIR(observed.st_mode):
+            digest = "directory"
         else:
             refuse(f"committed evidence contains a non-regular file: {path}")
         after = path.lstat()
-        fields = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        if fields != (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns):
+        fields = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+                  after.st_mode)
+        if fields != (observed.st_dev, observed.st_ino, observed.st_size,
+                      observed.st_mtime_ns, observed.st_mode):
             refuse(f"committed evidence changed while hashing: {path}")
         captured[str(path)] = (*fields, digest)
     return captured
@@ -674,6 +703,13 @@ def publish_receipt_no_replace(output: Path, value: dict[str, object],
             os.close(closing)
         except OSError as exc:
             raise qualification.OutcomeUnknown("Task19 output close outcome is uncertain") from exc
+        check_output_custody()
+        try:
+            final_bytes = os.pread(recovery, len(payload) + 1, 0)
+        except OSError as exc:
+            raise qualification.OutcomeUnknown("Task19 output bytes cannot be established") from exc
+        if final_bytes != payload:
+            refuse("Task19 output bytes changed during publication")
         check_output_custody()
     except BaseException:
         # Recovery remains open even if the primary descriptor's close failed.
