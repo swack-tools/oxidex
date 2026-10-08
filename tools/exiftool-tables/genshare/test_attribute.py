@@ -473,13 +473,31 @@ class ArtifactValidationTests(unittest.TestCase):
                         "candidate",
                         {"OXIDEX_GENSHARE_SILENCE": {"state": "value", "value": mode}},
                     )
-                    candidate_parsed = attribute.parse_json_output(candidate_text.encode(), "candidate")
+                    # _run_mode reads capture_process's canonical retained
+                    # parsed JSON, whose key order is used by the comparator.
+                    candidate_parsed = attribute._load_parsed(candidate)
+                    oracle_parsed = attribute._load_parsed(oracle)
+                    raw_occurrences = attribute.occurrence_sequence(
+                        candidate_parsed, normalize_access_date=False
+                    )
+                    normalized_occurrences = attribute.occurrence_sequence(
+                        candidate_parsed, normalize_access_date=True
+                    )
                     process_path = child / "process.json"
                     process_path.write_text(json.dumps({
                         "oracle": oracle,
                         "candidate": candidate,
-                        "candidate_occurrences": attribute.occurrence_sequence(
-                            candidate_parsed, normalize_access_date=True
+                        "candidate_occurrences_raw": raw_occurrences,
+                        "candidate_occurrences": normalized_occurrences,
+                        "raw_occurrences_sha256": attribute.canonical_sha256(raw_occurrences),
+                        "normalized_occurrences_sha256": attribute.canonical_sha256(normalized_occurrences),
+                        "normalization_count": sum(
+                            left["value"] != right["value"]
+                            for left, right in zip(raw_occurrences, normalized_occurrences)
+                        ),
+                        "oracle_normalization_count": sum(
+                            oracle_parsed[key] != value for key, value in
+                            attribute.normalize_access_date_output(oracle_parsed, oracle=True).items()
                         ),
                     }) + "\n")
                     child_record = {
@@ -491,7 +509,6 @@ class ArtifactValidationTests(unittest.TestCase):
                         }},
                     }
                     children.append(child_record)
-                    oracle_parsed = attribute.parse_json_output(oracle_json.encode(), "oracle")
                     per_file[relative] = attribute.project_file(
                         attribute.normalize_access_date_output(
                             oracle_parsed, oracle=True

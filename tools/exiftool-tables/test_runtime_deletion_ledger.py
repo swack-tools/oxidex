@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import json
+import struct
 from pathlib import Path
 import sys
 import unittest
@@ -243,25 +244,30 @@ class LiteralFieldProjectionControls(unittest.TestCase):
         stable = gate.ownership.StableFieldId.from_row(row).text()
         with tempfile.TemporaryDirectory(prefix="task18-field-") as directory:
             root = Path(directory)
-            def child(mode: str, oracle: dict, candidate: dict) -> dict:
+            raw_carrier = b"II\x2a\x00" + struct.pack("<I", 8) + struct.pack("<H", 1) + struct.pack("<HHII", 0x9c9b, 1, 1, 1) + struct.pack("<I", 0)
+            digest = hashlib.sha256(raw_carrier).hexdigest()
+            for name in ("XP.jpg", "Declined.jpg"):
+                (root / name).write_bytes(raw_carrier)
+            def child(mode: str, oracle: dict, candidate: dict, carrier="XP.jpg") -> dict:
                 place = root / mode
                 place.mkdir()
-                records = {}
+                records = {"source_sha256": digest, "staged_sha256": digest}
                 for side, value in (("oracle", oracle), ("candidate", candidate)):
                     output = place / f"{side}.stdout"
                     output.write_text(json.dumps([value]))
                     records[side] = {"stdout": {"path": str(output)}}
                 process = place / "process.json"
                 process.write_text(json.dumps(records))
-                return {"relative_path": "XP.jpg", "process": {"path": str(process)}}
+                return {"relative_path": carrier, "process": {"path": str(process)}}
             on = {"IFD0:XPTitle": "Hi"}
-            oracle = {"EXIF:XPTitle": "Hi"}
-            receipt = {"selection": {"ordered_paths": ["XP.jpg"]}, "runs": {
+            oracle = {"EXIF:IFD0:XPTitle": "Hi"}
+            receipt = {"selection": {"ordered_paths": ["XP.jpg"], "ordered_manifest": [
+                {"relative_path": "XP.jpg", "staged_path": str(root / "XP.jpg"), "sha256": digest}]}, "runs": {
                 "control-empty": {"children": [child("on", oracle, on)]},
                 "engine": {"children": [child("off", oracle, {})]}}}
             occurrence = field_projection.attribute.occurrence_sequence(on, normalize_access_date=False)
             spec = {"source_field": stable, "stable_field_id": stable, "owner": row["symbol"],
-                    "carrier": "XP.jpg", "token": "engine", "oracle_key": "EXIF:XPTitle",
+                    "carrier": "XP.jpg", "token": "engine", "oracle_key": "EXIF:IFD0:XPTitle",
                     "candidate_key": "IFD0:XPTitle", "fallback_carrier": None,
                     "on": occurrence, "off": [], "fallback_on": [], "fallback_off": []}
             self.assertEqual(field_projection.project(receipt, [spec], [stable], [row])[0]["on_count"], 1)
@@ -271,9 +277,10 @@ class LiteralFieldProjectionControls(unittest.TestCase):
             with self.assertRaisesRegex(field_projection.BlockedAttribution, "fallback"):
                 field_projection.project(receipt, [spec], [stable], [row, residual])
             receipt["selection"]["ordered_paths"].append("Declined.jpg")
+            receipt["selection"]["ordered_manifest"].append(
+                {"relative_path": "Declined.jpg", "staged_path": str(root / "Declined.jpg"), "sha256": digest})
             for mode, label in (("control-empty", "fallback-on"), ("engine", "fallback-off")):
-                item = child(label, oracle, on)
-                item["relative_path"] = "Declined.jpg"
+                item = child(label, oracle, on, "Declined.jpg")
                 receipt["runs"][mode]["children"].append(item)
             spec["fallback_carrier"] = "Declined.jpg"
             spec["fallback_on"] = occurrence
