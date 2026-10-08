@@ -174,6 +174,7 @@ class SignerCustodyTests(unittest.TestCase):
                  patch.object(qualification_source, '_trusted_key', side_effect=swap_after_check), \
                  patch.object(remote_build.ssh_transport, 'identity', return_value=('uploader', 'key')), \
                  patch.object(remote_build.ssh_transport, 'DirectTransport', return_value=transport), \
+                 patch.object(remote_build, 'launcher_source_root', return_value=source), \
                  patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
                  patch.object(remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}), \
                  patch('qualification_source.verify_source', return_value={}), \
