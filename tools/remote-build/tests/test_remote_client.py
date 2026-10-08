@@ -172,7 +172,7 @@ class ClientTests(unittest.TestCase):
                     self.assertEqual(packet.getnames(),actual_git())
                 with (source/'.git/config').open('a') as local_config:
                     local_config.write('[includeIf "gitdir:~/source/"]\n\tpath = ./other-config\n')
-                with self.assertRaisesRegex(RuntimeError,'Included Git exclusions'):
+                with self.assertRaisesRegex(RuntimeError,'Local Git configuration'):
                     remote_build.eligible_snapshot_paths(source)
 
     def test_explicit_empty_excludes_overrides_file_and_default_at_each_scope(self):

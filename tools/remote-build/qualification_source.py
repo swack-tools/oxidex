@@ -30,7 +30,7 @@ ATTESTED = "github-squash-attested"
 
 def _git(repo: Path, *args: str) -> bytes:
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
-    return subprocess.check_output(["git", "-C", str(repo), *args], env=env)
+    return subprocess.check_output(["git", "-C", str(repo), *args], env=env, timeout=5)
 
 
 def _sha(data: bytes) -> str:
@@ -128,7 +128,8 @@ def verify_source(repo: Path, head: str, signers: Path,
         env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
         subprocess.run(["git", "-C", str(repo), "-c", "gpg.format=ssh", "-c",
                         "gpg.ssh.allowedSignersFile=" + str(signers), "verify-commit", head],
-                       env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       env=env, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5)
         raw_signature, _ = _signed_payload(_git(repo, "cat-file", "commit", head))
         if not raw_signature.startswith(b"-----BEGIN SSH SIGNATURE-----\n"):
             raise ValueError("qualification source does not carry an SSH commit signature")

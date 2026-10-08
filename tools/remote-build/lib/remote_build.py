@@ -85,11 +85,101 @@ def source_git_env():
     return env
 
 
+MAX_LOCAL_CONFIG_BYTES = 256 * 1024
+GIT_ADMISSION_TIMEOUT = 5
+
+
+def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
+    """Read repository metadata as bounded inert bytes, never a FIFO or link."""
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        if not required:
+            return None
+        raise RuntimeError('Local Git configuration is missing') from None
+    if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_LOCAL_CONFIG_BYTES:
+        raise RuntimeError('Local Git configuration is not one bounded regular file')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        raw = os.read(fd, MAX_LOCAL_CONFIG_BYTES + 1)
+        after = os.fstat(fd)
+        named = path.lstat()
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size,
+                                 info.st_mtime_ns, info.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or len(raw) != opened.st_size
+                or identity(before) != identity(opened)
+                or identity(opened) != identity(after)
+                or identity(after) != identity(named)):
+            raise RuntimeError('Local Git configuration changed during admission')
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _local_config_preflight(source: Path) -> None:
+    """Refuse local include execution before Git initializes this repository.
+
+    Git has no reliable command-line switch to suppress includes for every
+    command. This deliberately rejects any local config containing the token,
+    including unusual benign values, before Git can open an include target.
+    """
+    marker = source / '.git'
+    info = marker.lstat()
+    if stat.S_ISDIR(info.st_mode):
+        gitdir = marker
+    elif stat.S_ISREG(info.st_mode):
+        raw = _local_config_bytes(marker)
+        match = re.fullmatch(rb'gitdir: ([^\r\n\0]{1,4096})\r?\n?', raw)
+        if not match:
+            raise RuntimeError('Local Git configuration worktree marker is invalid')
+        selected = Path(os.fsdecode(match[1]))
+        gitdir = (selected if selected.is_absolute() else source / selected).resolve(strict=True)
+    else:
+        raise RuntimeError('Local Git configuration marker is not regular')
+    if not stat.S_ISDIR(gitdir.lstat().st_mode):
+        raise RuntimeError('Local Git configuration directory is invalid')
+    common = _local_config_bytes(gitdir / 'commondir', required=False)
+    if common is not None:
+        match = re.fullmatch(rb'([^\r\n\0]{1,4096})\r?\n?', common)
+        if not match:
+            raise RuntimeError('Local Git configuration common directory is invalid')
+        selected = Path(os.fsdecode(match[1]))
+        common_dir = (selected if selected.is_absolute() else gitdir / selected).resolve(strict=True)
+    else:
+        common_dir = gitdir
+    for path, required in ((common_dir / 'config', True),
+                           (gitdir / 'config.worktree', False)):
+        raw = _local_config_bytes(path, required=required)
+        if raw is not None and b'include' in raw.lower():
+            raise RuntimeError('Local Git configuration includes are unsupported before source admission')
+
+
+def _git_check_output(command, **kwargs):
+    """Bound every repository Git read and recheck local config around it."""
+    source = Path(command[2])
+    _local_config_preflight(source)
+    kwargs.setdefault('timeout', GIT_ADMISSION_TIMEOUT)
+    result = subprocess.check_output(command, **kwargs)
+    _local_config_preflight(source)
+    return result
+
+
+def _git_run(command, **kwargs):
+    source = Path(command[2])
+    _local_config_preflight(source)
+    kwargs.setdefault('timeout', GIT_ADMISSION_TIMEOUT)
+    result = subprocess.run(command, **kwargs)
+    _local_config_preflight(source)
+    return result
+
+
 MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
 
 
 def _caller_excludes(source: Path) -> bytes:
     """Freeze Git's one effective per-user ignore file as inert pattern data."""
+    _local_config_preflight(source)
     if any(key in os.environ for key in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS')):
         raise RuntimeError('Caller Git command-scope exclusions cannot be isolated')
     env = source_git_env()
@@ -111,8 +201,8 @@ def _caller_excludes(source: Path) -> bytes:
         prefix = ['/usr/bin/git', '-C', str(source), 'config', scope, '--no-includes', '--null']
         for query in (['--name-only', '--get-regexp', '^include'],
                       ['--path', '--get-all', 'core.excludesFile']):
-            result = subprocess.run([*prefix, *query], env=env,
-                                    capture_output=True, timeout=5)
+            result = _git_run([*prefix, *query], env=env,
+                              capture_output=True, timeout=GIT_ADMISSION_TIMEOUT)
             if result.returncode not in (0, 1) or len(result.stdout) > 65536:
                 raise RuntimeError('Caller Git exclusion configuration is unavailable')
             if query[0] == '--name-only' and result.returncode == 0:
@@ -168,6 +258,7 @@ MAX_TOOLCHAIN_PIN_BYTES = 16 * 1024
 
 def _signed_toolchain_text(source, head):
     """Read only the authenticated HEAD pin blob, with fixed byte/time bounds."""
+    _local_config_preflight(source)
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Toolchain pin HEAD identity refused')
     env = source_git_env()
@@ -240,7 +331,8 @@ MAX_SIGNER_BYTES = 8192
 
 
 def configured_signer_path(source):
-    value = subprocess.check_output(
+    _local_config_preflight(source)
+    value = _git_check_output(
         ['git', '-C', str(source), 'config', '--path', '--get', 'gpg.ssh.allowedSignersFile'],
         text=True, env=source_git_env()).strip()
     return _canonical_signer_path(value)
@@ -325,13 +417,14 @@ def assert_frozen_signer(path, digest):
 
 
 def _verify_signed_source_with_frozen_signer(source, head, signer_path, digest):
+    _local_config_preflight(source)
     env = source_git_env()  # Validate fixed Git and SSH verifier before key inspection.
     assert_frozen_signer(signer_path, digest)
     from qualification_source import _trusted_key
     _trusted_key(signer_path)
     command=['git','-C',str(source), '-c','gpg.format=ssh',
              '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
-    identity = subprocess.check_output(
+    identity = _git_check_output(
         [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
         text=True, env=env).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
@@ -339,8 +432,8 @@ def _verify_signed_source_with_frozen_signer(source, head, signer_path, digest):
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
-    subprocess.run([*command,'verify-commit',head], check=True, env=env,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _git_run([*command,'verify-commit',head], check=True, env=env,
+             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     assert_frozen_signer(signer_path, digest)
 
 
@@ -648,19 +741,20 @@ def source_clean_status(source: Path, head: str) -> str:
     source. Object and index enumeration are non-filtering; hash actual bytes
     here instead of asking Git to convert them.
     """
+    _local_config_preflight(source)
     env = source_git_env()
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
-    effective_root = Path(subprocess.check_output(
+    effective_root = Path(_git_check_output(
         ['git', '-C', str(source), 'rev-parse', '--show-toplevel'], env=env,
         text=True).strip()).resolve(strict=True)
     if effective_root != source.resolve(strict=True):
         raise RuntimeError('Source Git worktree differs from selected source root')
-    if subprocess.check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
+    if _git_check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
                                env=env).strip() != b'sha1':
         raise RuntimeError('Source Git object format is unsupported')
-    tree = subprocess.check_output(['git', '-C', str(source), 'ls-tree', '-r', '-z', head], env=env)
-    index = subprocess.check_output(['git', '-C', str(source), 'ls-files', '--stage', '-z'], env=env)
+    tree = _git_check_output(['git', '-C', str(source), 'ls-tree', '-r', '-z', head], env=env)
+    index = _git_check_output(['git', '-C', str(source), 'ls-files', '--stage', '-z'], env=env)
     expected = {}
     for record in filter(None, tree.split(b'\0')):
         metadata, raw_name = record.split(b'\t', 1)
@@ -702,7 +796,7 @@ def source_clean_status(source: Path, head: str) -> str:
             digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         if digest != object_id:
             changed.append(' M ' + name)
-    untracked = subprocess.check_output(
+    untracked = _git_check_output(
         ['git', '-C', str(source), 'ls-files', '--others', '--exclude-standard', '-z'], env=env)
     changed.extend('?? ' + os.fsdecode(name) for name in filter(None, untracked.split(b'\0')))
     return '\n'.join(changed) + ('\n' if changed else '')
@@ -710,6 +804,7 @@ def source_clean_status(source: Path, head: str) -> str:
 
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
+    _local_config_preflight(source)
     command = ['git','-C',str(source),'ls-files','-z',
                '--cached','--others','--exclude-standard']
     patterns = _caller_excludes(source)
@@ -722,7 +817,7 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
         env['GIT_CONFIG_COUNT'] = '4'
         env['GIT_CONFIG_KEY_3'] = 'core.excludesFile'
         env['GIT_CONFIG_VALUE_3'] = '/dev/fd/' + str(fd)
-        listed = subprocess.check_output(command, env=env, pass_fds=(fd,))
+        listed = _git_check_output(command, env=env, pass_fds=(fd,))
     names = set(listed.decode().split('\0'))
     eligible=[]
     for name in names:
@@ -742,10 +837,11 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
 
 def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> dict[str, tuple[str, int]]:
     """Enumerate fleet packet blobs and modes from the authenticated commit."""
+    _local_config_preflight(source)
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
     env=source_git_env()
-    tree=subprocess.check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
+    tree=_git_check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
     signed={}
     for entry in tree.split(b'\0'):
         if not entry:
@@ -784,7 +880,7 @@ def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
     for name, (object_id, _) in sorted(signed.items()):
         if not re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name):
             continue
-        data = subprocess.check_output(['git', '-C', str(source), 'cat-file', 'blob', object_id],
+        data = _git_check_output(['git', '-C', str(source), 'cat-file', 'blob', object_id],
                                        env=source_git_env())
         modules.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
                         'module': Path(name).stem})
@@ -924,6 +1020,7 @@ def retrieve_infra_python_proof(transport, ssh, instance, zone, project, run_id,
 
 
 def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
+    _local_config_preflight(source)
     if source_profile is not None and signed_head is None:
         raise RuntimeError('Signed source profile requires exact HEAD')
     signed=signed_snapshot_files(source,signed_head,source_profile=source_profile) if signed_head is not None else None
@@ -939,7 +1036,7 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
                 info=tar.gettarinfo(str(path),arcname=name)
             else:
                 object_id, mode=signed[name]
-                data=subprocess.check_output(
+                data=_git_check_output(
                     ['git','-C',str(source),'cat-file','blob',object_id],
                     env=source_git_env())
                 if path.is_symlink() or not path.is_file() or path.read_bytes()!=data:
@@ -1080,6 +1177,7 @@ def main(argv=None):
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
+    _local_config_preflight(source)
     if not infra_python:
         require_ordinary_source_root(source)
     envelope=None
@@ -1169,9 +1267,9 @@ def main(argv=None):
             receipt['toolchain']=pinned_toolchain(source)
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
-        receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
+        receipt['source_commit']=_git_check_output(['git','-C',str(source),'rev-parse','HEAD'],
                                                         text=True,env=source_git_env()).strip()
-        receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
+        receipt['source_tree']=_git_check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
                                                       text=True,env=source_git_env()).strip()
         # External source is authenticated before its pin or working files are read.
         receipt['source_status'] = (None if infra_python else
@@ -1197,7 +1295,7 @@ def main(argv=None):
             if receipt['source_status']:
                 raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
             if infra_python:
-                raw_origins=subprocess.check_output(
+                raw_origins=_git_check_output(
                     ['git','-C',str(source),'config','--local','--get-all','remote.origin.url'],
                     text=True,env=source_git_env()).splitlines()
                 if len(raw_origins)!=1 or raw_origins[0] not in INFRA_PYTHON_ORIGINS:
@@ -1206,8 +1304,10 @@ def main(argv=None):
                 receipt['source_origin_check']='raw_local_config_allowlist'
                 _verify_signed_source_with_frozen_signer(
                     source, receipt['source_commit'], frozen_signer, signer_digest)
+                _local_config_preflight(source)
                 receipt['infra_repository_binding'] = infra_repository_binding.admit(
                     source, receipt['source_commit'], receipt['source_tree'], source_git_env())
+                _local_config_preflight(source)
                 receipt['toolchain'] = pinned_toolchain(
                     source, signed_head=receipt['source_commit'])
                 receipt['source_status'] = source_clean_status(source, receipt['source_commit'])
@@ -1218,13 +1318,15 @@ def main(argv=None):
                     source, receipt['source_commit'], frozen_signer, signer_digest)
                 # Fleet qualification also binds the OxiDex-specific source pins.
                 from qualification_source import verify_source
+                _local_config_preflight(source)
                 verify_source(source, receipt['source_commit'], frozen_signer)
+                _local_config_preflight(source)
                 assert_frozen_signer(frozen_signer, signer_digest)
             bundle=evidence/'repository.bundle'
-            subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
-                           env=source_git_env())
-            subprocess.run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
-                           env=source_git_env(),stdout=subprocess.DEVNULL)
+            _git_run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
+                     env=source_git_env(), timeout=60)
+            _git_run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
+                     env=source_git_env(),stdout=subprocess.DEVNULL, timeout=60)
             source_head=evidence/'fleet-source-head'
             source_head.write_text(receipt['source_commit']+'\n')
             extra_files={'repository.bundle':bundle,
@@ -1271,7 +1373,7 @@ def main(argv=None):
                 receipt['component_envelope_sha256']=envelope_sha256
                 receipt['component_envelope_bytes']=envelope_row['bytes']
         receipt['packaging_seconds']=time.monotonic()-start
-        after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],
+        after_commit=_git_check_output(['git','-C',str(source),'rev-parse','HEAD'],
                                              text=True,env=source_git_env()).strip()
         after_status=source_clean_status(source, receipt['source_commit'])
         if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
@@ -1287,7 +1389,9 @@ def main(argv=None):
             raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')
         if infra_python:
             binding = receipt['infra_repository_binding']
+            _local_config_preflight(source)
             infra_repository_binding.recheck(source, binding, source_git_env())
+            _local_config_preflight(source)
             infra_repository_binding.bind_packet(binding, args.worktree_id,
                 receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
             infra_repository_binding.verify_packet(binding, receipt['source_commit'], receipt['source_tree'],
@@ -1399,7 +1503,7 @@ def main(argv=None):
                     transport, ssh, args.instance, args.zone, args.project, args.worktree_id,
                     evidence, receipt['source_commit'], infra_manifest,
                     receipt['infra_python_manifest_sha256'])
-                after_head=subprocess.check_output(
+                after_head=_git_check_output(
                     ['git','-C',str(source),'rev-parse','HEAD'],
                     text=True,env=source_git_env()).strip()
                 if (after_head != receipt['source_commit']
@@ -1439,7 +1543,7 @@ def main(argv=None):
                 expected={'schema':1,'kind':'linux_perl_component_proof',
                           'status':'COMPONENT_ONLY_PASS','run_id':args.worktree_id,
                           'source_head':receipt['source_commit'],
-                          'source_tree':subprocess.check_output(
+                          'source_tree':_git_check_output(
                               ['git','-C',str(source),'rev-parse','HEAD^{tree}'],
                               text=True,env=source_git_env()).strip(),
                           'bundle_sha256':receipt['fleet_source_bundle_sha256'],
