@@ -1,0 +1,117 @@
+{
+  "schema": "runtime-deletion-ledger/v1",
+  "status": "historical-unqualified",
+  "historical_changes": [
+    {
+      "id": "D1",
+      "old_symbol": "src/core/exif_dir_engine.rs::DirEngineRows::drain",
+      "change_kind": "test-only-alias-removal",
+      "qualification": "unqualified-no-pre-deletion-appendix",
+      "development_commit": "13ce49071830ca2b76cfcdfdececb537a21e3e9a",
+      "integration_commit": "4f653243d33cf053107f4f19b8bd449329de611b",
+      "literal_deleted": true,
+      "source_fields": []
+    },
+    {
+      "id": "D2",
+      "old_symbol": "src/core/tiff_helpers.rs::EXIF_IFD_SILENCE_EDGES",
+      "change_kind": "constant-inline",
+      "qualification": "unqualified-no-pre-deletion-appendix",
+      "development_commit": "0ddcbb1b9cb7c67aa12d55059649e16bc7e4eb53",
+      "integration_commit": "4f653243d33cf053107f4f19b8bd449329de611b",
+      "literal_deleted": true,
+      "source_fields": []
+    },
+    {
+      "id": "D3",
+      "old_symbol": "src/core/tiff_helpers.rs::parse_ifd1_with_session",
+      "change_kind": "duplicate-branch-merge",
+      "qualification": "unqualified-no-pre-deletion-appendix",
+      "development_commit": "3d83a2cbc4ff3c86c05f1f9d117798eb2392cd7e",
+      "integration_commit": "4f653243d33cf053107f4f19b8bd449329de611b",
+      "literal_deleted": false,
+      "source_fields": []
+    },
+    {
+      "id": "D5",
+      "old_symbol": "src/core/exif_dir_engine.rs::DirEngineRows::drain_ifd0",
+      "change_kind": "production-alias-removal-with-embedded-caller-update",
+      "qualification": "unqualified-no-pre-deletion-appendix",
+      "development_commit": "bb826db3c18532cdc5db7ed3f9ad798581301216",
+      "integration_commit": "4f653243d33cf053107f4f19b8bd449329de611b",
+      "literal_deleted": true,
+      "source_fields": []
+    },
+    {
+      "id": "B2",
+      "old_symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
+      "change_kind": "five-id-generated-ownership-transfer-with-retained-on-decline-fallback",
+      "qualification": "unqualified-no-pre-deletion-appendix",
+      "development_commit": "f9fc0f74db6e0d17c2bca898c9a23ba1f24fe5ac",
+      "integration_commit": "4f653243d33cf053107f4f19b8bd449329de611b",
+      "literal_deleted": false,
+      "source_fields": [
+        "Exif::Main:0x9c9b",
+        "Exif::Main:0x9c9c",
+        "Exif::Main:0x9c9d",
+        "Exif::Main:0x9c9e",
+        "Exif::Main:0x9c9f"
+      ]
+    }
+  ],
+  "retained_groups": [
+    {
+      "id": "A1-A4",
+      "count": 4,
+      "reason": "residual, refused, unknown and runtime engine-absent hand arms remain live"
+    },
+    {
+      "id": "B1",
+      "count": 1,
+      "reason": "AmbientTemperature knockout changed negative-zero output"
+    },
+    {
+      "id": "B3",
+      "count": 1,
+      "reason": "IPTC, GeoTIFF, ModelTransform and PrintIM traversal remains structural"
+    },
+    {
+      "id": "B4",
+      "count": 1,
+      "reason": "IFD1 residual IDs are refused by the generator"
+    },
+    {
+      "id": "B5",
+      "count": 1,
+      "reason": "Copyright transition requires atomic generator and residual changes"
+    },
+    {
+      "id": "C1",
+      "count": 1,
+      "reason": "public CLI formatter entry points remain reachable"
+    },
+    {
+      "id": "C2-C10",
+      "count": 27,
+      "reason": "hand-parsed GPS, XMP, MakerNote, ICC, APP14 and fallback producers reach these rule clauses"
+    },
+    {
+      "id": "C11-C12",
+      "count": 2,
+      "reason": "APEX helpers and public predicates have live callers"
+    },
+    {
+      "id": "D4,D6-D10",
+      "count": 6,
+      "reason": "replay, priority, IFD1 forms, engine-off and Interop behavior remains live"
+    },
+    {
+      "id": "E1-E5",
+      "count": 5,
+      "reason": "engine adapters, keyed and serial walkers, and attribution guards remain live"
+    }
+  ],
+  "approved_finite_appendix": null,
+  "controller_reconciliation_manifest": null,
+  "prospective_entries": []
+}
