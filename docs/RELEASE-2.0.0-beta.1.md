@@ -40,13 +40,19 @@ recollection.
       `verdict: PASS` line in its log. Exit 1 is a code regression (read the
       `LOST` lines); exit 2 is a refused *measurement*: re-run it, don't
       count it as a pass.
-- [ ] **Benchmarks current.** The committed figures
-      (`benches/benchmark_results.md`, `docs/performance/`) were measured at
-      `$SHA`, or at a commit where `git diff --stat <measured>..$SHA -- src oxidex-tags* Cargo.lock`
-      is empty. Today they name `8f04e288` (oxidex 1.2.1); if they are older
-      than `$SHA` by any reader change, re-run `benches/exiftool_comparison.sh`
-      against the pinned ExifTool 13.59 and commit the result first. The
-      `Benchmarks (indicative)` push run for `$SHA` concluded `success`.
+- [ ] **Benchmark disposition verified.** For any claimed beta.1 speed,
+      measure the exact frozen candidate `$SHA` with the shipped-profile
+      instrument and pinned, capability-checked ExifTool; preserve its raw
+      artifacts and receipt. The committed CLI figures currently name
+      `8f04e288` (OxiDex 1.2.1), and the CI figures are also historical.
+      If those figures remain, verify their source artifacts, label them
+      visibly historical in the rendered pages, and record beta.1 performance
+      as unmeasured; do not attribute old results to `$SHA`. If no performance
+      claim remains, remove unsupported speed language and record
+      `not_applicable` with a reason. Inspect any cited indicative CI run and
+      artifact separately; a successful push job alone does not establish
+      shipped-profile speed. Complete the release-documentation evidence and
+      rendered-page audit for the chosen disposition before checking this box.
 - [ ] **Known limitations stated.** The release notes or the CHANGELOG entry
       say plainly: extraction parity with ExifTool is partial and measured
       (link the conformance score, not the tag-definition count); which
@@ -136,8 +142,8 @@ and approved policy exist. A tag does not enable it.
 | Crate | v1.2.1 | now | Why |
 |---|---|---|---|
 | `oxidex` | 1.2.1 | 2.0.0-beta.1 | Maintainer's decision for this line. |
-| `oxidex-tags-core` | 1.0.4 | 2.0.0-beta.1 | Public API broke: `types::{Tag, TagTable, TagDatabase}` moved to `oxidex-tags-shared`. They're re-exported at the crate root, but the `oxidex_tags_core::types::` paths are gone. Its data broke too: 11 of 118 tables were removed and tag definitions fell from 4,166 to 1,455, so `get_tag_table` returns `None` for names that used to resolve. |
-| `oxidex-tags-camera`, `-media`, `-image`, `-document`, `-specialty` | 1.0.4 | 2.0.0-beta.1 | Each one publicly re-exports `oxidex_tags_core::types::*` and now exposes `oxidex_tags_shared` types, so a major bump of core is a major bump of each. Each one also lost tables that `get_tag_table` used to find: camera 19 of 599, media 12 of 125, document 5 of 55, image 1 of 64, specialty 1 of 18. |
+| `oxidex-tags-core` | 1.0.4 | 2.0.0-beta.1 | Public API broke: `types::{Tag, TagTable, TagDatabase}` moved to `oxidex-tags-shared`. They're re-exported at the crate root, but the `oxidex_tags_core::types::` paths are gone. Current YAML definition counts are identified below. |
+| `oxidex-tags-camera`, `-media`, `-image`, `-document`, `-specialty` | 1.0.4 | 2.0.0-beta.1 | Each one publicly re-exports `oxidex_tags_core::types::*` and now exposes `oxidex_tags_shared` types, so a major bump of core is a major bump of each. |
 | `oxidex-tags` | 1.0.4 | 2.0.0-beta.1 | Facade: re-exports `core` as a module (so `oxidex_tags::core::types::Tag` is gone) and every domain crate above. |
 | `oxidex-tags-shared` | (did not exist) | 0.1.0 | New since v1.2.1 and never released, so there's no earlier interface to break. It gained the `description`/`license` metadata a publish needs. |
 
@@ -146,13 +152,16 @@ Evidence, `cargo-semver-checks` 0.50.0
 toolchain 1.97.1): `oxidex-tags-core` fails `struct_missing` for `Tag`,
 `TagTable` and `TagDatabase` at `oxidex_tags_core::types::` and requires a
 new major version. The five domain crates and `oxidex-tags` pass all 196
-type-level checks. That tool can't see two of the breaks above. It doesn't
-follow items re-exported from another crate (so it misses `core`'s breakage
-reaching the facade and the domain crates' switch to exporting
-`oxidex_tags_core` 2.x types), and it doesn't look at data, which is where
-the removed tables are. Those two are why the rest move to 2.0.0-beta.1
-too. Table and definition counts come from the `*_tags.yaml` sources at
-`v1.2.1` and at the tip: 32,683 tag definitions before, 16,683 now.
+type-level checks. That earlier check is not an exact-candidate runtime
+or data-compatibility measurement: it does not follow items re-exported from
+another crate or inspect table contents. The source-level API changes above
+explain the beta version decision; do not infer current table membership from
+that older check. Counting `- id:` rows in the six `*_tags.yaml` source files
+gives 32,683 at `v1.2.1` and 32,256 at integration commit
+`c7e98a76921eb387cbe9d2f3202a93b7a2902947`. Separately,
+`docs/public/measurements/status.json` reports 32,256 current generated tag
+definitions. These are definition inventories, not a count of tags OxiDex
+extracts; extraction coverage requires its own parity receipt.
 
 Inter-crate requirements pin the tag crates exactly (`=2.0.0-beta.1`), so
 a later beta of one tag crate can't be mixed with this beta of another.

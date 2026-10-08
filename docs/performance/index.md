@@ -68,8 +68,12 @@ artifact. The workflow is **non-blocking**: it has no regression threshold,
 and it fails only when the measurement itself is refused (a missing or stale
 binary, a wrong or degraded oracle, or a dirty tree).
 
-The run that proved the workflow in #825 (run `35355315041`, commit
-`b07fb7f6406689b401b221cecb3a891735b902fd`, `ubuntu-24.04`, 4 vCPU AMD EPYC 7763) gave these ratios:
+The run that proved the workflow in #825 ([run `35355315041`](https://github.com/swack-tools/oxidex/actions/runs/35355315041),
+PR head `b07fb7f6406689b401b221cecb3a891735b902fd`) measured the synthetic merge
+commit `24184580f640a91c9b9bbd488a17a50330dfb5cf`, as recorded by the artifact's
+instrument. The `benchmark-comparison` artifact (ID `10551838043`, archive SHA-256
+`d281ece4049dc7a48f1e3e20d89dd5002aa5bb087d9b36ef66ae629f943d381a`)
+records `ubuntu-24.04`, 4 vCPU AMD EPYC 7763, and these historical ratios:
 5.59x startup, 5.12x `Canon.jpg`, 11.95x write, 5.39x detection, 5.50x
 batch, 7.50x corpus (parallel) and **3.63x corpus single-threaded**. They are
 higher than the committed numbers because ExifTool runs about 2.7 to 3 times
