@@ -9,8 +9,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
-import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from typing import Callable
 
 import runtime_ownership as ownership
 import version_rehearsal_clean_snapshot as clean_snapshot
+from genshare import attribute
 
 # Direct script invocation starts with tools/exiftool-tables on sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -119,7 +121,18 @@ def no_new_manual(rows: list[dict]) -> None:
 
 def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(root), *args], text=True,
-                                   stderr=subprocess.PIPE, timeout=30).strip()
+                                   stderr=subprocess.PIPE, timeout=30,
+                                   env=_git_env()).strip()
+
+
+def _git_env() -> dict[str, str]:
+    return dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+
+
+def _is_ancestor(root: Path, ancestor: str, head: str) -> bool:
+    return subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, head],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+                          env=_git_env()).returncode == 0
 
 
 def verify_history(root: Path) -> str:
@@ -130,8 +143,7 @@ def verify_history(root: Path) -> str:
         raise Refused("deletion gate index differs from committed tree")
     # The five development commits were squash-merged as PR #940. They are
     # evidence references, not ancestors of the integration branch.
-    if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", INTEGRATION_COMMIT, head],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+    if not _is_ancestor(root, INTEGRATION_COMMIT, head):
         raise Refused("Task18 squash merge is not in candidate lineage")
     return head
 
@@ -190,6 +202,32 @@ def _file(path: object, ops_root: Path, *, test_only_temporary_evidence: bool = 
         raise Refused("evidence must be bounded regular file below durable ops root")
     return value
 
+
+def _trusted_ssh_keygen() -> str:
+    """Use the system verifier only when its path is owned by the OS."""
+    path = Path("/usr/bin/ssh-keygen")
+    for component in (Path("/"), Path("/usr"), Path("/usr/bin"), path):
+        try:
+            info = component.lstat()
+        except OSError as exc:
+            raise Refused("BLOCKED_AUTHORITY: trusted SSH verifier unavailable") from exc
+        kind_ok = stat.S_ISREG(info.st_mode) if component == path else stat.S_ISDIR(info.st_mode)
+        if not kind_ok or info.st_uid != 0 or info.st_mode & 0o022:
+            raise Refused("BLOCKED_AUTHORITY: trusted SSH verifier identity invalid")
+    return str(path)
+
+
+def _reject_non_json_constant(value: str) -> None:
+    raise ValueError(f"non-JSON constant {value}")
+
+
+def _strict_json(raw: bytes) -> object:
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=attribute._reject_duplicate_pairs,
+                          parse_constant=_reject_non_json_constant)
+    except (UnicodeError, ValueError) as exc:
+        raise Refused("signed evidence JSON is ambiguous or invalid") from exc
+
 def _signed(binding: object, ops_root: Path, key: bytes, *,
             test_only_temporary_evidence: bool = False) -> dict:
     if not isinstance(binding, dict) or set(binding) != {"path", "sha256", "signature_path"}:
@@ -200,18 +238,19 @@ def _signed(binding: object, ops_root: Path, key: bytes, *,
     sig = _file(binding["signature_path"], ops_root, test_only_temporary_evidence=test_only_temporary_evidence)
     if _sha(raw) != binding["sha256"]:
         raise Refused("signed evidence bytes differ from digest")
-    ssh = shutil.which("ssh-keygen")
-    if not ssh or not key.startswith(b"ssh-ed25519 "):
+    if not key.startswith(b"ssh-ed25519 "):
         raise Refused("BLOCKED_AUTHORITY: trusted controller key unavailable")
+    ssh = _trusted_ssh_keygen()
     with tempfile.TemporaryDirectory(prefix="task18-verify-") as directory:
         allowed = Path(directory) / "allowed"
         allowed.write_bytes(b"task18-controller " + key.strip() + b"\n")
         check = subprocess.run([ssh, "-Y", "verify", "-f", str(allowed), "-I", "task18-controller",
                                 "-n", "oxidex-task18-controller", "-s", str(sig)],
-                               input=raw, capture_output=True, timeout=30)
+                               input=raw, capture_output=True, timeout=30,
+                               env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
     if check.returncode:
         raise Refused("controller signature invalid")
-    document = json.loads(raw)
+    document = _strict_json(raw)
     if not isinstance(document, dict):
         raise Refused("signed evidence is not an object")
     return document
@@ -260,8 +299,7 @@ def evaluate_prospective(packet: dict, *, root: Path, ops_root: Path,
             or not appendix["candidates"]):
         raise Refused("appendix not approved for current candidate source/binary")
     for ancestor in (integration, merge):
-        if subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, head],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode:
+        if not _is_ancestor(root, ancestor, head):
             raise Refused("appendix lineage not in source history")
     if (manifest.get("schema") != "runtime-deletion-manifest/v1" or manifest.get("task") != "18"
             or manifest.get("appendix_sha256") != packet["appendix"]["sha256"]

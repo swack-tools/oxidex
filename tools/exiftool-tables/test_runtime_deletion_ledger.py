@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -112,6 +113,124 @@ class DurableEvidencePathControls(unittest.TestCase):
             (root / "alias").symlink_to(real, target_is_directory=True)
             with self.assertRaisesRegex(gate.Refused, "symlink"):
                 gate._file(str(root / "alias" / file.name), root, test_only_temporary_evidence=True)
+
+
+class CandidateHistoryIdentityControls(unittest.TestCase):
+    def test_replace_ref_cannot_supply_candidate_ancestry(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="task18-replace-") as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+            def git(*args: str) -> str:
+                return subprocess.check_output(["git", "-C", str(root), *args],
+                                               text=True, env=env).strip()
+            git("init", "-q")
+            git("config", "user.name", "Task18 Test")
+            git("config", "user.email", "task18@example.invalid")
+            (root / "source").write_text("integration")
+            git("add", "source")
+            git("commit", "-qm", "integration")
+            integration = git("rev-parse", "HEAD")
+            git("checkout", "-q", "--orphan", "candidate")
+            git("rm", "-qf", "source")
+            (root / "source").write_text("candidate")
+            git("add", "source")
+            git("commit", "-qm", "candidate")
+            head = git("rev-parse", "HEAD")
+            replacement = git("commit-tree", git("rev-parse", "HEAD^{tree}"),
+                              "-p", integration, "-m", "replacement")
+            git("replace", head, replacement)
+            self.assertEqual(git("rev-parse", "HEAD"), head)
+            with patch.object(gate, "INTEGRATION_COMMIT", integration):
+                with self.assertRaisesRegex(gate.Refused, "lineage"):
+                    gate.verify_history(root)
+
+    def test_replace_ref_cannot_supply_candidate_tree(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="task18-replace-tree-") as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+            def git(*args: str) -> str:
+                return subprocess.check_output(["git", "-C", str(root), *args],
+                                               text=True, env=env).strip()
+            git("init", "-q")
+            git("config", "user.name", "Task18 Test")
+            git("config", "user.email", "task18@example.invalid")
+            (root / "source").write_text("integration")
+            git("add", "source")
+            git("commit", "-qm", "integration")
+            integration = git("rev-parse", "HEAD")
+            (root / "source").write_text("original candidate")
+            git("add", "source")
+            git("commit", "-qm", "candidate")
+            head = git("rev-parse", "HEAD")
+            (root / "source").write_text("substituted candidate")
+            git("add", "source")
+            replacement_tree = git("write-tree")
+            git("reset", "--hard", head)
+            replacement = git("commit-tree", replacement_tree, "-p", integration,
+                              "-m", "replacement")
+            git("replace", head, replacement)
+            subprocess.run(["git", "-C", str(root), "reset", "--hard", "HEAD"],
+                           check=True, capture_output=True)
+            self.assertEqual((root / "source").read_text(), "substituted candidate")
+            with patch.object(gate, "INTEGRATION_COMMIT", integration):
+                with self.assertRaisesRegex(gate.Refused, "clean|index"):
+                    gate.verify_history(root)
+
+
+class SignedEvidenceControls(unittest.TestCase):
+    def test_ambient_path_verifier_cannot_accept_forged_signature(self) -> None:
+        verifier = Path("/usr/bin/ssh-keygen")
+        if not verifier.is_file():
+            self.skipTest("fixed system SSH verifier unavailable")
+        with tempfile.TemporaryDirectory(prefix="task18-fake-verifier-") as directory:
+            root = Path(directory).resolve()
+            fake = root / "ssh-keygen"
+            fake.write_text("#!/bin/sh\nexit 0\n")
+            fake.chmod(0o755)
+            payload = root / "appendix.json"
+            payload.write_text('{"schema":"forged"}')
+            signature = root / "appendix.json.sig"
+            signature.write_text("forged")
+            binding = {"path": str(payload), "sha256": gate._sha(payload.read_bytes()),
+                       "signature_path": str(signature)}
+            with patch.dict(os.environ, {"PATH": str(root) + os.pathsep + os.environ["PATH"]}):
+                with self.assertRaisesRegex(gate.Refused, "signature invalid"):
+                    gate._signed(binding, root, b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest",
+                                 test_only_temporary_evidence=True)
+                private = root / "test-only-controller"
+                subprocess.run([str(verifier), "-q", "-t", "ed25519", "-N", "", "-f", str(private)],
+                               check=True, capture_output=True)
+                public = private.with_suffix(".pub").read_bytes()
+                signature.unlink()
+                payload.write_text('{"schema":"valid"}')
+                binding["sha256"] = gate._sha(payload.read_bytes())
+                subprocess.run([str(verifier), "-Y", "sign", "-f", str(private), "-n",
+                                "oxidex-task18-controller", str(payload)], check=True, capture_output=True)
+                self.assertEqual(gate._signed(binding, root, public,
+                                 test_only_temporary_evidence=True), {"schema": "valid"})
+
+    def test_signed_json_rejects_duplicate_keys_and_non_json_constants(self) -> None:
+        verifier = Path("/usr/bin/ssh-keygen")
+        if not verifier.is_file():
+            self.skipTest("fixed system SSH verifier unavailable")
+        with tempfile.TemporaryDirectory(prefix="task18-signed-json-") as directory:
+            root = Path(directory).resolve()
+            private = root / "test-only-controller"
+            subprocess.run([str(verifier), "-q", "-t", "ed25519", "-N", "", "-f", str(private)],
+                           check=True, capture_output=True)
+            public = private.with_suffix(".pub").read_bytes()
+            for name, raw in (("duplicate", b'{"schema":"first","schema":"second"}'),
+                              ("nested-duplicate", b'{"approval":{"status":"first","status":"second"}}'),
+                              ("constant", b'{"schema":"valid","count":NaN}')):
+                with self.subTest(name=name):
+                    payload = root / f"{name}.json"
+                    payload.write_bytes(raw)
+                    subprocess.run([str(verifier), "-Y", "sign", "-f", str(private), "-n",
+                                    "oxidex-task18-controller", str(payload)], check=True, capture_output=True)
+                    binding = {"path": str(payload), "sha256": gate._sha(raw),
+                               "signature_path": str(payload) + ".sig"}
+                    with self.assertRaisesRegex(gate.Refused, "signed evidence JSON"):
+                        gate._signed(binding, root, public, test_only_temporary_evidence=True)
 
 
 class ProspectiveAuthenticatedPacketControls(unittest.TestCase):
