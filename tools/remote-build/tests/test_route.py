@@ -90,6 +90,60 @@ class RouteTests(unittest.TestCase):
         stage.assert_not_called()
         ci.assert_not_called()
 
+    def test_remote_builder_tests_use_signed_git_checkout_without_oracle(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('signed checkout')), \
+             patch.object(route, 'select_signed_builder_target', side_effect=lambda: events.append('target')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')) as launch:
+            route.main(['test-remote-build'])
+        self.assertEqual(events, ['signed checkout', 'target', 'suite'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_test-remote-build-worker'])
+
+        events.clear()
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=Path('/actions/verified')), \
+             patch.object(route, 'trusted_marker', return_value=False), \
+             patch.object(route, 'verify_ci_fleet_checkout', side_effect=lambda: events.append('verified CI')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('suite')):
+            route.main(['test-remote-build'])
+            route.main(['--require-local-context', 'test-remote-build'])
+        self.assertEqual(events, ['verified CI', 'suite', 'verified CI'])
+
+    def test_nested_ordinary_test_keeps_generic_carrier(self):
+        if shutil.which('just') is None:
+            self.skipTest('just is unavailable')
+        repository = Path(__file__).resolve().parents[3]
+        rendered = subprocess.run(['just', '--dry-run', '_test-worker'], cwd=repository,
+                                  capture_output=True, text=True, check=True).stderr
+        self.assertIn('just _test-remote-build-ordinary-worker', rendered)
+        nested = subprocess.run(['just', '--dry-run', '_test-remote-build-ordinary-worker'],
+                                cwd=repository, capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py --require-local-context\n', nested)
+        self.assertNotIn('--require-local-context test-remote-build', nested)
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(route, 'verify_ci_fleet_checkout') as ci:
+            self.assertEqual(route.main(['--require-local-context']), 0)
+        ci.assert_not_called()
+
+    def test_docs_site_worker_uses_signed_checkout_without_oracle_setup(self):
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout') as stage, \
+             patch.object(route, 'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(os, 'execvp') as launch:
+            route.main(['docs-site-build'])
+        stage.assert_called_once_with()
+        target.assert_called_once_with()
+        oracle.assert_not_called()
+        self.assertEqual(launch.call_args.args[1], ['just', '_docs-site-build-worker'])
+
     def test_rendered_private_package_keeps_one_literal_cargo_argument(self):
         if shutil.which('just') is None:
             self.skipTest('just is unavailable')
@@ -200,7 +254,7 @@ class RouteTests(unittest.TestCase):
         if shutil.which('just') is None:
             self.skipTest('just is unavailable')
         repository = Path(__file__).resolve().parents[3]
-        for recipe in ('ci', 'ci-standard', 'pre-commit', 'docs-build'):
+        for recipe in ('ci', 'ci-standard', 'pre-commit', 'docs-build', 'docs-site-build'):
             with self.subTest(recipe=recipe):
                 rendered = subprocess.run(['just', '--dry-run', recipe], cwd=repository,
                                           capture_output=True, text=True, check=True).stderr
@@ -219,6 +273,14 @@ class RouteTests(unittest.TestCase):
         docs = subprocess.run(['just', '--dry-run', '_docs-build-worker'], cwd=repository,
                               capture_output=True, text=True, check=True).stderr
         self.assertIn('cargo doc --workspace --no-deps', docs)
+        website = subprocess.run(['just', '--dry-run', '_docs-site-build-worker'], cwd=repository,
+                                 capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py --require-local-context docs-site-build', website)
+        self.assertIn('python3 tools/remote-build/docs_site_worker.py', website)
+        remote_suite = subprocess.run(['just', '--dry-run', '_test-remote-build-worker'],
+                                      cwd=repository, capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py --require-local-context test-remote-build', remote_suite)
+        self.assertNotIn('cargo doc', website)
         for recipe, ordered in (
             ('ci-standard', ('cargo fmt --all -- --check',
                              'Checking C header is up-to-date',
@@ -277,7 +339,7 @@ class RouteTests(unittest.TestCase):
             route.select_signed_builder_target()
         with patch.object(route, 'FLEET_CARGO_TARGET', Path('/target')), \
              patch.dict(os.environ, {'CARGO_TARGET_DIR': '/target'}), \
-             self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+             self.assertRaisesRegex(RuntimeError, 'overlaps the source checkout'):
             route.select_signed_builder_target()
 
     def test_public_signed_fleet_selects_target_before_oracle_and_worker(self):
@@ -364,9 +426,20 @@ class RouteTests(unittest.TestCase):
                  patch.object(route, 'local_worker_context', return_value=True), \
                  patch.object(route, 'trusted_marker', return_value=True), \
                  patch.dict(os.environ, {'CARGO_TARGET_DIR': str(root)}):
-                with self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+                with self.assertRaisesRegex(RuntimeError, 'overlaps the source checkout'):
                     route.main(['--require-local-context'])
-                with self.assertRaisesRegex(RuntimeError, 'contains the source checkout'):
+                with self.assertRaisesRegex(RuntimeError, 'overlaps the source checkout'):
+                    route.select_signed_builder_target()
+            nested = checkout / 'target'
+            with patch.object(route, 'FLEET_CHECKOUT', checkout), \
+                 patch.object(route, 'FLEET_CARGO_TARGET', nested), \
+                 patch.object(route.Path, 'cwd', return_value=checkout), \
+                 patch.object(route, 'local_worker_context', return_value=True), \
+                 patch.object(route, 'trusted_marker', return_value=True), \
+                 patch.dict(os.environ, {'CARGO_TARGET_DIR': str(nested)}):
+                with self.assertRaisesRegex(RuntimeError, 'overlaps|contains'):
+                    route.main(['--require-local-context'])
+                with self.assertRaisesRegex(RuntimeError, 'overlaps|contains'):
                     route.select_signed_builder_target()
 
     def test_both_hub_suite_requires_signed_checkout_and_locked_oracle(self):

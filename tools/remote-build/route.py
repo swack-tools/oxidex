@@ -77,11 +77,16 @@ def prepare_fleet_checkout() -> None:
 
 def verify_signed_builder_target() -> None:
     """The selected Cargo path must be a canonical sibling of signed source."""
-    if FLEET_CARGO_TARGET == FLEET_CHECKOUT or FLEET_CARGO_TARGET in FLEET_CHECKOUT.parents:
-        raise RuntimeError('signed fleet Cargo target contains the source checkout')
+    if target_overlaps_checkout(FLEET_CHECKOUT, FLEET_CARGO_TARGET):
+        raise RuntimeError('signed fleet Cargo target overlaps the source checkout')
     if (FLEET_CARGO_TARGET.is_symlink() or FLEET_CARGO_TARGET.resolve() != FLEET_CARGO_TARGET
             or (FLEET_CARGO_TARGET.exists() and not FLEET_CARGO_TARGET.is_dir())):
         raise RuntimeError('signed fleet Cargo target is not canonical')
+
+
+def target_overlaps_checkout(checkout: Path, target: Path) -> bool:
+    """Neither source nor target may contain the other (including equality)."""
+    return target == checkout or target in checkout.parents or checkout in target.parents
 
 
 def select_signed_builder_target() -> None:
@@ -252,7 +257,10 @@ def main(argv):
                 os.environ.pop(key, None)
             from test_runner import prepare_generic_recipe_oracle
             prepare_generic_recipe_oracle()
-        elif recipe in FLEET_RECIPES and recipe not in ('test-ignored', 'freeze-linux-perl', 'prove-linux-perl-component'):
+        elif (recipe in FLEET_RECIPES
+              and recipe not in ('test-ignored', 'freeze-linux-perl',
+                                 'prove-linux-perl-component', 'docs-site-build',
+                                 'test-remote-build')):
             from test_runner import prepare_fleet_recipe_oracle
             prepare_fleet_recipe_oracle()
         elif recipe in ORACLE_TEST_RECIPES:
