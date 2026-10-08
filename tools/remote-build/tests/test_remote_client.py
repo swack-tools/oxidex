@@ -111,16 +111,68 @@ class ClientTests(unittest.TestCase):
                          'GIT_CONFIG_GLOBAL':str(global_config)}
             archive=root/'packet.tar.gz'
             with patch.dict(os.environ,environment):
-                self.assertEqual(remote_build.eligible_snapshot_paths(source),['public.txt'])
+                # Local core.excludesFile is Git's effective final config value.
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),
+                                 ['credentials.json','public.txt'])
                 receipt=remote_build.make_snapshot(source,archive)
-            self.assertEqual([row['path'] for row in receipt['files']],['public.txt'])
+            self.assertEqual([row['path'] for row in receipt['files']],
+                             ['credentials.json','public.txt'])
             with tarfile.open(archive,'r:gz') as packet:
-                self.assertEqual(packet.getnames(),['public.txt'])
+                self.assertEqual(packet.getnames(),['credentials.json','public.txt'])
+            self.assertFalse(marker.exists())
+            subprocess.run(['/usr/bin/git','-C',str(source),'config','--local',
+                            '--unset','core.excludesFile'],check=True)
+            with patch.dict(os.environ,environment):
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),['public.txt'])
+                receipt=remote_build.make_snapshot(source,root/'global-packet.tar.gz')
+            self.assertEqual([row['path'] for row in receipt['files']],['public.txt'])
             self.assertFalse(marker.exists())
             global_config.write_text(global_config.read_text()+
                                      '[includeIf "gitdir:~/source/"]\n\tpath = ./other-config\n')
             with patch.dict(os.environ,environment):
-                with self.assertRaisesRegex(RuntimeError,'Included global Git exclusions'):
+                with self.assertRaisesRegex(RuntimeError,'Included Git exclusions'):
+                    remote_build.eligible_snapshot_paths(source)
+
+    def test_effective_excludes_precedence_and_gitignore_negation_match_git(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            for name in ('credentials.json','other.json','public.txt'):
+                (source/name).write_text(name+'\n')
+            (source/'.gitignore').write_text('!other.json\n')
+            first=root/'first-ignore';first.write_text('credentials.json\n')
+            second=root/'second-ignore';second.write_text('other.json\n')
+            local=root/'local-ignore';local.write_text('credentials.json\n')
+            config=root/'.gitconfig'
+            config.write_text('[core]\n\texcludesFile = '+str(first)+
+                              '\n\texcludesFile = '+str(second)+'\n')
+            environment={k:v for k,v in os.environ.items()
+                         if k not in ('GIT_CONFIG_COUNT','GIT_CONFIG_PARAMETERS',
+                                      'GIT_CONFIG_SYSTEM','XDG_CONFIG_HOME')}
+            environment.update(HOME=str(root),GIT_CONFIG_GLOBAL=str(config))
+            def actual_git():
+                output=subprocess.check_output(['/usr/bin/git','-C',str(source),'ls-files',
+                    '-z','--cached','--others','--exclude-standard'],env=os.environ)
+                return sorted(filter(None,output.decode().split('\0')))
+            with patch.dict(os.environ,environment,clear=True):
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),actual_git())
+                self.assertIn('credentials.json',actual_git())
+                self.assertIn('other.json',actual_git())  # .gitignore negates lower global exclude.
+                subprocess.run(['/usr/bin/git','-C',str(source),'config','--local',
+                                'core.excludesFile',str(local)],check=True)
+                self.assertEqual(remote_build.eligible_snapshot_paths(source),actual_git())
+                self.assertNotIn('credentials.json',actual_git())
+                archive=root/'packet.tar.gz'
+                receipt=remote_build.make_snapshot(source,archive)
+                self.assertEqual([row['path'] for row in receipt['files']],actual_git())
+                with tarfile.open(archive,'r:gz') as packet:
+                    self.assertEqual(packet.getnames(),actual_git())
+                with (source/'.git/config').open('a') as local_config:
+                    local_config.write('[includeIf "gitdir:~/source/"]\n\tpath = ./other-config\n')
+                with self.assertRaisesRegex(RuntimeError,'Included Git exclusions'):
                     remote_build.eligible_snapshot_paths(source)
 
     def test_ordinary_snapshot_uses_default_user_ignore_and_refuses_unreadable_policy(self):
