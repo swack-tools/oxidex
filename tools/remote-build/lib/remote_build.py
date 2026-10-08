@@ -555,6 +555,43 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
             'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
 
 
+def _stream_worktree_blob(path: Path) -> str:
+    """Hash one stable regular worktree file as a Git blob with bounded memory."""
+    before = path.lstat()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                                 info.st_mtime_ns, info.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink < 1
+                or identity(before) != identity(opened)):
+            raise RuntimeError('Tracked source changed before bounded blob read')
+        digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
+        remaining = opened.st_size
+        while remaining:
+            block = os.read(fd, min(1024 * 1024, remaining))
+            if not block:
+                raise RuntimeError('Tracked source short-read during bounded blob read')
+            digest.update(block)
+            remaining -= len(block)
+        if (identity(opened) != identity(os.fstat(fd))
+                or identity(opened) != identity(path.lstat())):
+            raise RuntimeError('Tracked source changed during bounded blob read')
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def launcher_source_root() -> Path:
+    """The checkout containing this installed remote-build client."""
+    return Path(__file__).resolve().parents[3]
+
+
+def require_ordinary_source_root(source: Path) -> None:
+    if source != launcher_source_root().resolve(strict=True):
+        raise RuntimeError('External source requires the fixed signed infra-python-v1 profile')
+
+
 def source_clean_status(source: Path, head: str) -> str:
     """Compare index and worktree to HEAD without Git diff/status/filter drivers.
 
@@ -600,7 +637,7 @@ def source_clean_status(source: Path, head: str) -> str:
         try:
             info = path.lstat()
             if mode in {'100644', '100755'} and stat.S_ISREG(info.st_mode):
-                data = path.read_bytes()
+                digest = _stream_worktree_blob(path)
                 if bool(info.st_mode & 0o111) != (mode == '100755'):
                     changed.append(' M ' + name)
                     continue
@@ -612,7 +649,8 @@ def source_clean_status(source: Path, head: str) -> str:
         except OSError:
             changed.append(' D ' + name)
             continue
-        digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+        if mode == '120000':
+            digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         if digest != object_id:
             changed.append(' M ' + name)
     untracked = subprocess.check_output(
@@ -996,6 +1034,8 @@ def main(argv=None):
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
+    if not infra_python:
+        require_ordinary_source_root(source)
     envelope=None
     if component:
         envelope=args.approved_linux_perl_envelope.expanduser()

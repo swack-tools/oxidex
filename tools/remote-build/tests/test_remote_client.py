@@ -9,6 +9,82 @@ SOURCE_HEAD = 'a' * 40
 
 
 class ClientTests(unittest.TestCase):
+    def setUp(self):
+        if self._testMethodName == 'test_external_unsigned_source_refused_before_transport':
+            return
+        # Existing transport fixtures use synthetic checkouts; source-root
+        # admission has its own real boundary control below.
+        from unittest.mock import patch
+        from lib import remote_build
+        selected=patch.object(remote_build,'require_ordinary_source_root')
+        selected.start();self.addCleanup(selected.stop)
+
+    def test_external_unsigned_source_refused_before_transport(self):
+        import sys
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'external';source.mkdir()
+            subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            adapter=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'direct.py'),
+                                    '--source',str(source),'--profile','debug'],
+                                   capture_output=True,text=True)
+            self.assertEqual(adapter.returncode,2)
+            self.assertIn('External source requires',adapter.stderr)
+            with patch.object(remote_build.ssh_transport,'identity',return_value=('uploader','key')), \
+                 patch.object(remote_build.ssh_transport,'DirectTransport',
+                              side_effect=AssertionError('transport started')), \
+                 patch.object(remote_build,'verify_builder_admission',
+                              side_effect=AssertionError('admission started')):
+                with self.assertRaisesRegex(RuntimeError,'External source'):
+                    remote_build.main(['--source',str(source),'--instance','builder-vm',
+                        '--zone','z','--instance-id','2','--worktree-id','external',
+                        '--evidence-dir',str(root/'evidence'),'--profile','debug'])
+                with patch.object(remote_build,'launcher_source_root',return_value=source):
+                    with self.assertRaisesRegex(AssertionError,'transport started'):
+                        remote_build.main(['--source',str(source),'--instance','builder-vm',
+                            '--zone','z','--instance-id','2','--worktree-id','selected',
+                            '--evidence-dir',str(root/'selected-evidence'),'--profile','debug'])
+
+    def test_source_clean_status_streams_regular_blob_without_read_bytes(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory);subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+            blob=source/'tracked';blob.write_bytes(b'actual tracked bytes\n')
+            subprocess.run(['/usr/bin/git','-C',str(source),'add','tracked'],check=True)
+            subprocess.run(['/usr/bin/git','-C',str(source),'-c','user.name=fixture',
+                            '-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false',
+                            'commit','-qm','fixture'],check=True)
+            head=subprocess.check_output(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+            with patch.object(Path,'read_bytes',side_effect=AssertionError('whole-file read')):
+                self.assertEqual(remote_build.source_clean_status(source,head),'')
+            original_read=os.read
+            def short_read(fd,count):
+                if os.fstat(fd).st_ino==blob.stat().st_ino:
+                    return b''
+                return original_read(fd,count)
+            with patch.object(remote_build.os,'read',side_effect=short_read):
+                with self.assertRaisesRegex(RuntimeError,'short-read'):
+                    remote_build.source_clean_status(source,head)
+            changed=[False]
+            def mutate_during_read(fd,count):
+                data=original_read(fd,count)
+                if os.fstat(fd).st_ino==blob.stat().st_ino and not changed[0]:
+                    changed[0]=True
+                    blob.write_bytes(b'mutated tracked bytes\n')
+                return data
+            with patch.object(remote_build.os,'read',side_effect=mutate_during_read):
+                with self.assertRaisesRegex(RuntimeError,'changed during'):
+                    remote_build.source_clean_status(source,head)
+            self.assertTrue(changed[0])
+            blob.write_bytes(b'actual tracked bytes\n')
+            blob.chmod(0o755)
+            self.assertIn(' M tracked',remote_build.source_clean_status(source,head))
+            blob.unlink();blob.symlink_to(source/'missing')
+            self.assertIn(' M tracked',remote_build.source_clean_status(source,head))
+
     def test_ordinary_snapshot_preserves_global_ignore_without_executing_global_config(self):
         import os
         from unittest.mock import patch
@@ -545,6 +621,12 @@ class ClientTests(unittest.TestCase):
 
 
 class DirectSetupReceiptTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        selected=patch.object(remote_build,'require_ordinary_source_root')
+        selected.start();self.addCleanup(selected.stop)
+
     def test_provider_failure_retryable_but_identity_failure_terminal(self):
         import json
         from unittest.mock import patch
@@ -580,6 +662,12 @@ class RequiredIdentityTests(unittest.TestCase):
 
 
 class RemoteTestProfileTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        selected=patch.object(remote_build,'require_ordinary_source_root')
+        selected.start();self.addCleanup(selected.stop)
+
     def test_remote_test_runs_workspace_suite_and_never_downloads_binary(self):
         from lib import remote_build
         from unittest.mock import patch

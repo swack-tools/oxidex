@@ -29,6 +29,8 @@ if not options.profile and not options.just_recipe:
 
 launcher_source=Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip())
 source=options.source or launcher_source
+if source.expanduser().resolve(strict=True) != launcher_source.resolve(strict=True) and not options.source_profile:
+    parser.error('External source requires the fixed signed infra-python-v1 profile')
 if options.just_recipe == 'infra-python-tests' and options.source_profile != 'infra-python-v1':
     parser.error('infra-python-tests requires --source-profile infra-python-v1')
 if options.source_profile and options.source is None:

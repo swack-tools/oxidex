@@ -17,6 +17,12 @@ import route
 
 
 class GenericRecipeTests(unittest.TestCase):
+    def setUp(self):
+        # These transport fixtures select synthetic source roots; the public
+        # source-root boundary has a separate real Git control.
+        selected=patch.object(remote_build,'require_ordinary_source_root')
+        selected.start();self.addCleanup(selected.stop)
+
     def test_linux_perl_route_and_packet_share_fleet_policy(self):
         self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
         receipt, commands, _, extras, heads = self.exercise(0, 'verify-linux-perl')
