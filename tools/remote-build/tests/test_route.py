@@ -114,6 +114,38 @@ class RouteTests(unittest.TestCase):
             route.main(['--require-local-context', 'test-remote-build'])
         self.assertEqual(events, ['verified CI', 'suite', 'verified CI'])
 
+    def test_qualification_python_route_uses_signed_source_and_no_oracle_setup(self):
+        with patch.object(route.sys, 'platform', 'darwin'), \
+             patch.object(os, 'execv') as launch:
+            route.main(['test-qualification'])
+        self.assertEqual(launch.call_args.args[1][-2:],
+                         ['--just-recipe', 'test-qualification'])
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout') as stage, \
+             patch.object(route, 'select_signed_builder_target') as target, \
+             patch('test_runner.prepare_fleet_recipe_oracle') as oracle, \
+             patch.object(os, 'execvp') as execute:
+            route.main(['test-qualification'])
+        stage.assert_called_once_with()
+        target.assert_called_once_with()
+        oracle.assert_not_called()
+        execute.assert_called_once_with('just', ['just', '_test-qualification-worker'])
+        with patch.object(route, 'local_worker_context', return_value=False):
+            with self.assertRaisesRegex(SystemExit, 'Refusing local test-qualification'):
+                route.main(['--require-local-context', 'test-qualification'])
+        with self.assertRaisesRegex(SystemExit, 'takes no arguments'):
+            route.main(['test-qualification', 'test'])
+        repository = Path(__file__).resolve().parents[3]
+        public = subprocess.run(['just', '--dry-run', 'test-qualification'], cwd=repository,
+                                capture_output=True, text=True, check=True).stderr
+        private = subprocess.run(['just', '--dry-run', '_test-qualification-worker'], cwd=repository,
+                                 capture_output=True, text=True, check=True).stderr
+        self.assertIn('route.py test-qualification', public)
+        self.assertIn('route.py --require-local-context test-qualification', private)
+        self.assertIn('qualification_test_runner.py', private)
+
     def test_nested_ordinary_test_keeps_generic_carrier(self):
         if shutil.which('just') is None:
             self.skipTest('just is unavailable')
