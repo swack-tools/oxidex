@@ -11,6 +11,9 @@ import tomllib
 ROOT = Path('/opt/runner-rust')
 PIN_FILE = Path('rust-toolchain.toml')
 TOOLS = ('rustc', 'cargo', 'rustfmt', 'clippy-driver')
+# rustup installs these PATH entry points as hardlinks to its own proxy binary.
+PROXIES = ('rustc', 'cargo', 'rustfmt', 'clippy-driver',
+           'rustdoc', 'cargo-fmt', 'cargo-clippy')
 
 
 def _trusted_storage(root: Path) -> None:
@@ -22,7 +25,8 @@ def _trusted_storage(root: Path) -> None:
         expected = stat.S_ISREG if path == root / 'cargo/bin/rustup' else stat.S_ISDIR
         if (path.is_symlink() or path.resolve(strict=True) != path
                 or not expected(info.st_mode) or info.st_uid != 0
-                or info.st_mode & 0o022):
+                or info.st_mode & 0o022
+                or (path == root / 'cargo/bin/rustup' and not info.st_mode & stat.S_IXOTH)):
             raise RuntimeError(f'Untrusted preinstalled Rust path: {path}')
     _readonly_mount(root)
 
@@ -30,6 +34,23 @@ def _trusted_storage(root: Path) -> None:
 def _readonly_mount(root: Path) -> None:
     if not os.path.ismount(root) or not os.statvfs(root).f_flag & os.ST_RDONLY:
         raise RuntimeError('Preinstalled Rust root is not a read-only mount')
+
+
+def _trusted_proxies(root: Path) -> None:
+    """Bind every exported Rust PATH entry to the sealed rustup proxy inode."""
+    binary = root / 'cargo/bin'
+    rustup = (binary / 'rustup').lstat()
+    for name in PROXIES:
+        path = binary / name
+        try:
+            info = path.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError(f'Missing preinstalled Rust proxy: {path}') from exc
+        if (path.is_symlink() or path.resolve(strict=True) != path
+                or not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022 or not info.st_mode & stat.S_IXOTH
+                or (info.st_dev, info.st_ino) != (rustup.st_dev, rustup.st_ino)):
+            raise RuntimeError(f'Untrusted preinstalled Rust proxy: {path}')
 
 
 def _trusted_tool(path: Path, tool: str, root: Path) -> None:
@@ -70,6 +91,7 @@ def probe(source: Path = Path('.'), root: Path = ROOT) -> bool:
     except FileNotFoundError:
         return False
     _trusted_storage(root)
+    _trusted_proxies(root)
     rustup = root / 'cargo/bin/rustup'
     env = dict(os.environ, RUSTUP_HOME=str(root / 'rustup'),
                PATH=str(root / 'cargo/bin') + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin'))

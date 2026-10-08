@@ -78,7 +78,8 @@ else: print(name + ' 1.99.0')
     def test_fixed_pin_components_targets_and_tool_identities(self):
         with tempfile.TemporaryDirectory() as directory:
             source, image = self.fixture(Path(directory).resolve())
-            with patch.object(selected, '_trusted_storage'), patch.object(selected, '_trusted_tool'):
+            with patch.object(selected, '_trusted_storage'), patch.object(selected, '_trusted_tool'), \
+                 patch.object(selected, '_trusted_proxies'):
                 self.assertTrue(selected.probe(source, image))
                 for env_name, expected in (('MISSING_COMPONENT', 'component'),
                                            ('MISSING_TARGET', 'target'),
@@ -97,6 +98,52 @@ else: print(name + ' 1.99.0')
                     '[toolchain]\nchannel = "1.98.0"\ncomponents = ["rustfmt", "clippy"]\n')
                 with self.assertRaises((RuntimeError, subprocess.CalledProcessError)):
                     selected.probe(source, image)
+
+    def test_actual_path_proxies_have_immutable_rustup_custody(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source, image = self.fixture(root)
+            proxy_dir = image / 'cargo/bin'
+            rustup = proxy_dir / 'rustup'
+            original_lstat = Path.lstat
+            def root_metadata(path, *args, **kwargs):
+                value = original_lstat(path, *args, **kwargs)
+                if path.is_relative_to(image):
+                    return SimpleNamespace(st_mode=value.st_mode, st_uid=0,
+                        st_dev=value.st_dev, st_ino=value.st_ino)
+                return value
+            with patch.object(selected, 'ROOT', image), \
+                 patch.object(Path, 'lstat', root_metadata), \
+                 patch.object(selected.os.path, 'ismount', return_value=True), \
+                 patch.object(selected.os, 'statvfs',
+                              return_value=SimpleNamespace(f_flag=os.ST_RDONLY)):
+                with self.assertRaisesRegex(RuntimeError, 'proxy'):
+                    selected.probe(source, image)  # Missing actual PATH proxies.
+                for name in selected.PROXIES:
+                    os.link(rustup, proxy_dir / name)
+                self.assertTrue(selected.probe(source, image))  # Real internal hardlinks.
+                for name in selected.PROXIES:
+                    with self.subTest(missing_proxy=name):
+                        path = proxy_dir / name
+                        path.unlink()
+                        with self.assertRaisesRegex(RuntimeError, 'proxy'):
+                            selected.probe(source, image)
+                        os.link(rustup, path)
+                victim = proxy_dir / 'rustc'
+                victim.unlink()
+                victim.write_bytes(rustup.read_bytes())
+                victim.chmod(0o755)
+                with self.assertRaisesRegex(RuntimeError, 'proxy'):
+                    selected.probe(source, image)  # Same bytes, different inode.
+                victim.unlink()
+                marker = root / 'untrusted-proxy-ran'
+                external = root / 'job-writable-rustc'
+                external.write_text('#!/bin/sh\n/usr/bin/touch '+str(marker)+'\n')
+                external.chmod(0o755)
+                victim.symlink_to(external)
+                with self.assertRaisesRegex(RuntimeError, 'proxy'):
+                    selected.probe(source, image)
+                self.assertFalse(marker.exists(), 'external wrapper executed before refusal')
 
     def test_action_output_only_selects_verified_preinstall(self):
         with tempfile.TemporaryDirectory() as directory:
