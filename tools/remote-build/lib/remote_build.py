@@ -29,7 +29,7 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
                            'prove-linux-perl-component', 'docs-site-build',
-                           'test-remote-build'})
+                           'test-remote-build', 'test-qualification'})
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
