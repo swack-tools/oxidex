@@ -65,7 +65,16 @@ struct Row {
     /// occurrence-based: duplicate ids and same-name ids must never borrow
     /// one another's generated row.
     entry_index: usize,
+    /// Identity and groups supplied by the generated FoundTag row, before
+    /// the public IFD lookup key is chosen by this adapter.
+    source_id: oxidex_tags::TagId,
+    module: &'static str,
+    table: &'static str,
+    group0: &'static str,
+    group1: &'static str,
+    group2: &'static str,
     name: &'static str,
+    is_list: bool,
     /// `Emitted::value` through [`engine_row_value`].
     display: TagValue,
     /// ExifTool's `-n` form: `Emitted::value_conv` when a `PrintConv`
@@ -713,21 +722,34 @@ pub(crate) fn ifd0_walk_with_session(
     )
 }
 
-/// `<Dir>:<Name>` into the map the way `FoundTag` records it: the row's
-/// priority, group1 `""` (the IFD1 convention, `tiff_helpers::IFD1_GROUP1`:
-/// the key prefix is the family-1 label and `resolve_family0` maps
-/// `ExifIFD`/`InteropIFD` to `EXIF`), and the `-n` form on the same
-/// occurrence, and its stored form when the caller asked for it.
+/// Record the generated `FoundTag` row under the adapter's public
+/// `<Dir>:<Name>` key. Its numeric source id, table, groups, list flag and
+/// value forms travel together; `MetadataMap` assigns its file-order slot.
 fn record(row: &Row, stored_forms: bool, metadata: &mut MetadataMap, key: String) {
-    metadata.insert_occurrence_with_forms_and_binary_state(
+    metadata.record_occurrence(
         key,
-        row.display.clone(),
-        row.no_print_conv.clone(),
-        row.stored.clone().filter(|_| stored_forms),
-        row.priority,
-        "",
-        Instance::default(),
-        row.binary_payload_unavailable,
+        TagOccurrence {
+            id: row.source_id.clone(),
+            name: intern(row.name),
+            group0: intern(row.group0),
+            group1: intern(row.group1),
+            group2: Some(intern(row.group2)),
+            instance: Instance::default(),
+            raw: row.display.clone(),
+            value: Some(row.no_print_conv.clone()),
+            print: Some(row.display.clone()),
+            stored: row.stored.clone().filter(|_| stored_forms),
+            binary_payload_unavailable: row.binary_payload_unavailable,
+            binary_extract_from_stored: false,
+            priority: row.priority.into(),
+            is_list: row.is_list,
+            order: 0, // MetadataMap assigns the physical insertion order.
+            origin: Provenance {
+                module: Some(row.module),
+                table: Some(row.table),
+                byte_range: None,
+            },
+        },
     );
 }
 
@@ -848,7 +870,14 @@ pub(crate) fn walk_with_session(
             entry_index: *row_entry
                 .get(&index)
                 .expect("a fenced root row has a root entry"),
+            source_id: row.source_id,
+            module: row.module,
+            table: row.table,
+            group0: row.group0,
+            group1: row.group1,
+            group2: row.group2,
             name: row.name,
+            is_list: row.is_list,
             display,
             no_print_conv,
             stored,

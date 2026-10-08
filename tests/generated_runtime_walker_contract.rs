@@ -1220,6 +1220,7 @@ fn canonraw_keyed_route_has_one_real_attributed_occurrence() {
 }
 
 /// Build a one-field IFD0 carrier with an exact numeric Exif::Main source id.
+/// Type 1 is a valid BYTE entry, and six bytes live at TIFF offset 26.
 /// The test uses the public reader and CLI, so a hand-built walker cannot
 /// stand in for the runtime owner/fallback route.
 fn task18_xp_carrier(id: u16, bytes: &[u8]) -> Vec<u8> {
@@ -1253,8 +1254,10 @@ fn task18_xp_carrier(id: u16, bytes: &[u8]) -> Vec<u8> {
 fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
     use std::process::Command;
     for (id, name) in [
-        (0x9c9b, "XPTitle"), (0x9c9c, "XPComment"),
-        (0x9c9d, "XPAuthor"), (0x9c9e, "XPKeywords"),
+        (0x9c9b, "XPTitle"),
+        (0x9c9c, "XPComment"),
+        (0x9c9d, "XPAuthor"),
+        (0x9c9e, "XPKeywords"),
         (0x9c9f, "XPSubject"),
     ] {
         let normal = tempfile::NamedTempFile::new().expect("carrier file");
@@ -1262,28 +1265,63 @@ fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
             .expect("write exact XP carrier");
         let key = format!("IFD0:{name}");
         let metadata = read_metadata(normal.path()).expect("public XP read");
-        let rows: Vec<_> = metadata.project_occurrences(ValueChannel::PrintConv)
-            .filter(|(field, _, _)| *field == key).collect();
+        let rows: Vec<_> = metadata
+            .project_occurrences(ValueChannel::PrintConv)
+            .filter(|(field, _, _)| *field == key)
+            .collect();
         assert_eq!(rows.len(), 1, "{id:#06x} {key} provenance");
         let (_, occurrence, value) = &rows[0];
         assert_eq!(occurrence.id, TagId::Numeric(id));
+        assert_eq!(occurrence.name.as_ref(), name);
+        assert_eq!(occurrence.group0.as_ref(), "EXIF");
+        assert_eq!(occurrence.group1.as_ref(), "IFD0");
         assert_eq!(occurrence.origin.module, Some("Exif"));
         assert_eq!(occurrence.origin.table, Some("Main"));
+        assert!(
+            !metadata.is_assigned(&key),
+            "read cannot become a caller set"
+        );
+        assert_eq!(
+            occurrence.stored,
+            Some(TagValue::Binary(b"H\0i\0\0\0".to_vec()))
+        );
+        assert_eq!(occurrence.value, Some(TagValue::new_string("Hi")));
+        assert_eq!(occurrence.print, Some(TagValue::new_string("Hi")));
         assert_eq!(value.as_string(), Some("Hi"));
         let read = |path: &std::path::Path, off: bool| -> serde_json::Map<String, Value> {
             let mut command = Command::new(env!("CARGO_BIN_EXE_oxidex"));
             command.args(["-j", "-G1", "-a"]);
-            if off { command.env("OXIDEX_GENSHARE_SILENCE", "engine"); }
-            else { command.env_remove("OXIDEX_GENSHARE_SILENCE"); }
+            if off {
+                command.env("OXIDEX_GENSHARE_SILENCE", "engine");
+            } else {
+                command.env_remove("OXIDEX_GENSHARE_SILENCE");
+            }
             let output = command.arg(path).output().expect("public XP CLI read");
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             let document: Value = serde_json::from_slice(&output.stdout).expect("typed CLI JSON");
-            document[0].as_object().expect("one carrier document").clone()
+            document[0]
+                .as_object()
+                .expect("one carrier document")
+                .clone()
         };
         let on = read(normal.path(), false);
         let off = read(normal.path(), true);
-        assert_eq!(on.get(&key), Some(&Value::String("Hi".into())), "{id:#06x}");
-        assert!(!off.contains_key(&key), "{id:#06x} generated-off must lose exact key");
+        assert_eq!(
+            on.get(&key),
+            Some(&Value::String("Hi".into())),
+            "{id:#06x}"
+        );
+        assert!(
+            !off.contains_key(&key),
+            "{id:#06x} generated-off must lose exact key"
+        );
+        let mut only_generated = on.clone();
+        only_generated.remove(&key);
+        assert_eq!(only_generated, off, "{id:#06x} silence changed a sibling");
 
         // A surrogate makes the generated conversion decline. The retained
         // hand fallback must survive both mode settings, with the same typed
@@ -1291,10 +1329,47 @@ fn task18_xp_fields_have_exact_generated_off_and_fallback_routes() {
         let declined = tempfile::NamedTempFile::new().expect("decline carrier");
         std::fs::write(declined.path(), task18_xp_carrier(id, &[0x3c, 0xd8, 0x8c, 0xdf, 0, 0]))
             .expect("write decline carrier");
+        let fallback = read_metadata(declined.path()).expect("public fallback XP read");
+        let fallback_rows: Vec<_> = fallback
+            .project_occurrences(ValueChannel::PrintConv)
+            .filter(|(field, _, _)| *field == key)
+            .collect();
+        assert_eq!(fallback_rows.len(), 1, "{id:#06x} one hand fallback");
+        let (_, hand, hand_value) = &fallback_rows[0];
+        assert_eq!(
+            hand.id,
+            TagId::Named(key.clone()),
+            "{id:#06x} no invented numeric source"
+        );
+        assert_eq!(
+            hand.origin.module, None,
+            "{id:#06x} no invented table source"
+        );
+        assert_eq!(
+            hand.origin.table, None,
+            "{id:#06x} no invented table source"
+        );
+        assert_eq!(
+            hand.stored,
+            Some(TagValue::Binary(vec![0x3c, 0xd8, 0x8c, 0xdf, 0, 0]))
+        );
+        assert_eq!(hand_value.as_string(), Some("🎌"));
+        assert!(
+            !fallback.is_assigned(&key),
+            "fallback read cannot become a caller set"
+        );
         let fallback_on = read(declined.path(), false);
         let fallback_off = read(declined.path(), true);
-        assert_eq!(fallback_on.get(&key), fallback_off.get(&key), "{id:#06x} fallback changed");
-        assert!(fallback_on.contains_key(&key), "{id:#06x} fallback absent");
+        assert_eq!(
+            fallback_on.get(&key),
+            fallback_off.get(&key),
+            "{id:#06x} fallback changed"
+        );
+        assert_eq!(fallback_on.get(&key), Some(&Value::String("🎌".into())));
+        assert_eq!(
+            fallback_on, fallback_off,
+            "{id:#06x} fallback route changed siblings"
+        );
     }
 }
 
