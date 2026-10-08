@@ -111,7 +111,12 @@ else
   SOURCE_IDENTITY="$SHA"
   CANDIDATE_SHA="$SHA"
   step "snapshot: $REF @ ${SHA:0:12}"
-  git -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
+  # Archive attributes must come only from the signed commit, without private
+  # overrides or export rules that can omit/substitute committed page bytes.
+  export GIT_ATTR_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+  python3 "$REPO/tools/docs/check-archive-source.py" "$REPO" "$SHA"
+  git -c core.attributesFile=/dev/null -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
+  bash "$REPO/tools/docs/attach-snapshot-history.sh" "$REPO" "$SHA" "$SRC"
 fi
 
 if [ "$USE_WORKTREE" = 1 ]; then
@@ -186,10 +191,7 @@ if [ "$BUILD_ONLY" = 1 ]; then
   fi
   mkdir -p "$OUTPUT/dist"
   cp -R "$DIST/." "$OUTPUT/dist/"
-  DIST_SHA256=$(
-    cd "$OUTPUT/dist"
-    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}'
-  )
+  DIST_SHA256=$(bash "$REPO/tools/docs/dist-sha256.sh" "$OUTPUT/dist")
   node - "$OUTPUT/snapshot-manifest.json" "$CANDIDATE_SHA" "$SHA" "$SOURCE_KIND" "$SOURCE_IDENTITY" \
     "$SNAPSHOT_TREE_HASH" "$DIST_SHA256" "$OUTPUT/dist" "${DOCS_BASE:-/}" <<'NODE'
 const fs = require('node:fs');
