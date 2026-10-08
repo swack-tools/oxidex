@@ -29,6 +29,8 @@ def main():
         parser.error('--just-arg requires --just-recipe')
     if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
         parser.error('invalid Just recipe name')
+    if args.just_recipe == 'infra-python-tests':
+        parser.error('infra-python-tests requires the signed test-infra-remote route')
     if bool(args.approved_linux_perl_envelope) != (args.just_recipe == 'prove-linux-perl-component'):
         parser.error('approved Linux Perl envelope belongs only to component proof')
     if args.approved_linux_perl_envelope and args.just_arg:

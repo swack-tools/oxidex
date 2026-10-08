@@ -29,6 +29,18 @@ SCP_KEEPALIVE = ('--scp-flag=-oServerAliveInterval=15',
 FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
                            'prove-linux-perl-component'})
+INFRA_PYTHON_PROFILE = 'infra-python-v1'
+INFRA_PYTHON_RECIPE = 'infra-python-tests'
+INFRA_PYTHON_ORIGINS = frozenset({
+    'git@github.com:swack-tools/spot-github-runners.git',
+    'https://github.com/swack-tools/spot-github-runners.git',
+    'https://github.com/swack-tools/spot-github-runners',
+})
+INFRA_PYTHON_REQUIRED = frozenset({
+    'justfile', 'rust-toolchain.toml', 'src/lib/host_admission.py',
+    'src/lib/qualification_trust/control_engine.py',
+    'tests/test_builder_c9_proof_repairs.py',
+})
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
@@ -53,16 +65,22 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
-def verify_signed_source(source, head):
+def verify_signed_source(source, head, signer_path=None):
+    if signer_path is not None:
+        from qualification_source import _trusted_key
+        _trusted_key(signer_path)
+    command=['git','-C',str(source)]
+    if signer_path is not None:
+        command += ['-c','gpg.format=ssh', '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
     identity = subprocess.check_output(
-        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
+        [*command,'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
         text=True).strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
-    subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
+    subprocess.run([*command,'verify-commit',head], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
@@ -331,7 +349,7 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
     return sorted(eligible)
 
 
-def signed_snapshot_files(source: Path, head: str) -> dict[str, tuple[str, int]]:
+def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> dict[str, tuple[str, int]]:
     """Enumerate fleet packet blobs and modes from the authenticated commit."""
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
@@ -358,13 +376,20 @@ def signed_snapshot_files(source: Path, head: str) -> dict[str, tuple[str, int]]
               'tools/remote-build/qualification_bootstrap.py',
               'tools/remote-build/qualification_source.py',
               'tools/remote-build/test_runner.py','tools/release/bootstrap_oracle.py'}
+    if source_profile == INFRA_PYTHON_PROFILE:
+        required=INFRA_PYTHON_REQUIRED
+    elif source_profile is not None:
+        raise RuntimeError('Unsupported signed source profile')
     if required-signed.keys():
-        raise RuntimeError(f'Signed fleet launcher is incomplete: {sorted(required-signed.keys())}')
+        label='Infrastructure source' if source_profile == INFRA_PYTHON_PROFILE else 'Signed fleet launcher'
+        raise RuntimeError(f'{label} is incomplete: {sorted(required-signed.keys())}')
     return signed
 
 
-def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None) -> dict:
-    signed=signed_snapshot_files(source,signed_head) if signed_head is not None else None
+def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
+    if source_profile is not None and signed_head is None:
+        raise RuntimeError('Signed source profile requires exact HEAD')
+    signed=signed_snapshot_files(source,signed_head,source_profile=source_profile) if signed_head is not None else None
     names=sorted(signed) if signed is not None else eligible_snapshot_paths(source)
     files=[]
     with tarfile.open(archive,'w:gz',compresslevel=3) as tar:
@@ -476,6 +501,7 @@ def main(argv=None):
     task=parser.add_mutually_exclusive_group()
     task.add_argument('--profile',choices=['debug','release','test'])
     task.add_argument('--just-recipe')
+    parser.add_argument('--source-profile',choices=[INFRA_PYTHON_PROFILE])
     parser.add_argument('--just-arg',action='append',default=[])
     parser.add_argument('--approved-linux-perl-envelope',type=Path)
     parser.add_argument('--artifact-dir',type=Path)
@@ -486,6 +512,12 @@ def main(argv=None):
         parser.error('--just-arg requires --just-recipe')
     if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
         parser.error('invalid Just recipe name')
+    infra_python=args.source_profile == INFRA_PYTHON_PROFILE
+    if args.just_recipe == INFRA_PYTHON_RECIPE and not infra_python:
+        parser.error('infra-python-tests requires --source-profile infra-python-v1')
+    if infra_python and (args.just_recipe != INFRA_PYTHON_RECIPE or args.just_arg
+                         or args.approved_linux_perl_envelope or args.artifact_dir):
+        parser.error('infra-python-v1 requires only --just-recipe infra-python-tests with zero arguments')
     component=args.just_recipe=='prove-linux-perl-component'
     if bool(args.approved_linux_perl_envelope) != component or (component and args.just_arg):
         parser.error('component proof requires only its explicit approved envelope')
@@ -525,7 +557,7 @@ def main(argv=None):
     if args.artifact_dir is None:
         args.artifact_dir=source/'target'/'remote-linux'/task_name
     evidence.mkdir(parents=True,exist_ok=True)
-    receipt={'profile':args.profile,'just_recipe':args.just_recipe,'just_args':args.just_arg,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
+    receipt={'profile':args.profile,'source_profile':args.source_profile,'just_recipe':args.just_recipe,'just_args':args.just_arg,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
     if approval:
         receipt['approved_instance'] = approval
@@ -598,6 +630,7 @@ def main(argv=None):
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
         receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        receipt['source_tree']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
         receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
         if args.just_recipe == 'freeze-linux-perl':
             source_tree=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
@@ -608,18 +641,26 @@ def main(argv=None):
         if args.profile == 'test':
             verify_signed_source(source, receipt['source_commit'])
         extra_files={}
-        if args.just_recipe in FLEET_RECIPES:
+        if args.just_recipe in FLEET_RECIPES or infra_python:
             if receipt['source_status']:
-                raise RuntimeError('Remote fleet tests require a clean exact-HEAD checkout')
-            verify_signed_source(source, receipt['source_commit'])
+                raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
             signer_path=Path(subprocess.check_output(
                 ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
                 text=True).strip())
             if signer_path.is_symlink() or not signer_path.is_file():
                 raise RuntimeError('Maintainer allowed signers file is unavailable')
-            # Pin the local signer before any packet source runs on Spot.
-            from qualification_source import verify_source
-            verify_source(source, receipt['source_commit'], signer_path)
+            if infra_python:
+                origin=subprocess.check_output(
+                    ['git','-C',str(source),'remote','get-url','origin'], text=True).strip()
+                if origin not in INFRA_PYTHON_ORIGINS:
+                    raise RuntimeError('Infrastructure source origin is not the approved repository')
+                receipt['source_repository']='swack-tools/spot-github-runners'
+                verify_signed_source(source, receipt['source_commit'], signer_path)
+            else:
+                verify_signed_source(source, receipt['source_commit'])
+                # Fleet qualification also binds the OxiDex-specific source pins.
+                from qualification_source import verify_source
+                verify_source(source, receipt['source_commit'], signer_path)
             bundle=evidence/'repository.bundle'
             subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
                            env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
@@ -632,8 +673,18 @@ def main(argv=None):
                          'fleet-source-head':source_head}
             if component:
                 extra_files['approved-linux-perl.json']=envelope
-        receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
-                                          signed_head=receipt['source_commit']) if extra_files else make_snapshot(source,archive)
+        if infra_python:
+            receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
+                                              signed_head=receipt['source_commit'],
+                                              source_profile=INFRA_PYTHON_PROFILE)
+        elif extra_files:
+            receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
+                                              signed_head=receipt['source_commit'])
+        else:
+            receipt['snapshot']=make_snapshot(source,archive)
+        if infra_python:
+            receipt['source_provenance']='signed_exact_head_infra_python_v1'
+            receipt['validation_scope']='infra_python_unittest_only'
         if extra_files:
             receipt['fleet_source_bundle_sha256']=next(
                 row['sha256'] for row in receipt['snapshot']['files']
