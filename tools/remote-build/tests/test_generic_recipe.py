@@ -104,7 +104,8 @@ class GenericRecipeTests(unittest.TestCase):
             with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
                  patch.object(remote_build.ssh_transport,'identity',return_value=('uploader','key')), \
                  patch.object(remote_build.subprocess,'run') as run, \
-                 patch.object(remote_build.subprocess,'check_output') as output:
+                 patch.object(remote_build.subprocess,'check_output') as output, \
+                 patch.object(remote_build,'_local_config_preflight'):
                 for candidate, message in ((root/'absent.json','regular file'),
                                            (link,'regular file'),
                                            (oversized,'transport bound')):
@@ -261,6 +262,7 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
                  patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
                  patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.99.0'}), \
+                 patch.object(remote_build,'_local_config_preflight'), \
                  patch.object(remote_build,'_verify_signed_source_with_frozen_signer'), \
                  patch('qualification_source.verify_source'), \
                  patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
@@ -490,6 +492,7 @@ class GenericRecipeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','init','-q',str(source)],check=True)
             (source/'tracked.txt').write_text('tracked')
             bundle=root/'repository.bundle';bundle.write_bytes(b'signed bundle')
             archive=root/'source.tar.gz'

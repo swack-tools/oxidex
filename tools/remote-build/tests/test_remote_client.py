@@ -9,6 +9,22 @@ SOURCE_HEAD = 'a' * 40
 
 
 class ClientTests(unittest.TestCase):
+    # These tests mock repository Git/transport and intentionally use source
+    # directories without .git. Actual config admission has real-Git controls.
+    SYNTHETIC_GIT_TESTS = frozenset({
+        'test_busy_explicit_builder_records_refusal_before_source_upload',
+        'test_cleanup_failure_after_verified_download_is_not_success',
+        'test_direct_approved_vm_cannot_bypass_busy_admission',
+        'test_direct_exception_refuses_replacement_before_remote_mutation',
+        'test_explicit_builder_replacement_prevents_all_ssh',
+        'test_failed_remote_header_validation_prevents_release_compilation',
+        'test_missing_local_pin_stops_before_remote_work',
+        'test_prepare_race_is_retryable_without_building',
+        'test_success_downloads_before_exact_run_cleanup',
+        'test_sync_failure_keeps_remote_diagnostics',
+        'test_toolchain_mismatch_stops_before_fetch',
+    })
+
     def setUp(self):
         if self._testMethodName == 'test_external_unsigned_source_refused_before_transport':
             return
@@ -18,6 +34,9 @@ class ClientTests(unittest.TestCase):
         from lib import remote_build
         selected=patch.object(remote_build,'require_ordinary_source_root')
         selected.start();self.addCleanup(selected.stop)
+        if self._testMethodName in self.SYNTHETIC_GIT_TESTS:
+            config=patch.object(remote_build,'_local_config_preflight')
+            config.start();self.addCleanup(config.stop)
 
     def test_external_unsigned_source_refused_before_transport(self):
         import sys
@@ -728,6 +747,8 @@ class DirectSetupReceiptTests(unittest.TestCase):
         from lib import remote_build
         selected=patch.object(remote_build,'require_ordinary_source_root')
         selected.start();self.addCleanup(selected.stop)
+        config=patch.object(remote_build,'_local_config_preflight')
+        config.start();self.addCleanup(config.stop)
 
     def test_provider_failure_retryable_but_identity_failure_terminal(self):
         import json
@@ -764,11 +785,20 @@ class RequiredIdentityTests(unittest.TestCase):
 
 
 class RemoteTestProfileTests(unittest.TestCase):
+    SYNTHETIC_GIT_TESTS = frozenset({
+        'test_completed_test_retains_remote_proof_if_download_fails',
+        'test_remote_test_refuses_unsigned_or_other_signer_before_upload',
+        'test_remote_test_runs_workspace_suite_and_never_downloads_binary',
+    })
+
     def setUp(self):
         from unittest.mock import patch
         from lib import remote_build
         selected=patch.object(remote_build,'require_ordinary_source_root')
         selected.start();self.addCleanup(selected.stop)
+        if self._testMethodName in self.SYNTHETIC_GIT_TESTS:
+            config=patch.object(remote_build,'_local_config_preflight')
+            config.start();self.addCleanup(config.stop)
 
     def test_remote_test_refuses_changed_bytes_hidden_after_clean_status(self):
         from lib import remote_build
