@@ -1192,7 +1192,7 @@ def main(argv=None):
             receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
                                               signed_head=receipt['source_commit'],
                                               source_profile=INFRA_PYTHON_PROFILE)
-        elif extra_files:
+        elif extra_files or args.profile == 'test':
             receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
                                               signed_head=receipt['source_commit'])
         else:

@@ -770,6 +770,63 @@ class RemoteTestProfileTests(unittest.TestCase):
         selected=patch.object(remote_build,'require_ordinary_source_root')
         selected.start();self.addCleanup(selected.stop)
 
+    def test_remote_test_refuses_changed_bytes_hidden_after_clean_status(self):
+        from lib import remote_build
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'source'
+            root.mkdir()
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            for name in ('justfile', 'rust-toolchain.toml',
+                         'tools/remote-build/route.py',
+                         'tools/remote-build/qualification_bootstrap.py',
+                         'tools/remote-build/qualification_source.py',
+                         'tools/remote-build/test_runner.py',
+                         'tools/release/bootstrap_oracle.py'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('committed\n')
+            source_file = root / 'code.rs'
+            source_file.write_text('committed\n')
+            subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)
+            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test',
+                            '-c', 'user.email=test@example.invalid',
+                            'commit', '-qm', 'fixture'], check=True)
+            subprocess.run(['git', '-C', str(root), 'update-index',
+                            '--assume-unchanged', 'code.rs'], check=True)
+
+            real_run = subprocess.run
+            mutated = False
+
+            def change_after_clean_status(command, **kwargs):
+                nonlocal mutated
+                result = real_run(command, stdout=subprocess.PIPE, check=True, **kwargs).stdout
+                if not mutated and 'status' in command and '--porcelain' in command:
+                    self.assertEqual(result, '')
+                    source_file.write_text('corrupted\n')
+                    mutated = True
+                return result
+
+            def reject_remote_command(command, **kwargs):
+                # On the broken path the archive would already contain the
+                # altered checkout bytes before the first remote command.
+                with tarfile.open(Path(directory) / 'evidence' / 'remote-source.tar.gz') as archive:
+                    self.assertEqual(archive.extractfile('code.rs').read(), b'corrupted\n')
+                source_file.write_text('committed\n')
+                raise AssertionError('remote command reached with unsigned source bytes')
+
+            with patch.object(remote_build.ssh_transport, 'identity', return_value=None), \
+                 patch.object(remote_build, 'verify_builder_admission', return_value={'admission_passed': True}), \
+                 patch.object(remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}), \
+                 patch.object(remote_build, 'verify_signed_source'), \
+                 patch.object(remote_build.subprocess, 'check_output', side_effect=change_after_clean_status), \
+                 patch.object(remote_build.subprocess, 'run', side_effect=reject_remote_command):
+                with self.assertRaisesRegex(RuntimeError, 'Fleet source differs from signed HEAD'):
+                    remote_build.main(['--source', str(root), '--instance', 'builder-vm', '--zone', 'z',
+                                       '--instance-id', '2', '--worktree-id', 'checkout',
+                                       '--evidence-dir', str(Path(directory) / 'evidence'), '--profile', 'test'])
+            self.assertTrue(mutated)
+
     def test_remote_test_runs_workspace_suite_and_never_downloads_binary(self):
         from lib import remote_build
         from unittest.mock import patch
