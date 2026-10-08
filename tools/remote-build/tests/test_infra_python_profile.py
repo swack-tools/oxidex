@@ -15,6 +15,46 @@ import qualification_source
 
 
 class InfraPythonProfileTests(unittest.TestCase):
+    def test_relative_allowed_signers_cannot_switch_keys_between_caller_and_git(self):
+        if shutil.which('ssh-keygen') is None:
+            self.skipTest('ssh-keygen unavailable')
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            caller = root / 'caller'
+            source = root / 'source'
+            caller.mkdir()
+            source.mkdir()
+            approved = root / 'approved'
+            attacker = root / 'attacker'
+            for key in (approved, attacker):
+                subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+            approved_public = ' '.join(approved.with_suffix('.pub').read_text().split()[:2])
+            attacker_public = ' '.join(attacker.with_suffix('.pub').read_text().split()[:2])
+            fingerprint = subprocess.check_output(['ssh-keygen', '-lf', str(approved) + '.pub'], text=True).split()[1]
+            (caller / 'signers').write_text(qualification_source.PRINCIPAL + ' ' + approved_public + '\n')
+            (source / 'signers').write_text(qualification_source.PRINCIPAL + ' ' + attacker_public + '\n')
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'swackhamer')
+            git('config', 'user.email', qualification_source.PRINCIPAL)
+            git('config', 'gpg.format', 'ssh')
+            git('config', 'user.signingkey', str(attacker))
+            git('config', 'gpg.ssh.allowedSignersFile', 'signers')
+            (source / 'payload').write_text('attacker-controlled\n')
+            git('add', 'payload')
+            git('commit', '-q', '-S', '-m', 'Attacker signed source')
+            head = git('rev-parse', 'HEAD')
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(caller)
+                with patch.object(qualification_source, 'KEY', approved_public), \
+                     patch.object(qualification_source, 'FINGERPRINT', fingerprint):
+                    with self.assertRaisesRegex(RuntimeError, 'absolute'):
+                        remote_build.verify_signed_source(source, head, Path('signers'))
+            finally:
+                os.chdir(original_cwd)
+
     def test_recipe_gate(self):
         with tempfile.TemporaryDirectory() as folder:
             base = ['--source', folder, '--instance', 'builder-vm', '--zone', 'zone',

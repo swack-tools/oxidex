@@ -71,8 +71,19 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
+def _canonical_signer_path(signer_path):
+    """Bind the trusted key check and Git verification to one file."""
+    signer_path = Path(signer_path)
+    if not signer_path.is_absolute():
+        raise RuntimeError('Maintainer allowed signers path must be absolute')
+    if signer_path.is_symlink() or not signer_path.is_file():
+        raise RuntimeError('Maintainer allowed signers file is unavailable')
+    return signer_path.resolve(strict=True)
+
+
 def verify_signed_source(source, head, signer_path=None):
     if signer_path is not None:
+        signer_path = _canonical_signer_path(signer_path)
         from qualification_source import _trusted_key
         _trusted_key(signer_path)
     command=['git','-C',str(source)]
@@ -657,8 +668,7 @@ def main(argv=None):
             signer_path=Path(subprocess.check_output(
                 ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
                 text=True,env=source_git_env()).strip())
-            if signer_path.is_symlink() or not signer_path.is_file():
-                raise RuntimeError('Maintainer allowed signers file is unavailable')
+            signer_path=_canonical_signer_path(signer_path)
             if infra_python:
                 raw_origins=subprocess.check_output(
                     ['git','-C',str(source),'config','--local','--get-all','remote.origin.url'],
