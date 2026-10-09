@@ -1192,6 +1192,45 @@ class BoundedSnapshotTests(unittest.TestCase):
                     remote_build.make_snapshot(source,root/'sparse.tar.gz',signed_head=head)
                 self.assertTrue(remote_build._snapshot_file_changed(source/'tracked',row))
 
+    def test_signed_snapshot_bound_accepts_catalog_metadata_without_blob_read(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source,head=self._repo(root,signed=True)
+            oid=remote_build.signed_snapshot_files(source,head)['tracked'][0]
+            real_git=remote_build._bounded_source_git
+            declared_size=[84184700]
+            class BodyRequested(RuntimeError):
+                pass
+            def metadata_only(selected,arguments,limit,**kwargs):
+                if arguments[:2]==['cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)']:
+                    return f'{oid} blob {declared_size[0]}\n'.encode()
+                if arguments[:2]==['cat-file','blob'] and arguments[2]==oid:
+                    raise BodyRequested('synthetic blob body requested')
+                return real_git(selected,arguments,limit,**kwargs)
+            with patch.object(remote_build,'_bounded_source_git',side_effect=metadata_only):
+                with self.assertRaisesRegex(BodyRequested,'synthetic blob body requested'):
+                    remote_build.make_snapshot(source,root/'catalog.tar.gz',signed_head=head)
+                declared_size[0]=remote_build.MAX_SIGNED_BLOB_BYTES+1
+                with self.assertRaisesRegex(RuntimeError,'exceeds declared bound'):
+                    remote_build.make_snapshot(source,root/'over-cap.tar.gz',signed_head=head)
+
+    def test_signed_snapshot_checks_worktree_sha256_after_oid(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source,head=self._repo(root,signed=True)
+            oid=remote_build.signed_snapshot_files(source,head)['tracked'][0]
+            real_hashes=remote_build._stream_worktree_hashes
+            def mismatched_sha(path,**kwargs):
+                if path==source/'tracked':
+                    real_hashes(path,**kwargs)
+                    return oid,'0'*64
+                return real_hashes(path,**kwargs)
+            with patch.object(remote_build,'_stream_worktree_hashes',side_effect=mismatched_sha):
+                with self.assertRaisesRegex(RuntimeError,'Fleet source differs'):
+                    remote_build.make_snapshot(source,root/'sha-mismatch.tar.gz',signed_head=head)
+
     def test_stream_rejects_growth_after_stat(self):
         import os
         from unittest.mock import patch

@@ -89,7 +89,9 @@ MAX_LOCAL_CONFIG_BYTES = 256 * 1024
 GIT_ADMISSION_TIMEOUT = 5
 # Git index output is untrusted even when HEAD was independently authenticated.
 MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
-MAX_SIGNED_BLOB_BYTES = 64 * 1024 * 1024
+# The signed source includes catalog-corpus-observed-13.59.json (84,184,700
+# bytes at d02ffe45); keep a finite cap above that legitimate source maximum.
+MAX_SIGNED_BLOB_BYTES = 128 * 1024 * 1024
 
 
 def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
@@ -1105,16 +1107,19 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
                 data=_bounded_source_git(source,['cat-file','blob',object_id],size)
                 if len(data)!=size:
                     raise RuntimeError('Signed fleet blob short-read')
+                data_sha256=hashlib.sha256(data).hexdigest()
                 try:
-                    actual_oid,_=_stream_worktree_hashes(path,expected_size=size,expected_mode=mode)
+                    actual_oid,actual_sha256=_stream_worktree_hashes(
+                        path,expected_size=size,expected_mode=mode)
                 except (OSError,RuntimeError) as error:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}') from error
-                if actual_oid!=object_id:
+                if actual_oid!=object_id or actual_sha256!=data_sha256:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}')
                 info=tarfile.TarInfo(name)
                 info.mode=mode
             info.size=len(data)
-            row={'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+            row={'path':name,'sha256':data_sha256 if signed is not None else hashlib.sha256(data).hexdigest(),
+                 'bytes':len(data)}
             if signed is not None:
                 row['mode']=info.mode
             files.append(row)
