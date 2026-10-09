@@ -54,7 +54,7 @@ class InfraPythonProfileTests(unittest.TestCase):
             git('config', 'remote.origin.partialclonefilter', 'blob:none')
             git('config', 'protocol.ext.allow', 'always')
             (source / '.git/objects' / tree[:2] / tree[2:]).unlink()
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaisesRegex(RuntimeError, 'Repository authority tool refused'):
                 remote_build.source_clean_status(source, head)
             self.assertFalse(marker.exists(), 'pre-admission Git started local transport helper')
             transport = subprocess.run(['/usr/bin/git', '-C', str(source), 'ls-remote',
