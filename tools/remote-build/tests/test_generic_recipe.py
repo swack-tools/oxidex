@@ -1,5 +1,6 @@
 """Bounded Just dispatch and signed fleet packet controls; no remote jobs."""
 import json
+from contextlib import ExitStack
 import hashlib
 from pathlib import Path
 import tarfile
@@ -267,28 +268,47 @@ class GenericRecipeTests(unittest.TestCase):
                 return (str(signer) + '\n').encode()
             def download(instance,zone,project,binary,artifact,digest,**kwargs):
                 artifact.write_bytes(b'verified synthetic binary')
-            with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
-                 patch.object(remote_build.ssh_transport,'identity',return_value=('oxidex-uploader','/synthetic/key')), \
-                 patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
-                 patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
-                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.99.0'}), \
-                 patch.object(remote_build,'_local_config_preflight'), \
-                 patch.object(remote_build,'_verify_signed_source_with_frozen_signer'), \
-                 patch('qualification_source.verify_source'), \
-                 patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
-                 patch.object(remote_build,'_create_bounded_source_bundle',side_effect=bundle), \
-                 patch.object(remote_build,'retrieve_perl_candidate',
-                              side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
-                              return_value={'status':'unapproved_candidate_retrieved'}) as retrieve, \
-                 patch.object(remote_build,'retrieve_component_proof',
-                              side_effect=RuntimeError('synthetic component proof transfer loss') if component_failure else None,
-                              return_value={'status':'COMPONENT_ONLY_PASS'}) as component_proof, \
-                 patch.object(remote_build,'verify_remote_toolchain'), \
-                 patch.object(remote_build,'source_clean_status',return_value=source_status) as clean_status, \
-                 patch.object(remote_build,'_bounded_source_git',side_effect=bounded_signer), \
-                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
-                 patch.object(remote_build,'download_artifact',side_effect=download), \
-                 patch.object(remote_build.subprocess,'run',side_effect=run):
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict(
+                    os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': '/synthetic/known'}))
+                stack.enter_context(patch.object(
+                    remote_build.ssh_transport, 'identity',
+                    return_value=('oxidex-uploader', '/synthetic/key')))
+                stack.enter_context(patch.object(
+                    remote_build.ssh_transport, 'DirectTransport', return_value=transport))
+                stack.enter_context(patch.object(
+                    remote_build, 'verify_builder_admission',
+                    return_value={'admission_passed': True}))
+                stack.enter_context(patch.object(
+                    remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}))
+                stack.enter_context(patch.object(remote_build, '_local_config_preflight'))
+                stack.enter_context(patch.object(
+                    remote_build, '_verify_signed_source_with_frozen_signer'))
+                stack.enter_context(patch('qualification_source.verify_source'))
+                stack.enter_context(patch.object(
+                    remote_build, 'make_snapshot', side_effect=snapshot))
+                stack.enter_context(patch.object(
+                    remote_build, '_create_bounded_source_bundle', side_effect=bundle))
+                retrieve = stack.enter_context(patch.object(
+                    remote_build, 'retrieve_perl_candidate',
+                    side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
+                    return_value={'status': 'unapproved_candidate_retrieved'}))
+                component_proof = stack.enter_context(patch.object(
+                    remote_build, 'retrieve_component_proof',
+                    side_effect=RuntimeError('synthetic component proof transfer loss')
+                    if component_failure else None,
+                    return_value={'status': 'COMPONENT_ONLY_PASS'}))
+                stack.enter_context(patch.object(remote_build, 'verify_remote_toolchain'))
+                clean_status = stack.enter_context(patch.object(
+                    remote_build, 'source_clean_status', return_value=source_status))
+                stack.enter_context(patch.object(
+                    remote_build, '_bounded_source_git', side_effect=bounded_signer))
+                stack.enter_context(patch.object(
+                    remote_build.subprocess, 'check_output', side_effect=output))
+                stack.enter_context(patch.object(
+                    remote_build, 'download_artifact', side_effect=download))
+                stack.enter_context(patch.object(
+                    remote_build.subprocess, 'run', side_effect=run))
                 argv=['--source',str(root),'--instance','builder-vm','--zone','z',
                       '--instance-id','2','--worktree-id','checkout',
                       '--evidence-dir',str(evidence),'--just-recipe',recipe]
