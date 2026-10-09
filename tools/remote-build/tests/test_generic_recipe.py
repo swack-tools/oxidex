@@ -250,11 +250,18 @@ class GenericRecipeTests(unittest.TestCase):
                     if 'approved-linux-perl.json' in ' '.join(command):
                         return remote_build.hashlib.sha256(envelope.read_bytes()).hexdigest()+'  packet\n'
                     return 'b'*64+'  /target/debug/oxidex\n'
-                if 'config' in command and 'gpg.ssh.allowedSignersFile' in command:
-                    return str(signer)+'\n'
                 if 'status' in command:
                     return source_status
                 return 'a'*40+'\n'
+            def bounded_signer(source, arguments, limit, *, env=None):
+                # This harness has no repository; the real bounded Git read is
+                # exercised by the identity/authentication controls.
+                self.assertEqual(source.resolve(), root.resolve())
+                self.assertEqual(arguments,
+                                 ['config', '--path', '--get', 'gpg.ssh.allowedSignersFile'])
+                self.assertEqual(limit, 4096)
+                self.assertIsNone(env)
+                return (str(signer) + '\n').encode()
             def download(instance,zone,project,binary,artifact,digest,**kwargs):
                 artifact.write_bytes(b'verified synthetic binary')
             with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
@@ -274,6 +281,7 @@ class GenericRecipeTests(unittest.TestCase):
                               return_value={'status':'COMPONENT_ONLY_PASS'}) as component_proof, \
                  patch.object(remote_build,'verify_remote_toolchain'), \
                  patch.object(remote_build,'source_clean_status',return_value=source_status) as clean_status, \
+                 patch.object(remote_build,'_bounded_source_git',side_effect=bounded_signer), \
                  patch.object(remote_build.subprocess,'check_output',side_effect=output), \
                  patch.object(remote_build,'download_artifact',side_effect=download), \
                  patch.object(remote_build.subprocess,'run',side_effect=run):
