@@ -44,6 +44,67 @@ class SourceIOBoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'bound|size'):
                     remote_build.source_clean_status(source, head)
 
+    def test_status_aggregate_budget_refuses_fourth_small_file_before_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, _, head = self.fixture(Path(folder),
+                {f'tracked-{index}': bytes([index]) * 20 for index in range(4)})
+            fourth = (source / 'tracked-3').stat().st_ino
+            original_read = os.read
+            def no_fourth_body(fd, count):
+                if os.fstat(fd).st_ino == fourth:
+                    raise AssertionError('fourth tracked body requested')
+                return original_read(fd, count)
+            with patch.object(remote_build, 'MAX_SOURCE_STATUS_BYTES', 65, create=True), \
+                 patch.object(remote_build.os, 'read', side_effect=no_fourth_body):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
+                    remote_build.source_clean_status(source, head)
+
+    def test_snapshot_aggregate_budget_refuses_fourth_small_file_before_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, _, _ = self.fixture(root,
+                {f'tracked-{index}': bytes([index]) * 20 for index in range(4)})
+            fourth = (source / 'tracked-3').stat().st_ino
+            original_read = os.read
+            def no_fourth_body(fd, count):
+                if os.fstat(fd).st_ino == fourth:
+                    raise AssertionError('fourth snapshot body requested')
+                return original_read(fd, count)
+            with patch.object(remote_build, 'MAX_SOURCE_SNAPSHOT_READ_BYTES', 65, create=True), \
+                 patch.object(remote_build.os, 'read', side_effect=no_fourth_body):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
+                    remote_build.make_snapshot(source, root / 'snapshot.tar.gz')
+
+    def test_signed_snapshot_counts_object_and_worktree_reads_together(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            members = {name: b'' for name in ('justfile', 'rust-toolchain.toml',
+                'tools/remote-build/route.py', 'tools/remote-build/qualification_bootstrap.py',
+                'tools/remote-build/qualification_source.py',
+                'tools/remote-build/test_runner.py', 'tools/release/bootstrap_oracle.py')}
+            members.update({f'tracked-{index}': bytes([index]) * 20 for index in range(4)})
+            source, _, head = self.fixture(root, members)
+            with patch.object(remote_build, 'MAX_SOURCE_SNAPSHOT_READ_BYTES', 65):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate read budget'):
+                    remote_build.make_snapshot(source, root / 'signed.tar.gz', signed_head=head)
+
+    def test_source_budget_deadline_does_not_renew_per_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, _, head = self.fixture(Path(folder), {'first': b'a', 'second': b'b'})
+            original_stream = remote_build._stream_worktree_hashes
+            seen_budgets = []
+            def expire_after_first(path, **kwargs):
+                seen_budgets.append(kwargs['budget'])
+                result = original_stream(path, **kwargs)
+                if len(seen_budgets) == 1:
+                    kwargs['budget'].deadline = time.monotonic() - 1
+                return result
+            with patch.object(remote_build, '_stream_worktree_hashes', side_effect=expire_after_first):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate deadline'):
+                    remote_build.source_clean_status(source, head)
+            self.assertEqual(len(seen_budgets), 1,
+                             'expired shared deadline must stop before the next file')
+
     def test_worktree_deadline_refuses_before_read(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'tracked'

@@ -93,6 +93,13 @@ MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
 # The signed source includes catalog-corpus-observed-13.59.json (84,184,700
 # bytes at d02ffe45); keep a finite cap above that legitimate source maximum.
 MAX_SIGNED_BLOB_BYTES = 128 * 1024 * 1024
+# The current OxiDex tree has 332,722,731 tracked regular-file bytes, including
+# the 84,184,700-byte catalog. Bound a complete status pass as well as each file.
+MAX_SOURCE_STATUS_BYTES = 512 * 1024 * 1024
+SOURCE_STATUS_TIMEOUT = 60
+# Signed snapshots read both the authenticated object and its worktree peer.
+MAX_SOURCE_SNAPSHOT_READ_BYTES = 1024 * 1024 * 1024
+SOURCE_SNAPSHOT_TIMEOUT = 600
 # Unittest modules have a separate admission bound; the catalog allowance above
 # must not permit a forged module object to materialize a catalog-sized body.
 MAX_INFRA_PYTHON_MODULE_BYTES = 8 * 1024 * 1024
@@ -184,12 +191,17 @@ def _git_run(command, **kwargs):
     return result
 
 
-def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data=None):
+def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data=None,
+                        deadline=None):
     """Read a pre-admission Git scalar with a byte and wall-clock bound."""
     _local_config_preflight(source)
+    seconds = GIT_ADMISSION_TIMEOUT if deadline is None else min(
+        GIT_ADMISSION_TIMEOUT, deadline - time.monotonic())
+    if seconds <= 0:
+        raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
     raw = infra_repository_binding._bounded_command(
         ['/usr/bin/git', '-C', str(source), *arguments],
-        source_git_env() if env is None else env, limit, GIT_ADMISSION_TIMEOUT,
+        source_git_env() if env is None else env, limit, seconds,
         pass_fds=pass_fds, data=data)
     _local_config_preflight(source)
     return raw
@@ -199,8 +211,32 @@ class _SourceObjectSizeBoundExceeded(RuntimeError):
     """A declared Git object size exceeds its selected source allowance."""
 
 
+class _SourceReadBudgetExceeded(RuntimeError):
+    """An aggregate source read would outlive or exceed its operation budget."""
+
+
+class _SourceReadBudget:
+    """One cumulative byte and deadline allowance for a source operation."""
+
+    def __init__(self, maximum: int, seconds: float):
+        self.remaining = maximum
+        self.deadline = time.monotonic() + seconds
+
+    def reserve(self, size: int) -> None:
+        if time.monotonic() >= self.deadline:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+        if size < 0 or size > self.remaining:
+            raise _SourceReadBudgetExceeded('Source scan aggregate byte bound exceeded')
+        self.remaining -= size
+
+    def check(self) -> None:
+        if time.monotonic() >= self.deadline:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+
+
 def _authenticated_source_object(source: Path, object_id: str, kind: str,
-                                 maximum: int, deadline: float) -> bytes:
+                                 maximum: int, deadline: float,
+                                 budget: _SourceReadBudget | None = None) -> bytes:
     """Read an exact Git object under one output/deadline/hash contract."""
     if not re.fullmatch(r'[0-9a-f]{40}', object_id) or kind not in {'blob', 'tree'}:
         raise RuntimeError('Signed source object identity refused')
@@ -221,6 +257,8 @@ def _authenticated_source_object(source: Path, object_id: str, kind: str,
     size = int(match[3])
     if size > maximum:
         raise _SourceObjectSizeBoundExceeded('Signed source object exceeds fixed bound')
+    if budget is not None:
+        budget.reserve(size)
     raw = git(['cat-file', kind, object_id], size)
     if (len(raw) != size or
             hashlib.sha1(kind.encode() + b' ' + str(size).encode() + b'\0' + raw).hexdigest() != object_id):
@@ -228,17 +266,23 @@ def _authenticated_source_object(source: Path, object_id: str, kind: str,
     return raw
 
 
-def _authenticated_source_blob(source: Path, object_id: str, maximum: int) -> bytes:
+def _authenticated_source_blob(source: Path, object_id: str, maximum: int,
+                               budget: _SourceReadBudget | None = None) -> bytes:
+    deadline = time.monotonic() + GIT_ADMISSION_TIMEOUT
+    if budget is not None:
+        budget.check()
+        deadline = min(deadline, budget.deadline)
     return _authenticated_source_object(source, object_id, 'blob', maximum,
-                                        time.monotonic() + GIT_ADMISSION_TIMEOUT)
+                                        deadline, budget)
 
 
-def _authenticated_tree_listing(source: Path, head: str) -> bytes:
+def _authenticated_tree_listing(source: Path, head: str, *, deadline=None) -> bytes:
     """Flatten hash-verified HEAD trees without trusting Git's ls-tree rendering."""
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
     _local_config_preflight(source)
-    deadline = time.monotonic() + SOURCE_TREE_TIMEOUT
+    deadline = min(time.monotonic() + SOURCE_TREE_TIMEOUT, deadline) \
+        if deadline is not None else time.monotonic() + SOURCE_TREE_TIMEOUT
     commit = infra_repository_binding._raw_commit(source, head, source_git_env(), deadline)
     _local_config_preflight(source)
     records = bytearray()
@@ -251,6 +295,8 @@ def _authenticated_tree_listing(source: Path, head: str) -> bytes:
         offset = 0
         names = set()
         while offset < len(raw):
+            if time.monotonic() >= deadline:
+                raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
             separator = raw.find(b' ', offset)
             ending = raw.find(b'\0', separator + 1)
             if separator < 0 or ending < 0 or ending + 21 > len(raw):
@@ -282,11 +328,18 @@ def _authenticated_tree_listing(source: Path, head: str) -> bytes:
 MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
 
 
-def _caller_excludes(source: Path) -> bytes:
+def _caller_excludes(source: Path, *, deadline=None) -> bytes:
     """Freeze Git's one effective per-user ignore file as inert pattern data."""
     _local_config_preflight(source)
     if any(key in os.environ for key in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS')):
         raise RuntimeError('Caller Git command-scope exclusions cannot be isolated')
+    def remaining():
+        if deadline is None:
+            return GIT_ADMISSION_TIMEOUT
+        seconds = min(GIT_ADMISSION_TIMEOUT, deadline - time.monotonic())
+        if seconds <= 0:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+        return seconds
     env = source_git_env()
     home = os.environ.get('HOME')
     if not home or not Path(home).is_absolute():
@@ -315,7 +368,7 @@ def _caller_excludes(source: Path) -> bytes:
     # worktree configuration scope to contribute an exclusion value.
     enabled = _git_run(['/usr/bin/git', '-C', str(source), 'config', '--local',
                         '--no-includes', '--bool', '--get', 'extensions.worktreeConfig'],
-                       env=env, capture_output=True, timeout=GIT_ADMISSION_TIMEOUT)
+                       env=env, capture_output=True, timeout=remaining())
     if enabled.returncode not in (0, 1) or enabled.stdout not in (b'', b'true\n', b'false\n'):
         raise RuntimeError('Caller Git worktree configuration is unavailable')
     if enabled.returncode == 1 or enabled.stdout == b'false\n':
@@ -325,7 +378,7 @@ def _caller_excludes(source: Path) -> bytes:
         for query in (['--name-only', '--get-regexp', '^include'],
                       ['--path', '--get-all', 'core.excludesFile']):
             result = _git_run([*prefix, *query], env=env,
-                              capture_output=True, timeout=GIT_ADMISSION_TIMEOUT)
+                              capture_output=True, timeout=remaining())
             if result.returncode not in (0, 1) or len(result.stdout) > 65536:
                 raise RuntimeError('Caller Git exclusion configuration is unavailable')
             if query[0] == '--name-only' and result.returncode == 0:
@@ -360,6 +413,7 @@ def _caller_excludes(source: Path) -> bytes:
         raise RuntimeError('Configured Git exclusion file is missing')
     fd = os.open(selected, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
+        remaining()
         opened = os.fstat(fd)
         raw = os.read(fd, MAX_CALLER_EXCLUDES_BYTES + 1)
         after = os.fstat(fd)
@@ -815,12 +869,16 @@ class _TrackedModeMismatch(RuntimeError):
 
 
 def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None,
-                            deadline=None, maximum=None, collect=False):
+                            deadline=None, maximum=None, collect=False,
+                            budget: _SourceReadBudget | None = None):
     """Hash a stable nofollow regular file with fixed size and time bounds."""
     if deadline is None:
         deadline = time.monotonic() + GIT_ADMISSION_TIMEOUT
     if maximum is None:
         maximum = MAX_SIGNED_BLOB_BYTES
+    if budget is not None:
+        deadline = min(deadline, budget.deadline)
+        budget.check()
     if time.monotonic() >= deadline:
         raise RuntimeError('Tracked source blob deadline exceeded')
     before = path.lstat()
@@ -831,6 +889,8 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
         raise RuntimeError('Tracked source size differs from signed or archived blob')
     if not stat.S_ISREG(before.st_mode):
         raise RuntimeError('Tracked source is not a regular file')
+    if budget is not None:
+        budget.reserve(before.st_size)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         opened = os.fstat(fd)
@@ -847,6 +907,8 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
         remaining = opened.st_size
         chunks = [] if collect else None
         while remaining:
+            if budget is not None:
+                budget.check()
             if time.monotonic() >= deadline:
                 raise RuntimeError('Tracked source blob deadline exceeded')
             block = os.read(fd, min(1024 * 1024, remaining))
@@ -857,6 +919,8 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
             if collect:
                 chunks.append(block)
             remaining -= len(block)
+        if budget is not None:
+            budget.check()
         if time.monotonic() >= deadline:
             raise RuntimeError('Tracked source blob deadline exceeded')
         if (identity(opened) != identity(os.fstat(fd))
@@ -868,8 +932,10 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
         os.close(fd)
 
 
-def _bounded_worktree_bytes(path: Path, maximum=MAX_SIGNED_BLOB_BYTES) -> bytes:
-    return _stream_worktree_hashes(path, maximum=maximum, collect=True)[2]
+def _bounded_worktree_bytes(path: Path, maximum=MAX_SIGNED_BLOB_BYTES,
+                            budget: _SourceReadBudget | None = None) -> bytes:
+    return _stream_worktree_hashes(path, maximum=maximum, collect=True,
+                                   budget=budget)[2]
 
 
 def launcher_source_root() -> Path:
@@ -889,23 +955,30 @@ def source_clean_status(source: Path, head: str) -> str:
     source. Object and index enumeration are non-filtering; hash actual bytes
     here instead of asking Git to convert them.
     """
+    budget = _SourceReadBudget(MAX_SOURCE_STATUS_BYTES, SOURCE_STATUS_TIMEOUT)
     _local_config_preflight(source)
     env = source_git_env()
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
+    budget.check()
     effective_root = Path(_git_check_output(
         ['git', '-C', str(source), 'rev-parse', '--show-toplevel'], env=env,
-        text=True).strip()).resolve(strict=True)
+        text=True, timeout=min(GIT_ADMISSION_TIMEOUT, budget.deadline - time.monotonic())).strip()).resolve(strict=True)
     if effective_root != source.resolve(strict=True):
         raise RuntimeError('Source Git worktree differs from selected source root')
+    budget.check()
     if _git_check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
-                               env=env).strip() != b'sha1':
+                               env=env, timeout=min(GIT_ADMISSION_TIMEOUT,
+                               budget.deadline - time.monotonic())).strip() != b'sha1':
         raise RuntimeError('Source Git object format is unsupported')
-    tree = _authenticated_tree_listing(source, head)
+    budget.check()
+    tree = _authenticated_tree_listing(source, head, deadline=budget.deadline)
     index = _bounded_source_git(source, ['ls-files', '--stage', '-z'],
-                                MAX_SOURCE_FILE_LIST_BYTES, env=env)
+                                MAX_SOURCE_FILE_LIST_BYTES, env=env,
+                                deadline=budget.deadline)
     expected = {}
     for record in filter(None, tree.split(b'\0')):
+        budget.check()
         metadata, raw_name = record.split(b'\t', 1)
         mode, kind, object_id = metadata.decode('ascii').split()
         name = os.fsdecode(raw_name)
@@ -915,6 +988,7 @@ def source_clean_status(source: Path, head: str) -> str:
         expected[name] = (mode, object_id)
     actual_index = {}
     for record in filter(None, index.split(b'\0')):
+        budget.check()
         metadata, raw_name = record.split(b'\t', 1)
         mode, object_id, stage = metadata.decode('ascii').split()
         name = os.fsdecode(raw_name)
@@ -925,15 +999,17 @@ def source_clean_status(source: Path, head: str) -> str:
     if actual_index != expected:
         changed.append(' M index')
     for name, (mode, object_id) in expected.items():
+        budget.check()
         path = source / name
         try:
             info = path.lstat()
             if mode in {'100644', '100755'} and stat.S_ISREG(info.st_mode):
-                digest = _stream_worktree_hashes(path)[0]
+                digest = _stream_worktree_hashes(path, budget=budget)[0]
                 if bool(info.st_mode & 0o111) != (mode == '100755'):
                     changed.append(' M ' + name)
                     continue
             elif mode == '120000' and stat.S_ISLNK(info.st_mode):
+                budget.reserve(info.st_size)
                 data = os.fsencode(os.readlink(path))
             else:
                 changed.append(' M ' + name)
@@ -945,14 +1021,18 @@ def source_clean_status(source: Path, head: str) -> str:
             digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
         if digest != object_id:
             changed.append(' M ' + name)
-    untracked = _list_files_with_caller_ignore(source, include_cached=False)
+    budget.check()
+    untracked = _list_files_with_caller_ignore(source, include_cached=False,
+                                               deadline=budget.deadline)
+    budget.check()
     changed.extend('?? ' + os.fsdecode(name) for name in filter(None, untracked.split(b'\0')))
     return '\n'.join(changed) + ('\n' if changed else '')
 
 
-def _list_files_with_caller_ignore(source: Path, *, include_cached: bool) -> bytes:
+def _list_files_with_caller_ignore(source: Path, *, include_cached: bool,
+                                   deadline=None) -> bytes:
     """Use one frozen caller ignore policy for status and snapshot paths."""
-    patterns = _caller_excludes(source)
+    patterns = _caller_excludes(source, deadline=deadline)
     env = source_git_env()
     # core.excludesFile is Git's lowest ignore tier. --exclude-from would
     # override .gitignore negations instead of preserving actual precedence.
@@ -967,7 +1047,7 @@ def _list_files_with_caller_ignore(source: Path, *, include_cached: bool) -> byt
             command.append('--cached')
         command.extend(('--others', '--exclude-standard'))
         return _bounded_source_git(source, command[3:], MAX_SOURCE_FILE_LIST_BYTES,
-                                   env=env, pass_fds=(fd,))
+                                   env=env, pass_fds=(fd,), deadline=deadline)
 
 
 def eligible_snapshot_paths(source: Path) -> list[str]:
@@ -1175,6 +1255,7 @@ def retrieve_infra_python_proof(transport, ssh, instance, zone, project, run_id,
 
 
 def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
+    budget = _SourceReadBudget(MAX_SOURCE_SNAPSHOT_READ_BYTES, SOURCE_SNAPSHOT_TIMEOUT)
     _local_config_preflight(source)
     if source_profile is not None and signed_head is None:
         raise RuntimeError('Signed source profile requires exact HEAD')
@@ -1187,18 +1268,21 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if signed is None:
                 if not path.is_file() or path.is_symlink():
                     raise RuntimeError('Source file changed type during snapshot')
-                data=_bounded_worktree_bytes(path)
+                data=_bounded_worktree_bytes(path, budget=budget)
                 info=tar.gettarinfo(str(path),arcname=name)
             else:
                 object_id, mode=signed[name]
-                data=_authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES)
+                data=_authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES,
+                                                budget=budget)
                 size=len(data)
                 data_sha256=hashlib.sha256(data).hexdigest()
                 try:
                     actual_oid,actual_sha256=_stream_worktree_hashes(
-                        path,expected_size=size,expected_mode=mode)
+                        path,expected_size=size,expected_mode=mode,budget=budget)
                 except _TrackedModeMismatch as error:
                     raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}') from error
+                except _SourceReadBudgetExceeded as error:
+                    raise RuntimeError(f'Fleet source aggregate read budget exceeded: {name}') from error
                 except (OSError,RuntimeError) as error:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}') from error
                 if actual_oid!=object_id or actual_sha256!=data_sha256:
@@ -1216,16 +1300,20 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if name in names or Path(name).name != name or path.is_symlink() or not path.is_file():
                 raise RuntimeError('Invalid signed fleet source member')
             if name == 'approved-linux-perl.json':
-                data=_bounded_worktree_bytes(path, approved_linux_perl.MAX_ENVELOPE_BYTES)
+                data=_bounded_worktree_bytes(path, approved_linux_perl.MAX_ENVELOPE_BYTES,
+                                             budget=budget)
             else:
-                data=_bounded_worktree_bytes(path, MAX_SNAPSHOT_EXTRA_BYTES)
+                data=_bounded_worktree_bytes(path, MAX_SNAPSHOT_EXTRA_BYTES,
+                                             budget=budget)
             info=tarfile.TarInfo(name)
             info.mode=0o644
             info.size=len(data)
             files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
             tar.addfile(info,io.BytesIO(data))
+    budget.check()
     if eligible_snapshot_paths(source)!=names:
         raise RuntimeError('Eligible source file set changed during snapshot')
+    budget.check()
     return {'files':files,'eligible_paths':names,'file_count':len(files),
             'archive_bytes':archive.stat().st_size,
             'archive_sha256':_sha256_file(archive)}
