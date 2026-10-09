@@ -1899,3 +1899,8 @@ _verify-linux-perl-worker:
     cd tools/remote-build && python3 -m unittest discover -s tests -p 'test_route.py'
     cd tools/exiftool-tables && python3 -m unittest discover -p 'test_qualification_bootstrap_boundary.py'
     cd tools/exiftool-tables && python3 -m unittest test_version_transition_qualification.PlatformPerlIdentityTests
+
+# Run the signed infrastructure Python suite on the admitted dedicated builder.
+[positional-arguments]
+test-infra-remote repository:
+    python3 tools/remote-build/direct.py --source "$1" --source-profile infra-python-v1 --just-recipe infra-python-tests

@@ -1,5 +1,6 @@
 """Bounded Just dispatch and signed fleet packet controls; no remote jobs."""
 import json
+from contextlib import ExitStack
 import hashlib
 from pathlib import Path
 import tarfile
@@ -17,6 +18,12 @@ import route
 
 
 class GenericRecipeTests(unittest.TestCase):
+    def setUp(self):
+        # These transport fixtures select synthetic source roots; the public
+        # source-root boundary has a separate real Git control.
+        selected=patch.object(remote_build,'require_ordinary_source_root')
+        selected.start();self.addCleanup(selected.stop)
+
     def test_linux_perl_route_and_packet_share_fleet_policy(self):
         self.assertIs(route.FLEET_RECIPES, remote_build.FLEET_RECIPES)
         receipt, commands, _, extras, heads = self.exercise(0, 'verify-linux-perl')
@@ -98,7 +105,8 @@ class GenericRecipeTests(unittest.TestCase):
             with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
                  patch.object(remote_build.ssh_transport,'identity',return_value=('uploader','key')), \
                  patch.object(remote_build.subprocess,'run') as run, \
-                 patch.object(remote_build.subprocess,'check_output') as output:
+                 patch.object(remote_build.subprocess,'check_output') as output, \
+                 patch.object(remote_build,'_local_config_preflight'):
                 for candidate, message in ((root/'absent.json','regular file'),
                                            (link,'regular file'),
                                            (oversized,'transport bound')):
@@ -200,6 +208,7 @@ class GenericRecipeTests(unittest.TestCase):
                  cleanup_failure=False, cleanup_observations=None):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external_directory:
             root=Path(directory);commands=[]
+            evidence=Path(external_directory)/'evidence'
             signer=root/'maintainer.allowed_signers'
             signer.write_text('fixture signer')
             envelope=Path(external_directory).resolve()/'approved-linux-perl.json'
@@ -222,12 +231,15 @@ class GenericRecipeTests(unittest.TestCase):
                                   'sha256':remote_build.hashlib.sha256(path.read_bytes()).hexdigest(),
                                   'bytes':path.stat().st_size}
                                  for name,path in (extra_files or {}).items()]}
+            def bundle(source, path):
+                commands.append(['git', '-C', str(source), 'bundle', 'create', str(path), 'HEAD'])
+                path.write_bytes(b'synthetic signed bundle')
             def run(command, **kwargs):
                 commands.append(command)
                 if ' cleanup' in ' '.join(command):
                     if cleanup_observations is not None:
                         cleanup_observations.append(json.loads(
-                            (root/'evidence/remote-build.json').read_text()))
+                            (evidence/'remote-build.json').read_text()))
                     if cleanup_failure:
                         raise remote_build.subprocess.CalledProcessError(1, command)
                 if 'bundle' in command and 'create' in command:
@@ -242,34 +254,64 @@ class GenericRecipeTests(unittest.TestCase):
                     if 'approved-linux-perl.json' in ' '.join(command):
                         return remote_build.hashlib.sha256(envelope.read_bytes()).hexdigest()+'  packet\n'
                     return 'b'*64+'  /target/debug/oxidex\n'
-                if 'config' in command and 'gpg.ssh.allowedSignersFile' in command:
-                    return str(signer)+'\n'
                 if 'status' in command:
                     return source_status
                 return 'a'*40+'\n'
+            def bounded_signer(source, arguments, limit, *, env=None):
+                # This harness has no repository; the real bounded Git read is
+                # exercised by the identity/authentication controls.
+                self.assertEqual(source.resolve(), root.resolve())
+                self.assertEqual(arguments,
+                                 ['config', '--path', '--get', 'gpg.ssh.allowedSignersFile'])
+                self.assertEqual(limit, 4096)
+                self.assertIsNone(env)
+                return (str(signer) + '\n').encode()
             def download(instance,zone,project,binary,artifact,digest,**kwargs):
                 artifact.write_bytes(b'verified synthetic binary')
-            with patch.dict(os.environ,{'OXIDEX_REMOTE_SSH_KNOWN_HOSTS':'/synthetic/known'}), \
-                 patch.object(remote_build.ssh_transport,'identity',return_value=('oxidex-uploader','/synthetic/key')), \
-                 patch.object(remote_build.ssh_transport,'DirectTransport',return_value=transport), \
-                 patch.object(remote_build,'verify_builder_admission',return_value={'admission_passed':True}), \
-                 patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.99.0'}), \
-                 patch.object(remote_build,'verify_signed_source'), \
-                 patch('qualification_source.verify_source'), \
-                 patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
-                 patch.object(remote_build,'retrieve_perl_candidate',
-                              side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
-                              return_value={'status':'unapproved_candidate_retrieved'}) as retrieve, \
-                 patch.object(remote_build,'retrieve_component_proof',
-                              side_effect=RuntimeError('synthetic component proof transfer loss') if component_failure else None,
-                              return_value={'status':'COMPONENT_ONLY_PASS'}) as component_proof, \
-                 patch.object(remote_build,'verify_remote_toolchain'), \
-                 patch.object(remote_build.subprocess,'check_output',side_effect=output), \
-                 patch.object(remote_build,'download_artifact',side_effect=download), \
-                 patch.object(remote_build.subprocess,'run',side_effect=run):
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict(
+                    os.environ, {'OXIDEX_REMOTE_SSH_KNOWN_HOSTS': '/synthetic/known'}))
+                stack.enter_context(patch.object(
+                    remote_build.ssh_transport, 'identity',
+                    return_value=('oxidex-uploader', '/synthetic/key')))
+                stack.enter_context(patch.object(
+                    remote_build.ssh_transport, 'DirectTransport', return_value=transport))
+                stack.enter_context(patch.object(
+                    remote_build, 'verify_builder_admission',
+                    return_value={'admission_passed': True}))
+                stack.enter_context(patch.object(
+                    remote_build, 'pinned_toolchain', return_value={'channel': '1.99.0'}))
+                stack.enter_context(patch.object(remote_build, '_local_config_preflight'))
+                stack.enter_context(patch.object(
+                    remote_build, '_verify_signed_source_with_frozen_signer'))
+                stack.enter_context(patch('qualification_source.verify_source'))
+                stack.enter_context(patch.object(
+                    remote_build, 'make_snapshot', side_effect=snapshot))
+                stack.enter_context(patch.object(
+                    remote_build, '_create_bounded_source_bundle', side_effect=bundle))
+                retrieve = stack.enter_context(patch.object(
+                    remote_build, 'retrieve_perl_candidate',
+                    side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
+                    return_value={'status': 'unapproved_candidate_retrieved'}))
+                component_proof = stack.enter_context(patch.object(
+                    remote_build, 'retrieve_component_proof',
+                    side_effect=RuntimeError('synthetic component proof transfer loss')
+                    if component_failure else None,
+                    return_value={'status': 'COMPONENT_ONLY_PASS'}))
+                stack.enter_context(patch.object(remote_build, 'verify_remote_toolchain'))
+                clean_status = stack.enter_context(patch.object(
+                    remote_build, 'source_clean_status', return_value=source_status))
+                stack.enter_context(patch.object(
+                    remote_build, '_bounded_source_git', side_effect=bounded_signer))
+                stack.enter_context(patch.object(
+                    remote_build.subprocess, 'check_output', side_effect=output))
+                stack.enter_context(patch.object(
+                    remote_build, 'download_artifact', side_effect=download))
+                stack.enter_context(patch.object(
+                    remote_build.subprocess, 'run', side_effect=run))
                 argv=['--source',str(root),'--instance','builder-vm','--zone','z',
                       '--instance-id','2','--worktree-id','checkout',
-                      '--evidence-dir',str(root/'evidence'),'--just-recipe',recipe]
+                      '--evidence-dir',str(evidence),'--just-recipe',recipe]
                 if recipe=='test-package':
                     argv += ['--just-arg=package with spaces']
                 if recipe=='freeze-linux-perl':
@@ -300,7 +342,8 @@ class GenericRecipeTests(unittest.TestCase):
                         retrieve.assert_called_once()
                     if recipe=='prove-linux-perl-component':
                         component_proof.assert_called_once()
-            receipt=json.loads((root/'evidence/remote-build.json').read_text())
+                clean_status.assert_called_with(root.resolve(), 'a'*40)
+            receipt=json.loads((evidence/'remote-build.json').read_text())
             return receipt,commands,root,extras_seen,signed_heads
 
     def test_component_packet_binds_one_envelope_and_cleans_only_after_proof(self):
@@ -481,6 +524,7 @@ class GenericRecipeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             source=root/'source';source.mkdir()
+            subprocess.run(['/usr/bin/git','init','-q',str(source)],check=True)
             (source/'tracked.txt').write_text('tracked')
             bundle=root/'repository.bundle';bundle.write_bytes(b'signed bundle')
             archive=root/'source.tar.gz'
@@ -559,7 +603,7 @@ class GenericRecipeTests(unittest.TestCase):
                      patch.object(remote_build,'verify_builder_admission',
                                   return_value={'admission_passed':True}), \
                      patch.object(remote_build,'pinned_toolchain',return_value={'channel':'1.97.1'}):
-                    with self.assertRaisesRegex(RuntimeError,'differs from signed HEAD: justfile'):
+                    with self.assertRaisesRegex(RuntimeError,'Signed remote recipe requires a clean exact-HEAD checkout'):
                         remote_build.main(['--source',str(source),'--instance','builder-vm',
                             '--zone','fixture','--instance-id','2','--worktree-id','fixture',
                             '--evidence-dir',str(root/'evidence'),'--just-recipe','fleet-test'])

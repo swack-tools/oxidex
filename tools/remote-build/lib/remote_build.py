@@ -6,17 +6,21 @@ import os
 import shlex
 import re
 import resource
+import signal
 import secrets
+import stat
 import subprocess
 import sys
 import tarfile
 import io
+import tempfile
 import tomllib
 import time
 from pathlib import Path
 
 from .config import approved_instances, builder_instance_name, matching_approval
 from . import ssh_transport
+from . import infra_repository_binding
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.release import approved_linux_perl
@@ -30,12 +34,446 @@ FLEET_RECIPES = frozenset({'fleet-test', 'fleet-tests-both', 'test-ignored',
                            'freeze-linux-perl', 'verify-linux-perl',
                            'prove-linux-perl-component', 'docs-site-build',
                            'test-remote-build', 'test-qualification'})
+INFRA_PYTHON_PROFILE = 'infra-python-v1'
+INFRA_PYTHON_RECIPE = 'infra-python-tests'
+INFRA_PYTHON_ORIGINS = frozenset({
+    'git@github.com:swack-tools/spot-github-runners.git',
+    'https://github.com/swack-tools/spot-github-runners.git',
+    'https://github.com/swack-tools/spot-github-runners',
+})
+INFRA_PYTHON_REQUIRED = frozenset({
+    'justfile', 'rust-toolchain.toml', 'src/lib/host_admission.py',
+    'src/lib/qualification_trust/control_engine.py',
+    'tests/test_builder_c9_proof_repairs.py', 'tools/infra_python_test_proof.py',
+})
+INFRA_PYTHON_MIN_TESTS = 854
+INFRA_PYTHON_MIN_MODULES = 82
+INFRA_PYTHON_PROOF_LIMIT = 64 * 1024
+INFRA_PYTHON_LOG_LIMIT = 16 * 1024 * 1024
+INFRA_PYTHON_RUNNER_ARGV = ['python3', '-B', 'tools/infra_python_test_proof.py']
+INFRA_PYTHON_UNITTEST_ARGV = ['python3', '-B', '-m', 'unittest', 'discover',
+                              '-s', 'tests', '-p', 'test_*.py', '-v']
+INFRA_PYTHON_DISCOVERY = {'start_dir':'tests', 'pattern':'test_*.py', 'top_level_dir':None}
+
 MAX_CANDIDATE_RECEIPT_BYTES = 64 * 1024
 MAX_CANDIDATE_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 
-def pinned_toolchain(source):
-    pin = tomllib.loads((source/'rust-toolchain.toml').read_text())['toolchain']['channel']
+def _trusted_source_tool(path):
+    """Only the system-owned Git and SSH verifier may process unadmitted source."""
+    executable = Path(path)
+    for component in (Path('/'), Path('/usr'), Path('/usr/bin'), executable):
+        info = component.lstat()
+        expected = stat.S_ISREG if component == executable else stat.S_ISDIR
+        if not expected(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise RuntimeError(f'Untrusted source admission tool: {path}')
+    return str(executable)
+
+
+def source_git_env():
+    """Read unadmitted source with fixed system tools and inert Git config."""
+    _trusted_source_tool('/usr/bin/git')
+    ssh_verifier = _trusted_source_tool('/usr/bin/ssh-keygen')
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update(PATH='/usr/bin:/bin', HOME='/nonexistent', XDG_CONFIG_HOME='/nonexistent',
+               GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1',
+               GIT_ALLOW_PROTOCOL='', GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
+               GIT_CONFIG_COUNT='3', GIT_CONFIG_KEY_0='core.fsmonitor',
+               GIT_CONFIG_VALUE_0='false', GIT_CONFIG_KEY_1='gpg.format',
+               GIT_CONFIG_VALUE_1='ssh', GIT_CONFIG_KEY_2='gpg.ssh.program',
+               GIT_CONFIG_VALUE_2=ssh_verifier)
+    return env
+
+
+MAX_LOCAL_CONFIG_BYTES = 256 * 1024
+GIT_ADMISSION_TIMEOUT = 5
+SOURCE_TREE_TIMEOUT = 30
+# Git index output is untrusted even when HEAD was independently authenticated.
+MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
+# The signed source includes catalog-corpus-observed-13.59.json (84,184,700
+# bytes at d02ffe45); keep a finite cap above that legitimate source maximum.
+MAX_SIGNED_BLOB_BYTES = 128 * 1024 * 1024
+# The current OxiDex tree has 332,722,731 tracked regular-file bytes, including
+# the 84,184,700-byte catalog. Bound a complete status pass as well as each file.
+MAX_SOURCE_STATUS_BYTES = 512 * 1024 * 1024
+SOURCE_STATUS_TIMEOUT = 60
+# Signed snapshots read both the authenticated object and its worktree peer.
+MAX_SOURCE_SNAPSHOT_READ_BYTES = 1024 * 1024 * 1024
+SOURCE_SNAPSHOT_TIMEOUT = 600
+# Unittest modules have a separate admission bound; the catalog allowance above
+# must not permit a forged module object to materialize a catalog-sized body.
+MAX_INFRA_PYTHON_MODULE_BYTES = 8 * 1024 * 1024
+MAX_INFRA_PYTHON_MANIFEST_READ_BYTES = 128 * 1024 * 1024
+INFRA_PYTHON_MANIFEST_TIMEOUT = 60
+MAX_SNAPSHOT_EXTRA_BYTES = 256 * 1024 * 1024
+SOURCE_BUNDLE_TIMEOUT = 60
+
+
+def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
+    """Read repository metadata as bounded inert bytes, never a FIFO or link."""
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        if not required:
+            return None
+        raise RuntimeError('Local Git configuration is missing') from None
+    if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_LOCAL_CONFIG_BYTES:
+        raise RuntimeError('Local Git configuration is not one bounded regular file')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        raw = os.read(fd, MAX_LOCAL_CONFIG_BYTES + 1)
+        after = os.fstat(fd)
+        named = path.lstat()
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size,
+                                 info.st_mtime_ns, info.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or len(raw) != opened.st_size
+                or identity(before) != identity(opened)
+                or identity(opened) != identity(after)
+                or identity(after) != identity(named)):
+            raise RuntimeError('Local Git configuration changed during admission')
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _local_config_preflight(source: Path) -> None:
+    """Refuse local include execution before Git initializes this repository.
+
+    Git has no reliable command-line switch to suppress includes for every
+    command. This deliberately rejects any local config containing the token,
+    including unusual benign values, before Git can open an include target.
+    """
+    marker = source / '.git'
+    info = marker.lstat()
+    if stat.S_ISDIR(info.st_mode):
+        gitdir = marker
+    elif stat.S_ISREG(info.st_mode):
+        raw = _local_config_bytes(marker)
+        match = re.fullmatch(rb'gitdir: ([^\r\n\0]{1,4096})\r?\n?', raw)
+        if not match:
+            raise RuntimeError('Local Git configuration worktree marker is invalid')
+        selected = Path(os.fsdecode(match[1]))
+        gitdir = (selected if selected.is_absolute() else source / selected).resolve(strict=True)
+    else:
+        raise RuntimeError('Local Git configuration marker is not regular')
+    if not stat.S_ISDIR(gitdir.lstat().st_mode):
+        raise RuntimeError('Local Git configuration directory is invalid')
+    common = _local_config_bytes(gitdir / 'commondir', required=False)
+    if common is not None:
+        match = re.fullmatch(rb'([^\r\n\0]{1,4096})\r?\n?', common)
+        if not match:
+            raise RuntimeError('Local Git configuration common directory is invalid')
+        selected = Path(os.fsdecode(match[1]))
+        common_dir = (selected if selected.is_absolute() else gitdir / selected).resolve(strict=True)
+    else:
+        common_dir = gitdir
+    for path, required in ((common_dir / 'config', True),
+                           (gitdir / 'config.worktree', False)):
+        raw = _local_config_bytes(path, required=required)
+        if raw is not None and b'include' in raw.lower():
+            raise RuntimeError('Local Git configuration includes are unsupported before source admission')
+
+
+def _git_check_output(command, **kwargs):
+    """Bound every repository Git read and recheck local config around it."""
+    source = Path(command[2])
+    _local_config_preflight(source)
+    kwargs.setdefault('timeout', GIT_ADMISSION_TIMEOUT)
+    result = subprocess.check_output(command, **kwargs)
+    _local_config_preflight(source)
+    return result
+
+
+def _git_run(command, **kwargs):
+    source = Path(command[2])
+    _local_config_preflight(source)
+    kwargs.setdefault('timeout', GIT_ADMISSION_TIMEOUT)
+    result = subprocess.run(command, **kwargs)
+    _local_config_preflight(source)
+    return result
+
+
+def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data=None,
+                        deadline=None):
+    """Read a pre-admission Git scalar with a byte and wall-clock bound."""
+    _local_config_preflight(source)
+    seconds = GIT_ADMISSION_TIMEOUT if deadline is None else min(
+        GIT_ADMISSION_TIMEOUT, deadline - time.monotonic())
+    if seconds <= 0:
+        raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+    raw = infra_repository_binding._bounded_command(
+        ['/usr/bin/git', '-C', str(source), *arguments],
+        source_git_env() if env is None else env, limit, seconds,
+        pass_fds=pass_fds, data=data)
+    _local_config_preflight(source)
+    return raw
+
+
+class _SourceObjectSizeBoundExceeded(RuntimeError):
+    """A declared Git object size exceeds its selected source allowance."""
+
+
+class _SourceReadBudgetExceeded(RuntimeError):
+    """An aggregate source read would outlive or exceed its operation budget."""
+
+
+class _SourceReadBudget:
+    """One cumulative byte and deadline allowance for a source operation."""
+
+    def __init__(self, maximum: int, seconds: float):
+        self.remaining = maximum
+        self.deadline = time.monotonic() + seconds
+
+    def reserve(self, size: int) -> None:
+        if time.monotonic() >= self.deadline:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+        if size < 0 or size > self.remaining:
+            raise _SourceReadBudgetExceeded('Source scan aggregate byte bound exceeded')
+        self.remaining -= size
+
+    def check(self) -> None:
+        if time.monotonic() >= self.deadline:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+
+
+def _authenticated_source_object(source: Path, object_id: str, kind: str,
+                                 maximum: int, deadline: float,
+                                 budget: _SourceReadBudget | None = None) -> bytes:
+    """Read an exact Git object under one output/deadline/hash contract."""
+    if not re.fullmatch(r'[0-9a-f]{40}', object_id) or kind not in {'blob', 'tree'}:
+        raise RuntimeError('Signed source object identity refused')
+    def git(arguments, limit, data=None):
+        _local_config_preflight(source)
+        raw = infra_repository_binding._bounded_command(
+            ['/usr/bin/git', '-C', str(source), *arguments], source_git_env(),
+            limit, deadline - time.monotonic(), data=data)
+        _local_config_preflight(source)
+        return raw
+    info = git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+               128, (object_id + '\n').encode())
+    match = re.fullmatch(rb'([0-9a-f]{40}) (blob|tree) ([0-9]{1,12})\n', info)
+    if info == (object_id + ' missing\n').encode():
+        raise RuntimeError('Repository authority tool refused')
+    if not match or match[1].decode('ascii') != object_id or match[2].decode('ascii') != kind:
+        raise RuntimeError('Signed source object identity refused')
+    size = int(match[3])
+    if size > maximum:
+        raise _SourceObjectSizeBoundExceeded('Signed source object exceeds fixed bound')
+    if budget is not None:
+        budget.reserve(size)
+    raw = git(['cat-file', kind, object_id], size)
+    if (len(raw) != size or
+            hashlib.sha1(kind.encode() + b' ' + str(size).encode() + b'\0' + raw).hexdigest() != object_id):
+        raise RuntimeError('Signed source object hash or size differs')
+    return raw
+
+
+def _authenticated_source_blob(source: Path, object_id: str, maximum: int,
+                               budget: _SourceReadBudget | None = None) -> bytes:
+    deadline = time.monotonic() + GIT_ADMISSION_TIMEOUT
+    if budget is not None:
+        budget.check()
+        deadline = min(deadline, budget.deadline)
+    return _authenticated_source_object(source, object_id, 'blob', maximum,
+                                        deadline, budget)
+
+
+def _authenticated_tree_listing(source: Path, head: str, *, deadline=None,
+                                budget: _SourceReadBudget | None = None) -> bytes:
+    """Flatten hash-verified HEAD trees without trusting Git's ls-tree rendering."""
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
+    _local_config_preflight(source)
+    if budget is not None:
+        budget.check()
+        deadline = min(deadline, budget.deadline) if deadline is not None else budget.deadline
+    deadline = min(time.monotonic() + SOURCE_TREE_TIMEOUT, deadline) \
+        if deadline is not None else time.monotonic() + SOURCE_TREE_TIMEOUT
+    commit = infra_repository_binding._raw_commit(source, head, source_git_env(), deadline)
+    _local_config_preflight(source)
+    records = bytearray()
+    consumed = 0
+    def visit(tree_id, prefix):
+        nonlocal consumed
+        raw = _authenticated_source_object(source, tree_id, 'tree',
+                 MAX_SOURCE_FILE_LIST_BYTES - consumed, deadline, budget)
+        consumed += len(raw)
+        offset = 0
+        names = set()
+        while offset < len(raw):
+            if time.monotonic() >= deadline:
+                raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+            separator = raw.find(b' ', offset)
+            ending = raw.find(b'\0', separator + 1)
+            if separator < 0 or ending < 0 or ending + 21 > len(raw):
+                raise RuntimeError('Signed source tree entry malformed')
+            mode, name = raw[offset:separator], raw[separator + 1:ending]
+            object_id = raw[ending + 1:ending + 21].hex()
+            offset = ending + 21
+            if (not name or name in names or name in (b'.', b'..')
+                    or b'/' in name):
+                raise RuntimeError('Signed source tree name refused')
+            names.add(name)
+            path = prefix + name
+            if mode == b'40000':
+                if len(path) > MAX_SOURCE_FILE_LIST_BYTES:
+                    raise RuntimeError('Signed source tree path exceeds bound')
+                visit(object_id, path + b'/')
+                continue
+            if mode not in (b'100644', b'100755', b'120000', b'160000'):
+                raise RuntimeError('Signed source tree mode refused')
+            kind = b'commit' if mode == b'160000' else b'blob'
+            record = mode + b' ' + kind + b' ' + object_id.encode() + b'\t' + path + b'\0'
+            if len(records) + len(record) > MAX_SOURCE_FILE_LIST_BYTES:
+                raise RuntimeError('Signed source tree listing exceeds bound')
+            records.extend(record)
+    visit(commit['tree'], b'')
+    return bytes(records)
+
+
+MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
+
+
+def _caller_excludes(source: Path, *, deadline=None) -> bytes:
+    """Freeze Git's one effective per-user ignore file as inert pattern data."""
+    _local_config_preflight(source)
+    if any(key in os.environ for key in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS')):
+        raise RuntimeError('Caller Git command-scope exclusions cannot be isolated')
+    def remaining():
+        if deadline is None:
+            return GIT_ADMISSION_TIMEOUT
+        seconds = min(GIT_ADMISSION_TIMEOUT, deadline - time.monotonic())
+        if seconds <= 0:
+            raise _SourceReadBudgetExceeded('Source scan aggregate deadline exceeded')
+        return seconds
+    env = source_git_env()
+    home = os.environ.get('HOME')
+    if not home or not Path(home).is_absolute():
+        raise RuntimeError('Caller home unavailable for global Git exclusions')
+    env['HOME'] = home
+    for key in ('XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'):
+        if key in os.environ:
+            env[key] = os.environ[key]
+        else:
+            env.pop(key, None)
+    if 'GIT_CONFIG_NOSYSTEM' in os.environ:
+        env['GIT_CONFIG_NOSYSTEM'] = os.environ['GIT_CONFIG_NOSYSTEM']
+    else:
+        env.pop('GIT_CONFIG_NOSYSTEM', None)
+    env['GIT_CONFIG_COUNT'] = '0'
+    for suffix in ('KEY_0', 'VALUE_0', 'KEY_1', 'VALUE_1', 'KEY_2', 'VALUE_2'):
+        env.pop('GIT_CONFIG_' + suffix, None)
+    selected = None
+    no_system = os.environ.get('GIT_CONFIG_NOSYSTEM', '').lower()
+    if no_system not in ('', '0', 'false', 'no', 'off', '1', 'true', 'yes', 'on'):
+        raise RuntimeError('Caller Git system configuration policy is unsupported')
+    scopes = (('--global', '--local', '--worktree') if no_system in ('1', 'true', 'yes', 'on')
+              else ('--system', '--global', '--local', '--worktree'))
+    # Git rejects an explicit --worktree query for linked worktrees unless the
+    # common repository enabled worktreeConfig. In that case there is no
+    # worktree configuration scope to contribute an exclusion value.
+    enabled = _git_run(['/usr/bin/git', '-C', str(source), 'config', '--local',
+                        '--no-includes', '--bool', '--get', 'extensions.worktreeConfig'],
+                       env=env, capture_output=True, timeout=remaining())
+    if enabled.returncode not in (0, 1) or enabled.stdout not in (b'', b'true\n', b'false\n'):
+        raise RuntimeError('Caller Git worktree configuration is unavailable')
+    if enabled.returncode == 1 or enabled.stdout == b'false\n':
+        scopes = tuple(scope for scope in scopes if scope != '--worktree')
+    for scope in scopes:
+        prefix = ['/usr/bin/git', '-C', str(source), 'config', scope, '--no-includes', '--null']
+        for query in (['--name-only', '--get-regexp', '^include'],
+                      ['--path', '--get-all', 'core.excludesFile']):
+            result = _git_run([*prefix, *query], env=env,
+                              capture_output=True, timeout=remaining())
+            if result.returncode not in (0, 1) or len(result.stdout) > 65536:
+                raise RuntimeError('Caller Git exclusion configuration is unavailable')
+            if query[0] == '--name-only' and result.returncode == 0:
+                raise RuntimeError('Included Git exclusions require explicit review')
+            if query[0] == '--path' and result.returncode == 0:
+                # --null emits one NUL even for an explicitly empty value.
+                # Empty is an override, unlike return code 1 (unset).
+                if not result.stdout.endswith(b'\0'):
+                    raise RuntimeError('Caller Git exclusion value is not NUL-terminated')
+                rows = result.stdout.split(b'\0')[:-1]
+                if not rows:
+                    raise RuntimeError('Caller Git exclusion value is unavailable')
+                selected = os.fsdecode(rows[-1])
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    if xdg is not None and not Path(xdg).is_absolute():
+        raise RuntimeError('Caller XDG configuration path is not absolute')
+    if selected == '':
+        return b''  # Explicit empty disables an earlier file and the XDG default.
+    if selected is None:
+        selected = (Path(xdg) if xdg else Path(home) / '.config') / 'git' / 'ignore'
+        required = False
+    else:
+        selected = Path(selected)
+        required = True
+    if not selected.is_absolute():
+        raise RuntimeError('Caller Git exclusion path is not absolute')
+    try:
+        before = selected.lstat()
+    except FileNotFoundError:
+        if not required:
+            return b''
+        raise RuntimeError('Configured Git exclusion file is missing')
+    fd = os.open(selected, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        remaining()
+        opened = os.fstat(fd)
+        raw = os.read(fd, MAX_CALLER_EXCLUDES_BYTES + 1)
+        after = os.fstat(fd)
+        named = selected.lstat()
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_size > MAX_CALLER_EXCLUDES_BYTES
+                or len(raw) != opened.st_size or b'\0' in raw
+                or identity(before) != identity(opened)
+                or identity(opened) != identity(after) or identity(after) != identity(named)):
+            raise RuntimeError('Caller Git exclusions changed or exceeded fixed bound')
+        return raw
+    finally:
+        os.close(fd)
+
+
+MAX_TOOLCHAIN_PIN_BYTES = 16 * 1024
+
+
+def _signed_toolchain_text(source, head):
+    """Read only the authenticated HEAD pin blob, with fixed byte/time bounds."""
+    _local_config_preflight(source)
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Toolchain pin HEAD identity refused')
+    listing = _authenticated_tree_listing(source, head)
+    entries = [entry for entry in listing.split(b'\0') if entry.endswith(b'\trust-toolchain.toml')]
+    if len(entries) != 1:
+        raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
+    match = re.fullmatch(rb'(?:100644|100755) blob ([0-9a-f]{40})\trust-toolchain.toml', entries[0])
+    if not match:
+        raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
+    oid = match[1].decode('ascii')
+    try:
+        raw = _authenticated_source_blob(source, oid, MAX_TOOLCHAIN_PIN_BYTES)
+    except _SourceObjectSizeBoundExceeded as error:
+        raise RuntimeError('Toolchain pin blob exceeds fixed bound') from error
+    if not raw:
+        raise RuntimeError('Toolchain pin blob exceeds fixed bound')
+    # Do not let the subsequent status scan stream a huge substituted pin.
+    info = (source/'rust-toolchain.toml').lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size != len(raw):
+        raise RuntimeError('Toolchain pin worktree type or size differs from signed blob')
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        raise RuntimeError('Toolchain pin blob is not UTF-8') from None
+
+
+def pinned_toolchain(source, *, signed_head=None):
+    text = (_signed_toolchain_text(source, signed_head) if signed_head is not None
+            else (source/'rust-toolchain.toml').read_text())
+    pin = tomllib.loads(text)['toolchain']['channel']
     if not re.fullmatch(r'\d+\.\d+\.\d+', pin):
         raise RuntimeError('A numeric Rust toolchain pin is required')
     try:
@@ -54,17 +492,139 @@ def pinned_toolchain(source):
     return {'channel':pin,'rustc_commit':commit[1],'cargo_version':cargo_output}
 
 
-def verify_signed_source(source, head):
-    identity = subprocess.check_output(
-        ['git','-C',str(source),'log','-1','--format=%an|%ae|%cn|%ce|%G?|%GS',head],
-        text=True).strip().split('|')
+def _canonical_signer_path(signer_path):
+    """Require a direct absolute signer file before opening it without following links."""
+    signer_path = Path(signer_path)
+    if not signer_path.is_absolute():
+        raise RuntimeError('Maintainer allowed signers path must be absolute')
+    if signer_path.is_symlink() or not signer_path.is_file():
+        raise RuntimeError('Maintainer allowed signers file is unavailable')
+    return signer_path.resolve(strict=True)
+
+
+MAX_SIGNER_BYTES = 8192
+
+
+def configured_signer_path(source):
+    value = _bounded_source_git(
+        source, ['config', '--path', '--get', 'gpg.ssh.allowedSignersFile'],
+        4096).decode('utf-8').strip()
+    return _canonical_signer_path(value)
+
+
+def freeze_signer(signer_path, evidence):
+    """Copy one stable, bounded signer read outside the source into private custody."""
+    signer_path = _canonical_signer_path(signer_path)
+    evidence = Path(evidence)
+    info = evidence.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise RuntimeError('Signer evidence directory must be private and launcher owned')
+    custody = Path(tempfile.mkdtemp(prefix='signer-custody-', dir=evidence))
+    os.chmod(custody, 0o700)
+    frozen = custody / 'maintainer.allowed_signers'
+    original = None
+    output = None
+    try:
+        before = signer_path.lstat()
+        original = os.open(signer_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        opened = os.fstat(original)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or not 0 < opened.st_size <= MAX_SIGNER_BYTES
+                or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+            raise RuntimeError('Maintainer signer is not one bounded regular file')
+        raw = bytearray()
+        while len(raw) <= MAX_SIGNER_BYTES:
+            part = os.read(original, MAX_SIGNER_BYTES + 1 - len(raw))
+            if not part:
+                break
+            raw.extend(part)
+        after = os.fstat(original)
+        path_after = signer_path.lstat()
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (len(raw) != opened.st_size or len(raw) > MAX_SIGNER_BYTES
+                or identity(opened) != identity(after)
+                or identity(opened) != identity(path_after)
+                or not stat.S_ISREG(path_after.st_mode)):
+            raise RuntimeError('Maintainer signer changed or was short-read during custody')
+        output = os.open(frozen, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        if os.write(output, raw) != len(raw):
+            raise RuntimeError('Maintainer signer custody write was short')
+        os.fsync(output)
+        os.fchmod(output, 0o400)
+        os.fsync(output)
+        os.close(output)
+        output = None
+        directory = os.open(custody, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        digest = hashlib.sha256(raw).hexdigest()
+        assert_frozen_signer(frozen, digest)
+        return frozen, digest
+    except Exception:
+        frozen.unlink(missing_ok=True)
+        custody.rmdir()
+        raise
+    finally:
+        if original is not None:
+            os.close(original)
+        if output is not None:
+            os.close(output)
+
+
+def assert_frozen_signer(path, digest):
+    before = path.lstat()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        raw = os.read(fd, MAX_SIGNER_BYTES + 1)
+        after = os.fstat(fd)
+        stable = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_mode & 0o222 or not 0 < opened.st_size <= MAX_SIGNER_BYTES
+                or stable(before) != stable(opened) or stable(opened) != stable(after)
+                or len(raw) != opened.st_size or hashlib.sha256(raw).hexdigest() != digest):
+            raise RuntimeError('Frozen maintainer signer custody changed')
+    finally:
+        os.close(fd)
+
+
+def _verify_signed_source_with_frozen_signer(source, head, signer_path, digest):
+    _local_config_preflight(source)
+    env = source_git_env()  # Validate fixed Git and SSH verifier before key inspection.
+    assert_frozen_signer(signer_path, digest)
+    from qualification_source import _trusted_key
+    _trusted_key(signer_path)
+    options=['-c','gpg.format=ssh',
+             '-c','gpg.ssh.allowedSignersFile='+str(signer_path)]
+    command=['/usr/bin/git','-C',str(source), *options]
+    identity = _bounded_source_git(
+        source, [*options, 'log', '-1', '--format=%an|%ae|%cn|%ce|%G?|%GS', head],
+        512, env=env).decode('utf-8').strip().split('|')
     expected = ['swackhamer','swackhamer@users.noreply.github.com',
                 'swackhamer','swackhamer@users.noreply.github.com',
                 'G','swackhamer@users.noreply.github.com']
     if identity != expected:
         raise RuntimeError('Remote workspace tests require the signed maintainer HEAD')
-    subprocess.run(['git','-C',str(source),'verify-commit',head], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _git_run([*command,'verify-commit',head], check=True, env=env,
+             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert_frozen_signer(signer_path, digest)
+
+
+def verify_signed_source(source, head, signer_path=None):
+    """Direct callers also get one private signer copy for both Git invocations."""
+    if signer_path is None:
+        signer_path = configured_signer_path(source)
+    from scripts.ops_paths import ops_root
+    evidence = ops_root() / 'evidence' / 'signer-verification'
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    frozen, digest = freeze_signer(signer_path, evidence)
+    try:
+        return _verify_signed_source_with_frozen_signer(source, head, frozen, digest)
+    finally:
+        frozen.unlink()
+        frozen.parent.rmdir()
 
 def download_test_proof(instance, zone, project, remote, local, digest, expected_commit,
                         expected_toolchain, expected_oracle, *, require_pass=True, transport=None):
@@ -312,10 +872,197 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
             'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
 
 
+class _TrackedModeMismatch(RuntimeError):
+    """A stable tracked file has a different executable mode."""
+
+
+def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None,
+                            deadline=None, maximum=None, collect=False,
+                            budget: _SourceReadBudget | None = None):
+    """Hash a stable nofollow regular file with fixed size and time bounds."""
+    if deadline is None:
+        deadline = time.monotonic() + GIT_ADMISSION_TIMEOUT
+    if maximum is None:
+        maximum = MAX_SIGNED_BLOB_BYTES
+    if budget is not None:
+        deadline = min(deadline, budget.deadline)
+        budget.check()
+    if time.monotonic() >= deadline:
+        raise RuntimeError('Tracked source blob deadline exceeded')
+    before = path.lstat()
+    if before.st_size > maximum:
+        raise RuntimeError('Tracked source blob exceeds fixed bound')
+    if (expected_size is not None and
+            (type(expected_size) is not int or expected_size < 0 or before.st_size != expected_size)):
+        raise RuntimeError('Tracked source size differs from signed or archived blob')
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeError('Tracked source is not a regular file')
+    if budget is not None:
+        budget.reserve(before.st_size)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                                 info.st_mtime_ns, info.st_ctime_ns)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink < 1
+                or opened.st_size > maximum
+                or identity(before) != identity(opened)):
+            raise RuntimeError('Tracked source changed before bounded blob read')
+        if expected_mode is not None and (0o755 if opened.st_mode & 0o111 else 0o644) != expected_mode:
+            raise _TrackedModeMismatch('Tracked source mode differs from signed or archived blob')
+        git_digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
+        sha_digest = hashlib.sha256()
+        remaining = opened.st_size
+        chunks = [] if collect else None
+        while remaining:
+            if budget is not None:
+                budget.check()
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Tracked source blob deadline exceeded')
+            block = os.read(fd, min(1024 * 1024, remaining))
+            if not block:
+                raise RuntimeError('Tracked source short-read during bounded blob read')
+            git_digest.update(block)
+            sha_digest.update(block)
+            if collect:
+                chunks.append(block)
+            remaining -= len(block)
+        if budget is not None:
+            budget.check()
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Tracked source blob deadline exceeded')
+        if (identity(opened) != identity(os.fstat(fd))
+                or identity(opened) != identity(path.lstat())):
+            raise RuntimeError('Tracked source changed during bounded blob read')
+        result = (git_digest.hexdigest(), sha_digest.hexdigest())
+        return (*result, b''.join(chunks)) if collect else result
+    finally:
+        os.close(fd)
+
+
+def _bounded_worktree_bytes(path: Path, maximum=MAX_SIGNED_BLOB_BYTES,
+                            budget: _SourceReadBudget | None = None) -> bytes:
+    return _stream_worktree_hashes(path, maximum=maximum, collect=True,
+                                   budget=budget)[2]
+
+
+def launcher_source_root() -> Path:
+    """The checkout containing this installed remote-build client."""
+    return Path(__file__).resolve().parents[3]
+
+
+def require_ordinary_source_root(source: Path) -> None:
+    if source != launcher_source_root().resolve(strict=True):
+        raise RuntimeError('External source requires the fixed signed infra-python-v1 profile')
+
+
+def source_clean_status(source: Path, head: str) -> str:
+    """Compare index and worktree to HEAD without Git diff/status/filter drivers.
+
+    Git status may execute repository-local clean filters even for unsigned
+    source. Object and index enumeration are non-filtering; hash actual bytes
+    here instead of asking Git to convert them.
+    """
+    budget = _SourceReadBudget(MAX_SOURCE_STATUS_BYTES, SOURCE_STATUS_TIMEOUT)
+    _local_config_preflight(source)
+    env = source_git_env()
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
+    budget.check()
+    effective_root = Path(_git_check_output(
+        ['git', '-C', str(source), 'rev-parse', '--show-toplevel'], env=env,
+        text=True, timeout=min(GIT_ADMISSION_TIMEOUT, budget.deadline - time.monotonic())).strip()).resolve(strict=True)
+    if effective_root != source.resolve(strict=True):
+        raise RuntimeError('Source Git worktree differs from selected source root')
+    budget.check()
+    if _git_check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
+                               env=env, timeout=min(GIT_ADMISSION_TIMEOUT,
+                               budget.deadline - time.monotonic())).strip() != b'sha1':
+        raise RuntimeError('Source Git object format is unsupported')
+    budget.check()
+    tree = _authenticated_tree_listing(source, head, deadline=budget.deadline)
+    index = _bounded_source_git(source, ['ls-files', '--stage', '-z'],
+                                MAX_SOURCE_FILE_LIST_BYTES, env=env,
+                                deadline=budget.deadline)
+    expected = {}
+    for record in filter(None, tree.split(b'\0')):
+        budget.check()
+        metadata, raw_name = record.split(b'\t', 1)
+        mode, kind, object_id = metadata.decode('ascii').split()
+        name = os.fsdecode(raw_name)
+        if (name in expected or not name or Path(name).is_absolute()
+                or '..' in Path(name).parts or kind not in {'blob', 'commit'}):
+            raise RuntimeError('Source HEAD has unsupported tree member')
+        expected[name] = (mode, object_id)
+    actual_index = {}
+    for record in filter(None, index.split(b'\0')):
+        budget.check()
+        metadata, raw_name = record.split(b'\t', 1)
+        mode, object_id, stage = metadata.decode('ascii').split()
+        name = os.fsdecode(raw_name)
+        if name in actual_index or stage != '0':
+            raise RuntimeError('Source index is unmerged or ambiguous')
+        actual_index[name] = (mode, object_id)
+    changed = []
+    if actual_index != expected:
+        changed.append(' M index')
+    for name, (mode, object_id) in expected.items():
+        budget.check()
+        path = source / name
+        try:
+            info = path.lstat()
+            if mode in {'100644', '100755'} and stat.S_ISREG(info.st_mode):
+                digest = _stream_worktree_hashes(path, budget=budget)[0]
+                if bool(info.st_mode & 0o111) != (mode == '100755'):
+                    changed.append(' M ' + name)
+                    continue
+            elif mode == '120000' and stat.S_ISLNK(info.st_mode):
+                budget.reserve(info.st_size)
+                data = os.fsencode(os.readlink(path))
+            else:
+                changed.append(' M ' + name)
+                continue
+        except OSError:
+            changed.append(' D ' + name)
+            continue
+        if mode == '120000':
+            digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+        if digest != object_id:
+            changed.append(' M ' + name)
+    budget.check()
+    untracked = _list_files_with_caller_ignore(source, include_cached=False,
+                                               deadline=budget.deadline)
+    budget.check()
+    changed.extend('?? ' + os.fsdecode(name) for name in filter(None, untracked.split(b'\0')))
+    return '\n'.join(changed) + ('\n' if changed else '')
+
+
+def _list_files_with_caller_ignore(source: Path, *, include_cached: bool,
+                                   deadline=None) -> bytes:
+    """Use one frozen caller ignore policy for status and snapshot paths."""
+    patterns = _caller_excludes(source, deadline=deadline)
+    env = source_git_env()
+    # core.excludesFile is Git's lowest ignore tier. --exclude-from would
+    # override .gitignore negations instead of preserving actual precedence.
+    with tempfile.TemporaryFile() as excludes:
+        excludes.write(patterns); excludes.flush(); excludes.seek(0)
+        fd = excludes.fileno()
+        env['GIT_CONFIG_COUNT'] = '4'
+        env['GIT_CONFIG_KEY_3'] = 'core.excludesFile'
+        env['GIT_CONFIG_VALUE_3'] = '/dev/fd/' + str(fd)
+        command = ['git', '-C', str(source), 'ls-files', '-z']
+        if include_cached:
+            command.append('--cached')
+        command.extend(('--others', '--exclude-standard'))
+        return _bounded_source_git(source, command[3:], MAX_SOURCE_FILE_LIST_BYTES,
+                                   env=env, pass_fds=(fd,), deadline=deadline)
+
+
 def eligible_snapshot_paths(source: Path) -> list[str]:
     """Enumerate tracked plus nonignored untracked files under existing exclusions."""
-    names = subprocess.check_output(['git','-C',str(source),'ls-files','-z',
-                                     '--cached','--others','--exclude-standard']).decode().split('\0')
+    _local_config_preflight(source)
+    listed = _list_files_with_caller_ignore(source, include_cached=True)
+    names = set(listed.decode().split('\0'))
     eligible=[]
     for name in names:
         parts=Path(name).parts
@@ -332,12 +1079,14 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
     return sorted(eligible)
 
 
-def signed_snapshot_files(source: Path, head: str) -> dict[str, tuple[str, int]]:
+def signed_snapshot_files(source: Path, head: str, *, source_profile=None,
+                          budget: _SourceReadBudget | None = None) -> dict[str, tuple[str, int]]:
     """Enumerate fleet packet blobs and modes from the authenticated commit."""
+    _local_config_preflight(source)
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
-    env=dict(os.environ, GIT_NO_REPLACE_OBJECTS='1')
-    tree=subprocess.check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
+    env=source_git_env()
+    tree=_authenticated_tree_listing(source, head, budget=budget)
     signed={}
     for entry in tree.split(b'\0'):
         if not entry:
@@ -359,13 +1108,227 @@ def signed_snapshot_files(source: Path, head: str) -> dict[str, tuple[str, int]]
               'tools/remote-build/qualification_bootstrap.py',
               'tools/remote-build/qualification_source.py',
               'tools/remote-build/test_runner.py','tools/release/bootstrap_oracle.py'}
+    if source_profile == INFRA_PYTHON_PROFILE:
+        required=INFRA_PYTHON_REQUIRED
+    elif source_profile is not None:
+        raise RuntimeError('Unsupported signed source profile')
     if required-signed.keys():
-        raise RuntimeError(f'Signed fleet launcher is incomplete: {sorted(required-signed.keys())}')
+        label='Infrastructure source' if source_profile == INFRA_PYTHON_PROFILE else 'Signed fleet launcher'
+        raise RuntimeError(f'{label} is incomplete: {sorted(required-signed.keys())}')
     return signed
 
 
-def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None) -> dict:
-    signed=signed_snapshot_files(source,signed_head) if signed_head is not None else None
+def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
+    """Bind the complete top-level unittest discovery set to signed blob bytes."""
+    budget = _SourceReadBudget(MAX_INFRA_PYTHON_MANIFEST_READ_BYTES,
+                               INFRA_PYTHON_MANIFEST_TIMEOUT)
+    signed = signed_snapshot_files(source, head, source_profile=INFRA_PYTHON_PROFILE,
+                                   budget=budget)
+    # A digest always occupies 64 ASCII bytes. Check the final serialized shape
+    # before asking Git for any module body, including a late oversized module.
+    modules = [
+        {'path': name, 'sha256': '0' * 64, 'module': Path(name).stem}
+        for name in sorted(signed)
+        if re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name)
+    ]
+    if len(modules) < INFRA_PYTHON_MIN_MODULES:
+        raise RuntimeError('Signed infrastructure unittest module floor not met')
+    manifest = {'schema': 1, 'kind': 'infra_python_test_manifest_v1',
+                'source_commit': head, 'modules': modules}
+    def serialize():
+        return json.dumps(manifest, sort_keys=True, separators=(',', ':'),
+                          allow_nan=False).encode()
+    if len(serialize()) > INFRA_PYTHON_PROOF_LIMIT:
+        raise RuntimeError('Infrastructure unittest manifest exceeds fixed bound')
+    for row in modules:
+        budget.check()
+        data = _authenticated_source_blob(source, signed[row['path']][0],
+                                          MAX_INFRA_PYTHON_MODULE_BYTES, budget=budget)
+        row['sha256'] = hashlib.sha256(data).hexdigest()
+    budget.check()
+    return manifest, serialize()
+
+
+def _infra_json_pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError('Duplicate infrastructure proof JSON key')
+        result[key] = value
+    return result
+
+
+def _infra_json_constant(value):
+    raise ValueError('Non-finite infrastructure proof JSON value: ' + value)
+
+
+def validate_infra_python_proof(raw: bytes, manifest: dict, source_commit: str,
+                                manifest_sha256: str, diagnostic_log_sha256: str) -> dict:
+    """Validate actual unittest result fields; SSH recipe text has no authority."""
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= INFRA_PYTHON_PROOF_LIMIT:
+        raise RuntimeError('Infrastructure unittest proof byte bound differs')
+    try:
+        proof = json.loads(raw.decode('utf-8'), object_pairs_hook=_infra_json_pairs,
+                           parse_constant=_infra_json_constant)
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError('Infrastructure unittest proof JSON invalid') from exc
+    fields = {'schema', 'kind', 'source_commit', 'manifest_sha256', 'runner_argv',
+              'unittest_argv', 'discovery', 'python_executable', 'discovered_tests',
+              'tests_run', 'module_counts', 'failures', 'errors', 'skipped',
+              'expected_failures', 'unexpected_successes', 'success', 'exit_code',
+              'status', 'diagnostic_log_sha256'}
+    if not isinstance(proof, dict) or set(proof) != fields:
+        raise RuntimeError('Infrastructure unittest proof schema differs')
+    if (type(proof['schema']) is not int or proof['schema'] != 1
+            or proof['kind'] != 'infra_python_unittest_v1'
+            or proof['source_commit'] != source_commit
+            or proof['manifest_sha256'] != manifest_sha256
+            or proof['runner_argv'] != INFRA_PYTHON_RUNNER_ARGV
+            or proof['unittest_argv'] != INFRA_PYTHON_UNITTEST_ARGV
+            or proof['discovery'] != INFRA_PYTHON_DISCOVERY
+            or not isinstance(proof['python_executable'], str)
+            or not proof['python_executable'].startswith('/')
+            or proof['diagnostic_log_sha256'] != diagnostic_log_sha256
+            or proof['status'] != 'PASS' or proof['success'] is not True):
+        raise RuntimeError('Infrastructure unittest proof identity or result differs')
+    for key in ('discovered_tests', 'tests_run', 'failures', 'errors', 'skipped',
+                'expected_failures', 'unexpected_successes', 'exit_code'):
+        if type(proof[key]) is not int or proof[key] < 0:
+            raise RuntimeError('Infrastructure unittest proof count invalid')
+    if (proof['discovered_tests'] < INFRA_PYTHON_MIN_TESTS
+            or proof['tests_run'] != proof['discovered_tests']
+            or any(proof[key] != 0 for key in ('failures', 'errors', 'skipped',
+                            'expected_failures', 'unexpected_successes', 'exit_code'))):
+        raise RuntimeError('Infrastructure unittest suite did not complete and pass')
+    expected = {row['module'] for row in manifest['modules']}
+    counts = proof['module_counts']
+    if (len(expected) < INFRA_PYTHON_MIN_MODULES or len(expected) != len(manifest['modules'])
+            or not isinstance(counts, dict) or set(counts) != expected
+            or any(type(value) is not int or value <= 0 for value in counts.values())
+            or sum(counts.values()) != proof['tests_run']):
+        raise RuntimeError('Infrastructure unittest module discovery incomplete')
+    return {'tests_run': proof['tests_run'], 'module_count': len(counts),
+            'source_commit': source_commit, 'status': 'PASS'}
+
+
+def _download_infra_python_bytes(transport, instance, zone, project, remote: str,
+                                 local: Path, expected_sha256: str, maximum: int) -> bytes:
+    """Fetch one fixed target artifact with existing checked SCP transport."""
+    import tempfile
+    if (not re.fullmatch(r'[0-9a-f]{64}', expected_sha256)
+            or local.exists() or local.is_symlink()):
+        raise RuntimeError('Infrastructure proof destination or checksum differs')
+    descriptor, name = tempfile.mkstemp(prefix='.infra-python-proof-', dir=local.parent)
+    os.close(descriptor)
+    temporary = Path(name)
+    try:
+        command = (transport.scp(temporary, remote, download=True) if transport else
+            ['gcloud', 'compute', 'scp', ssh_transport.target(instance)+':'+remote,
+             str(temporary), '--zone='+zone, '--project='+project, '--quiet',
+             *SCP_KEEPALIVE, *ssh_transport.flags('scp')])
+        subprocess.run(command, check=True, preexec_fn=lambda: resource.setrlimit(
+            resource.RLIMIT_FSIZE, (maximum, maximum)))
+        fd = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or not 0 < before.st_size <= maximum):
+                raise RuntimeError('Infrastructure proof artifact exceeds fixed bound')
+            raw = os.read(fd, maximum + 1)
+            after = os.fstat(fd)
+            if (len(raw) != before.st_size or
+                    (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+                     before.st_ctime_ns) !=
+                    (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+                     after.st_ctime_ns) or
+                    hashlib.sha256(raw).hexdigest() != expected_sha256):
+                raise RuntimeError('Infrastructure proof artifact changed or checksum differs')
+        finally:
+            os.close(fd)
+        temporary.replace(local)
+        return raw
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def retrieve_infra_python_proof(transport, ssh, instance, zone, project, run_id,
+                                evidence, source_commit, manifest, manifest_sha256):
+    target = '/mnt/runner-data/remote-build/targets/' + run_id
+    artifacts = (('infra-python-test-proof.json', INFRA_PYTHON_PROOF_LIMIT),
+                 ('infra-python-test.log', INFRA_PYTHON_LOG_LIMIT))
+    downloaded = {}
+    for name, maximum in artifacts:
+        remote = target + '/' + name
+        observed = subprocess.check_output(ssh('sha256sum ' + shlex.quote(remote)),
+                                           text=True).split()
+        if len(observed) != 2 or not re.fullmatch(r'[0-9a-f]{64}', observed[0]) or observed[1] != remote:
+            raise RuntimeError('Infrastructure proof remote checksum unavailable')
+        local = evidence / name
+        raw = _download_infra_python_bytes(transport, instance, zone, project,
+                                           remote, local, observed[0], maximum)
+        downloaded[name] = {'sha256': observed[0], 'bytes': len(raw), 'path': str(local), 'raw': raw}
+    summary = validate_infra_python_proof(downloaded['infra-python-test-proof.json']['raw'],
+                  manifest, source_commit, manifest_sha256,
+                  downloaded['infra-python-test.log']['sha256'])
+    return summary, {name: {key: value for key, value in item.items() if key != 'raw'}
+                     for name, item in downloaded.items()}
+
+
+def _create_bounded_source_bundle(source: Path, bundle: Path,
+                                  maximum: int = MAX_SNAPSHOT_EXTRA_BYTES) -> None:
+    """Create a new bundle under an inherited kernel file-size limit."""
+    if (type(maximum) is not int or maximum <= 0 or maximum > MAX_SNAPSHOT_EXTRA_BYTES
+            or bundle.exists() or bundle.is_symlink()):
+        raise RuntimeError('Source bundle destination or bound refused')
+    _local_config_preflight(source)
+    python = infra_repository_binding._trusted_tool('/usr/bin/python3')
+    _trusted_source_tool('/usr/bin/git')
+    # The fixed system interpreter only sets RLIMIT_FSIZE and execs fixed Git;
+    # no checkout script, shell, Python import path, or caller command is used.
+    wrapper = ('import os,resource,sys; '
+               'limit=int(sys.argv[1]); '
+               'resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)); '
+               'os.execve("/usr/bin/git",["/usr/bin/git","-C",sys.argv[2],'
+               '"bundle","create",sys.argv[3],"HEAD"],os.environ)')
+    private = Path(tempfile.mkdtemp(prefix='.source-bundle-', dir=bundle.parent))
+    partial = private / 'repository.bundle'
+    process = None
+    try:
+        environment = source_git_env()
+        for key in tuple(environment):
+            if key.startswith(('PYTHON', 'DYLD_', 'LD_')):
+                environment.pop(key)
+        process = subprocess.Popen(
+            [python, '-I', '-S', '-B', '-c', wrapper, str(maximum), str(source), str(partial)],
+            env=environment, cwd='/', stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            code = process.wait(timeout=SOURCE_BUNDLE_TIMEOUT)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError('Source bundle deadline exceeded') from error
+        if code != 0:
+            raise RuntimeError('Source bundle creation failed within fixed byte bound')
+        _local_config_preflight(source)
+        info = partial.lstat()
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= maximum:
+            raise RuntimeError('Source bundle exceeds fixed byte bound')
+        # link is exclusive: a pre-existing evidence file is never replaced.
+        os.link(partial, bundle, follow_symlinks=False)
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        partial.unlink(missing_ok=True)
+        private.rmdir()
+
+
+def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
+    budget = _SourceReadBudget(MAX_SOURCE_SNAPSHOT_READ_BYTES, SOURCE_SNAPSHOT_TIMEOUT)
+    _local_config_preflight(source)
+    if source_profile is not None and signed_head is None:
+        raise RuntimeError('Signed source profile requires exact HEAD')
+    signed=signed_snapshot_files(source,signed_head,source_profile=source_profile) if signed_head is not None else None
     names=sorted(signed) if signed is not None else eligible_snapshot_paths(source)
     files=[]
     with tarfile.open(archive,'w:gz',compresslevel=3) as tar:
@@ -374,21 +1337,30 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if signed is None:
                 if not path.is_file() or path.is_symlink():
                     raise RuntimeError('Source file changed type during snapshot')
-                data=path.read_bytes()
+                data=_bounded_worktree_bytes(path, budget=budget)
                 info=tar.gettarinfo(str(path),arcname=name)
             else:
                 object_id, mode=signed[name]
-                data=subprocess.check_output(
-                    ['git','-C',str(source),'cat-file','blob',object_id],
-                    env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
-                if path.is_symlink() or not path.is_file() or path.read_bytes()!=data:
+                data=_authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES,
+                                                budget=budget)
+                size=len(data)
+                data_sha256=hashlib.sha256(data).hexdigest()
+                try:
+                    actual_oid,actual_sha256=_stream_worktree_hashes(
+                        path,expected_size=size,expected_mode=mode,budget=budget)
+                except _TrackedModeMismatch as error:
+                    raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}') from error
+                except _SourceReadBudgetExceeded as error:
+                    raise RuntimeError(f'Fleet source aggregate read budget exceeded: {name}') from error
+                except (OSError,RuntimeError) as error:
+                    raise RuntimeError(f'Fleet source differs from signed HEAD: {name}') from error
+                if actual_oid!=object_id or actual_sha256!=data_sha256:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}')
-                if bool(path.stat().st_mode & 0o111) != (mode==0o755):
-                    raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}')
                 info=tarfile.TarInfo(name)
                 info.mode=mode
             info.size=len(data)
-            row={'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+            row={'path':name,'sha256':data_sha256 if signed is not None else hashlib.sha256(data).hexdigest(),
+                 'bytes':len(data)}
             if signed is not None:
                 row['mode']=info.mode
             files.append(row)
@@ -397,22 +1369,32 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if name in names or Path(name).name != name or path.is_symlink() or not path.is_file():
                 raise RuntimeError('Invalid signed fleet source member')
             if name == 'approved-linux-perl.json':
-                with path.open('rb') as stream:
-                    data=stream.read(approved_linux_perl.MAX_ENVELOPE_BYTES + 1)
-                if len(data)>approved_linux_perl.MAX_ENVELOPE_BYTES:
-                    raise RuntimeError('Component envelope exceeds approved transport bound')
+                data=_bounded_worktree_bytes(path, approved_linux_perl.MAX_ENVELOPE_BYTES,
+                                             budget=budget)
             else:
-                data=path.read_bytes()
+                data=_bounded_worktree_bytes(path, MAX_SNAPSHOT_EXTRA_BYTES,
+                                             budget=budget)
             info=tarfile.TarInfo(name)
             info.mode=0o644
             info.size=len(data)
             files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
             tar.addfile(info,io.BytesIO(data))
+    budget.check()
     if eligible_snapshot_paths(source)!=names:
         raise RuntimeError('Eligible source file set changed during snapshot')
+    budget.check()
     return {'files':files,'eligible_paths':names,'file_count':len(files),
             'archive_bytes':archive.stat().st_size,
-            'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+            'archive_sha256':_sha256_file(archive)}
+
+
+def _snapshot_file_changed(path: Path, row: dict) -> bool:
+    try:
+        _, actual = _stream_worktree_hashes(path, expected_size=row['bytes'],
+                                           expected_mode=row.get('mode'))
+        return actual != row['sha256']
+    except (OSError, RuntimeError):
+        return True
 
 
 class BuilderBusy(RuntimeError):
@@ -477,6 +1459,7 @@ def main(argv=None):
     task=parser.add_mutually_exclusive_group()
     task.add_argument('--profile',choices=['debug','release','test'])
     task.add_argument('--just-recipe')
+    parser.add_argument('--source-profile',choices=[INFRA_PYTHON_PROFILE])
     parser.add_argument('--just-arg',action='append',default=[])
     parser.add_argument('--approved-linux-perl-envelope',type=Path)
     parser.add_argument('--artifact-dir',type=Path)
@@ -487,6 +1470,12 @@ def main(argv=None):
         parser.error('--just-arg requires --just-recipe')
     if args.just_recipe and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',args.just_recipe):
         parser.error('invalid Just recipe name')
+    infra_python=args.source_profile == INFRA_PYTHON_PROFILE
+    if args.just_recipe == INFRA_PYTHON_RECIPE and not infra_python:
+        parser.error('infra-python-tests requires --source-profile infra-python-v1')
+    if infra_python and (args.just_recipe != INFRA_PYTHON_RECIPE or args.just_arg
+                         or args.approved_linux_perl_envelope or args.artifact_dir):
+        parser.error('infra-python-v1 requires only --just-recipe infra-python-tests with zero arguments')
     component=args.just_recipe=='prove-linux-perl-component'
     if bool(args.approved_linux_perl_envelope) != component or (component and args.just_arg):
         parser.error('component proof requires only its explicit approved envelope')
@@ -512,6 +1501,9 @@ def main(argv=None):
     namespace=args.worktree_id
     args.worktree_id=unique_run_id(namespace)
     source=args.source.expanduser().resolve();evidence=args.evidence_dir.expanduser().resolve()
+    _local_config_preflight(source)
+    if not infra_python:
+        require_ordinary_source_root(source)
     envelope=None
     if component:
         envelope=args.approved_linux_perl_envelope.expanduser()
@@ -526,7 +1518,7 @@ def main(argv=None):
     if args.artifact_dir is None:
         args.artifact_dir=source/'target'/'remote-linux'/task_name
     evidence.mkdir(parents=True,exist_ok=True)
-    receipt={'profile':args.profile,'just_recipe':args.just_recipe,'just_args':args.just_arg,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
+    receipt={'profile':args.profile,'source_profile':args.source_profile,'just_recipe':args.just_recipe,'just_args':args.just_arg,'source':str(source),'instance':args.instance,'zone':args.zone,'project':args.project,
              'worktree_namespace':namespace,'run_id':args.worktree_id}
     if approval:
         receipt['approved_instance'] = approval
@@ -595,49 +1587,111 @@ def main(argv=None):
     archive=evidence/'remote-source.tar.gz'
     try:
         receipt['stage']='local_toolchain'
-        receipt['toolchain']=pinned_toolchain(source)
+        if not infra_python:
+            receipt['toolchain']=pinned_toolchain(source)
         save()
         start=time.monotonic();archive=evidence/'remote-source.tar.gz'
-        receipt['source_commit']=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        receipt['source_status']=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        receipt['source_commit']=_git_check_output(['git','-C',str(source),'rev-parse','HEAD'],
+                                                        text=True,env=source_git_env()).strip()
+        receipt['source_tree']=_git_check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],
+                                                      text=True,env=source_git_env()).strip()
+        # External source is authenticated before its pin or working files are read.
+        receipt['source_status'] = (None if infra_python else
+            source_clean_status(source, receipt['source_commit']))
         if args.just_recipe == 'freeze-linux-perl':
-            source_tree=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip()
+            source_tree=receipt['source_tree']
             if args.just_arg != [receipt['source_commit'], source_tree]:
                 raise RuntimeError('Perl producer arguments differ from selected signed HEAD/tree')
         if args.profile == 'test' and receipt['source_status']:
             raise RuntimeError('Remote workspace tests require a clean exact-HEAD checkout')
+        frozen_signer = None
+        signer_digest = None
+        if args.profile == 'test' or args.just_recipe in FLEET_RECIPES or infra_python:
+            if evidence.is_relative_to(source):
+                raise RuntimeError('Signer custody evidence must be outside signed source')
+            signer_path = configured_signer_path(source)
+            frozen_signer, signer_digest = freeze_signer(signer_path, evidence)
         if args.profile == 'test':
-            verify_signed_source(source, receipt['source_commit'])
+            _verify_signed_source_with_frozen_signer(
+                source, receipt['source_commit'], frozen_signer, signer_digest)
         extra_files={}
-        if args.just_recipe in FLEET_RECIPES:
+        if args.just_recipe in FLEET_RECIPES or infra_python:
             if receipt['source_status']:
-                raise RuntimeError('Remote fleet tests require a clean exact-HEAD checkout')
-            verify_signed_source(source, receipt['source_commit'])
-            signer_path=Path(subprocess.check_output(
-                ['git','-C',str(source),'config','--path','--get','gpg.ssh.allowedSignersFile'],
-                text=True).strip())
-            if signer_path.is_symlink() or not signer_path.is_file():
-                raise RuntimeError('Maintainer allowed signers file is unavailable')
-            # Pin the local signer before any packet source runs on Spot.
-            from qualification_source import verify_source
-            verify_source(source, receipt['source_commit'], signer_path)
+                raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
+            if infra_python:
+                raw_origins=_bounded_source_git(
+                    source, ['config', '--local', '--get-all', 'remote.origin.url'],
+                    1024).decode('utf-8').splitlines()
+                if len(raw_origins)!=1 or raw_origins[0] not in INFRA_PYTHON_ORIGINS:
+                    raise RuntimeError('Infrastructure source raw origin is not the approved repository')
+                receipt['source_origin_configured']=raw_origins[0]
+                receipt['source_origin_check']='raw_local_config_allowlist'
+                _verify_signed_source_with_frozen_signer(
+                    source, receipt['source_commit'], frozen_signer, signer_digest)
+                _local_config_preflight(source)
+                receipt['infra_repository_binding'] = infra_repository_binding.admit(
+                    source, receipt['source_commit'], receipt['source_tree'], source_git_env())
+                _local_config_preflight(source)
+                receipt['toolchain'] = pinned_toolchain(
+                    source, signed_head=receipt['source_commit'])
+                receipt['source_status'] = source_clean_status(source, receipt['source_commit'])
+                if receipt['source_status']:
+                    raise RuntimeError('Signed remote recipe requires a clean exact-HEAD checkout')
+            else:
+                _verify_signed_source_with_frozen_signer(
+                    source, receipt['source_commit'], frozen_signer, signer_digest)
+                # Fleet qualification also binds the OxiDex-specific source pins.
+                from qualification_source import verify_source
+                _local_config_preflight(source)
+                verify_source(source, receipt['source_commit'], frozen_signer)
+                _local_config_preflight(source)
+                assert_frozen_signer(frozen_signer, signer_digest)
             bundle=evidence/'repository.bundle'
-            subprocess.run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
-                           env=dict(os.environ,GIT_NO_REPLACE_OBJECTS='1'))
-            subprocess.run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
-                           stdout=subprocess.DEVNULL)
+            receipt['stage']='source_bundle'
+            receipt['source_bundle_max_bytes']=MAX_SNAPSHOT_EXTRA_BYTES
+            receipt['source_bundle_timeout_seconds']=SOURCE_BUNDLE_TIMEOUT
+            save()
+            _create_bounded_source_bundle(source, bundle)
+            receipt['source_bundle_bytes']=bundle.stat().st_size
+            _git_run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
+                     env=source_git_env(),stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, timeout=60)
             source_head=evidence/'fleet-source-head'
             source_head.write_text(receipt['source_commit']+'\n')
             extra_files={'repository.bundle':bundle,
-                         'maintainer.allowed_signers':signer_path,
+                         'maintainer.allowed_signers':frozen_signer,
                          'fleet-source-head':source_head}
+            if infra_python:
+                receipt['stage']='infra_python_manifest'
+                save()
+                infra_manifest, manifest_bytes = infra_python_manifest(source, receipt['source_commit'])
+                manifest_file = evidence/'infra-python-test-manifest.json'
+                manifest_file.write_bytes(manifest_bytes)
+                receipt['infra_python_manifest_sha256'] = hashlib.sha256(manifest_bytes).hexdigest()
+                receipt['infra_python_manifest_modules'] = len(infra_manifest['modules'])
+                extra_files['infra-python-test-manifest.json'] = manifest_file
             if component:
                 extra_files['approved-linux-perl.json']=envelope
-        if extra_files or args.profile == 'test':
+        receipt['stage']='source_snapshot'
+        save()
+        if infra_python:
+            receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
+                                              signed_head=receipt['source_commit'],
+                                              source_profile=INFRA_PYTHON_PROFILE)
+        elif extra_files or args.profile == 'test':
             receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
                                               signed_head=receipt['source_commit'])
         else:
             receipt['snapshot']=make_snapshot(source,archive)
+        if frozen_signer is not None:
+            assert_frozen_signer(frozen_signer, signer_digest)
+            if extra_files:
+                signer_row = next(row for row in receipt['snapshot']['files']
+                                  if row['path'] == 'maintainer.allowed_signers')
+                if signer_row['sha256'] != signer_digest:
+                    raise RuntimeError('Snapshot signer differs from frozen maintainer signer')
+        if infra_python:
+            receipt['source_provenance']='signed_exact_head_infra_python_v1'
         if extra_files:
             receipt['fleet_source_bundle_sha256']=next(
                 row['sha256'] for row in receipt['snapshot']['files']
@@ -652,19 +1706,25 @@ def main(argv=None):
                 receipt['component_envelope_sha256']=envelope_sha256
                 receipt['component_envelope_bytes']=envelope_row['bytes']
         receipt['packaging_seconds']=time.monotonic()-start
-        after_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        after_status=subprocess.check_output(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],text=True)
+        after_commit=_git_check_output(['git','-C',str(source),'rev-parse','HEAD'],
+                                             text=True,env=source_git_env()).strip()
+        after_status=source_clean_status(source, receipt['source_commit'])
         if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
                 or (receipt['snapshot'].get('eligible_paths') is not None
                     and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
-                or any(not (source/row['path']).is_file() or (source/row['path']).is_symlink()
-                       or hashlib.sha256((source/row['path']).read_bytes()).hexdigest()!=row['sha256']
-                       or (row.get('mode') is not None and
-                           (0o755 if (source/row['path']).stat().st_mode & 0o111 else 0o644)
-                           != row['mode'])
+                or any(_snapshot_file_changed(source/row['path'], row)
                        for row in receipt['snapshot'].get('files',[])
                        if row['path'] in receipt['snapshot'].get('eligible_paths', []))):
             raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')
+        if infra_python:
+            binding = receipt['infra_repository_binding']
+            _local_config_preflight(source)
+            infra_repository_binding.recheck(source, binding, source_git_env())
+            _local_config_preflight(source)
+            infra_repository_binding.bind_packet(binding, args.worktree_id,
+                receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
+            infra_repository_binding.verify_packet(binding, receipt['source_commit'], receipt['source_tree'],
+                args.worktree_id, receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
         save()
         project=shlex.quote(args.worktree_id)
         receipt['stage']='prepare'
@@ -765,6 +1825,28 @@ def main(argv=None):
                 raise RuntimeError(f'{stage} failed; see {evidence / (stage+".log")}')
         if args.just_recipe:
             receipt['stage']='verify'
+            if infra_python:
+                receipt['infra_python_proof_state']='PENDING'
+                save()
+                summary, artifacts = retrieve_infra_python_proof(
+                    transport, ssh, args.instance, args.zone, args.project, args.worktree_id,
+                    evidence, receipt['source_commit'], infra_manifest,
+                    receipt['infra_python_manifest_sha256'])
+                after_head=_git_check_output(
+                    ['git','-C',str(source),'rev-parse','HEAD'],
+                    text=True,env=source_git_env()).strip()
+                if (after_head != receipt['source_commit']
+                        or source_clean_status(source, receipt['source_commit'])
+                        or eligible_snapshot_paths(source) != receipt['snapshot']['eligible_paths']):
+                    raise RuntimeError('Infrastructure source changed during remote measurement')
+                receipt['infra_python_test_proof']=summary
+                infra_repository_binding.verify_packet(receipt['infra_repository_binding'],
+                    receipt['source_commit'], receipt['source_tree'], args.worktree_id,
+                    receipt['fleet_source_bundle_sha256'], receipt['infra_python_manifest_sha256'])
+                receipt['infra_python_test_artifacts']=artifacts
+                receipt['infra_python_proof_state']='VALIDATED'
+                receipt['validation_scope']='infra_python_unittest_only'
+                save()
             binary_kind={'build':'debug','build-bin':'debug',
                          'build-release-local':'release','build-bin-release':'release'}.get(args.just_recipe)
             if binary_kind:
@@ -790,8 +1872,9 @@ def main(argv=None):
                 expected={'schema':1,'kind':'linux_perl_component_proof',
                           'status':'COMPONENT_ONLY_PASS','run_id':args.worktree_id,
                           'source_head':receipt['source_commit'],
-                          'source_tree':subprocess.check_output(
-                              ['git','-C',str(source),'rev-parse','HEAD^{tree}'],text=True).strip(),
+                          'source_tree':_git_check_output(
+                              ['git','-C',str(source),'rev-parse','HEAD^{tree}'],
+                              text=True,env=source_git_env()).strip(),
                           'bundle_sha256':receipt['fleet_source_bundle_sha256'],
                           'descriptor_sha256':_sha256_file(descriptor_path),
                           'lock_sha256':_sha256_file(source/'tools/release/oracle-lock.json'),
@@ -872,7 +1955,9 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain','cleanup') and not receipt.get('remote_retained'):
+        if receipt.get('stage') not in ('local_toolchain', 'source_bundle',
+                                       'infra_python_manifest', 'source_snapshot',
+                                       'cleanup') and not receipt.get('remote_retained'):
             cleanup()
         raise
     finally:
