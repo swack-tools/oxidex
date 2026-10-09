@@ -731,6 +731,10 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
             'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
 
 
+class _TrackedModeMismatch(RuntimeError):
+    """A stable tracked file has a different executable mode."""
+
+
 def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None):
     """Hash a stable nofollow regular file, never reading past its declared size."""
     before = path.lstat()
@@ -748,7 +752,7 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
                 or identity(before) != identity(opened)):
             raise RuntimeError('Tracked source changed before bounded blob read')
         if expected_mode is not None and (0o755 if opened.st_mode & 0o111 else 0o644) != expected_mode:
-            raise RuntimeError('Tracked source mode differs from signed or archived blob')
+            raise _TrackedModeMismatch('Tracked source mode differs from signed or archived blob')
         git_digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
         sha_digest = hashlib.sha256()
         remaining = opened.st_size
@@ -1111,6 +1115,8 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
                 try:
                     actual_oid,actual_sha256=_stream_worktree_hashes(
                         path,expected_size=size,expected_mode=mode)
+                except _TrackedModeMismatch as error:
+                    raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}') from error
                 except (OSError,RuntimeError) as error:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}') from error
                 if actual_oid!=object_id or actual_sha256!=data_sha256:
