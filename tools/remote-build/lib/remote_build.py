@@ -93,6 +93,9 @@ MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
 # The signed source includes catalog-corpus-observed-13.59.json (84,184,700
 # bytes at d02ffe45); keep a finite cap above that legitimate source maximum.
 MAX_SIGNED_BLOB_BYTES = 128 * 1024 * 1024
+# Unittest modules have a separate admission bound; the catalog allowance above
+# must not permit a forged module object to materialize a catalog-sized body.
+MAX_INFRA_PYTHON_MODULE_BYTES = 8 * 1024 * 1024
 MAX_SNAPSHOT_EXTRA_BYTES = 256 * 1024 * 1024
 
 
@@ -1026,7 +1029,7 @@ def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
     for name, (object_id, _) in sorted(signed.items()):
         if not re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name):
             continue
-        data = _authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES)
+        data = _authenticated_source_blob(source, object_id, MAX_INFRA_PYTHON_MODULE_BYTES)
         modules.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
                         'module': Path(name).stem})
     if len(modules) < INFRA_PYTHON_MIN_MODULES:

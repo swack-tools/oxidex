@@ -76,6 +76,36 @@ class SourceIOBoundaryTests(unittest.TestCase):
                     source_profile=remote_build.INFRA_PYTHON_PROFILE)
 
 
+    def test_manifest_module_size_bound_precedes_body(self):
+        with tempfile.TemporaryDirectory() as folder:
+            members = {name: b'signed' for name in remote_build.INFRA_PYTHON_REQUIRED}
+            members['tests/test_fixture.py'] = b'original fixture\n'
+            source, git, head = self.fixture(Path(folder), members)
+            oid = git('rev-parse', 'HEAD:tests/test_fixture.py')
+            real_command = remote_build.infra_repository_binding._bounded_command
+            body_limits = []
+            declared_size = 0
+            def declared_object(command, environment, limit, seconds, **kwargs):
+                if command[-2:] == ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'] \
+                        and kwargs.get('data') == (oid + '\n').encode():
+                    return f'{oid} blob {declared_size}\n'.encode()
+                if command[-3:] == ['cat-file', 'blob', oid]:
+                    body_limits.append(limit)
+                    raise AssertionError('module body requested')
+                return real_command(command, environment, limit, seconds, **kwargs)
+            with patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1), \
+                 patch.object(remote_build.infra_repository_binding, '_bounded_command',
+                              side_effect=declared_object):
+                for declared_size in (remote_build.MAX_INFRA_PYTHON_MODULE_BYTES + 1,
+                                      remote_build.MAX_SIGNED_BLOB_BYTES):
+                    with self.assertRaisesRegex(RuntimeError, 'fixed bound'):
+                        remote_build.infra_python_manifest(source, head)
+                    self.assertEqual(body_limits, [], 'oversized module body was requested')
+                declared_size = remote_build.MAX_INFRA_PYTHON_MODULE_BYTES
+                with self.assertRaisesRegex(AssertionError, 'module body requested'):
+                    remote_build.infra_python_manifest(source, head)
+                self.assertEqual(body_limits, [remote_build.MAX_INFRA_PYTHON_MODULE_BYTES])
+
     def test_signed_blob_truncated_output_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             source, git, _ = self.fixture(Path(folder), {'tracked': b'hello'})
