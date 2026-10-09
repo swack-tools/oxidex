@@ -1198,21 +1198,23 @@ class BoundedSnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source,head=self._repo(root,signed=True)
             oid=remote_build.signed_snapshot_files(source,head)['tracked'][0]
-            real_git=remote_build._bounded_source_git
+            real_command=remote_build.infra_repository_binding._bounded_command
             declared_size=[84184700]
             class BodyRequested(RuntimeError):
                 pass
-            def metadata_only(selected,arguments,limit,**kwargs):
-                if arguments[:2]==['cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)']:
+            def metadata_only(command,environment,limit,seconds,**kwargs):
+                if command[-2:]==['cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)'] \
+                        and kwargs.get('data')==(oid+'\n').encode():
                     return f'{oid} blob {declared_size[0]}\n'.encode()
-                if arguments[:2]==['cat-file','blob'] and arguments[2]==oid:
+                if command[-3:]==['cat-file','blob',oid]:
                     raise BodyRequested('synthetic blob body requested')
-                return real_git(selected,arguments,limit,**kwargs)
-            with patch.object(remote_build,'_bounded_source_git',side_effect=metadata_only):
+                return real_command(command,environment,limit,seconds,**kwargs)
+            with patch.object(remote_build.infra_repository_binding,'_bounded_command',
+                              side_effect=metadata_only):
                 with self.assertRaisesRegex(BodyRequested,'synthetic blob body requested'):
                     remote_build.make_snapshot(source,root/'catalog.tar.gz',signed_head=head)
                 declared_size[0]=remote_build.MAX_SIGNED_BLOB_BYTES+1
-                with self.assertRaisesRegex(RuntimeError,'exceeds declared bound'):
+                with self.assertRaisesRegex(RuntimeError,'exceeds fixed bound'):
                     remote_build.make_snapshot(source,root/'over-cap.tar.gz',signed_head=head)
 
     def test_signed_snapshot_checks_worktree_sha256_after_oid(self):

@@ -87,11 +87,13 @@ def source_git_env():
 
 MAX_LOCAL_CONFIG_BYTES = 256 * 1024
 GIT_ADMISSION_TIMEOUT = 5
+SOURCE_TREE_TIMEOUT = 30
 # Git index output is untrusted even when HEAD was independently authenticated.
 MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
 # The signed source includes catalog-corpus-observed-13.59.json (84,184,700
 # bytes at d02ffe45); keep a finite cap above that legitimate source maximum.
 MAX_SIGNED_BLOB_BYTES = 128 * 1024 * 1024
+MAX_SNAPSHOT_EXTRA_BYTES = 256 * 1024 * 1024
 
 
 def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
@@ -188,6 +190,86 @@ def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data
         pass_fds=pass_fds, data=data)
     _local_config_preflight(source)
     return raw
+
+
+def _authenticated_source_object(source: Path, object_id: str, kind: str,
+                                 maximum: int, deadline: float) -> bytes:
+    """Read an exact Git object under one output/deadline/hash contract."""
+    if not re.fullmatch(r'[0-9a-f]{40}', object_id) or kind not in {'blob', 'tree'}:
+        raise RuntimeError('Signed source object identity refused')
+    def git(arguments, limit, data=None):
+        _local_config_preflight(source)
+        raw = infra_repository_binding._bounded_command(
+            ['/usr/bin/git', '-C', str(source), *arguments], source_git_env(),
+            limit, deadline - time.monotonic(), data=data)
+        _local_config_preflight(source)
+        return raw
+    info = git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+               128, (object_id + '\n').encode())
+    match = re.fullmatch(rb'([0-9a-f]{40}) (blob|tree) ([0-9]{1,12})\n', info)
+    if info == (object_id + ' missing\n').encode():
+        raise RuntimeError('Repository authority tool refused')
+    if not match or match[1].decode('ascii') != object_id or match[2].decode('ascii') != kind:
+        raise RuntimeError('Signed source object identity refused')
+    size = int(match[3])
+    if size > maximum:
+        raise RuntimeError('Signed source object exceeds fixed bound')
+    raw = git(['cat-file', kind, object_id], size)
+    if (len(raw) != size or
+            hashlib.sha1(kind.encode() + b' ' + str(size).encode() + b'\0' + raw).hexdigest() != object_id):
+        raise RuntimeError('Signed source object hash or size differs')
+    return raw
+
+
+def _authenticated_source_blob(source: Path, object_id: str, maximum: int) -> bytes:
+    return _authenticated_source_object(source, object_id, 'blob', maximum,
+                                        time.monotonic() + GIT_ADMISSION_TIMEOUT)
+
+
+def _authenticated_tree_listing(source: Path, head: str) -> bytes:
+    """Flatten hash-verified HEAD trees without trusting Git's ls-tree rendering."""
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
+    _local_config_preflight(source)
+    deadline = time.monotonic() + SOURCE_TREE_TIMEOUT
+    commit = infra_repository_binding._raw_commit(source, head, source_git_env(), deadline)
+    _local_config_preflight(source)
+    records = bytearray()
+    consumed = 0
+    def visit(tree_id, prefix):
+        nonlocal consumed
+        raw = _authenticated_source_object(source, tree_id, 'tree',
+                 MAX_SOURCE_FILE_LIST_BYTES - consumed, deadline)
+        consumed += len(raw)
+        offset = 0
+        names = set()
+        while offset < len(raw):
+            separator = raw.find(b' ', offset)
+            ending = raw.find(b'\0', separator + 1)
+            if separator < 0 or ending < 0 or ending + 21 > len(raw):
+                raise RuntimeError('Signed source tree entry malformed')
+            mode, name = raw[offset:separator], raw[separator + 1:ending]
+            object_id = raw[ending + 1:ending + 21].hex()
+            offset = ending + 21
+            if (not name or name in names or name in (b'.', b'..')
+                    or b'/' in name):
+                raise RuntimeError('Signed source tree name refused')
+            names.add(name)
+            path = prefix + name
+            if mode == b'40000':
+                if len(path) > MAX_SOURCE_FILE_LIST_BYTES:
+                    raise RuntimeError('Signed source tree path exceeds bound')
+                visit(object_id, path + b'/')
+                continue
+            if mode not in (b'100644', b'100755', b'120000', b'160000'):
+                raise RuntimeError('Signed source tree mode refused')
+            kind = b'commit' if mode == b'160000' else b'blob'
+            record = mode + b' ' + kind + b' ' + object_id.encode() + b'\t' + path + b'\0'
+            if len(records) + len(record) > MAX_SOURCE_FILE_LIST_BYTES:
+                raise RuntimeError('Signed source tree listing exceeds bound')
+            records.extend(record)
+    visit(commit['tree'], b'')
+    return bytes(records)
 
 
 MAX_CALLER_EXCLUDES_BYTES = 1024 * 1024
@@ -295,34 +377,21 @@ def _signed_toolchain_text(source, head):
     _local_config_preflight(source)
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Toolchain pin HEAD identity refused')
-    env = source_git_env()
-    deadline = time.monotonic() + 5
-    def git(arguments, limit, data=None):
-        return infra_repository_binding._bounded_command(
-            ['/usr/bin/git', '-C', str(source), *arguments], env, limit,
-            deadline-time.monotonic(), data=data)
-    entry = git(['ls-tree', '-z', head, '--', 'rust-toolchain.toml'], 256)
-    match = re.fullmatch(rb'(?:100644|100755) blob ([0-9a-f]{40})\trust-toolchain.toml\0', entry)
+    listing = _authenticated_tree_listing(source, head)
+    entries = [entry for entry in listing.split(b'\0') if entry.endswith(b'\trust-toolchain.toml')]
+    if len(entries) != 1:
+        raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
+    match = re.fullmatch(rb'(?:100644|100755) blob ([0-9a-f]{40})\trust-toolchain.toml', entries[0])
     if not match:
         raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
     oid = match[1].decode('ascii')
-    info = git(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
-               128, (oid+'\n').encode())
-    match = re.fullmatch(rb'([0-9a-f]{40}) blob ([0-9]{1,12})\n', info)
-    if not match or match[1].decode() != oid:
-        raise RuntimeError('Toolchain pin blob identity refused')
-    size = int(match[2])
-    if not 0 < size <= MAX_TOOLCHAIN_PIN_BYTES:
+    raw = _authenticated_source_blob(source, oid, MAX_TOOLCHAIN_PIN_BYTES)
+    if not raw:
         raise RuntimeError('Toolchain pin blob exceeds fixed bound')
-    # Do not let the subsequent general status scan stream a huge substituted
-    # pin, or parse a FIFO/symlink. No working-tree pin bytes are opened here.
+    # Do not let the subsequent status scan stream a huge substituted pin.
     info = (source/'rust-toolchain.toml').lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+    if not stat.S_ISREG(info.st_mode) or info.st_size != len(raw):
         raise RuntimeError('Toolchain pin worktree type or size differs from signed blob')
-    raw = git(['cat-file', 'blob', oid], size)
-    if (len(raw) != size or
-            hashlib.sha1(b'blob '+str(size).encode()+b'\0'+raw).hexdigest() != oid):
-        raise RuntimeError('Toolchain pin blob hash or size differs')
     try:
         return raw.decode('utf-8')
     except UnicodeError:
@@ -735,9 +804,18 @@ class _TrackedModeMismatch(RuntimeError):
     """A stable tracked file has a different executable mode."""
 
 
-def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None):
-    """Hash a stable nofollow regular file, never reading past its declared size."""
+def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None,
+                            deadline=None, maximum=None, collect=False):
+    """Hash a stable nofollow regular file with fixed size and time bounds."""
+    if deadline is None:
+        deadline = time.monotonic() + GIT_ADMISSION_TIMEOUT
+    if maximum is None:
+        maximum = MAX_SIGNED_BLOB_BYTES
+    if time.monotonic() >= deadline:
+        raise RuntimeError('Tracked source blob deadline exceeded')
     before = path.lstat()
+    if before.st_size > maximum:
+        raise RuntimeError('Tracked source blob exceeds fixed bound')
     if (expected_size is not None and
             (type(expected_size) is not int or expected_size < 0 or before.st_size != expected_size)):
         raise RuntimeError('Tracked source size differs from signed or archived blob')
@@ -749,6 +827,7 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
         identity = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_size,
                                  info.st_mtime_ns, info.st_ctime_ns)
         if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink < 1
+                or opened.st_size > maximum
                 or identity(before) != identity(opened)):
             raise RuntimeError('Tracked source changed before bounded blob read')
         if expected_mode is not None and (0o755 if opened.st_mode & 0o111 else 0o644) != expected_mode:
@@ -756,23 +835,31 @@ def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=Non
         git_digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
         sha_digest = hashlib.sha256()
         remaining = opened.st_size
+        chunks = [] if collect else None
         while remaining:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Tracked source blob deadline exceeded')
             block = os.read(fd, min(1024 * 1024, remaining))
             if not block:
                 raise RuntimeError('Tracked source short-read during bounded blob read')
             git_digest.update(block)
             sha_digest.update(block)
+            if collect:
+                chunks.append(block)
             remaining -= len(block)
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Tracked source blob deadline exceeded')
         if (identity(opened) != identity(os.fstat(fd))
                 or identity(opened) != identity(path.lstat())):
             raise RuntimeError('Tracked source changed during bounded blob read')
-        return git_digest.hexdigest(), sha_digest.hexdigest()
+        result = (git_digest.hexdigest(), sha_digest.hexdigest())
+        return (*result, b''.join(chunks)) if collect else result
     finally:
         os.close(fd)
 
 
-def _stream_worktree_blob(path: Path) -> str:
-    return _stream_worktree_hashes(path)[0]
+def _bounded_worktree_bytes(path: Path, maximum=MAX_SIGNED_BLOB_BYTES) -> bytes:
+    return _stream_worktree_hashes(path, maximum=maximum, collect=True)[2]
 
 
 def launcher_source_root() -> Path:
@@ -804,8 +891,7 @@ def source_clean_status(source: Path, head: str) -> str:
     if _git_check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
                                env=env).strip() != b'sha1':
         raise RuntimeError('Source Git object format is unsupported')
-    tree = _bounded_source_git(source, ['ls-tree', '-r', '-z', head],
-                               MAX_SOURCE_FILE_LIST_BYTES, env=env)
+    tree = _authenticated_tree_listing(source, head)
     index = _bounded_source_git(source, ['ls-files', '--stage', '-z'],
                                 MAX_SOURCE_FILE_LIST_BYTES, env=env)
     expected = {}
@@ -833,7 +919,7 @@ def source_clean_status(source: Path, head: str) -> str:
         try:
             info = path.lstat()
             if mode in {'100644', '100755'} and stat.S_ISREG(info.st_mode):
-                digest = _stream_worktree_blob(path)
+                digest = _stream_worktree_hashes(path)[0]
                 if bool(info.st_mode & 0o111) != (mode == '100755'):
                     changed.append(' M ' + name)
                     continue
@@ -901,8 +987,7 @@ def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> di
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
     env=source_git_env()
-    tree=_bounded_source_git(source, ['ls-tree','-r','-z',head],
-                             MAX_SOURCE_FILE_LIST_BYTES, env=env)
+    tree=_authenticated_tree_listing(source, head)
     signed={}
     for entry in tree.split(b'\0'):
         if not entry:
@@ -941,8 +1026,7 @@ def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
     for name, (object_id, _) in sorted(signed.items()):
         if not re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name):
             continue
-        data = _git_check_output(['git', '-C', str(source), 'cat-file', 'blob', object_id],
-                                       env=source_git_env())
+        data = _authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES)
         modules.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
                         'module': Path(name).stem})
     if len(modules) < INFRA_PYTHON_MIN_MODULES:
@@ -1093,24 +1177,12 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if signed is None:
                 if not path.is_file() or path.is_symlink():
                     raise RuntimeError('Source file changed type during snapshot')
-                data=path.read_bytes()
+                data=_bounded_worktree_bytes(path)
                 info=tar.gettarinfo(str(path),arcname=name)
             else:
                 object_id, mode=signed[name]
-                # The signed object supplies the exact size; refuse oversized blobs
-                # before materializing bytes for the existing archive format.
-                info_raw=_bounded_source_git(source,
-                    ['cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)'],
-                    128,data=(object_id+'\n').encode())
-                match=re.fullmatch(rb'([0-9a-f]{40}) blob ([0-9]{1,12})\n',info_raw)
-                if not match or match[1].decode()!=object_id:
-                    raise RuntimeError('Signed fleet blob identity refused')
-                size=int(match[2])
-                if size>MAX_SIGNED_BLOB_BYTES:
-                    raise RuntimeError('Signed fleet blob exceeds declared bound')
-                data=_bounded_source_git(source,['cat-file','blob',object_id],size)
-                if len(data)!=size:
-                    raise RuntimeError('Signed fleet blob short-read')
+                data=_authenticated_source_blob(source, object_id, MAX_SIGNED_BLOB_BYTES)
+                size=len(data)
                 data_sha256=hashlib.sha256(data).hexdigest()
                 try:
                     actual_oid,actual_sha256=_stream_worktree_hashes(
@@ -1134,12 +1206,9 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
             if name in names or Path(name).name != name or path.is_symlink() or not path.is_file():
                 raise RuntimeError('Invalid signed fleet source member')
             if name == 'approved-linux-perl.json':
-                with path.open('rb') as stream:
-                    data=stream.read(approved_linux_perl.MAX_ENVELOPE_BYTES + 1)
-                if len(data)>approved_linux_perl.MAX_ENVELOPE_BYTES:
-                    raise RuntimeError('Component envelope exceeds approved transport bound')
+                data=_bounded_worktree_bytes(path, approved_linux_perl.MAX_ENVELOPE_BYTES)
             else:
-                data=path.read_bytes()
+                data=_bounded_worktree_bytes(path, MAX_SNAPSHOT_EXTRA_BYTES)
             info=tarfile.TarInfo(name)
             info.mode=0o644
             info.size=len(data)
@@ -1149,7 +1218,7 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
         raise RuntimeError('Eligible source file set changed during snapshot')
     return {'files':files,'eligible_paths':names,'file_count':len(files),
             'archive_bytes':archive.stat().st_size,
-            'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+            'archive_sha256':_sha256_file(archive)}
 
 
 def _snapshot_file_changed(path: Path, row: dict) -> bool:
