@@ -72,7 +72,7 @@ class ClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source=Path(directory);subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
             blob=source/'tracked';blob.write_bytes(b'actual tracked bytes\n')
-            subprocess.run(['/usr/bin/git','-C',str(source),'add','tracked'],check=True)
+            subprocess.run(['/usr/bin/git','-C',str(source),'add','.'],check=True)
             subprocess.run(['/usr/bin/git','-C',str(source),'-c','user.name=fixture',
                             '-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false',
                             'commit','-qm','fixture'],check=True)
@@ -1121,3 +1121,92 @@ class RemoteTestProfileTests(unittest.TestCase):
                     download_test_proof('vm','z','p','/remote',local,
                                         hashlib.sha256(json.dumps(proof).encode()).hexdigest(),
                                         'a'*40,toolchain,'13.59')
+
+class BoundedSnapshotTests(unittest.TestCase):
+    def _repo(self, root, *, signed=False):
+        source=root/'source';source.mkdir()
+        subprocess.run(['/usr/bin/git','-C',str(source),'init','-q'],check=True)
+        (source/'tracked').write_bytes(b'signed bytes\n')
+        if signed:
+            for name in ('justfile','rust-toolchain.toml','tools/remote-build/route.py',
+                         'tools/remote-build/qualification_bootstrap.py',
+                         'tools/remote-build/qualification_source.py',
+                         'tools/remote-build/test_runner.py','tools/release/bootstrap_oracle.py'):
+                item=source/name;item.parent.mkdir(parents=True,exist_ok=True)
+                item.write_bytes(b'signed bytes\n')
+        subprocess.run(['/usr/bin/git','-C',str(source),'add','.'],check=True)
+        subprocess.run(['/usr/bin/git','-C',str(source),'-c','user.name=fixture',
+                        '-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false',
+                        'commit','-qm','fixture'],check=True)
+        head=subprocess.check_output(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        return source,head
+
+    def test_tiny_index_overflow_and_normal_staged_difference(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            source,head=self._repo(Path(directory))
+            for number in range(20):
+                (source/f'a{number}').write_text('added')
+            subprocess.run(['/usr/bin/git','-C',str(source),'add','.'],check=True)
+            self.assertIn(' M index',remote_build.source_clean_status(source,head))
+            with patch.object(remote_build,'MAX_SOURCE_FILE_LIST_BYTES',64,create=True):
+                with self.assertRaisesRegex(RuntimeError,'output limit'):
+                    remote_build.source_clean_status(source,head)
+                with self.assertRaisesRegex(RuntimeError,'output limit'):
+                    remote_build.eligible_snapshot_paths(source)
+
+    def test_signed_snapshot_streams_and_rejects_sparse_replacement(self):
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source,head=self._repo(root,signed=True)
+            archive=root/'packet.tar.gz'
+            original_bytes=Path.read_bytes
+            def refuse_tracked_bytes(path):
+                if path==source/'tracked':
+                    raise AssertionError('whole-file tracked read')
+                return original_bytes(path)
+            with patch.object(Path,'read_bytes',refuse_tracked_bytes):
+                receipt=remote_build.make_snapshot(source,archive,signed_head=head)
+            with tarfile.open(archive) as stream:
+                self.assertEqual(stream.extractfile('tracked').read(),b'signed bytes\n')
+            row=next(row for row in receipt['files'] if row['path']=='tracked')
+            self.assertFalse(remote_build._snapshot_file_changed(source/'tracked',row))
+            (source/'tracked').write_bytes(b'mutated data\n')
+            self.assertTrue(remote_build._snapshot_file_changed(source/'tracked',row))
+            (source/'tracked').write_bytes(b'signed bytes\n')
+            (source/'tracked').chmod(0o755)
+            self.assertTrue(remote_build._snapshot_file_changed(source/'tracked',row))
+            (source/'tracked').chmod(0o644)
+            with (source/'tracked').open('wb') as stream:
+                stream.truncate(1024*1024)
+            import os
+            original_read=os.read
+            def reject_sparse_read(fd,count):
+                if os.fstat(fd).st_ino==(source/'tracked').stat().st_ino:
+                    raise AssertionError('sparse file read')
+                return original_read(fd,count)
+            with patch.object(remote_build.os,'read',side_effect=reject_sparse_read):
+                with self.assertRaisesRegex(RuntimeError,'Fleet source differs'):
+                    remote_build.make_snapshot(source,root/'sparse.tar.gz',signed_head=head)
+                self.assertTrue(remote_build._snapshot_file_changed(source/'tracked',row))
+
+    def test_stream_rejects_growth_after_stat(self):
+        import os
+        from unittest.mock import patch
+        from lib import remote_build
+        with tempfile.TemporaryDirectory() as directory:
+            source,head=self._repo(Path(directory))
+            path=source/'tracked'; original=os.read; changed=[False]
+            def growing(fd,count):
+                block=original(fd,count)
+                if os.fstat(fd).st_ino==path.stat().st_ino and not changed[0]:
+                    with path.open('ab') as stream:
+                        stream.write(b'growth')
+                    changed[0]=True
+                return block
+            with patch.object(remote_build.os,'read',side_effect=growing):
+                with self.assertRaisesRegex(RuntimeError,'changed during'):
+                    remote_build._stream_worktree_hashes(path,expected_size=len(b'signed bytes\n'))
+            self.assertTrue(changed[0])

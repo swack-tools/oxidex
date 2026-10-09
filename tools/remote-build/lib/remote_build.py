@@ -87,6 +87,9 @@ def source_git_env():
 
 MAX_LOCAL_CONFIG_BYTES = 256 * 1024
 GIT_ADMISSION_TIMEOUT = 5
+# Git index output is untrusted even when HEAD was independently authenticated.
+MAX_SOURCE_FILE_LIST_BYTES = 8 * 1024 * 1024
+MAX_SIGNED_BLOB_BYTES = 64 * 1024 * 1024
 
 
 def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
@@ -174,12 +177,13 @@ def _git_run(command, **kwargs):
     return result
 
 
-def _bounded_source_git(source, arguments, limit, *, env=None):
+def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data=None):
     """Read a pre-admission Git scalar with a byte and wall-clock bound."""
     _local_config_preflight(source)
     raw = infra_repository_binding._bounded_command(
         ['/usr/bin/git', '-C', str(source), *arguments],
-        source_git_env() if env is None else env, limit, GIT_ADMISSION_TIMEOUT)
+        source_git_env() if env is None else env, limit, GIT_ADMISSION_TIMEOUT,
+        pass_fds=pass_fds, data=data)
     _local_config_preflight(source)
     return raw
 
@@ -725,9 +729,14 @@ def retrieve_component_proof(transport, ssh, run_id: str, evidence: Path,
             'status':proof['status'],'cold':proof['cold'],'warm':proof['warm']}
 
 
-def _stream_worktree_blob(path: Path) -> str:
-    """Hash one stable regular worktree file as a Git blob with bounded memory."""
+def _stream_worktree_hashes(path: Path, *, expected_size=None, expected_mode=None):
+    """Hash a stable nofollow regular file, never reading past its declared size."""
     before = path.lstat()
+    if (expected_size is not None and
+            (type(expected_size) is not int or expected_size < 0 or before.st_size != expected_size)):
+        raise RuntimeError('Tracked source size differs from signed or archived blob')
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeError('Tracked source is not a regular file')
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         opened = os.fstat(fd)
@@ -736,20 +745,28 @@ def _stream_worktree_blob(path: Path) -> str:
         if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink < 1
                 or identity(before) != identity(opened)):
             raise RuntimeError('Tracked source changed before bounded blob read')
-        digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
+        if expected_mode is not None and (0o755 if opened.st_mode & 0o111 else 0o644) != expected_mode:
+            raise RuntimeError('Tracked source mode differs from signed or archived blob')
+        git_digest = hashlib.sha1(b'blob ' + str(opened.st_size).encode() + b'\0')
+        sha_digest = hashlib.sha256()
         remaining = opened.st_size
         while remaining:
             block = os.read(fd, min(1024 * 1024, remaining))
             if not block:
                 raise RuntimeError('Tracked source short-read during bounded blob read')
-            digest.update(block)
+            git_digest.update(block)
+            sha_digest.update(block)
             remaining -= len(block)
         if (identity(opened) != identity(os.fstat(fd))
                 or identity(opened) != identity(path.lstat())):
             raise RuntimeError('Tracked source changed during bounded blob read')
-        return digest.hexdigest()
+        return git_digest.hexdigest(), sha_digest.hexdigest()
     finally:
         os.close(fd)
+
+
+def _stream_worktree_blob(path: Path) -> str:
+    return _stream_worktree_hashes(path)[0]
 
 
 def launcher_source_root() -> Path:
@@ -781,8 +798,10 @@ def source_clean_status(source: Path, head: str) -> str:
     if _git_check_output(['git', '-C', str(source), 'rev-parse', '--show-object-format'],
                                env=env).strip() != b'sha1':
         raise RuntimeError('Source Git object format is unsupported')
-    tree = _git_check_output(['git', '-C', str(source), 'ls-tree', '-r', '-z', head], env=env)
-    index = _git_check_output(['git', '-C', str(source), 'ls-files', '--stage', '-z'], env=env)
+    tree = _bounded_source_git(source, ['ls-tree', '-r', '-z', head],
+                               MAX_SOURCE_FILE_LIST_BYTES, env=env)
+    index = _bounded_source_git(source, ['ls-files', '--stage', '-z'],
+                                MAX_SOURCE_FILE_LIST_BYTES, env=env)
     expected = {}
     for record in filter(None, tree.split(b'\0')):
         metadata, raw_name = record.split(b'\t', 1)
@@ -845,7 +864,8 @@ def _list_files_with_caller_ignore(source: Path, *, include_cached: bool) -> byt
         if include_cached:
             command.append('--cached')
         command.extend(('--others', '--exclude-standard'))
-        return _git_check_output(command, env=env, pass_fds=(fd,))
+        return _bounded_source_git(source, command[3:], MAX_SOURCE_FILE_LIST_BYTES,
+                                   env=env, pass_fds=(fd,))
 
 
 def eligible_snapshot_paths(source: Path) -> list[str]:
@@ -875,7 +895,8 @@ def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> di
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
     env=source_git_env()
-    tree=_git_check_output(['git','-C',str(source),'ls-tree','-r','-z',head],env=env)
+    tree=_bounded_source_git(source, ['ls-tree','-r','-z',head],
+                             MAX_SOURCE_FILE_LIST_BYTES, env=env)
     signed={}
     for entry in tree.split(b'\0'):
         if not entry:
@@ -1070,13 +1091,26 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
                 info=tar.gettarinfo(str(path),arcname=name)
             else:
                 object_id, mode=signed[name]
-                data=_git_check_output(
-                    ['git','-C',str(source),'cat-file','blob',object_id],
-                    env=source_git_env())
-                if path.is_symlink() or not path.is_file() or path.read_bytes()!=data:
+                # The signed object supplies the exact size; refuse oversized blobs
+                # before materializing bytes for the existing archive format.
+                info_raw=_bounded_source_git(source,
+                    ['cat-file','--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+                    128,data=(object_id+'\n').encode())
+                match=re.fullmatch(rb'([0-9a-f]{40}) blob ([0-9]{1,12})\n',info_raw)
+                if not match or match[1].decode()!=object_id:
+                    raise RuntimeError('Signed fleet blob identity refused')
+                size=int(match[2])
+                if size>MAX_SIGNED_BLOB_BYTES:
+                    raise RuntimeError('Signed fleet blob exceeds declared bound')
+                data=_bounded_source_git(source,['cat-file','blob',object_id],size)
+                if len(data)!=size:
+                    raise RuntimeError('Signed fleet blob short-read')
+                try:
+                    actual_oid,_=_stream_worktree_hashes(path,expected_size=size,expected_mode=mode)
+                except (OSError,RuntimeError) as error:
+                    raise RuntimeError(f'Fleet source differs from signed HEAD: {name}') from error
+                if actual_oid!=object_id:
                     raise RuntimeError(f'Fleet source differs from signed HEAD: {name}')
-                if bool(path.stat().st_mode & 0o111) != (mode==0o755):
-                    raise RuntimeError(f'Fleet source mode differs from signed HEAD: {name}')
                 info=tarfile.TarInfo(name)
                 info.mode=mode
             info.size=len(data)
@@ -1105,6 +1139,15 @@ def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=
     return {'files':files,'eligible_paths':names,'file_count':len(files),
             'archive_bytes':archive.stat().st_size,
             'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+
+
+def _snapshot_file_changed(path: Path, row: dict) -> bool:
+    try:
+        _, actual = _stream_worktree_hashes(path, expected_size=row['bytes'],
+                                           expected_mode=row.get('mode'))
+        return actual != row['sha256']
+    except (OSError, RuntimeError):
+        return True
 
 
 class BuilderBusy(RuntimeError):
@@ -1413,11 +1456,7 @@ def main(argv=None):
         if (after_commit!=receipt['source_commit'] or after_status!=receipt['source_status']
                 or (receipt['snapshot'].get('eligible_paths') is not None
                     and eligible_snapshot_paths(source)!=receipt['snapshot']['eligible_paths'])
-                or any(not (source/row['path']).is_file() or (source/row['path']).is_symlink()
-                       or hashlib.sha256((source/row['path']).read_bytes()).hexdigest()!=row['sha256']
-                       or (row.get('mode') is not None and
-                           (0o755 if (source/row['path']).stat().st_mode & 0o111 else 0o644)
-                           != row['mode'])
+                or any(_snapshot_file_changed(source/row['path'], row)
                        for row in receipt['snapshot'].get('files',[])
                        if row['path'] in receipt['snapshot'].get('eligible_paths', []))):
             raise RuntimeError('Checkout bytes changed during snapshot; retry with a stable checkout')

@@ -31,13 +31,14 @@ MAX_GRAPH_SECONDS = 30
 HEX = re.compile(r'[0-9a-f]{40}\Z')
 
 
-def _bounded_command(command, env, limit, seconds, *, data=None):
+def _bounded_command(command, env, limit, seconds, *, data=None, pass_fds=()):
     """Cap bytes during receipt, kill/reap on error, never expose tool stderr."""
     if seconds <= 0:
         raise RuntimeError('Repository authority deadline exceeded')
     deadline = time.monotonic() + seconds
     process = subprocess.Popen(command, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd='/')
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd='/',
+                               pass_fds=pass_fds)
     try:
         if data is not None:
             # Only a short object ID or one bounded token header; never file input.
