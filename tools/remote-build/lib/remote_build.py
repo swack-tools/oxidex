@@ -195,6 +195,10 @@ def _bounded_source_git(source, arguments, limit, *, env=None, pass_fds=(), data
     return raw
 
 
+class _SourceObjectSizeBoundExceeded(RuntimeError):
+    """A declared Git object size exceeds its selected source allowance."""
+
+
 def _authenticated_source_object(source: Path, object_id: str, kind: str,
                                  maximum: int, deadline: float) -> bytes:
     """Read an exact Git object under one output/deadline/hash contract."""
@@ -216,7 +220,7 @@ def _authenticated_source_object(source: Path, object_id: str, kind: str,
         raise RuntimeError('Signed source object identity refused')
     size = int(match[3])
     if size > maximum:
-        raise RuntimeError('Signed source object exceeds fixed bound')
+        raise _SourceObjectSizeBoundExceeded('Signed source object exceeds fixed bound')
     raw = git(['cat-file', kind, object_id], size)
     if (len(raw) != size or
             hashlib.sha1(kind.encode() + b' ' + str(size).encode() + b'\0' + raw).hexdigest() != object_id):
@@ -388,7 +392,10 @@ def _signed_toolchain_text(source, head):
     if not match:
         raise RuntimeError('Toolchain pin is not a regular signed HEAD blob')
     oid = match[1].decode('ascii')
-    raw = _authenticated_source_blob(source, oid, MAX_TOOLCHAIN_PIN_BYTES)
+    try:
+        raw = _authenticated_source_blob(source, oid, MAX_TOOLCHAIN_PIN_BYTES)
+    except _SourceObjectSizeBoundExceeded as error:
+        raise RuntimeError('Toolchain pin blob exceeds fixed bound') from error
     if not raw:
         raise RuntimeError('Toolchain pin blob exceeds fixed bound')
     # Do not let the subsequent status scan stream a huge substituted pin.
