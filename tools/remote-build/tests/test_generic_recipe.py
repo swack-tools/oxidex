@@ -230,6 +230,9 @@ class GenericRecipeTests(unittest.TestCase):
                                   'sha256':remote_build.hashlib.sha256(path.read_bytes()).hexdigest(),
                                   'bytes':path.stat().st_size}
                                  for name,path in (extra_files or {}).items()]}
+            def bundle(source, path):
+                commands.append(['git', '-C', str(source), 'bundle', 'create', str(path), 'HEAD'])
+                path.write_bytes(b'synthetic signed bundle')
             def run(command, **kwargs):
                 commands.append(command)
                 if ' cleanup' in ' '.join(command):
@@ -273,6 +276,7 @@ class GenericRecipeTests(unittest.TestCase):
                  patch.object(remote_build,'_verify_signed_source_with_frozen_signer'), \
                  patch('qualification_source.verify_source'), \
                  patch.object(remote_build,'make_snapshot',side_effect=snapshot), \
+                 patch.object(remote_build,'_create_bounded_source_bundle',side_effect=bundle), \
                  patch.object(remote_build,'retrieve_perl_candidate',
                               side_effect=RuntimeError('synthetic transfer loss') if retrieval_fail else None,
                               return_value={'status':'unapproved_candidate_retrieved'}) as retrieve, \

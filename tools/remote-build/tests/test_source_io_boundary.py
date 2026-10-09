@@ -29,6 +29,97 @@ class SourceIOBoundaryTests(unittest.TestCase):
             '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture')
         return source, git, git('rev-parse', 'HEAD')
 
+    def test_manifest_aggregate_refuses_later_module_before_body(self):
+        with tempfile.TemporaryDirectory() as folder:
+            members = {name: b'signed' for name in remote_build.INFRA_PYTHON_REQUIRED}
+            members.update({f'tests/test_module_{index:03d}.py': bytes([index]) * 20
+                            for index in range(4)})
+            source, git, head = self.fixture(Path(folder), members)
+            fourth = git('rev-parse', 'HEAD:tests/test_module_003.py')
+            original = remote_build.infra_repository_binding._bounded_command
+            bodies = []
+            def bounded(command, environment, limit, seconds, **kwargs):
+                if command[-3:-1] == ['cat-file', 'blob']:
+                    bodies.append(command[-1])
+                    if command[-1] == fourth:
+                        raise AssertionError('fourth module body requested')
+                return original(command, environment, limit, seconds, **kwargs)
+            with patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1), \
+                 patch.object(remote_build, 'MAX_INFRA_PYTHON_MANIFEST_READ_BYTES', 710), \
+                 patch.object(remote_build.infra_repository_binding, '_bounded_command',
+                              side_effect=bounded):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate byte bound'):
+                    remote_build.infra_python_manifest(source, head)
+            self.assertNotIn(fourth, bodies)
+
+    def test_manifest_serialized_limit_refuses_before_any_module_body(self):
+        with tempfile.TemporaryDirectory() as folder:
+            members = {name: b'signed' for name in remote_build.INFRA_PYTHON_REQUIRED}
+            members.update({f'tests/test_module_{index:03d}.py': b'x'
+                            for index in range(700)})
+            source, _, head = self.fixture(Path(folder), members)
+            with patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1), \
+                 patch.object(remote_build, '_authenticated_source_blob',
+                              side_effect=AssertionError('module body requested')):
+                with self.assertRaisesRegex(RuntimeError, 'manifest exceeds fixed bound'):
+                    remote_build.infra_python_manifest(source, head)
+
+    def test_manifest_deadline_shared_through_module_loop(self):
+        with tempfile.TemporaryDirectory() as folder:
+            members = {name: b'signed' for name in remote_build.INFRA_PYTHON_REQUIRED}
+            members.update({'tests/test_first.py': b'first', 'tests/test_second.py': b'second'})
+            source, _, head = self.fixture(Path(folder), members)
+            original = remote_build._authenticated_source_blob
+            seen = []
+            def expire(source, oid, maximum, budget=None):
+                seen.append(oid)
+                result = original(source, oid, maximum, budget)
+                if len(seen) == 1:
+                    budget.deadline = time.monotonic() - 1
+                return result
+            with patch.object(remote_build, 'INFRA_PYTHON_MIN_MODULES', 1), \
+                 patch.object(remote_build, '_authenticated_source_blob', side_effect=expire):
+                with self.assertRaisesRegex(RuntimeError, 'aggregate deadline'):
+                    remote_build.infra_python_manifest(source, head)
+            self.assertEqual(len(seen), 1)
+
+    def test_bundle_enforces_kernel_byte_limit_and_preserves_existing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, git, _ = self.fixture(root, {'tracked': os.urandom(64 * 1024)})
+            bundle = root / 'repository.bundle'
+            with self.assertRaisesRegex(RuntimeError, 'byte bound'):
+                remote_build._create_bounded_source_bundle(source, bundle, maximum=4096)
+            self.assertFalse(bundle.exists())
+            self.assertEqual(list(root.glob('.source-bundle-*')), [])
+            bundle.write_bytes(b'pre-existing evidence')
+            with self.assertRaisesRegex(RuntimeError, 'destination or bound'):
+                remote_build._create_bounded_source_bundle(source, bundle, maximum=4096)
+            self.assertEqual(bundle.read_bytes(), b'pre-existing evidence')
+            bundle.unlink()
+            remote_build._create_bounded_source_bundle(source, bundle, maximum=1024 * 1024)
+            self.assertLess(bundle.stat().st_size, 1024 * 1024)
+            git('bundle', 'verify', str(bundle))
+
+    def test_bundle_deadline_kills_owned_child_and_partial(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, _, _ = self.fixture(root, {'tracked': b'small'})
+            bundle = root / 'repository.bundle'
+            actual_popen = subprocess.Popen
+            child = []
+            def slow_child(command, **kwargs):
+                process = actual_popen(['/bin/sleep', '2'], **kwargs)
+                child.append(process)
+                return process
+            with patch.object(remote_build, 'SOURCE_BUNDLE_TIMEOUT', 0.01), \
+                 patch.object(remote_build.subprocess, 'Popen', side_effect=slow_child):
+                with self.assertRaisesRegex(RuntimeError, 'deadline'):
+                    remote_build._create_bounded_source_bundle(source, bundle, maximum=4096)
+            self.assertIsNotNone(child[0].poll(), 'bundle child was not reaped')
+            self.assertFalse(bundle.exists())
+            self.assertEqual(list(root.glob('.source-bundle-*')), [])
+
     def test_status_refuses_oversized_replacement_before_read(self):
         with tempfile.TemporaryDirectory() as folder:
             source, _, head = self.fixture(Path(folder), {'tracked': b'hello'})

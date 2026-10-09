@@ -6,6 +6,7 @@ import os
 import shlex
 import re
 import resource
+import signal
 import secrets
 import stat
 import subprocess
@@ -103,7 +104,10 @@ SOURCE_SNAPSHOT_TIMEOUT = 600
 # Unittest modules have a separate admission bound; the catalog allowance above
 # must not permit a forged module object to materialize a catalog-sized body.
 MAX_INFRA_PYTHON_MODULE_BYTES = 8 * 1024 * 1024
+MAX_INFRA_PYTHON_MANIFEST_READ_BYTES = 128 * 1024 * 1024
+INFRA_PYTHON_MANIFEST_TIMEOUT = 60
 MAX_SNAPSHOT_EXTRA_BYTES = 256 * 1024 * 1024
+SOURCE_BUNDLE_TIMEOUT = 60
 
 
 def _local_config_bytes(path: Path, *, required: bool = True) -> bytes | None:
@@ -276,11 +280,15 @@ def _authenticated_source_blob(source: Path, object_id: str, maximum: int,
                                         deadline, budget)
 
 
-def _authenticated_tree_listing(source: Path, head: str, *, deadline=None) -> bytes:
+def _authenticated_tree_listing(source: Path, head: str, *, deadline=None,
+                                budget: _SourceReadBudget | None = None) -> bytes:
     """Flatten hash-verified HEAD trees without trusting Git's ls-tree rendering."""
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Source HEAD must be a full SHA-1 commit ID')
     _local_config_preflight(source)
+    if budget is not None:
+        budget.check()
+        deadline = min(deadline, budget.deadline) if deadline is not None else budget.deadline
     deadline = min(time.monotonic() + SOURCE_TREE_TIMEOUT, deadline) \
         if deadline is not None else time.monotonic() + SOURCE_TREE_TIMEOUT
     commit = infra_repository_binding._raw_commit(source, head, source_git_env(), deadline)
@@ -290,7 +298,7 @@ def _authenticated_tree_listing(source: Path, head: str, *, deadline=None) -> by
     def visit(tree_id, prefix):
         nonlocal consumed
         raw = _authenticated_source_object(source, tree_id, 'tree',
-                 MAX_SOURCE_FILE_LIST_BYTES - consumed, deadline)
+                 MAX_SOURCE_FILE_LIST_BYTES - consumed, deadline, budget)
         consumed += len(raw)
         offset = 0
         names = set()
@@ -1071,13 +1079,14 @@ def eligible_snapshot_paths(source: Path) -> list[str]:
     return sorted(eligible)
 
 
-def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> dict[str, tuple[str, int]]:
+def signed_snapshot_files(source: Path, head: str, *, source_profile=None,
+                          budget: _SourceReadBudget | None = None) -> dict[str, tuple[str, int]]:
     """Enumerate fleet packet blobs and modes from the authenticated commit."""
     _local_config_preflight(source)
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('Fleet source HEAD must be a full commit ID')
     env=source_git_env()
-    tree=_authenticated_tree_listing(source, head)
+    tree=_authenticated_tree_listing(source, head, budget=budget)
     signed={}
     for entry in tree.split(b'\0'):
         if not entry:
@@ -1111,22 +1120,33 @@ def signed_snapshot_files(source: Path, head: str, *, source_profile=None) -> di
 
 def infra_python_manifest(source: Path, head: str) -> tuple[dict, bytes]:
     """Bind the complete top-level unittest discovery set to signed blob bytes."""
-    signed = signed_snapshot_files(source, head, source_profile=INFRA_PYTHON_PROFILE)
-    modules = []
-    for name, (object_id, _) in sorted(signed.items()):
-        if not re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name):
-            continue
-        data = _authenticated_source_blob(source, object_id, MAX_INFRA_PYTHON_MODULE_BYTES)
-        modules.append({'path': name, 'sha256': hashlib.sha256(data).hexdigest(),
-                        'module': Path(name).stem})
+    budget = _SourceReadBudget(MAX_INFRA_PYTHON_MANIFEST_READ_BYTES,
+                               INFRA_PYTHON_MANIFEST_TIMEOUT)
+    signed = signed_snapshot_files(source, head, source_profile=INFRA_PYTHON_PROFILE,
+                                   budget=budget)
+    # A digest always occupies 64 ASCII bytes. Check the final serialized shape
+    # before asking Git for any module body, including a late oversized module.
+    modules = [
+        {'path': name, 'sha256': '0' * 64, 'module': Path(name).stem}
+        for name in sorted(signed)
+        if re.fullmatch(r'tests/test_[A-Za-z0-9_]+\.py', name)
+    ]
     if len(modules) < INFRA_PYTHON_MIN_MODULES:
         raise RuntimeError('Signed infrastructure unittest module floor not met')
     manifest = {'schema': 1, 'kind': 'infra_python_test_manifest_v1',
                 'source_commit': head, 'modules': modules}
-    raw = json.dumps(manifest, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
-    if len(raw) > INFRA_PYTHON_PROOF_LIMIT:
+    def serialize():
+        return json.dumps(manifest, sort_keys=True, separators=(',', ':'),
+                          allow_nan=False).encode()
+    if len(serialize()) > INFRA_PYTHON_PROOF_LIMIT:
         raise RuntimeError('Infrastructure unittest manifest exceeds fixed bound')
-    return manifest, raw
+    for row in modules:
+        budget.check()
+        data = _authenticated_source_blob(source, signed[row['path']][0],
+                                          MAX_INFRA_PYTHON_MODULE_BYTES, budget=budget)
+        row['sha256'] = hashlib.sha256(data).hexdigest()
+    budget.check()
+    return manifest, serialize()
 
 
 def _infra_json_pairs(items):
@@ -1252,6 +1272,55 @@ def retrieve_infra_python_proof(transport, ssh, instance, zone, project, run_id,
                   downloaded['infra-python-test.log']['sha256'])
     return summary, {name: {key: value for key, value in item.items() if key != 'raw'}
                      for name, item in downloaded.items()}
+
+
+def _create_bounded_source_bundle(source: Path, bundle: Path,
+                                  maximum: int = MAX_SNAPSHOT_EXTRA_BYTES) -> None:
+    """Create a new bundle under an inherited kernel file-size limit."""
+    if (type(maximum) is not int or maximum <= 0 or maximum > MAX_SNAPSHOT_EXTRA_BYTES
+            or bundle.exists() or bundle.is_symlink()):
+        raise RuntimeError('Source bundle destination or bound refused')
+    _local_config_preflight(source)
+    python = infra_repository_binding._trusted_tool('/usr/bin/python3')
+    _trusted_source_tool('/usr/bin/git')
+    # The fixed system interpreter only sets RLIMIT_FSIZE and execs fixed Git;
+    # no checkout script, shell, Python import path, or caller command is used.
+    wrapper = ('import os,resource,sys; '
+               'limit=int(sys.argv[1]); '
+               'resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)); '
+               'os.execve("/usr/bin/git",["/usr/bin/git","-C",sys.argv[2],'
+               '"bundle","create",sys.argv[3],"HEAD"],os.environ)')
+    private = Path(tempfile.mkdtemp(prefix='.source-bundle-', dir=bundle.parent))
+    partial = private / 'repository.bundle'
+    process = None
+    try:
+        environment = source_git_env()
+        for key in tuple(environment):
+            if key.startswith(('PYTHON', 'DYLD_', 'LD_')):
+                environment.pop(key)
+        process = subprocess.Popen(
+            [python, '-I', '-S', '-B', '-c', wrapper, str(maximum), str(source), str(partial)],
+            env=environment, cwd='/', stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        try:
+            code = process.wait(timeout=SOURCE_BUNDLE_TIMEOUT)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError('Source bundle deadline exceeded') from error
+        if code != 0:
+            raise RuntimeError('Source bundle creation failed within fixed byte bound')
+        _local_config_preflight(source)
+        info = partial.lstat()
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= maximum:
+            raise RuntimeError('Source bundle exceeds fixed byte bound')
+        # link is exclusive: a pre-existing evidence file is never replaced.
+        os.link(partial, bundle, follow_symlinks=False)
+    finally:
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        partial.unlink(missing_ok=True)
+        private.rmdir()
 
 
 def make_snapshot(source: Path, archive: Path, extra_files=None, *, signed_head=None, source_profile=None) -> dict:
@@ -1578,16 +1647,23 @@ def main(argv=None):
                 _local_config_preflight(source)
                 assert_frozen_signer(frozen_signer, signer_digest)
             bundle=evidence/'repository.bundle'
-            _git_run(['git','-C',str(source),'bundle','create',str(bundle),'HEAD'],check=True,
-                     env=source_git_env(), timeout=60)
+            receipt['stage']='source_bundle'
+            receipt['source_bundle_max_bytes']=MAX_SNAPSHOT_EXTRA_BYTES
+            receipt['source_bundle_timeout_seconds']=SOURCE_BUNDLE_TIMEOUT
+            save()
+            _create_bounded_source_bundle(source, bundle)
+            receipt['source_bundle_bytes']=bundle.stat().st_size
             _git_run(['git','-C',str(source),'bundle','verify',str(bundle)],check=True,
-                     env=source_git_env(),stdout=subprocess.DEVNULL, timeout=60)
+                     env=source_git_env(),stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, timeout=60)
             source_head=evidence/'fleet-source-head'
             source_head.write_text(receipt['source_commit']+'\n')
             extra_files={'repository.bundle':bundle,
                          'maintainer.allowed_signers':frozen_signer,
                          'fleet-source-head':source_head}
             if infra_python:
+                receipt['stage']='infra_python_manifest'
+                save()
                 infra_manifest, manifest_bytes = infra_python_manifest(source, receipt['source_commit'])
                 manifest_file = evidence/'infra-python-test-manifest.json'
                 manifest_file.write_bytes(manifest_bytes)
@@ -1596,6 +1672,8 @@ def main(argv=None):
                 extra_files['infra-python-test-manifest.json'] = manifest_file
             if component:
                 extra_files['approved-linux-perl.json']=envelope
+        receipt['stage']='source_snapshot'
+        save()
         if infra_python:
             receipt['snapshot']=make_snapshot(source,archive,extra_files=extra_files,
                                               signed_head=receipt['source_commit'],
@@ -1877,7 +1955,9 @@ def main(argv=None):
                 receipt['error']=f'Source extraction failed; see {log}'
                 print(receipt['error'], file=sys.stderr, flush=True)
         save()
-        if receipt.get('stage') not in ('local_toolchain','cleanup') and not receipt.get('remote_retained'):
+        if receipt.get('stage') not in ('local_toolchain', 'source_bundle',
+                                       'infra_python_manifest', 'source_snapshot',
+                                       'cleanup') and not receipt.get('remote_retained'):
             cleanup()
         raise
     finally:
