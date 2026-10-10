@@ -359,6 +359,20 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(events, ['signed checkout', 'locked fixtures', 'suite'])
         self.assertEqual(launch.call_args.args[1], ['just', '_fleet-test-worker'])
 
+    def test_ci_standard_public_worker_enters_verified_git_checkout(self):
+        events = []
+        with patch.object(route, 'local_worker_context', return_value=True), \
+             patch.object(Path, 'cwd', return_value=route.FLEET_SOURCE), \
+             patch.object(route, 'trusted_marker', return_value=True), \
+             patch.object(route, 'prepare_fleet_checkout', side_effect=lambda: events.append('checkout')), \
+             patch.object(route, 'select_signed_builder_target', side_effect=lambda: events.append('target')), \
+             patch('test_runner.prepare_generic_recipe_oracle', side_effect=lambda: events.append('oracle')), \
+             patch('test_runner.prepare_fleet_recipe_oracle', side_effect=AssertionError('fleet-only corpus contract')), \
+             patch.object(os, 'execvp', side_effect=lambda *_: events.append('recipe')) as launch:
+            route.main(['ci-standard'])
+        self.assertEqual(events, ['checkout', 'target', 'oracle', 'recipe'])
+        self.assertEqual(launch.call_args.args[1], ['just', '_ci-standard-worker'])
+
     def test_signed_builder_target_is_sibling_and_generic_source_stays_separate(self):
         self.assertNotIn(route.FLEET_CARGO_TARGET, route.FLEET_CHECKOUT.parents)
         self.assertNotEqual(route.FLEET_CARGO_TARGET, route.FLEET_CHECKOUT)

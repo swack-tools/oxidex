@@ -20,6 +20,7 @@ use oxidex::exiftool_tables::session::{MemberVal, Session};
 use oxidex::exiftool_tables::{EntryRead, IfdDir, MemberValue, process_exif_decoded};
 use oxidex::io::ByteOrder;
 use oxidex::parsers::DetectorMode;
+use oxidex_tags::TagId;
 
 /// A little-endian TIFF block whose IFD at offset 8 contains the supplied
 /// `(id, type, count, bytes)` entries. Values over four bytes are stored after
@@ -502,8 +503,17 @@ fn mixed_decline_and_report_duplicates_keep_physical_order_and_owner() {
         "the second entry belongs to the generated report"
     );
     assert!(occurrences[0].0.order < occurrences[1].0.order);
-    assert_eq!(&*occurrences[0].0.group1, "");
-    assert_eq!(&*occurrences[1].0.group1, "");
+    let hand = occurrences[0].0;
+    assert_eq!(hand.id, TagId::Named("ExifIFD:UserComment".into()));
+    assert_eq!(hand.group1.as_ref(), "");
+    assert_eq!(hand.origin.module, None);
+    assert_eq!(hand.origin.table, None);
+    let generated = occurrences[1].0;
+    assert_eq!(generated.id, TagId::Numeric(0x9286));
+    assert_eq!(generated.group0.as_ref(), "EXIF");
+    assert_eq!(generated.group1.as_ref(), "ExifIFD");
+    assert_eq!(generated.origin.module, Some("Exif"));
+    assert_eq!(generated.origin.table, Some("Main"));
 }
 
 #[test]
@@ -779,16 +789,23 @@ fn all_four_standard_directories_keep_one_owner_group_and_physical_order() {
     let metadata = read_metadata(file.path()).expect("synthetic TIFF parses");
 
     let expected = [
-        ("IFD0:Make", TagValue::new_string("Root")),
-        ("ExifIFD:UserComment", TagValue::new_string("exif")),
+        ("IFD0:Make", TagValue::new_string("Root"), "IFD0", 0x010f),
+        (
+            "ExifIFD:UserComment",
+            TagValue::new_string("exif"),
+            "ExifIFD",
+            0x9286,
+        ),
         (
             "InteropIFD:InteropIndex",
             TagValue::new_string("R98 - DCF basic file (sRGB)"),
+            "InteropIFD",
+            0x0001,
         ),
-        ("IFD1:Model", TagValue::new_string("Thumb")),
+        ("IFD1:Model", TagValue::new_string("Thumb"), "IFD1", 0x0110),
     ];
     let mut prior_order = None;
-    for (key, expected_value) in expected {
+    for (key, expected_value, group1, id) in expected {
         let occurrences: Vec<_> = metadata
             .project_occurrences(ValueChannel::PrintConv)
             .filter(|(candidate, _, _)| *candidate == key)
@@ -800,7 +817,11 @@ fn all_four_standard_directories_keep_one_owner_group_and_physical_order() {
         );
         let (_, occurrence, value) = &occurrences[0];
         assert_eq!(value.as_ref(), &expected_value, "{key}");
-        assert_eq!(&*occurrence.group1, "", "{key}");
+        assert_eq!(occurrence.id, TagId::Numeric(id), "{key} source id");
+        assert_eq!(occurrence.group0.as_ref(), "EXIF", "{key} group 0");
+        assert_eq!(occurrence.group1.as_ref(), group1, "{key} group 1");
+        assert_eq!(occurrence.origin.module, Some("Exif"), "{key} module");
+        assert_eq!(occurrence.origin.table, Some("Main"), "{key} table");
         if let Some(prior) = prior_order {
             assert!(prior < occurrence.order, "physical order for {key}");
         }
@@ -812,6 +833,16 @@ fn all_four_standard_directories_keep_one_owner_group_and_physical_order() {
         Some(&TagValue::new_integer(7)),
         "Owner::Hand keeps the unknown IFD1 entry on the named residual"
     );
+    let residuals: Vec<_> = metadata
+        .project_occurrences(ValueChannel::PrintConv)
+        .filter(|(key, _, _)| *key == "IFD1:0xDEAD")
+        .collect();
+    assert_eq!(residuals.len(), 1, "one hand-owned unknown entry");
+    let residual = residuals[0].1;
+    assert_eq!(residual.id, TagId::Named("IFD1:0xDEAD".into()));
+    assert_eq!(residual.group1.as_ref(), "");
+    assert_eq!(residual.origin.module, None);
+    assert_eq!(residual.origin.table, None);
     assert!(
         metadata.get("IFD0:ExifOffset").is_none(),
         "Owner::Silent withholds the ExifIFD parent edge"

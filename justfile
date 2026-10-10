@@ -1813,6 +1813,19 @@ verify-runtime-ownership:
     python3 tools/remote-build/route.py --require-local-context verify-runtime-ownership
     uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 
+# Task18 gate remains BLOCKED until the historical chronology and finite
+# appendix have real prior approval; a no-new-manual PASS alone is insufficient.
+verify-runtime-deletions:
+    python3 tools/remote-build/route.py verify-runtime-deletions
+
+_verify-runtime-deletions-worker:
+    python3 tools/remote-build/route.py --require-local-context verify-runtime-deletions
+    uv run python -m unittest tools/exiftool-tables/test_runtime_deletion_ledger.py -v
+    cargo test --test generated_runtime_deletion_controls -- --nocapture
+    cargo test --test generated_runtime_walker_contract task18_xp_fields_have_exact_generated_off_and_fallback_routes -- --nocapture
+    uv run python tools/exiftool-tables/runtime_deletion_ledger.py no-new-manual --root .
+    uv run python tools/exiftool-tables/runtime_deletion_ledger.py verify --root .
+
 # Fleet python suite (fleetlib CAS, claims, queue, verdict admissibility,
 # drift, intent/ledger). Needs a FRESH release binary for the ledger tests --
 # a stale one reports MISSING for formats the tip parses (measured: 11

@@ -10,7 +10,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -25,7 +25,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -40,7 +40,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -55,7 +55,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -70,7 +70,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -85,7 +85,7 @@
     "refusal": null,
     "residual_disposition": "hand-kept",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
     "table": "Main"
   },
@@ -100,7 +100,7 @@
     "refusal": null,
     "residual_disposition": "fallback-on-decline",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
     "table": "Main"
   },
@@ -115,7 +115,7 @@
     "refusal": null,
     "residual_disposition": "fallback-on-decline",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
     "table": "Main"
   },
@@ -130,7 +130,7 @@
     "refusal": null,
     "residual_disposition": "fallback-on-decline",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
     "table": "Main"
   },
@@ -145,7 +145,7 @@
     "refusal": null,
     "residual_disposition": "fallback-on-decline",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
     "table": "Main"
   },
@@ -160,7 +160,7 @@
     "refusal": null,
     "residual_disposition": "fallback-on-decline",
     "source_release": "13.59",
-    "source_sha256": "b42ebab54125cf083b6909938576e62fab8cf14eba884535c62b3a68666a3f52",
+    "source_sha256": "dda01684880fdea28b00583f3f361b52a9d79196a902caf941b93061eb681b3f",
     "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_ON_DECLINE",
     "table": "Main"
   },

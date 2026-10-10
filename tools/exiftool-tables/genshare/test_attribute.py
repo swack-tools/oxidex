@@ -51,6 +51,24 @@ class TokenContractTests(unittest.TestCase):
 
 
 class ParsingAndProjectionTests(unittest.TestCase):
+    def test_retained_raw_occurrence_ledger_cannot_replace_child_stdout(self):
+        oracle = {"EXIF:XPTitle": "Hi"}
+        candidate = {"IFD0:XPTitle": "Hi"}
+        rows = attribute.occurrence_sequence(candidate, normalize_access_date=False)
+        record = {
+            "candidate_occurrences_raw": rows,
+            "candidate_occurrences": rows,
+            "raw_occurrences_sha256": attribute.canonical_sha256(rows),
+            "normalized_occurrences_sha256": attribute.canonical_sha256(rows),
+            "normalization_count": 0, "oracle_normalization_count": 0,
+        }
+        attribute.validate_raw_occurrences(record, oracle, candidate, "engine")
+        forged = copy.deepcopy(record)
+        forged["candidate_occurrences_raw"][0]["value"] = "other"
+        forged["raw_occurrences_sha256"] = attribute.canonical_sha256(forged["candidate_occurrences_raw"])
+        with self.assertRaisesRegex(attribute.ReceiptError, "raw typed occurrence"):
+            attribute.validate_raw_occurrences(forged, oracle, candidate, "engine")
+
     def test_duplicate_json_keys_fail_closed(self):
         with self.assertRaisesRegex(attribute.ReceiptError, "duplicate JSON key"):
             attribute.parse_json_output(b'[{"ICC:Header":1,"ICC:Header":2}]', "candidate")
@@ -455,13 +473,31 @@ class ArtifactValidationTests(unittest.TestCase):
                         "candidate",
                         {"OXIDEX_GENSHARE_SILENCE": {"state": "value", "value": mode}},
                     )
-                    candidate_parsed = attribute.parse_json_output(candidate_text.encode(), "candidate")
+                    # _run_mode reads capture_process's canonical retained
+                    # parsed JSON, whose key order is used by the comparator.
+                    candidate_parsed = attribute._load_parsed(candidate)
+                    oracle_parsed = attribute._load_parsed(oracle)
+                    raw_occurrences = attribute.occurrence_sequence(
+                        candidate_parsed, normalize_access_date=False
+                    )
+                    normalized_occurrences = attribute.occurrence_sequence(
+                        candidate_parsed, normalize_access_date=True
+                    )
                     process_path = child / "process.json"
                     process_path.write_text(json.dumps({
                         "oracle": oracle,
                         "candidate": candidate,
-                        "candidate_occurrences": attribute.occurrence_sequence(
-                            candidate_parsed, normalize_access_date=True
+                        "candidate_occurrences_raw": raw_occurrences,
+                        "candidate_occurrences": normalized_occurrences,
+                        "raw_occurrences_sha256": attribute.canonical_sha256(raw_occurrences),
+                        "normalized_occurrences_sha256": attribute.canonical_sha256(normalized_occurrences),
+                        "normalization_count": sum(
+                            left["value"] != right["value"]
+                            for left, right in zip(raw_occurrences, normalized_occurrences)
+                        ),
+                        "oracle_normalization_count": sum(
+                            oracle_parsed[key] != value for key, value in
+                            attribute.normalize_access_date_output(oracle_parsed, oracle=True).items()
                         ),
                     }) + "\n")
                     child_record = {
@@ -473,7 +509,6 @@ class ArtifactValidationTests(unittest.TestCase):
                         }},
                     }
                     children.append(child_record)
-                    oracle_parsed = attribute.parse_json_output(oracle_json.encode(), "oracle")
                     per_file[relative] = attribute.project_file(
                         attribute.normalize_access_date_output(
                             oracle_parsed, oracle=True
@@ -979,6 +1014,21 @@ class EmptyDiagnosticReceiptTests(unittest.TestCase):
                         attribute.write_json(parsed_path, document)
                         process["candidate"]["stdout"] = attribute._artifact_record(stdout_path)
                         process["candidate"]["parsed"] = attribute._artifact_record(parsed_path)
+                        # The forged process claims to have emitted the changed
+                        # bytes. Keep its typed ledger self-consistent so the
+                        # diagnostic contract, not the ledger guard, is tested.
+                        retained = json.loads(parsed_path.read_text())
+                        raw_occurrences = attribute.occurrence_sequence(
+                            retained, normalize_access_date=False)
+                        normalized_occurrences = attribute.occurrence_sequence(
+                            retained, normalize_access_date=True)
+                        process["candidate_occurrences_raw"] = raw_occurrences
+                        process["candidate_occurrences"] = normalized_occurrences
+                        process["raw_occurrences_sha256"] = attribute.canonical_sha256(raw_occurrences)
+                        process["normalized_occurrences_sha256"] = attribute.canonical_sha256(normalized_occurrences)
+                        process["normalization_count"] = sum(
+                            left["value"] != right["value"]
+                            for left, right in zip(raw_occurrences, normalized_occurrences))
                         attribute.write_json(process_path, process)
                         child["process"] = attribute._artifact_record(process_path)
                         forged["runs"][mode]["non_comparable_inputs"][0]["process"] = child["process"]
