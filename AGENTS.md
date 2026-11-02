@@ -53,9 +53,10 @@ which deletes idle `target/` directories when free space drops below 10 GiB.
 With dozens of worktrees and concurrent sessions that can delete another
 session's build mid-flight, so set `auto_recover_targets = false` if you do.
 
-CI still uses WarpBuild's `rust-cache`, not kache. The numbers above are APFS,
-where restores are reflinks; Warp's Linux runners are ext4 and have to copy, so
-the local result does not transfer and CI needs its own measurement first.
+CI does not use kache. It runs on GitHub-hosted runners with
+`Swatinem/rust-cache`. The numbers above are APFS, where restores are reflinks;
+the Linux runners are ext4 and have to copy, so the local result does not
+transfer and CI needs its own measurement first.
 
 ## Commands
 ```bash
