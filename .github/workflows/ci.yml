@@ -197,6 +197,17 @@ jobs:
       #    for `crate-type`. sccache caches rlib/lib but not cdylib,
       #    staticlib or test harnesses -- which is precisely what this crate
       #    builds for its C FFI, and precisely where the time goes.
+      #
+      #  - kache as RUSTC_WRAPPER -- NOT measured on CI yet, deliberately not
+      #    wired up here. It does fix sccache's structural problem (252 of 252
+      #    crates stored, no crate-type refusals) and is a large local win:
+      #    43.1s -> 3.1s on a clean target, and 58.7s -> 4.3s in a second
+      #    worktree. But those numbers are Apple silicon on APFS, where a
+      #    restore is a reflink clone and copies 0 bytes. These runners are
+      #    ext4, which has no reflinks, so restores have to copy and the local
+      #    result does not transfer. Measure it here before adopting, and
+      #    account for it sitting on top of the WarpBuild cache below rather
+      #    than replacing it. Local setup is in AGENTS.md ("Build cache").
       - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
         with:
           cache-on-failure: true
