@@ -100,6 +100,28 @@ test-tags:
     @echo "Running tests for all tag crates..."
     cargo test -p oxidex-tags -p oxidex-tags-core -p oxidex-tags-camera -p oxidex-tags-media -p oxidex-tags-image -p oxidex-tags-document -p oxidex-tags-specialty -p oxidex-tags-shared
 
+# Build with the kache compiler cache (opt-in; see AGENTS.md "Build cache")
+kache-build *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # RUSTC_WRAPPER is set for this command only. It is deliberately NOT in the
+    # repo's .cargo/config.toml: cargo exits 101 when the wrapper binary is
+    # absent, which would break every contributor and CI job without kache.
+    if ! command -v kache >/dev/null 2>&1; then
+        echo "kache not installed. brew install kunobi-ninja/kunobi/kache" >&2
+        echo "or: cargo install kache --locked" >&2
+        exit 1
+    fi
+    RUSTC_WRAPPER=kache cargo build {{args}}
+
+# Show kache cache hit rate, time saved and disk use
+kache-stats:
+    @kache stats
+
+# Explain why the last kache build missed
+kache-why:
+    @kache explain
+
 # Build the project in debug mode
 build:
     @echo "Building project (debug)..."
