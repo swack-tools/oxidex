@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **CI moved off WarpBuild back to GitHub-hosted runners** - every `warp-ubuntu-*` / `warp-macos-*` label is now a GitHub-hosted label, and the `WarpBuilds/*` actions are back to their upstream equivalents
+  - **Why**: the WarpBuild runners stopped answering. Every Warp-hosted job queued indefinitely rather than failing, so nothing went red: `ci.yml` last succeeded 2026-10-08, `update-coverage-docs.yml` 2026-09-30, `jpeg-tag-matrix.yml` 2026-09-28, while 122+ commits merged to `main` with no Build & Test verification
+  - **Runners**: `warp-ubuntu-latest-x64-{2,4,8}x` → `ubuntu-latest` (4 vCPU / 16 GB, this repo being public), `warp-ubuntu-latest-arm64-*` → `ubuntu-24.04-arm`, `warp-macos-15-arm64-6x` → `macos-15`
+  - **Actions**: `WarpBuilds/rust-cache` → `Swatinem/rust-cache`, `WarpBuilds/cache{,/restore,/save}` → `actions/cache{,/restore,/save}`, `WarpBuilds/setup-node` → `actions/setup-node`; the `cache-provider: warpbuild` inputs and the Docker layer cache's `url=http://127.0.0.1:49160/` proxy and `network=host` driver-opt are removed
+  - **Expect slower CI**: Build & Test drops from 8 vCPU to 4, below the knee the PR #305 sweep identified, so roughly 1.5x its former wall clock; jobs that were on 2x labels purely to skip Warp's seconds-long queue now pay the GitHub-hosted queue again
+  - **`CARGO_PROFILE_TEST_CODEGEN_UNITS=16` removed**: its justification was an 8-vCPU/32 GB runner. `[profile.test]`'s `codegen-units = 4` and the per-package `opt-level = 2` overrides exist to stop the generated tag crates OOMing a smaller machine, which is now the machine CI runs on
+  - A test (`test_no_unreachable_runner_labels`) now fails if any `warp-*` label or `WarpBuilds/` action returns, because that regression queues forever instead of failing and is therefore invisible in a PR
+- **Benchmark baseline discontinuity (2026-11-02)** - CI benchmarks moved back from `warp-ubuntu-latest-x64-8x` to GitHub-hosted `ubuntu-latest`
+  - **Impact**: benchmark numbers from between 2026-08-08 and this date are **not comparable** with numbers after it. This is the mirror of the 2026-08-08 entry below and has the same cause: a runner-class change, not a change in OxiDex
+  - **Not a performance regression or improvement**: any step change in the published figures at this date reflects the runner move
+  - Measurement flags are unchanged (`--quick`, `lto = false`, `codegen-units = 16` on the bench profile), so this discontinuity is hardware only
+  - Both benchmark jobs moved together and must continue to match each other on runner label and measurement flags
 - **`tag-comparison`'s full-corpus sweep now processes formats concurrently** - the per-format loop in `src/bin/tag-comparison/main.rs` (used by `just compare-exiftool-full` and the fix-loop dispatcher's per-round attribution rebuild) now runs on a `rayon` thread pool instead of one format at a time in a single thread; measured 1.2-1.7x faster wall-clock on a full ~4,200-file/126-format corpus sweep depending on cache warmth, with byte-for-byte identical output. What gets measured and how gaps are attributed is unchanged
 - **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity
   - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`

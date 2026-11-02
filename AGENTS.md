@@ -8,8 +8,55 @@ to decrease the amount of time grepping. We also have things like hyperfine.
 
 We have: coreutils bat eza fd ripgrep hyperfine dust bottom tokei procs sd zoxide starship gitui git-delta lsd tealdeer broot bandwhich grex xh just watchexec typos-cli nushell yazi atuin mprocs hurl
 
-## Where you can utilize sccache to speed up builds especially when dealing with multiple worktrees
-building the same thing basically
+## Build cache: use kache, not sccache
+
+Many worktrees build the same thing here, so a compiler cache is worth having.
+Use [kache](https://github.com/kunobi-ninja/kache), not sccache.
+
+sccache does not work for this crate, and the reason is structural rather than
+a tuning problem: it caches `rlib`/`lib` but refuses `cdylib`, `staticlib` and
+test harnesses, which is exactly what the root crate builds
+(`crate-type = ["lib", "staticlib", "cdylib"]`) for its C FFI. CI measured 267s
+to 269s *with* a 100% hit rate, because only 27 of 94 rustc calls were eligible
+at all. See the rejected-cache notes in `.github/workflows/ci.yml`.
+
+kache caches all of it. Measured locally on this crate, `cargo build --bin
+oxidex`, Apple silicon / APFS, kache 1.2.2:
+
+| Scenario | No cache | kache |
+| --- | --- | --- |
+| Same worktree, clean target (median of 3) | 43.1s | 3.1s |
+| New worktree, first build (cache from another worktree) | 58.7s / 64.5s | 28.8s |
+| New worktree, subsequent builds | 58.7s / 64.5s | 4.3s |
+
+252 of 252 crates were stored, with no `crate-type` refusals, and restores were
+100% reflink clones (0 bytes copied). The second baseline figure is an
+order control: baseline got *slower* in second position, so the speedups are
+not a warm-page-cache artifact.
+
+### Setup is opt-in and per-developer
+
+Never put `build.rustc-wrapper = "kache"` in the repo's `.cargo/config.toml`.
+Cargo exits 101 (`could not execute process`) when the wrapper binary is
+absent, which would break every contributor, CI job and release build that does
+not have kache installed.
+
+```bash
+brew install kunobi-ninja/kunobi/kache   # or: cargo install kache --locked
+just kache-build                          # per-command, nothing global
+```
+
+`just kache-build` sets `RUSTC_WRAPPER` for that one command. If you want it
+always on, run `kache init` yourself — but note it rewrites `~/.cargo/config.toml`
+and `~/.zshrc`, installs a login service, and turns on `auto_recover_targets`,
+which deletes idle `target/` directories when free space drops below 10 GiB.
+With dozens of worktrees and concurrent sessions that can delete another
+session's build mid-flight, so set `auto_recover_targets = false` if you do.
+
+CI does not use kache. It runs on GitHub-hosted runners with
+`Swatinem/rust-cache`. The numbers above are APFS, where restores are reflinks;
+the Linux runners are ext4 and have to copy, so the local result does not
+transfer and CI needs its own measurement first.
 
 ## Commands
 ```bash
