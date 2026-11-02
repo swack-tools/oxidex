@@ -1,5 +1,8 @@
 //! Unit tests for audio parsers and document formats
 
+#[path = "common/zip_writer.rs"]
+mod zip_writer;
+
 #[path = "unit/audio/flac_tests.rs"]
 mod flac_tests;
 

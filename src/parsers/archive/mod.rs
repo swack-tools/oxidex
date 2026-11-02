@@ -17,4 +17,6 @@ pub use ole::OLEParser;
 pub use rar::RARParser;
 pub use sevenz::SevenZParser;
 pub use tar::TARParser;
+pub mod zip_reader;
 pub use zip::ZipParser;
+pub use zip_reader::{DosDateTime, ZipEntry, ZipReadError, ZipReader};

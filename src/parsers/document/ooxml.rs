@@ -2,10 +2,9 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::archive::zip_reader::ZipReader;
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
-use std::io::{Cursor, Read};
-use zip::ZipArchive;
 
 /// Extract the general-purpose bit flag from the first ZIP local file header.
 ///
@@ -118,8 +117,7 @@ impl FormatParser for DocxParser {
         let zip_crc = extract_zip_crc(file_data);
         let zip_compressed_size = extract_zip_compressed_size(file_data);
         let zip_local_header_tags = extract_zip_local_header_tags(file_data);
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
+        let archive = ZipReader::new(file_data)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid DOCX: {}", e)))?;
 
         if let Some((compression, filename, modify_date, required_version, uncompressed_size)) =
@@ -155,8 +153,8 @@ impl FormatParser for DocxParser {
         }
 
         // Check for DOCX-specific files
-        let has_content_types = archive.by_name("[Content_Types].xml").is_ok();
-        let has_word_doc = archive.by_name("word/document.xml").is_ok();
+        let has_content_types = archive.contains("[Content_Types].xml");
+        let has_word_doc = archive.contains("word/document.xml");
 
         if !has_content_types || !has_word_doc {
             return Err(ExifToolError::parse_error("Not a valid DOCX file"));
@@ -174,9 +172,8 @@ impl FormatParser for DocxParser {
         }
 
         // Parse core.xml for metadata
-        if let Ok(mut core_file) = archive.by_name("docProps/core.xml") {
-            let mut xml_content = String::new();
-            core_file.read_to_string(&mut xml_content).map_err(|e| {
+        if archive.contains("docProps/core.xml") {
+            let xml_content = archive.read_to_string("docProps/core.xml").map_err(|e| {
                 ExifToolError::parse_error(format!("Failed to read core.xml: {}", e))
             })?;
 
@@ -184,9 +181,8 @@ impl FormatParser for DocxParser {
         }
 
         // Parse app.xml for application properties
-        if let Ok(mut app_file) = archive.by_name("docProps/app.xml") {
-            let mut xml_content = String::new();
-            app_file.read_to_string(&mut xml_content).map_err(|e| {
+        if archive.contains("docProps/app.xml") {
+            let xml_content = archive.read_to_string("docProps/app.xml").map_err(|e| {
                 ExifToolError::parse_error(format!("Failed to read app.xml: {}", e))
             })?;
 
@@ -194,9 +190,8 @@ impl FormatParser for DocxParser {
         }
 
         // Parse custom.xml for custom properties
-        if let Ok(mut custom_file) = archive.by_name("docProps/custom.xml") {
-            let mut xml_content = String::new();
-            custom_file.read_to_string(&mut xml_content).map_err(|e| {
+        if archive.contains("docProps/custom.xml") {
+            let xml_content = archive.read_to_string("docProps/custom.xml").map_err(|e| {
                 ExifToolError::parse_error(format!("Failed to read custom.xml: {}", e))
             })?;
 
@@ -205,19 +200,16 @@ impl FormatParser for DocxParser {
         }
 
         // Parse [Content_Types].xml
-        if let Ok(mut content_types_file) = archive.by_name("[Content_Types].xml") {
-            let mut xml_content = String::new();
-            content_types_file
-                .read_to_string(&mut xml_content)
-                .map_err(|e| {
-                    ExifToolError::parse_error(format!("Failed to read [Content_Types].xml: {}", e))
-                })?;
+        if archive.contains("[Content_Types].xml") {
+            let xml_content = archive.read_to_string("[Content_Types].xml").map_err(|e| {
+                ExifToolError::parse_error(format!("Failed to read [Content_Types].xml: {}", e))
+            })?;
 
             parse_content_types(&xml_content, &mut metadata)?;
         }
 
         // Parse DOCX-specific properties
-        parse_docx_specific(&mut archive, &mut metadata)?;
+        parse_docx_specific(&archive, &mut metadata)?;
 
         // Add DOCX-specific tag aliases for Worker 20 requirements
         add_docx_tag_aliases(&mut metadata);
@@ -307,42 +299,45 @@ impl FormatParser for XlsxParser {
         let mut metadata = MetadataMap::new();
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
+        let archive = ZipReader::new(file_data)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid XLSX: {}", e)))?;
 
-        if archive.by_name("xl/workbook.xml").is_err() {
+        if !archive.contains("xl/workbook.xml") {
             return Err(ExifToolError::parse_error("Not a valid XLSX file"));
         }
 
         // Parse metadata from docProps
-        if let Ok(mut core_file) = archive.by_name("docProps/core.xml") {
-            let mut xml_content = String::new();
-            core_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/core.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/core.xml")
+                .unwrap_or_default();
             parse_core_properties(&xml_content, &mut metadata)?;
         }
 
-        if let Ok(mut app_file) = archive.by_name("docProps/app.xml") {
-            let mut xml_content = String::new();
-            app_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/app.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/app.xml")
+                .unwrap_or_default();
             parse_app_properties(&xml_content, &mut metadata)?;
         }
 
-        if let Ok(mut custom_file) = archive.by_name("docProps/custom.xml") {
-            let mut xml_content = String::new();
-            custom_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/custom.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/custom.xml")
+                .unwrap_or_default();
             parse_custom_properties(&xml_content, &mut metadata)?;
         }
 
         // Parse [Content_Types].xml
-        if let Ok(mut content_types_file) = archive.by_name("[Content_Types].xml") {
-            let mut xml_content = String::new();
-            content_types_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("[Content_Types].xml") {
+            let xml_content = archive
+                .read_to_string("[Content_Types].xml")
+                .unwrap_or_default();
             parse_content_types(&xml_content, &mut metadata)?;
         }
 
         // Parse XLSX-specific properties
-        parse_xlsx_specific(&mut archive, &mut metadata)?;
+        parse_xlsx_specific(&archive, &mut metadata)?;
 
         Ok(metadata)
     }
@@ -360,37 +355,40 @@ impl FormatParser for PptxParser {
         let mut metadata = MetadataMap::new();
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
+        let archive = ZipReader::new(file_data)
             .map_err(|e| ExifToolError::parse_error(format!("Not a valid PPTX: {}", e)))?;
 
-        if archive.by_name("ppt/presentation.xml").is_err() {
+        if !archive.contains("ppt/presentation.xml") {
             return Err(ExifToolError::parse_error("Not a valid PPTX file"));
         }
 
         // Parse metadata
-        if let Ok(mut core_file) = archive.by_name("docProps/core.xml") {
-            let mut xml_content = String::new();
-            core_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/core.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/core.xml")
+                .unwrap_or_default();
             parse_core_properties(&xml_content, &mut metadata)?;
         }
 
-        if let Ok(mut app_file) = archive.by_name("docProps/app.xml") {
-            let mut xml_content = String::new();
-            app_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/app.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/app.xml")
+                .unwrap_or_default();
             parse_app_properties(&xml_content, &mut metadata)?;
         }
 
-        if let Ok(mut custom_file) = archive.by_name("docProps/custom.xml") {
-            let mut xml_content = String::new();
-            custom_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("docProps/custom.xml") {
+            let xml_content = archive
+                .read_to_string("docProps/custom.xml")
+                .unwrap_or_default();
             parse_custom_properties(&xml_content, &mut metadata)?;
         }
 
         // Parse [Content_Types].xml
-        if let Ok(mut content_types_file) = archive.by_name("[Content_Types].xml") {
-            let mut xml_content = String::new();
-            content_types_file.read_to_string(&mut xml_content).ok();
+        if archive.contains("[Content_Types].xml") {
+            let xml_content = archive
+                .read_to_string("[Content_Types].xml")
+                .unwrap_or_default();
             parse_content_types(&xml_content, &mut metadata)?;
         }
 
@@ -717,21 +715,17 @@ fn parse_content_types(xml: &str, metadata: &mut MetadataMap) -> Result<()> {
 }
 
 /// Parse DOCX-specific properties (styles count, comments presence)
-fn parse_docx_specific<R: Read + std::io::Seek>(
-    archive: &mut ZipArchive<R>,
-    metadata: &mut MetadataMap,
-) -> Result<()> {
+fn parse_docx_specific(archive: &ZipReader<'_>, metadata: &mut MetadataMap) -> Result<()> {
     // Check for comments
-    if archive.by_name("word/comments.xml").is_ok() {
+    if archive.contains("word/comments.xml") {
         metadata.insert(
             "OOXML:HasComments".to_string(),
             TagValue::new_string("true".to_string()),
         );
 
         // Try to count comments
-        if let Ok(mut comments_file) = archive.by_name("word/comments.xml") {
-            let mut xml_content = String::new();
-            if comments_file.read_to_string(&mut xml_content).is_ok() {
+        if let Ok(xml_content) = archive.read_to_string("word/comments.xml") {
+            {
                 let comment_count = count_xml_elements(&xml_content, "comment");
                 if comment_count > 0 {
                     metadata.insert(
@@ -744,9 +738,8 @@ fn parse_docx_specific<R: Read + std::io::Seek>(
     }
 
     // Check for styles
-    if let Ok(mut styles_file) = archive.by_name("word/styles.xml") {
-        let mut xml_content = String::new();
-        if styles_file.read_to_string(&mut xml_content).is_ok() {
+    if let Ok(xml_content) = archive.read_to_string("word/styles.xml") {
+        {
             let styles_count = count_xml_elements(&xml_content, "style");
             if styles_count > 0 {
                 metadata.insert(
@@ -761,13 +754,9 @@ fn parse_docx_specific<R: Read + std::io::Seek>(
 }
 
 /// Parse XLSX-specific properties (sheet names and count)
-fn parse_xlsx_specific<R: Read + std::io::Seek>(
-    archive: &mut ZipArchive<R>,
-    metadata: &mut MetadataMap,
-) -> Result<()> {
-    if let Ok(mut workbook_file) = archive.by_name("xl/workbook.xml") {
-        let mut xml_content = String::new();
-        if workbook_file.read_to_string(&mut xml_content).is_ok() {
+fn parse_xlsx_specific(archive: &ZipReader<'_>, metadata: &mut MetadataMap) -> Result<()> {
+    if let Ok(xml_content) = archive.read_to_string("xl/workbook.xml") {
+        {
             let mut reader = Reader::from_str(&xml_content);
             reader.config_mut().trim_text(true);
 

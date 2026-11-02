@@ -2,8 +2,7 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use std::io::{Cursor, Read};
-use zip::ZipArchive;
+use crate::parsers::archive::zip_reader::ZipReader;
 
 /// Pages parser
 pub struct PagesParser;
@@ -70,12 +69,14 @@ fn parse_iwork(
     // Read as ZIP
     let size = reader.size() as usize;
     let file_data = reader.read(0, size)?;
-    let cursor = Cursor::new(file_data);
-    let mut archive = ZipArchive::new(cursor)
+    let archive = ZipReader::new(file_data)
         .map_err(|e| ExifToolError::parse_error(format!("Not a valid {} file: {}", app_name, e)))?;
 
-    // Check for iWork-specific structure
-    if archive.by_name(expected_file).is_err() {
+    // Check for iWork-specific structure. Presence in the central directory is
+    // the test, not readability: the marker file may be compressed with a
+    // method this reader does not decompress, and that still identifies the
+    // format.
+    if !archive.contains(expected_file) {
         return Err(ExifToolError::parse_error(format!(
             "Not a valid {} file: missing {}",
             app_name, expected_file
@@ -89,20 +90,14 @@ fn parse_iwork(
     );
 
     // Try to find metadata in Index/Metadata.plist if it exists
-    if let Ok(mut metadata_file) = archive.by_name("Index/Metadata.plist") {
-        let mut content = String::new();
-        if metadata_file.read_to_string(&mut content).is_ok() {
-            // Basic plist parsing - look for common keys
-            extract_plist_metadata(&content, &mut metadata);
-        }
+    if let Ok(content) = archive.read_to_string("Index/Metadata.plist") {
+        // Basic plist parsing - look for common keys
+        extract_plist_metadata(&content, &mut metadata);
     }
 
     // Extract build version if available
-    if let Ok(mut buildversion_file) = archive.by_name("buildVersionHistory.plist") {
-        let mut content = String::new();
-        if buildversion_file.read_to_string(&mut content).is_ok() {
-            extract_build_version(&content, &mut metadata);
-        }
+    if let Ok(content) = archive.read_to_string("buildVersionHistory.plist") {
+        extract_build_version(&content, &mut metadata);
     }
 
     Ok(metadata)

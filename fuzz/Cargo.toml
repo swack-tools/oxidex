@@ -40,3 +40,9 @@ name = "fuzz_mp3"
 path = "fuzz_targets/fuzz_mp3.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_zip"
+path = "fuzz_targets/fuzz_zip.rs"
+test = false
+doc = false

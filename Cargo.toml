@@ -136,7 +136,6 @@ csv = "1.4"
 flate2 = "1.1"
 
 # ZIP Archive Support (for Office and document formats)
-zip = "8.6"
 
 # CLI Argument Parsing (for tag-comparison binary)
 clap = { version = "4.6", features = ["derive"] }
