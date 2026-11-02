@@ -124,23 +124,72 @@ mod phase3_integration_tests {
 
     /// Test 7: Verify cache configuration for Rust dependencies
     ///
-    /// Caching moved off `actions/cache` to `WarpBuilds/rust-cache`, which
-    /// knows the cargo layout itself -- so there is no longer an explicit
-    /// `~/.cargo` path list in the workflow to assert on. Asserting the
-    /// provider too keeps a silent fallback to the GitHub cache backend
-    /// (the action's default) from passing this test.
+    /// A rust-cache action knows the cargo layout itself, so there is no
+    /// explicit `~/.cargo` path list in the workflow to assert on -- the
+    /// action's presence is the thing to check.
+    ///
+    /// This asserted `WarpBuilds/rust-cache` and `cache-provider: warpbuild`
+    /// until the WarpBuild runners stopped answering and every Warp-hosted
+    /// job queued forever. Now it asserts the upstream action and, just as
+    /// importantly, that no Warp reference came back: a `warp-ubuntu-*`
+    /// label or the WarpBuilds fork would queue indefinitely rather than
+    /// fail, which is the failure mode that is invisible in a PR.
     #[test]
     fn test_cache_configuration() {
         let workflow_path = Path::new(".github/workflows/deploy-docs.yml");
         let content = fs::read_to_string(workflow_path).expect("should read workflow file");
 
         assert!(
-            content.contains("WarpBuilds/rust-cache"),
-            "should use the WarpBuild rust-cache action"
+            content.contains("Swatinem/rust-cache"),
+            "should use the upstream rust-cache action"
         );
         assert!(
-            content.contains("cache-provider: warpbuild"),
-            "rust-cache should target the WarpBuild cache backend, not the GitHub default"
+            !content.contains("WarpBuilds/"),
+            "no WarpBuilds action should remain: those runners no longer answer, \
+             so the job would queue forever instead of failing"
+        );
+        assert!(
+            !content.contains("cache-provider: warpbuild"),
+            "cache-provider: warpbuild targets a backend that is no longer reachable"
+        );
+    }
+
+    /// Every workflow must stay on runners that actually answer.
+    ///
+    /// The WarpBuild runners stopped responding in October 2026 and every
+    /// Warp-hosted job queued indefinitely: `ci.yml` last succeeded
+    /// 2026-10-08, `update-coverage-docs.yml` 2026-09-30, and over a hundred
+    /// commits merged to main with no Build & Test verification. Nothing went
+    /// red, because a job waiting for a runner that will never arrive is
+    /// "queued", not "failed".
+    ///
+    /// That is why this is a test rather than a review habit: reintroducing a
+    /// `warp-*` label is silent, and silence here looks exactly like success.
+    #[test]
+    fn test_no_unreachable_runner_labels() {
+        let dir = Path::new(".github/workflows");
+        let mut offenders = Vec::new();
+        for entry in fs::read_dir(dir).expect("should read workflows dir") {
+            let path = entry.expect("should read dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yml") {
+                continue;
+            }
+            let content = fs::read_to_string(&path).expect("should read workflow file");
+            for (n, line) in content.lines().enumerate() {
+                let code = line.split('#').next().unwrap_or("");
+                if code.contains("warp-ubuntu")
+                    || code.contains("warp-macos")
+                    || code.contains("WarpBuilds/")
+                {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, code.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "unreachable WarpBuild runners/actions referenced in workflow code \
+             (comments are fine, these are directives):\n  {}",
+            offenders.join("\n  ")
         );
     }
 
