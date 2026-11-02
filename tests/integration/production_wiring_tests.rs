@@ -713,17 +713,16 @@ Content-Transfer-Encoding: 8bit\r\n\
 }
 
 fn write_zip_fixture(entries: &[(&str, &[u8])], suffix: &str) -> tempfile::NamedTempFile {
+    use crate::zip_writer::{Entry, build};
     let file = temp_with_suffix(suffix);
-    {
-        let output = fs::File::create(file.path()).expect("open temp zip");
-        let mut zip = zip::ZipWriter::new(output);
-        let options = zip::write::SimpleFileOptions::default();
-        for (name, data) in entries {
-            zip.start_file(*name, options).expect("start zip entry");
-            zip.write_all(data).expect("write zip entry");
-        }
-        zip.finish().expect("finish zip");
-    }
+    let built = build(
+        &entries
+            .iter()
+            .map(|(name, data)| Entry::deflated(name, data))
+            .collect::<Vec<_>>(),
+        "",
+    );
+    fs::write(file.path(), &built).expect("write temp zip");
     file
 }
 

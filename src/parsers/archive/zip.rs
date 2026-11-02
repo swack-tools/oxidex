@@ -2,10 +2,9 @@
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::parsers::archive::zip_reader::{DosDateTime, ZipReader};
 use crate::parsers::raw::{RawFormat, parse_raw_metadata};
 use crate::tag_db::lookup_tag_name;
-use std::io::{Cursor, Read};
-use zip::ZipArchive;
 
 const ZIP_SIGNATURE: &[u8] = b"PK";
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
@@ -166,18 +165,19 @@ impl ZipParser {
     /// EIP is a ZIP container whose `manifest.xml` names an embedded IIQ file.
     /// Feeding that member through the existing IIQ/TIFF parser keeps all TIFF
     /// byte-order and offset handling in the normal RAW metadata emitter.
-    fn read_eip_raw_metadata(
-        archive: &mut ZipArchive<Cursor<&[u8]>>,
-    ) -> Result<Option<MetadataMap>> {
+    fn read_eip_raw_metadata(archive: &ZipReader<'_>) -> Result<Option<MetadataMap>> {
         let has_manifest = archive
-            .file_names()
-            .any(|name| name.eq_ignore_ascii_case("manifest.xml"));
+            .entries()
+            .iter()
+            .any(|entry| entry.name().eq_ignore_ascii_case("manifest.xml"));
         if !has_manifest {
             return Ok(None);
         }
 
         let raw_name = archive
-            .file_names()
+            .entries()
+            .iter()
+            .map(|entry| entry.name())
             .find(|name| {
                 name.rsplit_once('.')
                     .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("iiq"))
@@ -187,30 +187,24 @@ impl ZipParser {
             return Ok(None);
         };
 
-        let raw_file = archive.by_name(&raw_name).map_err(|error| {
-            ExifToolError::parse_error(format!("Failed to read EIP raw member: {error}"))
+        let raw_entry = archive.by_name(&raw_name).ok_or_else(|| {
+            ExifToolError::parse_error("EIP manifest names a member the archive lacks")
         })?;
         // The declared uncompressed size is attacker-controlled central
         // directory data: reject absurd declarations up front and bound the
         // read with `take` instead of pre-allocating from the header. Reading
         // one byte past the declared size keeps the original mismatch checks:
         // a stream shorter *or* longer than declared still errors below.
-        let declared_size = raw_file.size();
+        let declared_size = raw_entry.size();
         if declared_size > EIP_RAW_MEMBER_MAX_SIZE {
             return Err(ExifToolError::parse_error("EIP raw member is too large"));
         }
-        let mut raw_data = Vec::new();
-        raw_file
-            .take(declared_size + 1)
-            .read_to_end(&mut raw_data)
-            .map_err(|error| {
-                ExifToolError::parse_error(format!("Failed to extract EIP raw member: {error}"))
-            })?;
-        if raw_data.len() as u64 != declared_size {
-            return Err(ExifToolError::parse_error(
-                "EIP raw member is shorter than its declared size",
-            ));
-        }
+        // ZipReader already refuses a stream that inflates to anything other
+        // than its declared size, so the length check the zip crate required
+        // here is enforced one level down rather than duplicated.
+        let raw_data = archive.read_entry(raw_entry).map_err(|error| {
+            ExifToolError::parse_error(format!("Failed to extract EIP raw member: {error}"))
+        })?;
 
         parse_raw_metadata(&raw_data, RawFormat::PhaseOneIIQ).map(Some)
     }
@@ -220,7 +214,7 @@ impl ZipParser {
     /// DOS datetime format:
     /// - Date: bits 0-4=day, 5-8=month, 9-15=year (from 1980)
     /// - Time: bits 0-4=seconds/2, 5-10=minutes, 11-15=hours
-    fn datetime_to_iso8601(dt: zip::DateTime) -> String {
+    fn datetime_to_iso8601(dt: DosDateTime) -> String {
         format!(
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
             dt.year(),
@@ -233,18 +227,9 @@ impl ZipParser {
     }
 
     /// Returns human-readable compression method name
-    fn compression_method_name(method: zip::CompressionMethod) -> &'static str {
-        match method {
-            zip::CompressionMethod::Stored => "Stored",
-            zip::CompressionMethod::Deflated => "Deflate",
-            zip::CompressionMethod::Bzip2 => "Bzip2",
-            zip::CompressionMethod::Zstd => "Zstd",
-            _ => "Unknown",
-        }
-    }
 
     /// Compare two DateTime objects for ordering
-    fn datetime_compare(a: &zip::DateTime, b: &zip::DateTime) -> i32 {
+    fn datetime_compare(a: &DosDateTime, b: &DosDateTime) -> i32 {
         if a.year() != b.year() {
             return (a.year() as i32) - (b.year() as i32);
         }
@@ -316,15 +301,14 @@ impl FormatParser for ZipParser {
         // Read entire file into memory for zip crate
         let size = reader.size() as usize;
         let file_data = reader.read(0, size)?;
-        let cursor = Cursor::new(file_data);
-        let mut archive = ZipArchive::new(cursor)
+        let archive = ZipReader::new(file_data)
             .map_err(|e| ExifToolError::parse_error(format!("Failed to read ZIP: {}", e)))?;
 
         // RAW parsing preserves physical IFD contexts in its keys. ExifTool's
         // EIP reader promotes only these embedded-IIQ fields to EXIF. Resolve
         // both names through the tag database rather than assuming prefixes,
         // and do not merge the RAW parser's Composite or other IIQ tags.
-        if let Some(raw_metadata) = Self::read_eip_raw_metadata(&mut archive)? {
+        if let Some(raw_metadata) = Self::read_eip_raw_metadata(&archive)? {
             const EIP_TAGS: &[(u16, &str)] = &[
                 (0x0102, "IFD0"),    // BitsPerSample
                 (0x9102, "ExifIFD"), // CompressedBitsPerPixel
@@ -367,12 +351,10 @@ impl FormatParser for ZipParser {
 
         // Archive comment
         let comment = archive.comment();
-        if !comment.is_empty()
-            && let Ok(comment_str) = std::str::from_utf8(comment)
-        {
+        if !comment.is_empty() {
             metadata.insert(
                 "ZIP:Comment".to_string(),
-                TagValue::new_string(comment_str.to_string()),
+                TagValue::new_string(comment.to_string()),
             );
         }
 
@@ -380,13 +362,13 @@ impl FormatParser for ZipParser {
         let mut total_compressed_size: u64 = 0;
         let mut total_uncompressed_size: u64 = 0;
         let mut encrypted_file_count = 0;
-        let mut oldest_date: Option<zip::DateTime> = None;
-        let mut newest_date: Option<zip::DateTime> = None;
+        let mut oldest_date: Option<DosDateTime> = None;
+        let mut newest_date: Option<DosDateTime> = None;
         let mut file_names = Vec::new();
 
         // Per-file metadata extraction
         for i in 0..file_count {
-            if let Ok(file) = archive.by_index(i) {
+            if let Some(file) = archive.by_index(i) {
                 let prefix = format!("ZIP:File{}:", i + 1);
 
                 // Basic file info
@@ -421,22 +403,16 @@ impl FormatParser for ZipParser {
                 );
 
                 // Compression method
-                let compression = file.compression();
                 metadata.insert(
                     format!("{}CompressionMethod", prefix),
-                    TagValue::new_string(Self::compression_method_name(compression).to_string()),
+                    TagValue::new_string(file.compression_name().to_string()),
                 );
 
-                // Store compression method as integer
-                // Note: CompressionMethod enum doesn't support direct cast to i64
-                // We store the discriminant value indirectly through display
-                let compression_value = match compression {
-                    zip::CompressionMethod::Stored => 0,
-                    zip::CompressionMethod::Deflated => 8,
-                    zip::CompressionMethod::Bzip2 => 12,
-                    zip::CompressionMethod::Zstd => 93,
-                    _ => 255, // Unknown
-                };
+                // The raw method code, straight from the central directory.
+                // This used to be a match over the zip crate's enum, which
+                // collapsed every method it did not name to 255 -- so an LZMA
+                // or PPMd entry reported the same code as a corrupt one.
+                let compression_value = i64::from(file.compression());
                 metadata.insert(
                     format!("{}CompressionMethodRaw", prefix),
                     TagValue::new_integer(compression_value),
@@ -477,14 +453,11 @@ impl FormatParser for ZipParser {
                     );
                 }
 
-                // Encryption detection - check if file name suggests encryption
-                // Note: zip crate doesn't expose encryption flags directly in stable API
-                // We detect this indirectly through available methods
-                let is_encrypted = file.compressed_size() > 0
-                    && file.compression() == zip::CompressionMethod::Stored
-                    && file.crc32() == 0;
-
-                if is_encrypted {
+                // General purpose bit 0, the flag the format defines for an
+                // encrypted entry. This replaced a heuristic (stored method
+                // plus a zero CRC) that the zip crate's API forced, and which
+                // misreported ordinary zero-CRC stored entries.
+                if file.is_encrypted() {
                     encrypted_file_count += 1;
                     metadata.insert(
                         format!("{}IsEncrypted", prefix),
@@ -557,8 +530,8 @@ impl FormatParser for ZipParser {
             let mut max_count = 0;
 
             for i in 0..file_count {
-                if let Ok(file) = archive.by_index(i) {
-                    let method = Self::compression_method_name(file.compression()).to_string();
+                if let Some(file) = archive.by_index(i) {
+                    let method = file.compression_name().to_string();
                     let count = compression_counts.entry(method.clone()).or_insert(0);
                     *count += 1;
                     if *count > max_count {
@@ -579,11 +552,8 @@ impl FormatParser for ZipParser {
             // Check the first encrypted file for encryption type
             let mut encryption_method = "Unknown".to_string();
             for i in 0..file_count {
-                if let Ok(file) = archive.by_index(i) {
-                    let is_encrypted = file.compressed_size() > 0
-                        && file.compression() == zip::CompressionMethod::Stored
-                        && file.crc32() == 0;
-                    if is_encrypted {
+                if let Some(file) = archive.by_index(i) {
+                    if file.is_encrypted() {
                         // ZIP typically uses Traditional PKWARE or WinZip AES encryption
                         // For now, we report as encrypted but can't determine the exact method
                         // from the stable zip crate API
@@ -677,9 +647,17 @@ pub fn parse_zip_metadata(
 mod tests {
     use super::*;
     use crate::io::BufferedReader;
-    use std::io::Write;
-    use zip::write::{SimpleFileOptions, ZipWriter};
+    // Fixture-based tests (anything needing a built archive) live in
+    // tests/unit/archive/zip_tests.rs, alongside the dependency-free writer
+    // in tests/common/zip_writer.rs. Keeping them there avoids a second copy
+    // of that writer: src/test_support is #[cfg(test)] on the library and so
+    // unreachable from the integration crates, and a #[path] include cannot
+    // traverse the directory an inline `mod tests` synthesises.
 
+    /// Round-trips a timestamp through a real archive to get a `DosDateTime`,
+    /// which has no public constructor by design: it carries the packed DOS
+    /// fields rather than a calendar date, because real archives store values
+    /// that are not valid dates.
     #[test]
     fn test_zip_signature() {
         // Minimal ZIP file (empty archive)
@@ -701,21 +679,6 @@ mod tests {
 
         let result = parser.parse(&reader);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_datetime_to_iso8601() {
-        // Test DOS datetime conversion. DOS timestamps have 2-second resolution,
-        // so use an even second that round-trips exactly (zip 8.x correctly
-        // truncates odd seconds; zip 0.6 did not).
-        let dt = zip::DateTime::from_date_and_time(2024, 3, 15, 14, 30, 44).unwrap();
-        let iso = ZipParser::datetime_to_iso8601(dt);
-        assert_eq!(iso, "2024-03-15T14:30:44");
-
-        // Test edge case: earliest valid DOS date
-        let dt = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
-        let iso = ZipParser::datetime_to_iso8601(dt);
-        assert_eq!(iso, "1980-01-01T00:00:00");
     }
 
     #[test]
@@ -764,290 +727,5 @@ mod tests {
             ZipParser::read_first_local_file_crc(&reader).unwrap(),
             Some(0x6e17461a)
         );
-    }
-
-    #[test]
-    fn test_zip_crc_metadata_format() {
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-            zip.start_file("test.txt", SimpleFileOptions::default())
-                .unwrap();
-            zip.write_all(b"ExifTool test file\n").unwrap();
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let metadata = ZipParser.parse(&reader).unwrap();
-
-        assert_eq!(
-            metadata.get("ZIP:ZipCRC"),
-            Some(&TagValue::new_string("0x6e17461a".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_compression_method_names() {
-        assert_eq!(
-            ZipParser::compression_method_name(zip::CompressionMethod::Stored),
-            "Stored"
-        );
-        assert_eq!(
-            ZipParser::compression_method_name(zip::CompressionMethod::Deflated),
-            "Deflate"
-        );
-        assert_eq!(
-            ZipParser::compression_method_name(zip::CompressionMethod::Bzip2),
-            "Bzip2"
-        );
-    }
-
-    #[test]
-    fn test_datetime_compare() {
-        let dt1 = zip::DateTime::from_date_and_time(2024, 1, 1, 12, 0, 0).unwrap();
-        let dt2 = zip::DateTime::from_date_and_time(2024, 1, 2, 12, 0, 0).unwrap();
-        let dt3 = zip::DateTime::from_date_and_time(2024, 1, 1, 12, 0, 0).unwrap();
-
-        assert!(ZipParser::datetime_compare(&dt1, &dt2) < 0);
-        assert!(ZipParser::datetime_compare(&dt2, &dt1) > 0);
-        assert_eq!(ZipParser::datetime_compare(&dt1, &dt3), 0);
-    }
-
-    #[test]
-    fn test_empty_zip_archive() {
-        // Create an empty ZIP archive
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-            zip.set_comment("Test archive comment").unwrap();
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let parser = ZipParser;
-
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Verify basic metadata
-        assert_eq!(
-            metadata.get("ZIP:FileCount"),
-            Some(&TagValue::new_integer(0))
-        );
-
-        // Verify comment
-        assert_eq!(
-            metadata.get("ZIP:Comment"),
-            Some(&TagValue::new_string("Test archive comment".to_string()))
-        );
-
-        // Verify forensic fields
-        assert_eq!(
-            metadata.get("ZIP:TotalCompressedSize"),
-            Some(&TagValue::new_integer(0))
-        );
-        assert_eq!(
-            metadata.get("ZIP:TotalUncompressedSize"),
-            Some(&TagValue::new_integer(0))
-        );
-    }
-
-    #[test]
-    fn test_zip_with_files() {
-        // Create a ZIP archive with test files
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-
-            // Add first file (stored)
-            let options = SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored)
-                .last_modified_time(
-                    zip::DateTime::from_date_and_time(2024, 1, 15, 10, 30, 0).unwrap(),
-                );
-            zip.start_file("test1.txt", options).unwrap();
-            zip.write_all(b"Hello, World!").unwrap();
-
-            // Add second file (deflated)
-            let options = SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .last_modified_time(
-                    zip::DateTime::from_date_and_time(2024, 3, 20, 15, 45, 30).unwrap(),
-                );
-            zip.start_file("test2.txt", options).unwrap();
-            zip.write_all(b"This is a longer text that should compress well with deflate compression algorithm.").unwrap();
-
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let parser = ZipParser;
-
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Verify file count
-        assert_eq!(
-            metadata.get("ZIP:FileCount"),
-            Some(&TagValue::new_integer(2))
-        );
-
-        // Verify file names
-        assert!(metadata.contains_key("ZIP:File1:Filename"));
-        assert!(metadata.contains_key("ZIP:File2:Filename"));
-        assert_eq!(
-            metadata.get("ZIP:File1:Filename"),
-            Some(&TagValue::new_string("test1.txt".to_string()))
-        );
-
-        // Verify sizes
-        assert!(metadata.contains_key("ZIP:File1:CompressedSize"));
-        assert!(metadata.contains_key("ZIP:File1:UncompressedSize"));
-        assert!(metadata.contains_key("ZIP:File2:CompressedSize"));
-        assert!(metadata.contains_key("ZIP:File2:UncompressedSize"));
-
-        // Verify CRC32
-        assert!(metadata.contains_key("ZIP:File1:CRC32"));
-        assert!(metadata.contains_key("ZIP:File2:CRC32"));
-
-        // Verify compression methods
-        assert_eq!(
-            metadata.get("ZIP:File1:CompressionMethod"),
-            Some(&TagValue::new_string("Stored".to_string()))
-        );
-        assert_eq!(
-            metadata.get("ZIP:File2:CompressionMethod"),
-            Some(&TagValue::new_string("Deflate".to_string()))
-        );
-
-        // Verify timestamps
-        assert_eq!(
-            metadata.get("ZIP:File1:LastModified"),
-            Some(&TagValue::new_string("2024-01-15T10:30:00".to_string()))
-        );
-        assert_eq!(
-            metadata.get("ZIP:File2:LastModified"),
-            Some(&TagValue::new_string("2024-03-20T15:45:30".to_string()))
-        );
-
-        // Verify version made by
-        assert!(metadata.contains_key("ZIP:File1:VersionMadeBy"));
-        assert!(metadata.contains_key("ZIP:File2:VersionMadeBy"));
-
-        // Verify comma-separated file list (backward compatibility)
-        assert_eq!(
-            metadata.get("ZIP:Files"),
-            Some(&TagValue::new_string("test1.txt, test2.txt".to_string()))
-        );
-
-        // Verify forensic summary fields
-        assert!(metadata.contains_key("ZIP:TotalCompressedSize"));
-        assert!(metadata.contains_key("ZIP:TotalUncompressedSize"));
-        assert!(metadata.contains_key("ZIP:CompressionRatio"));
-
-        // Verify date range
-        assert_eq!(
-            metadata.get("ZIP:OldestFileDate"),
-            Some(&TagValue::new_string("2024-01-15T10:30:00".to_string()))
-        );
-        assert_eq!(
-            metadata.get("ZIP:NewestFileDate"),
-            Some(&TagValue::new_string("2024-03-20T15:45:30".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_zip_with_directory() {
-        // Create a ZIP archive with a directory
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-
-            // Add directory
-            let options = SimpleFileOptions::default();
-            zip.add_directory("test_dir/", options).unwrap();
-
-            // Add file in directory
-            zip.start_file("test_dir/file.txt", options).unwrap();
-            zip.write_all(b"Content").unwrap();
-
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let parser = ZipParser;
-
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Verify directory is detected
-        assert_eq!(
-            metadata.get("ZIP:FileCount"),
-            Some(&TagValue::new_integer(2))
-        );
-        assert_eq!(
-            metadata.get("ZIP:File1:IsDirectory"),
-            Some(&TagValue::new_string("true".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_compression_ratio_calculation() {
-        // Create a ZIP with highly compressible data
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-            let options =
-                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            zip.start_file("repeated.txt", options).unwrap();
-            // Write highly compressible data (repeated pattern)
-            let data = "A".repeat(10000);
-            zip.write_all(data.as_bytes()).unwrap();
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let parser = ZipParser;
-
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Verify compression ratio exists and is reasonable (should be very low for repeated data)
-        assert!(metadata.contains_key("ZIP:CompressionRatio"));
-        if let Some(TagValue::String(ratio_str)) = metadata.get("ZIP:CompressionRatio") {
-            let ratio_value: f64 = ratio_str
-                .trim_end_matches('%')
-                .parse()
-                .expect("Failed to parse ratio");
-            // Highly compressible data should have very low ratio
-            assert!(
-                ratio_value < 10.0,
-                "Compression ratio should be < 10% for repeated data"
-            );
-        }
-    }
-
-    #[test]
-    fn test_zip64_detection() {
-        // We can't easily create a true ZIP64 file in tests, but we can verify the logic
-        // by checking that normal files don't get flagged as ZIP64
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        {
-            let mut zip = ZipWriter::new(&mut buffer);
-            let options = SimpleFileOptions::default();
-            zip.start_file("small.txt", options).unwrap();
-            zip.write_all(b"Small file").unwrap();
-            zip.finish().unwrap();
-        }
-
-        let data = buffer.into_inner();
-        let reader = BufferedReader::from_bytes(&data);
-        let parser = ZipParser;
-
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Small archive should not be detected as ZIP64
-        assert!(!metadata.contains_key("ZIP:IsZIP64"));
     }
 }
